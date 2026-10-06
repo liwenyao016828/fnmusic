@@ -1,0 +1,37 @@
+# 换行符策略
+#
+# 背景（先纠正一个容易搞错的地方）：`fpk-package/manifest` 存的是 LF，
+# **CRLF 是打包时由 scripts/build_fpk.py 生成的**（复刻 fnpack 的规则：
+# key 补到 20 列 + " = " + 值 + CRLF + 末尾 checksum）。所以这个文件在库里
+# 就是普通文本，而且它里面放着版本号、每次发版都要改 —— 必须保留 diff，
+# 不能标成二进制。
+#
+# 真正需要钉住的是「会被执行、且对行尾敏感」的东西：
+# 一个带 CRLF 的 .sh 在 Linux 上跑会报 `\r: command not found`，
+# 而这类问题只在换了机器/重新克隆之后才出现，最难查。所以：
+* text=auto eol=lf
+
+*.sh    text eol=lf
+*.py    text eol=lf
+*.go    text eol=lf
+*.js    text eol=lf
+*.mjs   text eol=lf
+*.vue   text eol=lf
+*.json  text eol=lf
+*.md    text eol=lf
+manifest text eol=lf
+
+# Windows 专用脚本保持 CRLF
+*.ps1  text eol=crlf
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+
+# 二进制资源：永不转换
+*.png  -text
+*.PNG  -text
+*.jpg  -text
+*.jpeg -text
+*.ico  -text
+*.woff2 -text
+*.ttf  -text
+*.fpk  -text
