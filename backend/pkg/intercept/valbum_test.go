@@ -273,14 +273,25 @@ func TestAlbumSearchPassthroughWhenShapeIsNotObjectList(t *testing.T) {
 }
 
 func TestAlbumSearchPassthroughOnOfficialError(t *testing.T) {
-	const body = `{"code":401,"msg":"未登录","data":null}`
-	h := newHarness(t)
-	h.setOnline(map[string]bool{"1": true}, albumSong("1", "A", "甲", "专辑一"))
-	h.setOfficial("GET /music/api/v1/search/album", http.StatusOK, body)
+	// ⚠️ 两条夹具都要有，而**第二条才是咬住「业务错误守卫」的那条**：
+	// `data:null` 会被后面那道「data 必须是对象」的检查兜住（它验的是形状检查，
+	// 不是业务错误守卫）；`data` 形状合法时，守卫一没，本地就会把官方的
+	// 「未登录」改写成「未登录 + 在线卡片」—— 那是把官方自己的语义改了。
+	for _, body := range []string{
+		`{"code":401,"msg":"未登录","data":null}`,
+		`{"code":401,"msg":"未登录","data":{"list":[],"total":0}}`,
+	} {
+		h := newHarness(t)
+		h.setOnline(map[string]bool{"1": true}, albumSong("1", "A", "甲", "专辑一"))
+		h.setOfficial("GET /music/api/v1/search/album", http.StatusOK, body)
 
-	w, _ := h.do(http.MethodGet, "/music/api/v1/search/album?q=x", "", nil)
-	if w.Body.String() != body {
-		t.Fatalf("官方业务错误必须原样透传（那是官方自己的语义）：%s", w.Body.String())
+		w, handled := h.do(http.MethodGet, "/music/api/v1/search/album?q=x", "", nil)
+		if !handled {
+			t.Fatal("这条路由该被认领")
+		}
+		if w.Body.String() != body {
+			t.Fatalf("官方业务错误必须逐字节原样透传（那是官方自己的语义）。\nwant %s\ngot  %s", body, w.Body.String())
+		}
 	}
 }
 
@@ -437,16 +448,25 @@ func TestAlbumDetailPassthroughOfficialGuid(t *testing.T) {
 
 func TestAlbumDetailPassthroughOnNonReadonlyMethod(t *testing.T) {
 	const body = `{"code":0,"msg":"","data":{"ok":true}}`
-	h := newHarness(t)
+	// ⚠️ id 必须是**我们自己合成的专辑 guid**：不带 id 的 POST 走的是「找不到 id →
+	// 透传」那条路，与 albumRejectMethod 无关（那道守卫被拿掉它照样绿）。
+	// 带上自己的 guid 之后，守卫一没，本地就会应答这条本该透传的请求。
+	anchor := albumTrack("wy", "1", "甲一", "甲", "同名专辑")
+	h, fake := albumHarness(t, anchor, albumSong("2", "甲二", "甲", "同名专辑"))
 	h.setOfficialFunc(func(r *http.Request, _ []byte) *http.Response {
 		return jsonResp(http.StatusOK, body)
 	})
-	w, handled := h.do(http.MethodPost, "/music/api/v1/album", `{"guid":"x"}`, nil)
+	w, handled := h.do(http.MethodPost, "/music/api/v1/album?guid="+fake+":album",
+		`{"guid":"`+fake+`:album"}`, nil)
 	if !handled {
 		t.Fatal("该被认领")
 	}
 	if w.Body.String() != body {
-		t.Fatalf("非只读方法该原样透传：%s", w.Body.String())
+		t.Fatalf("非只读方法该原样透传（哪怕 id 是我们自己的虚拟专辑）：%s", w.Body.String())
+	}
+	// 透传必须**真的转给官方**（不是本地猜了一份一样的 body 回来）。
+	if calls := h.up.calls(); len(calls) != 1 || calls[0] != "POST /music/api/v1/album" {
+		t.Fatalf("该把这条请求原样转给官方，得到 %v", calls)
 	}
 }
 
@@ -676,9 +696,8 @@ func TestAlbumDetailUsesLocalSnapshotsWithoutSearch(t *testing.T) {
 func TestAlbumSynthesisIsCached(t *testing.T) {
 	anchor := albumTrack("wy", "1", "甲一", "甲", "同名专辑")
 	h := newHarness(t)
-	calls := 0
+	logs := captureLogs(h)
 	h.it.searcher = func(keyword, platform string, page, size int) []search.UnifiedSong {
-		calls++
 		return []search.UnifiedSong{albumSong("1", "甲一", "甲", "同名专辑")}
 	}
 	h.it.pool = chartResolverPool(map[string]map[string]bool{"wy": {"1": true}})
@@ -690,9 +709,30 @@ func TestAlbumSynthesisIsCached(t *testing.T) {
 			t.Fatalf("第 %d 次请求没拿到专辑：%s", n+1, w.Body.String())
 		}
 	}
-	if calls != 1 {
-		t.Fatalf("合成结果该进缓存（120 秒），搜索只该发生 1 次，得到 %d 次", calls)
+	// 断言的是「**专辑合成**只发生了一次」，不是 searcher 被调了几次：collectOnline
+	// 自己还有一层关键词缓存（search.go 的 onlineCacheTTL），专辑那层缓存坏掉时
+	// searcher 照样只被调一次 —— 数它咬不住这条用例名字承诺的东西。
+	// 合成路径上唯一可数的观察点就是这条日志：albumFor 命中缓存时**提前返回**，
+	// 走不到它（曲目解析池自己也有缓存，所以也不能数解析次数）。
+	if got := albumSynthesisLogs(logs()); len(got) != 1 {
+		t.Fatalf("合成结果该进缓存（%s），3 次请求只该合成 1 次，得到 %d 次：%v",
+			albumCacheTTL, len(got), got)
 	}
+}
+
+// albumSynthesisLogs 挑出「在线专辑合成了一次」的日志行。
+//
+// 必须同时匹配「在线专辑」与「首可播」：collectOnline 自己也会打一条「在线搜索 …
+// 首可播」（那是关键词缓存那层的，不是专辑合成），预算超时那条含「在线专辑」
+// 却不含「首可播」。
+func albumSynthesisLogs(lines []string) []string {
+	out := make([]string, 0, len(lines))
+	for _, l := range lines {
+		if strings.Contains(l, "在线专辑") && strings.Contains(l, "首可播") {
+			out = append(out, l)
+		}
+	}
+	return out
 }
 
 // ── 只读 ────────────────────────────────────────────────────────────────
