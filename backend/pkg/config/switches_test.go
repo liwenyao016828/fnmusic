@@ -156,3 +156,68 @@ func TestLXServerKeysAreOffByDefaultAndSurviveRestart(t *testing.T) {
 		t.Fatal("端口传 0 该表示「不改动」，应保持 18925")
 	}
 }
+
+// daily_llm_enabled（v2.1.118 新增）单独验三件事。
+//
+// 这个开关与别的不同：它管的是**把用户的收听历史发给外部大模型**这件事的同意。
+// 所以「缺省必须是关」是隐私要求，不是产品口味 —— nil 被当成「开」就等于替用户
+// 默认同意了。另外 load 与 Update **两处都要登记**（项目既有讲究），
+// 只登记一处就是「改完能用、重启变回默认」或「改了没生效」。
+func TestDailyLLMSwitch(t *testing.T) {
+	dir := t.TempDir()
+	cm, err := NewConfigManager(dir, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// ① 缺省：没配过 = 关（隐私缺省）。
+	if cm.Get().DailyLLMOn() {
+		t.Fatal("⚠️ 没配过时 daily_llm_enabled 必须是**关** —— 缺省开等于替用户同意把收听历史发出去")
+	}
+	var fresh AppConfig
+	if fresh.DailyLLMOn() {
+		t.Fatal("零值 AppConfig 的 DailyLLMOn 该是 false")
+	}
+
+	// ② 显式打开 → 活过重启（验 load 那一处登记了）。
+	on := true
+	c := cm.Get()
+	c.DailyLLMEnabled = &on
+	if err := cm.Update(c); err != nil {
+		t.Fatal(err)
+	}
+	cm2, err := NewConfigManager(dir, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cm2.Get().DailyLLMOn() {
+		t.Fatal("显式打开的 daily_llm_enabled 该活过重启（load 里漏登记了？）")
+	}
+
+	// ③ 部分更新里**没带**这个键 → 不能被清掉（验 Update 那一处是 nil = 不动）。
+	// 这一条是这类开关最常踩的坑：用户改个别的设置，把刚打开的开关顺手关了。
+	other := cm2.Get()
+	other.DailyLLMEnabled = nil
+	other.TeeEnabled = &on
+	if err := cm2.Update(other); err != nil {
+		t.Fatal(err)
+	}
+	if !cm2.Get().DailyLLMOn() {
+		t.Fatal("⚠️ patch 里没带 daily_llm_enabled 时不该动它（Update 里漏了 nil 判定？）")
+	}
+
+	// ④ 显式关掉 → 也要活过重启。
+	off := false
+	c4 := cm2.Get()
+	c4.DailyLLMEnabled = &off
+	if err := cm2.Update(c4); err != nil {
+		t.Fatal(err)
+	}
+	cm4, err := NewConfigManager(dir, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cm4.Get().DailyLLMOn() {
+		t.Fatal("显式关掉的 daily_llm_enabled 该活过重启")
+	}
+}

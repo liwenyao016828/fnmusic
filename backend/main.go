@@ -135,6 +135,12 @@ func main() {
 			// 「边听边下」与它的暂存落点（见 pkg/intercept/tee.go）。
 			TeeEnabled:  func() bool { return cfgMgr.Get().TeeOn() },
 			DownloadDir: func() string { return cfgMgr.Get().DownloadDir },
+			// 「每日推荐的大模型层」的用户同意开关（见 pkg/intercept/vdaily_llm.go）。
+			//
+			// 现取：用户打开就该立刻生效。**这里只有这一个字段** ——
+			// 「有没有模型可调」是另一回事，走下面那个 SetRecommendLLM 注入，
+			// 不在这里判（两处判同一条判断迟早不一致）。
+			DailyLLMEnabled: func() bool { return cfgMgr.Get().DailyLLMOn() },
 			// 「下载源池」= 当前启用的外挂平台。下载时先去池里找同名曲目挑最高音质，
 			// 找不到才回落用曲目自己平台的直链（见 pkg/intercept/acquire.go）。
 			// 外挂音源关着时返回空 → 池不起作用，行为与以前一致。
@@ -183,6 +189,20 @@ func main() {
 
 	// 4. Initialize HTTP API Server
 	server := api.NewServer(cfgMgr, sourcesMgr, staticFS)
+
+	// 每日推荐的大模型层：把「问模型要候选」这条路注进拦截层
+	// （见 pkg/intercept/vdaily_llm.go）。
+	//
+	// ⚠️ 只能**这里**注，不能在构造拦截层时注：AI 客户端由 server 持有，
+	// 而拦截层在 `api.NewServer` 之前就建好了。
+	// ⚠️ 必须在开始服务之前注（下面 httpServer.Serve 之前）—— 它写的是拦截层的
+	// 配置，服务期间那份配置会被并发读。
+	//
+	// 注进去**不等于**这一层就生效：还要用户在设置里打开 `daily_llm_enabled`
+	// （那是对「把收听历史发给大模型」这件事的明确同意），见 Config.DailyLLMEnabled。
+	if ic != nil {
+		ic.SetRecommendLLM(server.RecommendCandidates)
+	}
 	// 状态与客户端都传**函数**：客户端会在配置变化时重建，构造时抓一份
 	// 就等于永远指向旧的那个（见 pkg/api/musicdl.go 的说明）。
 	server.SetMusicDL(mdl.Status, mdl.Client)

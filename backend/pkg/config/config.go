@@ -126,6 +126,28 @@ type AppConfig struct {
 	// 完整拿到就提升成曲库文件（与「收藏自动下载」共用同一张登记表）。
 	// nil = 关。读它请走 TeeOn()，别自己判 nil。
 	TeeEnabled *bool `json:"tee_enabled,omitempty"`
+	// DailyLLMEnabled 是「每日推荐里的**大模型推荐层**」的开关。
+	//
+	// # 为什么要与「AI 大模型」的总开关分开
+	//
+	// AI 总开关（`ai.Config.Enabled`）管的是**别的用途**：文件名判名、搜索匹配消歧、
+	// 歌词核验、生成命名正则 —— 那些发出去的是**文件名与曲目元数据**。
+	// 这一层发出去的是**用户的收听历史与收藏**（歌名 + 歌手 + 专辑，字段级清单见
+	// `pkg/ai.RecommendRequest`）—— 是另一类数据。
+	//
+	// 用户为了「清理文件名」而打开 AI，不该等于默认同意把自己的听歌记录发给模型。
+	// 所以这两件事各有一个开关，**两个都开**这一层才动：本开关 = 用户对「把收听
+	// 历史发出去」这件事的明确同意；AI 总开关 = 有没有模型可调（没配好时静默降级）。
+	//
+	// # 为什么缺省是关
+	//
+	// 它会**真的把收听历史发到外部**，还可能每天花掉几次 token，该由用户明确打开。
+	// ⚠️ 参考实现 `/tmp/fnme-z` 没有这个开关 —— 它「配了 `FNMUSIC_LLM_*` 就启用」。
+	// 这里刻意不照抄：那是它把 LLM 配置本身当开关用，而曲率的 AI 配置是**全局**的、
+	// 已经被另外五个用途占着了（见 HANDOVER §3.5）。
+	//
+	// nil = 关。读它请走 DailyLLMOn()，别自己判 nil。
+	DailyLLMEnabled *bool `json:"daily_llm_enabled,omitempty"`
 
 	// ── 服务端洛雪宿主（goal-a5eb2a23 ⑤ 方案 b）────────────────────────
 	// ⚠️ 打开后**第三方音源脚本会跑在服务端** —— 这故意破了原来「后端不执行第三方 JS」
@@ -269,6 +291,15 @@ func (a AppConfig) FavAutoDownloadOn() bool {
 // TeeOn 报告「边听边下」开没开（nil = 关）。
 func (a AppConfig) TeeOn() bool {
 	return a.TeeEnabled != nil && *a.TeeEnabled
+}
+
+// DailyLLMOn 报告「每日推荐里的大模型推荐层」开没开（nil = 关）。
+//
+// ⚠️ 它只回答「用户同意把收听历史发出去吗」，**不**回答「模型配好了吗」——
+// 后者是 `ai.Config.Available()` 的事，由 `pkg/ai` 自己静默降级。
+// 两处都判等于把同一条判断写两遍，迟早不一致。
+func (a AppConfig) DailyLLMOn() bool {
+	return a.DailyLLMEnabled != nil && *a.DailyLLMEnabled
 }
 
 // LXServerOn 是「服务端洛雪宿主」的总开关。缺省关 —— 它是新能力，且会破掉
@@ -516,6 +547,11 @@ func (cm *ConfigManager) load() {
 			v := *c.TeeEnabled
 			cm.config.TeeEnabled = &v
 		}
+		// 每日推荐的大模型层（v2.1.118 新增）。⚠️ 同样 load 与 Update 两处都要登记。
+		if c.DailyLLMEnabled != nil {
+			v := *c.DailyLLMEnabled
+			cm.config.DailyLLMEnabled = &v
+		}
 		if c.LXServerEnabled != nil {
 			v := *c.LXServerEnabled
 			cm.config.LXServerEnabled = &v
@@ -661,6 +697,11 @@ func (cm *ConfigManager) Update(c AppConfig) error {
 	if c.TeeEnabled != nil {
 		v := *c.TeeEnabled
 		cm.config.TeeEnabled = &v
+	}
+	// 每日推荐的大模型层：nil = 不动（patch 里没这个键就不能动它）。
+	if c.DailyLLMEnabled != nil {
+		v := *c.DailyLLMEnabled
+		cm.config.DailyLLMEnabled = &v
 	}
 	if c.LXServerEnabled != nil {
 		v := *c.LXServerEnabled

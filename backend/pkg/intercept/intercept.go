@@ -188,6 +188,29 @@ type Config struct {
 	//
 	// 只在同源通道的 `/music/_qulv/ui.js` 这一条上生效，不会影响别的响应。
 	UIDevFile string
+
+	// ── 每日推荐的「大模型推荐层」（v2.1.118 新增）──────────────────────
+	//
+	// 这两条是**一对**，缺一这层就不存在。为什么拆成两个字段：一个回答「有没有模型
+	// 可调」（由调用方注入的实现决定），另一个回答「用户同意把收听历史发出去吗」
+	// （由用户配置决定）。前者是能力，后者是同意 —— 合成一个迟早会把「AI 配好了」
+	// 当成「用户可以发数据了」。
+	//
+	// 这一层怎么插进每日推荐、发出去的是什么、失败了怎么办，全在
+	// `vdaily_llm.go` 的文件注释里。
+
+	// RecommendLLM 是「拿种子换候选」的注入口，nil = 这一层不存在（**缺省**）。
+	//
+	// 为什么是函数而不是直接拿 `*ai.Client`：拦截层不该知道大模型客户端长什么样、
+	// 配置存在哪、用量记在哪。它只要「给我一组种子、还我一组候选」。
+	// 真实现是 `api.Server.RecommendCandidates`（见 `pkg/api/server.go`），
+	// 由 main.go 在 server 建好之后注进来。
+	RecommendLLM RecommendLLMFunc
+	// DailyLLMEnabled 返回「用户同意把收听历史发给大模型吗」（**现取**），
+	// nil = 一律视为关（与 TeeEnabled / FavAutoDownload 同一条口径）。
+	//
+	// 现取而不是构造时定死：用户在设置里打开就该立刻生效，不用重启应用。
+	DailyLLMEnabled func() bool
 }
 
 // defaultPlatforms 是默认参与在线搜索的平台。
@@ -244,6 +267,16 @@ type Interceptor struct {
 
 	vMu    sync.Mutex
 	vCache map[string]vEntry
+
+	// llmMu/llmCache 是「每日推荐的大模型层」按 (用户, 日期) 的缓存（见 vdaily_llm.go）。
+	//
+	// 与 vCache 分开是有意的，两件事的键与寿命都不同：
+	//   - vCache 的键是虚拟**歌单** guid（含日期），寿命 30 分钟 —— 它管的是
+	//     「这份歌单多久重算一次」；
+	//   - llmCache 的键是「用户 + 当天」，寿命是**一整天** —— 它管的是
+	//     「今天问过模型了吗」。合在一起就等于每次歌单重算都重新打一次模型。
+	llmMu    sync.Mutex
+	llmCache map[string]*llmEntry
 
 	// albumMu/albumCache 缓存「合成好的在线专辑」（见 valbum.go 的 albumFor）。
 	// 与 vCache 分开是有意的：vCache 的键是虚拟**歌单** guid，而专辑 guid 是
@@ -352,6 +385,7 @@ func New(cfg Config) *Interceptor {
 		onlineCache:     make(map[string]onlineCacheEntry, 32),
 		lyricCache:      make(map[string]lyricEntry, 64),
 		vCache:          make(map[string]vEntry, 8),
+		llmCache:        make(map[string]*llmEntry, 8),
 		albumCache:      make(map[string]albumEntry, 8),
 		albumLogged:     map[string]bool{},
 		stats:           make(map[string]int, 32),

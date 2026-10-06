@@ -162,29 +162,44 @@ func vNMGUID(id string) string { return vNMPrefix + strings.TrimSpace(id) }
 // 比查不到更糟，所以解析不出直链的曲目根本不进列表。排除集见 `dailyExclude`：
 // 已收藏的、以及最近播放过的都不再推（推一首他早就收藏过、或者刚听完的歌没有意义）。
 //
-// 在线候选不足 `vDailySize` 时，用**本地已有文件**的曲目补满空位（见
-// `localDailyFill`）—— 只补空位，在线推荐永远排在前面。
+// # 三层
+//
+//	在线推荐（按种子搜） → 大模型推荐（预留 vDailyLLMQuota 个名额） → 本地兜底（补空位）
+//
+// 中间那层是 v2.1.118 加的，全在 `vdaily_llm.go`：拿最近播放 / 收藏当种子问大模型，
+// 模型给的歌名再走一遍搜索 + 匹配 + 可播过滤。它**不在场时（没注入 / 开关关着 /
+// 没配置 / 超时 / 空回复）配额就是 0**，下面走的代码路径与加它之前逐字节相同。
+//
+// 本地兜底用**本地已有文件**的曲目补满空位（见 `localDailyFill`）—— 只补空位，
+// 在线推荐永远排在前面。
 func (i *Interceptor) dailyPlaylist(ctx context.Context, r *http.Request, now time.Time) vPlaylist {
 	user := i.userKey(r)
 	ex := i.dailyExclude(user)
+	seeds := i.dailySeeds(user, now)
 
-	var out []online.Track
+	quota := i.llmQuota()
+
+	// ⚠️ 顺序要紧：大模型这一路**先发出去**，再去做在线搜索。
+	//
+	// 它慢（要过 SSE），而这里是同步算歌单的请求路径。先发出去，它的等待就被
+	// 在线搜索的时间**遮住**大半，请求路径真正多等的时间远小于 vDailyLLMSyncWait。
+	deadline := time.Now().Add(vDailyLLMSyncWait)
+	llm := i.startLLMCandidates(ctx, user, now, quota)
+
+	out := make([]online.Track, 0, vDailySize)
 	seen := make(map[string]bool, vDailySize*2)
 
-	for _, seed := range i.dailySeeds(user, now) {
-		if len(out) >= vDailySize {
-			break
-		}
-		for _, t := range i.collectOnline(ctx, seed) {
-			if len(out) >= vDailySize {
-				break
-			}
-			if seen[t.RealID()] || ex.has(t.FakeID(), t) {
-				continue
-			}
-			seen[t.RealID()] = true
-			out = append(out, t)
-		}
+	i.fillOnline(ctx, seeds, ex, seen, &out, vDailySize-quota)
+
+	if llm != nil {
+		i.fillFromLLM(llm, deadline, ex, seen, &out, vDailySize)
+	}
+
+	// 大模型那一层没把预留的名额交满（超时 / 空回复 / 匹配不上 / 全被排除集滤掉）时，
+	// 把名额**还给在线层**：开了这个开关不该让推荐变少，也不该让本地兜底去顶它的位。
+	// 配额为 0 时这一步整个不执行 —— 加这一层之前是几次搜索，之后还是几次。
+	if llm != nil && len(out) < vDailySize {
+		i.fillOnline(ctx, seeds, ex, seen, &out, vDailySize)
 	}
 
 	// 本地兜底：**只在在线候选不够时**、且只补空位。它绝不能挤掉在线推荐的位置 ——
@@ -203,6 +218,32 @@ func (i *Interceptor) dailyPlaylist(ctx context.Context, r *http.Request, now ti
 		CreatedAt: ts,
 		UpdatedAt: ts,
 		Tracks:    out,
+	}
+}
+
+// fillOnline 按种子词搜在线候选，补到 target 为止。
+//
+// 从 `dailyPlaylist` 里抽出来是因为它现在要**被调用两次**：第一次按「去掉大模型
+// 预留名额之后」的目标，第二次在大模型那层没交满时把名额补回来。
+//
+// 第二次调用是**接着**第一次继续的，不是重头来：`seen` 与 `ex` 都是同一份，
+// 已经进列表的曲目会被跳过，所以它会自然地从上次停下的地方往下取。
+// `collectOnline` 自己带 5 分钟缓存，所以第二次那几搜基本是命中缓存、不重打上游。
+func (i *Interceptor) fillOnline(ctx context.Context, seeds []string, ex vDailyExclude, seen map[string]bool, out *[]online.Track, target int) {
+	for _, seed := range seeds {
+		if len(*out) >= target {
+			return
+		}
+		for _, t := range i.collectOnline(ctx, seed) {
+			if len(*out) >= target {
+				return
+			}
+			if seen[t.RealID()] || ex.has(t.FakeID(), t) {
+				continue
+			}
+			seen[t.RealID()] = true
+			*out = append(*out, t)
+		}
 	}
 }
 

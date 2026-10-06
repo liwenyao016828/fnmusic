@@ -625,6 +625,25 @@ func (s *Server) HandleDuplicatesResolve(w http.ResponseWriter, r *http.Request)
 
 // ── AI ──
 
+// RecommendCandidates 是拦截层「每日推荐的大模型层」的注入口
+// （见 pkg/intercept/vdaily_llm.go）。
+//
+// 为什么要有这个薄薄的方法，而不是让拦截层直接拿 `*ai.Client`：AI 客户端与它的
+// 配置、用量记账都归这个 Server 管，拦截层不该知道它们长什么样。它只要
+// 「给我一组种子、还我一组候选」。
+//
+// **未配置 AI 时返回 nil**（`ai.Client.Recommend` 的静默降级），调用方据此把这一层
+// 整个跳过 —— 每日推荐照常交在线 + 本地两层的结果，不会变成错误、空白或少歌。
+//
+// ⚠️ 它是**并发安全**的：拦截至在后台 goroutine 里调它（见 startLLMCandidates），
+// 而 `ai.Client` 自己的配置读写有锁。
+func (s *Server) RecommendCandidates(ctx context.Context, req ai.RecommendRequest) []ai.RecommendCandidate {
+	if s == nil || s.aiClient == nil {
+		return nil
+	}
+	return s.aiClient.Recommend(ctx, req)
+}
+
 // HandleAIConfig AI 配置读写
 //
 // GET  /api/ai/config  -> 密钥已脱敏
