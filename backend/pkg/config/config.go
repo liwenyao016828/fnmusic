@@ -126,6 +126,16 @@ type AppConfig struct {
 	// 完整拿到就提升成曲库文件（与「收藏自动下载」共用同一张登记表）。
 	// nil = 关。读它请走 TeeOn()，别自己判 nil。
 	TeeEnabled *bool `json:"tee_enabled,omitempty"`
+
+	// ── 服务端洛雪宿主（goal-a5eb2a23 ⑤ 方案 b）────────────────────────
+	// ⚠️ 打开后**第三方音源脚本会跑在服务端** —— 这故意破了原来「后端不执行第三方 JS」
+	// 的约束，是用户 2026-10-06 明确选的 (b)。所以缺省**关**，界面文案要写明这一点。
+	//
+	// 只有两个键，是刻意的：路径类字段一旦用字符串，`Update` 收到「部分更新」时
+	// 会被空值清掉（这个项目踩过同类坑）。所以脚本目录/宿主脚本路径**由程序推导**，
+	// 只把「开不开」和「端口」交给用户。
+	LXServerEnabled *bool `json:"lx_server_enabled,omitempty"`
+	LXServerPort    int   `json:"lx_server_port,omitempty"` // 0 = 用缺省 8920
 	// FnosToken 手工指定的飞牛音乐令牌（故障排查用）。
 	// 非空时优先于环境变量与数据库自动读取；留空表示走自动读取。
 	FnosToken string `json:"fnos_token,omitempty"`
@@ -259,6 +269,12 @@ func (a AppConfig) FavAutoDownloadOn() bool {
 // TeeOn 报告「边听边下」开没开（nil = 关）。
 func (a AppConfig) TeeOn() bool {
 	return a.TeeEnabled != nil && *a.TeeEnabled
+}
+
+// LXServerOn 是「服务端洛雪宿主」的总开关。缺省关 —— 它是新能力，且会破掉
+// 「后端不执行第三方 JS」这条边界，必须用户显式打开。
+func (a AppConfig) LXServerOn() bool {
+	return a.LXServerEnabled != nil && *a.LXServerEnabled
 }
 
 // LyricAutoDownloadOn 报告「下载时自动带上歌词」开没开。
@@ -500,6 +516,13 @@ func (cm *ConfigManager) load() {
 			v := *c.TeeEnabled
 			cm.config.TeeEnabled = &v
 		}
+		if c.LXServerEnabled != nil {
+			v := *c.LXServerEnabled
+			cm.config.LXServerEnabled = &v
+		}
+		if c.LXServerPort != 0 {
+			cm.config.LXServerPort = c.LXServerPort
+		}
 		if c.LyricAutoDownload != nil {
 			v := *c.LyricAutoDownload
 			cm.config.LyricAutoDownload = &v
@@ -638,6 +661,13 @@ func (cm *ConfigManager) Update(c AppConfig) error {
 	if c.TeeEnabled != nil {
 		v := *c.TeeEnabled
 		cm.config.TeeEnabled = &v
+	}
+	if c.LXServerEnabled != nil {
+		v := *c.LXServerEnabled
+		cm.config.LXServerEnabled = &v
+	}
+	if c.LXServerPort != 0 {
+		cm.config.LXServerPort = c.LXServerPort
 	}
 	if c.LyricAutoDownload != nil {
 		v := *c.LyricAutoDownload

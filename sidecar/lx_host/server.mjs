@@ -82,6 +82,15 @@ function loadOne(file) {
   } catch (e) { meta.error = String(e.message).slice(0, 300); }
   meta.actions = [...handlers.keys()];
   meta.wants = [...new Set(meta.wants)].slice(0, 40);
+  // 直接打进日志：这样**不用开任何接口**就能看出脚本缺什么。
+  // 放进真脚本时，这条日志就是「宿主还要补哪些全局」的答案。
+  const platform = Object.keys(((meta.inited || {}).sources) || {});
+  if (!meta.ok) {
+    console.log(`[lx_host] ✗ ${meta.file} 加载失败：${meta.error}`);
+  } else {
+    console.log(`[lx_host] ✓ ${meta.file} 平台=[${platform.join(',') || '未声明'}] 动作=[${meta.actions.join(',') || '无'}]` +
+      (meta.wants.length ? ` ⚠️ 缺全局=${meta.wants.join(',')}` : ' 未发现缺失的全局'));
+  }
   return { meta, handler: handlers.get('request') };
 }
 

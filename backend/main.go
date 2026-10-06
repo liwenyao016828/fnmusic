@@ -20,6 +20,7 @@ import (
 	"fn-lx-player/pkg/applog"
 	"fn-lx-player/pkg/config"
 	"fn-lx-player/pkg/intercept"
+	"fn-lx-player/pkg/lxnode"
 	"fn-lx-player/pkg/online"
 	"fn-lx-player/pkg/sources"
 	"fn-lx-player/pkg/takeover"
@@ -172,6 +173,25 @@ func main() {
 	server.SetMusicDL(mdl.Status, mdl.Client)
 	// 界面上的「重试启动」= 拿当前配置再 Apply 一次（配置没变就不会重建，只拉起进程）。
 	server.SetMusicDLRestart(func() { mdl.Apply(cfgMgr.Get()) })
+
+	// 服务端洛雪宿主（goal-a5eb2a23 ⑤ 方案 b）—— 缺省关。
+	// 它与 musicdl 的 sidecar 是两回事：那个跑的是 Python 音乐平台客户端，
+	// 这个跑的是用户自己的洛雪音源脚本。同样是「挂了不影响曲率」：Resolve 只返回错误。
+	lxn := lxnode.New()
+	{
+		c := cfgMgr.Get()
+		lxn.Apply(lxnode.Config{
+			Enabled: c.LXServerOn(),
+			NodeBin: "node",
+			// 复用 sidecarSourceDir 的定位逻辑（生产在可执行文件旁、开发在仓库根），
+			// 它给的是 sidecar/musicdl_service，取其父目录再进 lx_host。
+			Script: filepath.Join(filepath.Dir(sidecarSourceDir()), "lx_host", "server.mjs"),
+			Dir:    filepath.Join(*dataDir, "lx_sources"),
+			Port:   c.LXServerPort,
+		})
+	}
+	defer lxn.Stop()
+	_ = lxn
 	server.SetTakeover(tk)
 	server.SetTakeoverError(tkErr)
 	// 启动歌单监控调度（轮询式，重启后状态天然正确，不会因错过时刻丢任务）

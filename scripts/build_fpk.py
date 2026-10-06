@@ -142,6 +142,9 @@ REF_INNER = [
     "sidecar", "sidecar/musicdl_service",
     "sidecar/musicdl_service/app.py", "sidecar/musicdl_service/core.py",
     "sidecar/musicdl_service/requirements.txt",
+    # 服务端洛雪宿主（v2.1.115 起，goal-a5eb2a23 ⑤ 方案 b）。
+    # 漏了它 = 真机上「找不到 lx 宿主脚本」，而且是**静默**的 —— 所以列在这里走存在性断言。
+    "sidecar/lx_host", "sidecar/lx_host/server.mjs",
 ]
 
 MIN_BINARY_SIZE = 1024 * 1024  # 自检阈值：主程序必须 > 1MB
