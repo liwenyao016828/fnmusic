@@ -49,6 +49,7 @@ import (
 	"sync"
 	"time"
 
+	"fn-lx-player/pkg/lxnode"
 	"fn-lx-player/pkg/online"
 	"fn-lx-player/pkg/search"
 )
@@ -147,6 +148,18 @@ type Config struct {
 	// 只用来「对着页面源码能看出这行脚本是哪个版本发的」，以及参与缓存打破。
 	// 留空也能工作（脚本内容的指纹会补上）。见 pageshell.go。
 	Revision string
+	// LxSearch 是「洛雪音源脚本」搜索的注入口，nil = 洛雪源不进池（**缺省**）。
+	//
+	// 为什么是函数而不是一个布尔开关：洛雪源能不能用，取决于宿主进程起没起来、
+	// 以及用户装进去的脚本**谁在 inited 里声明了 musicSearch** —— 后者只有宿主知道。
+	// 所以这里只接一条「问它要候选」的路，哪些源能搜由宿主自己过滤（见
+	// sidecar/lx_host/server.mjs 的 /search）；宿主没起来时它返回 lxnode.ErrNotRunning，
+	// 拦截层当「源没开」静默跳过 —— 于是这里**不需要**再判一次开关
+	// （两处判空迟早不一致）。
+	//
+	// 返回的 Song.Source 是洛雪源标识（qsvip / wy / …），进池时会加 `lx:` 前缀，
+	// 见 lxsource.go。
+	LxSearch func(ctx context.Context, keyword string, limit int) ([]lxnode.Song, error)
 	// DownloadSources 返回「下载源池」的平台列表（现取），nil = 不用池（直接用曲目自己平台）。
 	//
 	// 用户的分工（2026-10-06）：网易云 / QQ 是**发现**来源，musicdl 那批平台是
@@ -241,6 +254,7 @@ type Interceptor struct {
 	dlSet map[string]bool
 
 	searcher     func(keyword, platform string, page, size int) []search.UnifiedSong
+	lxSearch     func(ctx context.Context, keyword string, limit int) ([]lxnode.Song, error)
 	lyricFetch   func(t online.Track) string
 	nmFetch      func(ctx context.Context, id string, limit int) (string, string, []online.Track)
 	chartFetch   func(ctx context.Context, source, id string, limit int) (string, string, []online.Track, error)
@@ -312,6 +326,7 @@ func New(cfg Config) *Interceptor {
 		dlSet:           map[string]bool{},
 		favAutoDownload: cfg.FavAutoDownload,
 		searcher:        searcher,
+		lxSearch:        cfg.LxSearch,
 		lyricFetch:      lyricFetcher,
 		store:           store,
 		userCache:       make(map[string]userEntry, 16),

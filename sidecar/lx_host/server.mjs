@@ -16,14 +16,22 @@
  *   node server.mjs --dir <脚本目录> --port 8920
  *   curl localhost:8920/health
  *   curl -X POST localhost:8920/resolve -d '{"source":"wy","info":{"name":"x"},"quality":"320k"}'
+ *   curl -X POST localhost:8920/search  -d '{"keyword":"晴天","page":1,"limit":5}'
+ *
+ * ⚠️ `musicSearch` **不在官方 LX 契约里**（官方文档的 `sources[k].actions` 只认
+ * musicUrl / lyric / pic，`info` 的形状也只对这几个动作有定义）。它是音源脚本作者与
+ * 第三方宿主（觅音那一族）之间的约定 —— 所以形状**只能靠真脚本实测**，照文档写会全错。
+ * /search 那段顶部与 normalizeSearchItem 顶部记着实测结果，改之前先看那几条。
  */
 import http from 'node:http';
 import vm from 'node:vm';
 import fs from 'node:fs';
 import path from 'node:path';
-import { createRequire } from 'node:module';
+import nodeBuffer from 'node:buffer';
 import nodeCrypto from 'node:crypto';
-import * as nodeZlib from 'node:zlib';
+import nodeHttps from 'node:https';
+import nodeUrl from 'node:url';
+import nodeZlib from 'node:zlib';
 
 const argv = process.argv.slice(2);
 const arg = (n, d) => { const i = argv.indexOf('--' + n); return i >= 0 && argv[i + 1] ? argv[i + 1] : d; };
@@ -338,6 +346,61 @@ function createLxUtils(record) {
   }, 'lx.utils.', record);
 }
 
+// ─────────────────────────────────────────────────────────────
+// require 白名单 —— 从浏览器侧 lx-compat.js 的 createRequireShim() 移植
+// ─────────────────────────────────────────────────────────────
+// 为什么必须有：沙箱里的 `require` 原来是**真的 Node require**（`createRequire(import.meta.url)`），
+// 于是任何丢进音源目录的 .js 都能 `require('node:fs')` 读写宿主的文件、
+// `require('node:child_process')` 起进程 —— 宿主对脚本的边界就是从这条缝漏掉的。
+//
+// 白名单**照抄**浏览器侧 createRequireShim()：清单只有 buffer / crypto / url / zlib，
+// 查表语义也照抄（这几条正是两边行为必须一致的部分）：
+//   · 先 `String(id || '')` 再剥掉开头的 `node:` —— `require('node:crypto')` ≡ `require('crypto')`
+//   · **整名精确匹配**、大小写敏感：`Crypto`、`crypto/promises`、`node:zlib/promises` 一律拒绝
+//   · 按剥掉前缀后的名字缓存：同一次加载里拿回同一个模块对象
+//   · 不在名单里 → **抛错**，绝不返回 undefined：返回 undefined 会让脚本在几百行外
+//     以「Cannot read properties of undefined」这种看不懂的方式炸（这正是本文件的诊断信条）
+//
+// ⚠️ 与浏览器侧**唯一**的差异，在这里说明（不默默改）：模块的**内容**用 Node 原生内建，
+// 不用浏览器侧那份手写替身。三点理由：
+//   ① 这是本文件已有的移植规则 —— 上面 lx.utils 就是「成员名照抄浏览器侧、实现换成 Node 原生」；
+//   ② 真桌面版洛雪给脚本的本来就是真 Node 内建，浏览器替身才是偏差，照抄替身会**静默算错**：
+//      浏览器版 `require('crypto').createHash('md5').update(s).digest()` 返回 hex **字符串**，
+//      而 Node/桌面版返回 **Buffer**；浏览器版 `require('zlib')` 只有 Promise 写法，
+//      桌面版是回调 + `*Sync` 写法。差别不报错，只是数据悄悄不对 —— 这一层最忌讳这个。
+//   ③ 白名单挡的是**模块名**，而 buffer / crypto / url / zlib 这四个本身都摸不到文件系统与进程，
+//      放行它们不削弱上面那条边界。
+// 若以后决定连内容也要与浏览器侧逐字节等价，把下面四个 case 换成 `{ Buffer, SlowBuffer: Buffer,
+// INSPECT_MAX_BYTES: 50 }` / lx-compat.js 的 createCryptoModule() / zlib 包装即可 ——
+// 但那时要同时接受 ② 里那两个偏差。
+//
+// ⚠️ 宿主自己（node:http/https 取直链、node:crypto/zlib 实现 utils）**不走这里**：
+// 本文件顶层用 ESM `import` 拿内建，沙箱里的 `require` 只发给脚本。走这条被限制的路会把自己也挡住。
+function createLxRequire() {
+  const cache = new Map();
+
+  return function lxRequire(id) {
+    const name = String(id || '').replace(/^node:/, '');
+    if (cache.has(name)) return cache.get(name);
+
+    let mod;
+    switch (name) {
+      case 'buffer': mod = nodeBuffer; break;
+      case 'crypto': mod = nodeCrypto; break;
+      case 'url': mod = nodeUrl; break;
+      case 'zlib': mod = nodeZlib; break;
+      default:
+        // 明确的错误信息：说清是**被宿主白名单拒绝**，以及到底放行了什么 ——
+        // 不然脚本只会拿到 undefined，然后在很远的地方崩。
+        throw new Error(
+          `沙箱拒绝 require('${id}')：该模块不在宿主白名单里，只提供 buffer / crypto / url / zlib`,
+        );
+    }
+    cache.set(name, mod);
+    return mod;
+  };
+}
+
 /** 按 frontend/src/engine/lx-runtime.js 的契约造一个 lx 宿主（每个脚本一份）。 */
 function makeLx(meta, onRequestDone) {
   const handlers = new Map();
@@ -360,7 +423,12 @@ function makeLx(meta, onRequestDone) {
       const u = String(url);
       if (!/^https?:\/\//i.test(u)) { if (cb) cb(new Error('只允许 http/https'), null); return; }
       meta.requests.push(u.slice(0, 140));
-      const mod = u.startsWith('https:') ? require('node:https') : require('node:http');
+      // ⚠️ 走宿主自己的内建（顶层 import），**不是**沙箱那个白名单 require ——
+      // 宿主内部的取直链能力不能被发给脚本的那份限制挡住。
+      // 顺带修了一个潜伏 bug：这里原来写的是裸 `require('node:http')`，而 makeLx 是模块作用域的
+      // 函数、ESM 里并没有 `require` 绑定 → 真脚本一旦调 lx.request 就 100% 抛
+      // `require is not defined`（probe 里有模块级 `const require`，所以只在宿主上暴露）。
+      const mod = u.startsWith('https:') ? nodeHttps : http;
       mod.get(u, (res) => {
         const chunks = [];
         res.on('data', (c) => chunks.push(c));
@@ -382,9 +450,10 @@ function loadOne(file) {
   const code = fs.readFileSync(file, 'utf8');
   const meta = { file: path.basename(file), ok: false, wants: [], requests: [], error: '', inited: null, actions: [] };
   const { lx, handlers } = makeLx(meta, null);
-  const require = createRequire(import.meta.url);
   const base = {
-    lx, require, module: { exports: {} }, exports: {}, global: {},
+    // 脚本拿到的 `require` 是**白名单函数**（createLxRequire），不是真 require ——
+    // 原来这里是 `createRequire(import.meta.url)`，等于把宿主的文件系统/进程交给任何丢进来的 .js。
+    lx, require: createLxRequire(), module: { exports: {} }, exports: {}, global: {},
     Buffer, console: { log() {}, warn() {}, error() {} },
     setInterval: () => 0, clearInterval: () => {}, setTimeout: (f) => { try { f && f(); } catch {} return 0; }, clearTimeout: () => {}, requestAnimationFrame: () => 0,
   };
@@ -448,6 +517,50 @@ loadAll();
 
 const readBody = (req) => new Promise((res) => { let b = ''; req.on('data', (c) => b += c); req.on('end', () => res(b)); });
 
+// ─────────────────────────────────────────────────────────────
+// POST /search 的归一化辅助
+// ─────────────────────────────────────────────────────────────
+/**
+ * 把脚本返回的一条搜索结果归一成调用方（Go 侧）能直接用的形状。
+ *
+ * 逐字段的取舍 —— **全部来自实测**（2026-10-06，真脚本 `全豆要-聚合音源-V4.1.js`
+ * 的 `qsvip` 源），不是照文档或猜的：
+ *   · id       ← `songmid` ‖ `id` ‖ `hash`：脚本给这三个字段塞的是同一个值（实测），
+ *                而 `songmid` 是脚本解析那一步 `getSongId()` **优先读**的字段名，
+ *                也是曲率池里的「平台内 id」口径 —— 两处对齐，后续直接用。
+ *   · name     ← `name`；singer ← `singer`（字符串，不是数组）；album ← `albumName`。
+ *   · duration ← **秒**（脚本把上游毫秒 floor 成秒：实测 269000 → 269）。
+ *                正好是曲率统一结构要的单位，不需要再换算。
+ *   · pic      ← `pic`。
+ *   · raw      ← 脚本那条记录**原样**，只删掉 `_raw`。
+ *                `_raw` 是脚本自己的「上游原对象」透传，内容与体积都不可知（可能不是
+ *                纯 JSON），而 `raw` 本身已经能证明「脚本自己报的字段一个都没丢」。
+ *   · quality / size ← **只有脚本真的给了才带**。实测的 qsvip 两个都没给，
+ *                所以现在恒为缺省。**不替它编一个档位**：池里对「缺体积」
+ *                （不主动占优）与「缺音质」（算最低档，见 qualityRank）的处理完全不同，
+ *                编一个就等于伪造决策依据。
+ */
+function normalizeSearchItem(script, source, item) {
+  const it = item && typeof item === 'object' ? item : {};
+  const raw = Object.assign({}, it);
+  delete raw._raw; // 理由见上（脚本的上游透传，形状不可知）
+  const out = {
+    script,
+    source,
+    id: String(it.songmid || it.id || it.hash || ''),
+    name: String(it.name || ''),
+    singer: String(it.singer || ''),
+    album: String(it.albumName || it.album || ''),
+    duration: Number(it.duration) > 0 ? Math.floor(Number(it.duration)) : 0,
+    pic: String(it.pic || it.cover || ''),
+    raw,
+  };
+  // 只在**脚本真给了**的时候透传 —— 缺就是缺，不补默认值（见函数顶部）
+  if (it.quality) out.quality = String(it.quality);
+  if (Number(it.size) > 0) out.size = Math.floor(Number(it.size));
+  return out;
+}
+
 http.createServer(async (req, res) => {
   const send = (code, obj) => { const s = JSON.stringify(obj); res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': Buffer.byteLength(s) }); res.end(s); };
   if (req.url === '/health') {
@@ -470,6 +583,59 @@ http.createServer(async (req, res) => {
     }
     return send(502, { error: '没有脚本能解析出直链', tried });
   }
+  // ── POST /search：让「声明了 musicSearch 的源」把搜索结果交出来 ──────
+  //
+  // 实测形状（真脚本 qsvip，见 normalizeSearchItem 顶部）：入参是
+  //   `{ source, action: 'musicSearch', info: { keyword, page, pagesize } }`
+  // ⚠️ 搜索参数放在 `info` **顶层**，不是 `info.musicInfo` 里（与 musicUrl 正相反）——
+  // 放错层时脚本读不到 keyword，**不报错**，静默返回 `{isEnd:true, list:[]}`（实测）。
+  // 同理 `pagesize` 不能叫 `limit`：脚本只认 `pagesize`，给 `limit` 它会按默认 30 搜（实测）。
+  //
+  // 两条硬规矩（与 /resolve 同一个风格）：
+  //   · 只调**在 inited 里声明了 musicSearch** 的源；没声明的明确记一笔「已跳过」，
+  //     不盲调（盲调对这类脚本是 reject `action not support`，实测）。
+  //   · 单个源失败**只记一笔**，绝不影响别的源 —— 一个音源挂了不该让整次搜索空手。
+  // 结果为空**不是错误**（搜索本来就可能没有命中）：照常 200 + results:[]，
+  // 原因留在 tried 里。真正的错误只有请求体不是 JSON（400）与缺 keyword（400）。
+  if (req.url === '/search' && req.method === 'POST') {
+    let payload = {};
+    try { payload = JSON.parse((await readBody(req)) || '{}'); } catch { return send(400, { error: 'bad json' }); }
+    const keyword = String(payload.keyword == null ? '' : payload.keyword).trim();
+    if (!keyword) return send(400, { error: '缺少 keyword' });
+    const page = Number(payload.page) > 0 ? Math.floor(Number(payload.page)) : 1;
+    const limit = Number(payload.limit) > 0 ? Math.floor(Number(payload.limit)) : 10;
+    // 留空 = 所有声明了 musicSearch 的源（调用方通常不指定）
+    const wantSource = String(payload.source == null ? '' : payload.source).trim();
+
+    const results = [];
+    const tried = [];
+    for (const l of loaded) {
+      if (!l.handler) { tried.push({ script: l.meta.file, source: wantSource, error: l.meta.error || '脚本没注册 request 处理器' }); continue; }
+      const sources = (l.meta.inited && l.meta.inited.sources) || {};
+      for (const src of Object.keys(sources)) {
+        if (wantSource && src !== wantSource) continue;
+        const info = sources[src] || {};
+        const actions = Array.isArray(info.actions) ? info.actions : [];
+        if (!actions.includes('musicSearch')) {
+          // 「不支持搜索」是**正常事实**，不是故障：说出来，别让调用方以为搜过而没结果
+          tried.push({ script: l.meta.file, source: src, error: '该源未声明 musicSearch，已跳过' });
+          continue;
+        }
+        try {
+          const out = await Promise.race([
+            Promise.resolve(l.handler({ source: src, action: 'musicSearch', info: { keyword, page, pagesize: limit } })),
+            new Promise((_, rej) => setTimeout(() => rej(new Error('timeout 8s')), 8000)),
+          ]);
+          const list = Array.isArray(out && out.list) ? out.list : [];
+          for (const it of list) results.push(normalizeSearchItem(l.meta.file, src, it));
+          if (!list.length) tried.push({ script: l.meta.file, source: src, error: '上游没返回结果' });
+        } catch (e) {
+          tried.push({ script: l.meta.file, source: src, error: String((e && e.message) || e).slice(0, 160) });
+        }
+      }
+    }
+    return send(200, { ok: true, keyword, page, limit, results, tried });
+  }
   if (req.url === '/reload' && req.method === 'POST') { loadAll(); return send(200, { reloaded: loaded.length }); }
-  send(404, { error: 'not found', routes: ['GET /health', 'POST /resolve', 'POST /reload'] });
+  send(404, { error: 'not found', routes: ['GET /health', 'POST /resolve', 'POST /search', 'POST /reload'] });
 }).listen(PORT, '127.0.0.1', () => console.log(`[lx_host] 监听 127.0.0.1:${PORT}，脚本目录 ${DIR}，加载 ${loaded.length} 个脚本`));

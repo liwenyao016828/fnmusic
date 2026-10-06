@@ -220,12 +220,18 @@ func (i *Interceptor) bestQualityTrack(ctx context.Context, title, artist string
 func (i *Interceptor) rankedSources(ctx context.Context, title, artist string, wantSec int) []online.Track {
 	plats := i.downloadSources()
 	keyword := strings.TrimSpace(title + " " + artist)
-	if len(plats) == 0 || keyword == "" {
+	// 池空 = musicdl 那批平台一个都没有、**而且**洛雪源也没接 —— 那就一次搜索都不发。
+	// （洛雪没接时这个条件与改动前完全一致：len(plats)==0 就直接返回。）
+	lxOn := i.lxSearch != nil
+	if keyword == "" || (len(plats) == 0 && !lxOn) {
 		return nil
 	}
 
 	results := make([][]search.UnifiedSong, len(plats))
-	var wg sync.WaitGroup
+	var (
+		wg      sync.WaitGroup
+		lxSongs []search.UnifiedSong
+	)
 	for idx, p := range plats {
 		wg.Add(1)
 		go func(idx int, p string) {
@@ -235,21 +241,39 @@ func (i *Interceptor) rankedSources(ctx context.Context, title, artist string, w
 			results[idx] = i.searcher(keyword, p, 1, 5)
 		}(idx, p)
 	}
+	// 洛雪源与平台源**并发**问：它只是池里的另一条来源，没理由串在平台后面多等一轮
+	//（这一层在下载路径上，等待就是用户体验）。它自己那点失败在 lxCandidates 里
+	// 就吞掉了，不会影响平台源的结论。
+	if lxOn {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			lxSongs = i.lxCandidates(ctx, keyword)
+		}()
+	}
 	wg.Wait()
 	if ctx.Err() != nil {
 		return nil
 	}
 
+	// 过筛的判据只有**这一份**：洛雪候选与平台候选共用它，池里不该有两套匹配语义。
+	accept := func(s search.UnifiedSong) bool {
+		return sameTitle(s.Name, title) &&
+			// 同名还不够：还要是**同一版录音**（时长对得上）
+			durationMatches(wantSec, durationSeconds(s))
+	}
+
 	var matched []search.UnifiedSong
 	for _, songs := range results {
 		for _, s := range songs {
-			if !sameTitle(s.Name, title) {
-				continue
+			if accept(s) {
+				matched = append(matched, s)
 			}
-			// 同名还不够：还要是**同一版录音**（时长对得上）
-			if !durationMatches(wantSec, durationSeconds(s)) {
-				continue
-			}
+		}
+	}
+	// 洛雪那批（声明了 musicSearch 的脚本给的）与平台候选一起排序、一起挑。
+	for _, s := range lxSongs {
+		if accept(s) {
 			matched = append(matched, s)
 		}
 	}

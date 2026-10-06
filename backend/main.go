@@ -69,6 +69,13 @@ func main() {
 	cfgMgr.OnUpdate(mdl.Apply) // 开关一翻就热切换（不用重启应用）
 	defer mdl.Stop()           // 退出时停进程：sidecar 是子进程，不主动收就成孤儿
 
+	// 服务端洛雪宿主（goal-a5eb2a23 ⑤ 方案 b）—— 缺省关。
+	//
+	// ⚠️ Manager 在这里先建出来（而不是等到下面那个块），因为拦截层的配置里要用
+	// 它的方法值：洛雪音源脚本的搜索也要进下载源池（见 pkg/intercept/lxsource.go）。
+	// **起停仍由下面那个块负责** —— 这里只是拿着句柄，不 Apply。
+	lxn := lxnode.New()
+
 	// 3. 音乐入口接管（可选，默认关闭）
 	//
 	// 开启后本应用会监听飞牛官方音乐的 Unix socket，除自己处理的路径外全部透传。
@@ -137,7 +144,13 @@ func main() {
 			},
 			// 解析池：**同一个池**，这样外挂平台（musicdl）与原生平台
 			// （网易 / QQ）在拦截层眼里没有区别。
-			Pool: pool,
+			// 洛雪音源脚本的搜索也进池（见 pkg/intercept/lxsource.go）。
+			//
+			// 传的是宿主的方法值，不在这里判开关：宿主没起来时 SearchAll 返回
+			// lxnode.ErrNotRunning，拦截层把它当「源没开」**静默跳过** ——
+			// 所以「缺省关」这条不需要在两处各判一次（两处判空迟早会不一致）。
+			LxSearch: lxn.SearchAll,
+			Pool:     pool,
 			// 参与「官方页面搜索合并」的平台 = 内置默认（网易 + QQ）
 			// ∪ 当前启用的外挂平台。
 			//
@@ -177,7 +190,6 @@ func main() {
 	// 服务端洛雪宿主（goal-a5eb2a23 ⑤ 方案 b）—— 缺省关。
 	// 它与 musicdl 的 sidecar 是两回事：那个跑的是 Python 音乐平台客户端，
 	// 这个跑的是用户自己的洛雪音源脚本。同样是「挂了不影响曲率」：Resolve 只返回错误。
-	lxn := lxnode.New()
 	{
 		c := cfgMgr.Get()
 		lxn.Apply(lxnode.Config{
@@ -191,7 +203,6 @@ func main() {
 		})
 	}
 	defer lxn.Stop()
-	_ = lxn
 	server.SetTakeover(tk)
 	server.SetTakeoverError(tkErr)
 	// 启动歌单监控调度（轮询式，重启后状态天然正确，不会因错过时刻丢任务）

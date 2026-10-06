@@ -46,6 +46,23 @@ type Config struct {
 // readyTimeout 是等宿主起来的上限。首次加载脚本目录可能较慢，给足。
 const readyTimeout = 20 * time.Second
 
+// searchTimeout 是**单次**搜索的预算。
+//
+// 比宿主内部的单源预算（8s）长一点，好让宿主自己那条「哪个源超时了」的
+// 记录先发生（它比我们这边一刀砍掉更有信息量）；又必须比下载路径的总预算短得多
+// —— 搜不到就回落，不能让一次洛雪搜索拖住整首歌的下载。
+const searchTimeout = 12 * time.Second
+
+// ErrNotRunning 表示宿主**没在跑**（开关关着 / 起不来 / 已经退出）。
+//
+// 单独一个哨兵错误是为了让调用方分得清两件事：
+//
+//	· 「洛雪源没开」——用户开关的正常状态，池静默少一条来源，不该刷日志；
+//	· 「开着，但这次搜索失败了」——要留日志。
+//
+// 两者对下载池的结论都是「没有候选」，但对排障的意义完全不同。
+var ErrNotRunning = errors.New("lx 宿主不可用")
+
 // process 是本包用到的那部分子进程能力（测试替换它）。
 type process interface {
 	Start() error
@@ -172,7 +189,9 @@ func (m *Manager) Resolve(ctx context.Context, source string, info map[string]an
 	if m.state != StateReady || m.proc == nil {
 		st := m.state
 		m.mu.Unlock()
-		return "", fmt.Errorf("lx 宿主不可用（%s）", st)
+		// 包一层哨兵错误：字符串与以前一致，但调用方能 errors.Is 出「宿主没开」
+		// （池里要静默跳过，见 pkg/intercept/lxsource.go）
+		return "", fmt.Errorf("%w（%s）", ErrNotRunning, st)
 	}
 	base := m.cfg.base()
 	m.mu.Unlock()
@@ -233,6 +252,157 @@ func (m *Manager) Resolve(ctx context.Context, source string, info map[string]an
 		return "", fmt.Errorf("宿主返回的不是直链：%q", out.URL)
 	}
 	return out.URL, nil
+}
+
+// ── 搜索 ─────────────────────────────────────────────────────────────────
+//
+// `musicSearch` **不在官方 LX 契约里**（官方文档的 `sources[k].actions` 只认
+// musicUrl / lyric / pic）。它是音源脚本作者与第三方宿主之间的约定，形状只能在
+// 真脚本上量。2026-10-06 用真脚本 `全豆要-聚合音源-V4.1.js` 的 `qsvip` 源实测到的：
+//
+//	入参  { source, action: 'musicSearch', info: { keyword, page, pagesize } }
+//	      ⚠️ 搜索参数在 info **顶层**（与 musicUrl 的 info.musicInfo 正相反）；
+//	         放错层脚本读不到 keyword，**不报错**，静默回 { isEnd: true, list: [] }；
+//	         `pagesize` 不能写成 `limit`，否则脚本按默认 30 搜。
+//	出参  Promise<{ isEnd, list: [{ id, songmid, hash, name, singer,
+//	          albumName, duration(秒), pic, _raw }], total }>
+//	失败  没声明 musicSearch 的源 → reject `action not support`
+//	      上游挂了 → reject（HTTP 500 / 请求错误: …）
+//	空结果**不是失败**：{ isEnd: true, list: [] }
+//
+// 这些都是宿主（sidecar/lx_host/server.mjs 的 /search）实测后的契约，本包只调它。
+
+// Tried 是宿主报的「这个（脚本, 源）为什么没有结果」。
+//
+// 带上来是为了排障时不用翻宿主日志 —— 与 Resolve 的 tried 同一个用意。
+type Tried struct {
+	Script string `json:"script"`
+	Source string `json:"source"`
+	Error  string `json:"error"`
+}
+
+// Song 是宿主 /search 返回的一条归一化搜索结果。
+//
+// ⚠️ 字段**缺就是缺**，不要在这里补默认值：
+//   - Duration 单位是**秒**（宿主已把上游毫秒压成秒），0 = 脚本没给；
+//   - Quality / Size 只有脚本**真的给了**才非空/非零 —— 实测的 qsvip **两个都没给**。
+//     池里对「缺体积」（不主动占优）与「缺音质」（算最低档）的处理完全不同，
+//     在这里编一个默认档位就等于伪造决策依据。
+type Song struct {
+	Script string `json:"script"` // 哪个 .js 给的（排障用）
+	Source string `json:"source"` // 洛雪源标识（qsvip / wy / …）
+	ID     string `json:"id"`     // 平台内 id；宿主取 songmid ‖ id ‖ hash
+	Name   string `json:"name"`
+	Singer string `json:"singer"`
+	Album  string `json:"album"`
+	// Duration 是秒。0 = 脚本没给（不是「零秒」）。
+	Duration int    `json:"duration"`
+	Pic      string `json:"pic"`
+	Quality  string `json:"quality"` // 缺省空串 = 脚本没给
+	Size     int64  `json:"size"`    // 缺省 0 = 脚本没给
+}
+
+// searchRequest 是发给宿主的搜索请求体（形状与 host 的 /search 对齐）。
+type searchRequest struct {
+	Source  string `json:"source"` // 空 = 所有声明了 musicSearch 的源
+	Keyword string `json:"keyword"`
+	Page    int    `json:"page"`
+	Limit   int    `json:"limit"`
+}
+
+// Search 让宿主去搜关键词。source 留空 = 所有声明了 musicSearch 的源。
+//
+// 「哪些脚本支持搜索」**不由这里判断** —— 宿主按每个脚本 inited 里声明的 actions
+// 自己过滤，不支持的源它会明确记一笔「已跳过」。Go 侧不假设任何脚本支持搜索
+// （这正是「别指望所有脚本都支持」那条要求的落点）。
+//
+// 硬约束与 Resolve 一致：**任何失败都只返回 error**，不 panic、不阻塞调用方。
+// 「搜到 0 条」**不是**错误（搜索本来就可能没有命中），那时返回空切片 + nil。
+// 只有「宿主没开」（ErrNotRunning）、连不上、响应不是 200 才算 error。
+func (m *Manager) Search(ctx context.Context, source, keyword string, page, limit int) ([]Song, error) {
+	m.mu.Lock()
+	if m.state != StateReady || m.proc == nil {
+		st := m.state
+		m.mu.Unlock()
+		return nil, fmt.Errorf("%w（%s）", ErrNotRunning, st)
+	}
+	base := m.cfg.base()
+	m.mu.Unlock()
+
+	if strings.TrimSpace(keyword) == "" {
+		return nil, errors.New("空的搜索关键词")
+	}
+	if page <= 0 {
+		page = 1
+	}
+	if limit <= 0 {
+		limit = 10
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, searchTimeout)
+	defer cancel()
+
+	body, _ := json.Marshal(searchRequest{Source: source, Keyword: keyword, Page: page, Limit: limit})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/search", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var out struct {
+		OK      bool    `json:"ok"`
+		Results []Song  `json:"results"`
+		Tried   []Tried `json:"tried"`
+		Error   string  `json:"error"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	if resp.StatusCode != http.StatusOK {
+		msg := out.Error
+		if msg == "" {
+			msg = resp.Status
+		}
+		if s := triedSummary(out.Tried); s != "" {
+			msg += "（" + s + "）"
+		}
+		return nil, errors.New(msg)
+	}
+	// 200 但一条都没有：**不是错误**（这个关键词本来就可能没歌）。但把宿主给的
+	// 「每个源为什么没有结果」播出来 —— 「上游 404」与「本来就没这首歌」在日志里
+	// 必须能分清，否则「搜索接进来了但永远搜不到」这种问题根本没法查。
+	if len(out.Results) == 0 && len(out.Tried) > 0 {
+		m.logf("搜索 %q 无结果：%s", keyword, triedSummary(out.Tried))
+	}
+	return out.Results, nil
+}
+
+// SearchAll 搜**所有**声明了 musicSearch 的源，第 1 页。
+//
+// 参数形状专门对齐下载池的注入口（pkg/intercept.Config.LxSearch）——
+// 池只关心「有没有同名同版的那一条」，不需要翻页。
+func (m *Manager) SearchAll(ctx context.Context, keyword string, limit int) ([]Song, error) {
+	return m.Search(ctx, "", keyword, 1, limit)
+}
+
+// triedSummary 把 tried 压成一行：「脚本/源 → 原因；…」。
+func triedSummary(tried []Tried) string {
+	if len(tried) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(tried))
+	for _, tr := range tried {
+		who := tr.Script
+		if tr.Source != "" {
+			who += "/" + tr.Source
+		}
+		parts = append(parts, who+" → "+tr.Error)
+	}
+	return strings.Join(parts, "；")
 }
 
 // execProc 是真实的进程实现。

@@ -10,16 +10,19 @@
  * 注意：探测阶段**不出网**（lx.request 直接回错），只看脚本的结构与依赖。
  */
 import { readFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import vm from 'node:vm';
+import nodeBuffer from 'node:buffer';
 import nodeCrypto from 'node:crypto';
-import * as nodeZlib from 'node:zlib';
+import nodeUrl from 'node:url';
+import nodeZlib from 'node:zlib';
 
 const file = process.argv[2];
 if (!file) { console.error('用法: node scripts/lx-probe.mjs <音源脚本.js>'); process.exit(2); }
 
 const code = readFileSync(file, 'utf8');
-const require = createRequire(import.meta.url);
+// ⚠️ 这里**故意没有**真的 `require` 变量：脚本拿到的那个 `require` 由 createLxRequire() 提供的
+// 白名单函数充当（见下）。宿主自己要用内建（node:crypto / node:zlib）一律走顶层 ESM `import`。
+// 原来这里是 `const require = createRequire(import.meta.url)` —— 那等于把**真 require 交给脚本**。
 const out = { file, bytes: code.length, inited: null, handlers: [], wants: [], requests: [], errors: [] };
 
 // ─────────────────────────────────────────────────────────────
@@ -330,6 +333,61 @@ function createLxUtils(record) {
   }, 'lx.utils.', record);
 }
 
+// ─────────────────────────────────────────────────────────────
+// require 白名单 —— 从浏览器侧 lx-compat.js 的 createRequireShim() 移植
+// ─────────────────────────────────────────────────────────────
+// 为什么必须有：沙箱里的 `require` 原来是**真的 Node require**（`createRequire(import.meta.url)`），
+// 于是任何丢进音源目录的 .js 都能 `require('node:fs')` 读写宿主的文件、
+// `require('node:child_process')` 起进程 —— 宿主对脚本的边界就是从这条缝漏掉的。
+//
+// 白名单**照抄**浏览器侧 createRequireShim()：清单只有 buffer / crypto / url / zlib，
+// 查表语义也照抄（这几条正是两边行为必须一致的部分）：
+//   · 先 `String(id || '')` 再剥掉开头的 `node:` —— `require('node:crypto')` ≡ `require('crypto')`
+//   · **整名精确匹配**、大小写敏感：`Crypto`、`crypto/promises`、`node:zlib/promises` 一律拒绝
+//   · 按剥掉前缀后的名字缓存：同一次加载里拿回同一个模块对象
+//   · 不在名单里 → **抛错**，绝不返回 undefined：返回 undefined 会让脚本在几百行外
+//     以「Cannot read properties of undefined」这种看不懂的方式炸（这正是本文件的诊断信条）
+//
+// ⚠️ 与浏览器侧**唯一**的差异，在这里说明（不默默改）：模块的**内容**用 Node 原生内建，
+// 不用浏览器侧那份手写替身。三点理由：
+//   ① 这是本文件已有的移植规则 —— 上面 lx.utils 就是「成员名照抄浏览器侧、实现换成 Node 原生」；
+//   ② 真桌面版洛雪给脚本的本来就是真 Node 内建，浏览器替身才是偏差，照抄替身会**静默算错**：
+//      浏览器版 `require('crypto').createHash('md5').update(s).digest()` 返回 hex **字符串**，
+//      而 Node/桌面版返回 **Buffer**；浏览器版 `require('zlib')` 只有 Promise 写法，
+//      桌面版是回调 + `*Sync` 写法。差别不报错，只是数据悄悄不对 —— 这一层最忌讳这个。
+//   ③ 白名单挡的是**模块名**，而 buffer / crypto / url / zlib 这四个本身都摸不到文件系统与进程，
+//      放行它们不削弱上面那条边界。
+// 若以后决定连内容也要与浏览器侧逐字节等价，把下面四个 case 换成 `{ Buffer, SlowBuffer: Buffer,
+// INSPECT_MAX_BYTES: 50 }` / lx-compat.js 的 createCryptoModule() / zlib 包装即可 ——
+// 但那时要同时接受 ② 里那两个偏差。
+//
+// ⚠️ 宿主自己（node:http/https 取直链、node:crypto/zlib 实现 utils）**不走这里**：
+// 本文件顶层用 ESM `import` 拿内建，沙箱里的 `require` 只发给脚本。走这条被限制的路会把自己也挡住。
+function createLxRequire() {
+  const cache = new Map();
+
+  return function lxRequire(id) {
+    const name = String(id || '').replace(/^node:/, '');
+    if (cache.has(name)) return cache.get(name);
+
+    let mod;
+    switch (name) {
+      case 'buffer': mod = nodeBuffer; break;
+      case 'crypto': mod = nodeCrypto; break;
+      case 'url': mod = nodeUrl; break;
+      case 'zlib': mod = nodeZlib; break;
+      default:
+        // 明确的错误信息：说清是**被宿主白名单拒绝**，以及到底放行了什么 ——
+        // 不然脚本只会拿到 undefined，然后在很远的地方崩。
+        throw new Error(
+          `沙箱拒绝 require('${id}')：该模块不在宿主白名单里，只提供 buffer / crypto / url / zlib`,
+        );
+    }
+    cache.set(name, mod);
+    return mod;
+  };
+}
+
 // 按 frontend/src/engine/lx-runtime.js 的契约复刻宿主（只给脚本可能碰到的部分）
 const handlers = new Map();
 // ⚠️ EVENT_NAMES 必须给：真脚本前 113 行就 `const { EVENT_NAMES, request, on, send } = globalThis.lx`，
@@ -361,7 +419,7 @@ const lxRaw = {
 const lx = missTrap(lxRaw, 'lx.', record);
 
 const base = {
-  lx, require, module: { exports: {} }, exports: {}, global: {},
+  lx, require: createLxRequire(), module: { exports: {} }, exports: {}, global: {},
   Buffer, console: { log() {}, warn() {}, error() {} },
   setInterval: () => 0, setTimeout: (f) => { try { f?.(); } catch {} return 0; },
   clearInterval: () => {}, clearTimeout: () => {}, requestAnimationFrame: () => 0,
