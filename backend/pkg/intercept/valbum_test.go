@@ -735,6 +735,152 @@ func albumSynthesisLogs(lines []string) []string {
 	return out
 }
 
+// ── 缓存按用户隔离 ──────────────────────────────────────────────────────
+
+// albumAuthKey 算出「带这个凭据头」的请求会落到哪个用户键。
+//
+// 刻意走拦截层自己的 `userKey`，不自己拼一个 `fp-...`：用例要钉的是
+// 「凭据不同 → 缓存不串」，自己拼键就绕过了那道真身，等于在测一个不存在的约定。
+func albumAuthKey(t *testing.T, it *Interceptor, auth string) string {
+	t.Helper()
+	r := httptest.NewRequest(http.MethodGet, "/music/api/v1/album", nil)
+	r.Header.Set("Authorization", auth)
+	return it.userKey(r)
+}
+
+// albumTrackGUIDs 取出专辑详情里曲目的 guid 集合。
+//
+// 断言比**内容**（guid 集合），不比条数：条数相同但内容不同（各自拿到对方那首）
+// 同样是串味，只看 trackCount 是咬不住的。
+func albumTrackGUIDs(t *testing.T, w *httptest.ResponseRecorder, handled bool) map[string]bool {
+	t.Helper()
+	if !handled {
+		t.Fatal("专辑路由该被认领（透传的话这条用例什么都没验）")
+	}
+	raw, ok := dataOf(t, w)["tracks"].([]any)
+	if !ok {
+		t.Fatalf("data.tracks 不是数组：%s", w.Body.String())
+	}
+	out := make(map[string]bool, len(raw))
+	for _, item := range raw {
+		m, ok := item.(map[string]any)
+		if !ok {
+			t.Fatalf("data.tracks 里有非对象元素：%#v", item)
+		}
+		out[asString(m["guid"])] = true
+	}
+	return out
+}
+
+// TestAlbumCacheIsScopedPerUser 钉住「合成缓存按用户分区」。
+//
+// 合成结果里含**按用户隔离的本地快照**（albumTracks 的 store.Favorites /
+// store.History）。缓存键只带专辑 guid 时，两个凭据在 TTL（120 秒）内请求同一张
+// 专辑，第二个会直接命中第一个的合成结果 —— 收藏里的曲目串到别人页面上。
+//
+// 两个凭据必须在**同一个 harness**（同一个 Interceptor、同一个缓存）上请求，
+// 这才是「同一台 NAS 上两个人」的形状；换 harness 就等于各有一份缓存，测不到。
+func TestAlbumCacheIsScopedPerUser(t *testing.T) {
+	const (
+		authA = "Bearer user-a"
+		authB = "Bearer user-b"
+	)
+	anchor := albumTrack("wy", "1", "甲一", "甲", "同名专辑")
+	h, fake := albumHarness(t, anchor)
+	// 池子必须认「收藏里那首」：albumTracks 会把收藏曲目并进来，但可播过滤
+	// （playableOnly）会把解析不出直链的剔掉 —— 不认它就等于这条用例没造出素材。
+	h.it.pool = chartResolverPool(map[string]map[string]bool{"wy": {"1": true, "9": true}})
+
+	keyA := albumAuthKey(t, h.it, authA)
+	keyB := albumAuthKey(t, h.it, authB)
+	if keyA == keyB {
+		t.Fatalf("两个凭据该算出不同的用户键（否则这条用例什么都没测）：A=%q B=%q", keyA, keyB)
+	}
+	if keyA == "shared" || keyB == "shared" {
+		t.Fatalf("带凭据的请求不该落到共享桶：A=%q B=%q", keyA, keyB)
+	}
+
+	// A 的收藏里有一首同一张专辑的曲目（本地快照，零网络）。
+	favFake := online.FakeID(online.RealID("wy", "9"))
+	if err := h.it.store.AddFavorite(keyA, online.FavoriteItem{
+		GUID:      favFake,
+		CreatedAt: 1700000000,
+		Track:     albumTrack("wy", "9", "甲九", "甲", "同名专辑"),
+	}); err != nil {
+		t.Fatalf("写收藏失败：%v", err)
+	}
+
+	target := "/music/api/v1/album?guid=" + fake + ":album"
+
+	// ① A 先请求：他的合成结果里该有收藏那首（证明素材真的进了曲目集）。
+	wA, okA := h.do(http.MethodGet, target, "", map[string]string{"Authorization": authA})
+	gotA := albumTrackGUIDs(t, wA, okA)
+	if !gotA[favFake] {
+		t.Fatalf("A 的结果里该有他收藏的那首，否则这条用例没有串味的素材：%v", gotA)
+	}
+
+	// ② B 在 TTL 内请求**同一个专辑 guid**：只能拿到自己那份。
+	wB, okB := h.do(http.MethodGet, target, "", map[string]string{"Authorization": authB})
+	gotB := albumTrackGUIDs(t, wB, okB)
+	if gotB[favFake] {
+		t.Fatalf("B 拿到了 A 收藏里的曲目 —— 合成缓存跨用户串味。\nA 的曲目集：%v\nB 的曲目集：%v", gotA, gotB)
+	}
+	if !gotB[fake] {
+		t.Fatalf("B 该拿到自己那份合成结果（至少含锚点）：%v", gotB)
+	}
+}
+
+// TestAlbumCacheStillHitsForSameUser 是「加维度不是关缓存」的守卫。
+//
+// 最省事的「修法」是把缓存整个关掉 —— 那样跨用户当然不串，但客户端进专辑页会
+// 连打两次完整合成（详情 + 曲目列表），上游搜索与解析翻倍。这条用例钉住：
+// **同一个用户的重复请求仍然命中缓存**。
+func TestAlbumCacheStillHitsForSameUser(t *testing.T) {
+	anchor := albumTrack("wy", "1", "甲一", "甲", "同名专辑")
+	h, fake := albumHarness(t, anchor)
+	logs := captureLogs(h)
+	h.it.pool = chartResolverPool(map[string]map[string]bool{"wy": {"1": true}})
+
+	headers := map[string]string{"Authorization": "Bearer user-a"}
+	target := "/music/api/v1/album?guid=" + fake + ":album"
+	for n := 0; n < 3; n++ {
+		w, _ := h.do(http.MethodGet, target, "", headers)
+		if asString(dataOf(t, w)["guid"]) != fake+":album" {
+			t.Fatalf("第 %d 次请求没拿到专辑：%s", n+1, w.Body.String())
+		}
+	}
+	// 与 TestAlbumSynthesisIsCached 同一个观察点（合成路径上唯一可数的日志）。
+	if got := albumSynthesisLogs(logs()); len(got) != 1 {
+		t.Fatalf("同一个用户的重复请求该命中缓存（%s），3 次只该合成 1 次，得到 %d 次：%v",
+			albumCacheTTL, len(got), got)
+	}
+}
+
+// TestAlbumCacheAnonymousBucketIsShared 钉住「无凭据 → shared」那条既有约定
+// 没有被这次改动拆散：所有匿名请求共用**一个**桶（不是每个请求一个新键），
+// 所以它们之间仍然互相命中缓存。
+func TestAlbumCacheAnonymousBucketIsShared(t *testing.T) {
+	anchor := albumTrack("wy", "1", "甲一", "甲", "同名专辑")
+	h, fake := albumHarness(t, anchor)
+	logs := captureLogs(h)
+	h.it.pool = chartResolverPool(map[string]map[string]bool{"wy": {"1": true}})
+
+	if got := h.it.userKey(mustRequest(t, "/music/api/v1/album", "")); got != "shared" {
+		t.Fatalf("无凭据该落到 shared（既有约定）：%q", got)
+	}
+
+	target := "/music/api/v1/album?guid=" + fake + ":album"
+	for n := 0; n < 3; n++ {
+		w, _ := h.do(http.MethodGet, target, "", nil)
+		if asString(dataOf(t, w)["guid"]) != fake+":album" {
+			t.Fatalf("第 %d 次匿名请求没拿到专辑：%s", n+1, w.Body.String())
+		}
+	}
+	if got := albumSynthesisLogs(logs()); len(got) != 1 {
+		t.Fatalf("匿名请求该共用一个桶（shared），3 次只该合成 1 次，得到 %d 次：%v", len(got), got)
+	}
+}
+
 // ── 只读 ────────────────────────────────────────────────────────────────
 
 func TestAlbumRoutesAreReadOnly(t *testing.T) {

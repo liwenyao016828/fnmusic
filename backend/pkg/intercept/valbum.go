@@ -118,7 +118,16 @@ const (
 	albumCacheTTL = 2 * time.Minute
 
 	// albumCacheMax 是合成缓存的条数上限（超了整体清空，与 vCache 同一套土办法）。
-	albumCacheMax = 64
+	//
+	// ⚠️ 键是「用户 + 专辑」（见 albumCacheKey），所以这个数不能再按**单用户**估：
+	// 原来 64 的前提是「一台机器上只有一种内容」，加了用户维度之后同一张专辑
+	// 每个凭据各占一条，两个人同时翻专辑就可能把对方的条目冲掉 —— 而一次冲掉
+	// 意味着下一次请求要重走整条合成（上游搜索 + 批量解析，最坏 9 秒）。
+	//
+	// 取值：一个凭据在 TTL（120 秒）内打开的专辑数是个位数，几个凭据并发的
+	// 最坏情况按「几十张 × 几个人」算，256 给的是这个余量。它仍然是**硬上限**：
+	// 条目最多带 albumTrackMax（100）首曲目，256 条是几 MB 的量级，不是无界增长。
+	albumCacheMax = 256
 )
 
 // albumSearchBudget 是「等在线那一路」的上限，**并发**于官方转发。
@@ -147,6 +156,29 @@ type albumEntry struct {
 	pl         vPlaylist
 	anchorFake string
 	ts         time.Time
+}
+
+// albumCacheKey 拼出合成缓存的键：**用户 + 专辑**。
+//
+// 为什么必须带用户：合成出来的曲目集里含**按用户隔离的本地快照**（albumTracks 里
+// 那两行 store.Favorites / store.History）。键只带专辑 guid 的话，TTL（120 秒）内
+// 第二个凭据请求同一张专辑会直接命中第一个凭据的合成结果 —— 他收藏里的曲目就出现
+// 在别人页面上，跨用户串味。
+//
+// 用户维度的**来源与 vplaylist.go 一致**：`userKey(r)`，含「没有凭据 → shared」
+// 那条既有约定（vplaylist.go:168/434 也是这么取 user 的）。
+//
+// 差别只有一处，是刻意的：那边把 user 过一遍 `vUserSuffix`（剔非字母数字 + 截 12 位）
+// 再**拼进歌单 guid**，因为那个 guid 要下发给客户端、且必须与 fnmusic-ext 逐字节
+// 对齐；这里用**原值**，因为这个键只在进程内用、没有任何对齐压力，截断只会白送
+// 一个碰撞面。至于「专辑 guid 里为什么不能像虚拟歌单那样带用户后缀」：专辑 guid
+// 是 `albumFor` 从客户端回传的 id 反解出来的（`<曲目虚拟 id>:album`），既是我们
+// 下发的、也是客户端回传的，改它等于改虚拟 id 约定 —— 用户维度只能落在缓存键上。
+//
+// 分隔符 \x1f（与 vTrackKey 同一套）：userKey 是 `fp-<16hex>` 或 `shared`，
+// 专辑 guid 是 `<32hex>:album`，两边都不含它，拼不出歧义。
+func albumCacheKey(guid, user string) string {
+	return user + "\x1f" + guid
 }
 
 // ── 路由 ──────────────────────────────────────────────────────────────
@@ -522,6 +554,8 @@ func jsonInt(v any) (int, bool) {
 // 第二个返回值是锚点曲目的虚拟 id（详情的 artists[].guid 要用），第三个表示
 // 「这个 id 是我们的虚拟专辑吗」—— **非虚拟 id 立刻返回 false，不做任何网络动作**，
 // 调用方据此原样透传。这是整个拦截层最重要的不变式：认不出来就交给官方，绝不猜。
+//
+// 缓存按**用户 + 专辑**分键（见 albumCacheKey）：合成结果里含按用户隔离的本地快照。
 func (i *Interceptor) albumFor(candidates []string, r *http.Request) (vPlaylist, string, bool) {
 	anchor, anchorFake, ok := i.albumAnchor(candidates)
 	if !ok {
@@ -529,8 +563,13 @@ func (i *Interceptor) albumFor(candidates []string, r *http.Request) (vPlaylist,
 	}
 	guid := anchorFake + ":" + online.SubKindAlbum
 
+	// user 只取一次，**同时**喂给缓存键与合成：两处必须是同一个值 —— 否则就会出现
+	// 「键按 A 存、内容按 B 合成」这种半串味，比不修还糟。
+	user := i.userKey(r)
+	key := albumCacheKey(guid, user)
+
 	i.albumMu.Lock()
-	if e, ok := i.albumCache[guid]; ok {
+	if e, ok := i.albumCache[key]; ok {
 		// 空结果（整张专辑都不可播）只留 vChartNegTTL：一次上游抖动不该让专辑页
 		// 空两分钟，但也不能变成「每次请求都重新搜一遍」。
 		ttl := albumCacheTTL
@@ -545,7 +584,7 @@ func (i *Interceptor) albumFor(candidates []string, r *http.Request) (vPlaylist,
 	i.albumMu.Unlock()
 
 	now := time.Now()
-	tracks := i.albumTracks(r.Context(), anchor, i.userKey(r))
+	tracks := i.albumTracks(r.Context(), anchor, user)
 	for _, t := range tracks {
 		// 曲目登记进虚拟 id 表：详情 / 曲目列表下发的 guid 之后要能取流、取歌词、
 		// 取封面（否则就是「查得到点不动」的死条目）。
@@ -566,7 +605,7 @@ func (i *Interceptor) albumFor(candidates []string, r *http.Request) (vPlaylist,
 	if len(i.albumCache) >= albumCacheMax {
 		i.albumCache = make(map[string]albumEntry, 8)
 	}
-	i.albumCache[guid] = albumEntry{pl: pl, anchorFake: anchorFake, ts: now}
+	i.albumCache[key] = albumEntry{pl: pl, anchorFake: anchorFake, ts: now}
 	i.albumMu.Unlock()
 
 	i.logf("[INTERCEPT] 在线专辑 %s（%s）→ %d 首可播", pl.Name, pl.GUID, len(pl.Tracks))
