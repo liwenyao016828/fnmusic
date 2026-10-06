@@ -68,6 +68,10 @@ function loadOne(file) {
     has: () => true,
     get(t, k) {
       if (k in t) return t[k];
+      // ⚠️ 必须先看**真全局**：vm 上下文的内建（JSON/Promise/encodeURIComponent…）
+      // 也要走这个 trap。直接返回 undefined 会把它们全遮蔽掉 —— 集成测试抓出来的。
+      const real = globalThis[k];
+      if (real !== undefined) return real;
       if (typeof k === 'string' && !k.startsWith('Symbol(')) meta.wants.push(k);
       return undefined;
     },
