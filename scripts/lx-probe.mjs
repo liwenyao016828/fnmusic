@@ -22,8 +22,16 @@ const out = { file, bytes: code.length, inited: null, handlers: [], wants: [], r
 
 // 按 frontend/src/engine/lx-runtime.js 的契约复刻宿主（只给脚本可能碰到的部分）
 const handlers = new Map();
-const lx = {
-  currentScriptInfo: { name: 'probe', version: 'probe', rawScript: code },
+// ⚠️ EVENT_NAMES 必须给：真脚本前 113 行就 `const { EVENT_NAMES, request, on, send } = globalThis.lx`，
+// 拿不到就是 undefined，然后 1069 行 `on(EVENT_NAMES.request, …)` 抛
+//   Cannot read properties of undefined (reading 'request')
+// —— 报错位置离病因 950 行，看名字还以为是 request 没了。对齐 lx-runtime.js。
+const EVENT_NAMES = { request: 'request', inited: 'inited', updateAlert: 'updateAlert' };
+const lxRaw = {
+  EVENT_NAMES,
+  env: 'desktop',
+  version: '2.0.0',
+  currentScriptInfo: { name: 'probe', description: '', version: 'probe', author: '', homepage: '', rawScript: code },
   on(ev, fn) { handlers.set(ev, fn); out.handlers.push(ev); },
   send(ev, data) { if (ev === 'inited') out.inited = data; },
   request(url, options, callback) {
@@ -33,6 +41,16 @@ const lx = {
   },
   utils: { buffer: {}, bufToString: () => '', deflate: () => '', crypto: {} },
 };
+// lx 成员的 read-miss 也要能被看见。
+// 上面那条 EVENT_NAMES 之所以是「跑到 1069 行才炸」，就是因为 `lx` 是普通对象：
+// 沙箱 Proxy 只拦**全局**读取，`lx.缺的成员` 直接静默 undefined，既不报错也不进 wants。
+// 套一层 Proxy 把这类成员读取记成 `lx.<name>`，探测才名副其实。
+const lx = new Proxy(lxRaw, {
+  get(t, k, r) {
+    if (!(k in t) && typeof k === 'string' && !k.startsWith('Symbol(')) out.wants.push('lx.' + k);
+    return Reflect.get(t, k, r);
+  },
+});
 
 const base = {
   lx, require, module: { exports: {} }, exports: {}, global: {},
@@ -42,6 +60,14 @@ const base = {
 };
 // Proxy 是探测的核心：任何「脚本要了、宿主没给」的全局都会落进 out.wants
 const sandbox = new Proxy(base, {
+// 这是真脚本实测出来的，不是推断 —— 缺的既不是 document 也不是 localStorage。
+// ⚠️ has:()=>true 是双刃剑，读 wants 时必须知道这一点（实测，不是推断）：
+//   脚本里**从未声明**的标识符（如本脚本的 HUIBQ_API）在真浏览器里是
+//     ReferenceError: HUIBQ_API is not defined
+//   但这里 has 恒为 true，标识符解析「找得到」，于是静默变成 undefined
+//   （`HUIBQ_API + "/url"` → "undefined/url"，看起来像宿主没给 API）。
+//   所以 wants 里混了两类东西：①宿主真该补的浏览器全局 ②脚本自己漏声明的常量。
+//   区分办法是静态查声明（grep "const <名字>"），不要靠猜。
   has: () => true,
   get(t, k) {
     if (k in t) return t[k];
@@ -54,6 +80,15 @@ const sandbox = new Proxy(base, {
   },
 });
 
+// 脚本读的是 globalThis.lx（**不是**函数参数 lx）。沙箱里的
+// globalThis/window/self 必须指回**沙箱自身**，否则会落到宿主的
+// globalThis 上，真脚本报的是这句：
+//   Cannot destructure property 'EVENT_NAMES' of 'globalThis.lx' as it is undefined
+// 这是真脚本实测出来的，不是推断 —— 缺的既不是 document 也不是 localStorage。
+base.globalThis = sandbox;
+base.window = sandbox;
+base.self = sandbox;
+
 try {
   new vm.Script(code, { filename: file }).runInContext(vm.createContext(sandbox), { timeout: 8000 });
 } catch (e) {
@@ -63,7 +98,18 @@ try {
 // 有 request 处理器就真叫它一次：这才是「在 Node 里能不能干活」的实测
 const onReq = handlers.get('request');
 if (onReq) {
-  const probe = { source: 'wy', action: 'musicUrl', info: { id: '1', songmid: '1', name: 'probe', singer: 'probe', album: 'probe' }, quality: '320k' };
+  // payload 必须照 lx-runtime.js 的 _callHandler() 复刻：歌曲信息在 **info.musicInfo** 里，
+  // 音质在 **info.type** 里。原来把 id/name/singer 直接摊在 info 顶层，
+  // 所有 LX 脚本的第一个判断 `if (!info?.musicInfo) reject('请求参数不完整')` 就短路了 ——
+  // probe 于是在「真调一次」这个环节上其实什么都没测到。
+  const probe = {
+    source: 'wy',
+    action: 'musicUrl',
+    info: {
+      type: '320k',
+      musicInfo: { source: 'wy', id: '1', songmid: '1', name: 'probe', singer: 'probe', album: 'probe' },
+    },
+  };
   try {
     const r = await Promise.race([
       Promise.resolve(onReq(probe)),

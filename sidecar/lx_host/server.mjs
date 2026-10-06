@@ -31,7 +31,15 @@ const PORT = Number(arg('port', '8920'));
 /** 按 frontend/src/engine/lx-runtime.js 的契约造一个 lx 宿主（每个脚本一份）。 */
 function makeLx(meta, onRequestDone) {
   const handlers = new Map();
-  const lx = {
+  // ⚠️ EVENT_NAMES 必须给：真脚本 `const { EVENT_NAMES, request, on, send } = globalThis.lx`
+  // 拿不到就静默 undefined，然后在 `on(EVENT_NAMES.request, …)` 抛
+  //   Cannot read properties of undefined (reading 'request')
+  // —— 报错点离病因近千行，看名字还以为是 request 没了。对齐 lx-runtime.js。
+  const EVENT_NAMES = { request: 'request', inited: 'inited', updateAlert: 'updateAlert' };
+  const lxRaw = {
+    EVENT_NAMES,
+    env: 'desktop',
+    version: '2.0.0',
     currentScriptInfo: meta,
     on(ev, fn) { handlers.set(ev, fn); },
     send(ev, data) { if (ev === 'inited') meta.inited = data; },
@@ -49,6 +57,14 @@ function makeLx(meta, onRequestDone) {
     },
     utils: { buffer: {}, bufToString: (b) => Buffer.from(b || '').toString('utf8'), deflate: (b) => b, crypto: {} },
   };
+  // lx 成员的 read-miss 也要能被看见（原来 `lx` 是普通对象，缺成员直接静默 undefined，
+  // 沙箱 Proxy 只拦全局读取，这类缺失既不报错也不进 wants —— 上面的 EVENT_NAMES 就是这么漏的）。
+  const lx = new Proxy(lxRaw, {
+    get(t, k, r) {
+      if (!(k in t) && typeof k === 'string' && !k.startsWith('Symbol(')) meta.wants.push('lx.' + k);
+      return Reflect.get(t, k, r);
+    },
+  });
   void onRequestDone;
   return { lx, handlers };
 }
@@ -65,6 +81,13 @@ function loadOne(file) {
     setInterval: () => 0, clearInterval: () => {}, setTimeout: (f) => { try { f && f(); } catch {} return 0; }, clearTimeout: () => {}, requestAnimationFrame: () => 0,
   };
   const sandbox = new Proxy(base, {
+  // 这是真脚本实测出来的，不是推断 —— 缺的既不是 document 也不是 localStorage。
+  // ⚠️ has:()=>true 是双刃剑（实测，不是推断）：脚本里**从未声明**的标识符
+  // （如真脚本的 HUIBQ_API）在真浏览器里是 ReferenceError: HUIBQ_API is not defined，
+  // 但这里 has 恒为 true，标识符解析「找得到」，于是静默变 undefined，
+  // 最后拼出 "undefined/url/…" 这种请求 —— 看起来像宿主没给 API。
+  // 所以 wants 里混了两类：①宿主真该补的全局 ②脚本自己漏声明的常量（看声明即可区分）。
+  // 生产侧只靠 lx.request 的 scheme 校验兜底：非 http(s) 一律回错，不会真发出去。
     has: () => true,
     get(t, k) {
       if (k in t) return t[k];
@@ -76,6 +99,15 @@ function loadOne(file) {
       return undefined;
     },
   });
+
+  // 脚本读的是 globalThis.lx（**不是**函数参数 lx）。沙箱里的
+  // globalThis/window/self 必须指回**沙箱自身**，否则会落到宿主的
+  // globalThis 上，真脚本报的是这句：
+  //   Cannot destructure property 'EVENT_NAMES' of 'globalThis.lx' as it is undefined
+  // 这是真脚本实测出来的，不是推断 —— 缺的既不是 document 也不是 localStorage。
+  base.globalThis = sandbox;
+  base.window = sandbox;
+  base.self = sandbox;
   try {
     new vm.Script(code, { filename: file }).runInContext(vm.createContext(sandbox), { timeout: 8000 });
     meta.ok = true;
