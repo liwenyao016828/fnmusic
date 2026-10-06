@@ -1200,6 +1200,26 @@ func APICatalog(baseURL string) []Endpoint {
 				"body 可省略（用当前启用的源 + 默认关键词）。耗时秒级到十几秒（单源预算），" +
 				"建议只测几个或分批。",
 		},
+		{
+			Method: http.MethodPost, Path: "/api/musicdl/preview", Summary: "试运行一个未启用的源（临时拉起，不写配置）", Category: catMusicDL,
+			Example: "curl -X POST " + baseURL + "/api/musicdl/preview -H 'Content-Type: application/json' -d '{\"source\":\"bq\"}'",
+			Notes: "「先试、不生效」的窗口：**不写配置、不注册解析器/搜索器、不影响搜索结果**，" +
+				"TTL（默认 300 秒）内没保存就自动回收（进程也停）。源已正式启用时不会另起进程。" +
+				"之后用 GET 看状态、DELETE 手动停。",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/musicdl/preview", Summary: "试运行状态（预览中的源 + 剩余秒数 + 进程状态）", Category: catMusicDL,
+			Example: "curl " + baseURL + "/api/musicdl/preview",
+			Notes: "active=false 表示没有在试运行。active 时给 source / seconds_left / ttl / " +
+				"state（sidecar 的 off|preparing|starting|ready|failed）与 own_process" +
+				"（true = 这个进程是试运行自己拉起来的，回收时会停掉）。",
+		},
+		{
+			Method: http.MethodDelete, Path: "/api/musicdl/preview", Summary: "手动结束试运行（等于立刻到期回收）", Category: catMusicDL,
+			Example: "curl -X DELETE " + baseURL + "/api/musicdl/preview",
+			Notes: "只收试运行自己拉起的进程；正式启用的源与它的解析器/搜索器一概不动。" +
+				"返回里 stopped 是被收回的源短码。",
+		},
 
 		// ── 音乐入口接管 ──
 		{

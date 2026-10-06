@@ -235,6 +235,10 @@ type Interceptor struct {
 	onlineMu    sync.Mutex
 	onlineCache map[string]onlineCacheEntry
 
+	// suggestShapeOnce 让「官方联想的 data 不是字符串数组」这件事只记一次日志
+	// （见 suggest.go 的 noteSuggestShape）。
+	suggestShapeOnce sync.Once
+
 	lyricMu    sync.Mutex
 	lyricCache map[string]lyricEntry
 
@@ -445,6 +449,10 @@ func (i *Interceptor) buildRoutes() []route {
 		{get, apiPrefix + "/track/lyrics", i.handleLyricText},
 		{get, apiPrefix + "/detail/lyrics", i.handleLyricText},
 		{get, apiPrefix + "/search/track", i.handleSearch},
+		// 搜索联想：官方库的联想词 + 在线源的前几条歌名（见 suggest.go）。
+		// 前缀挂载 —— 官方也用 `/search/suggest/<keyword>` 这种带子路径的写法
+		// （`route.matches` 允许「正好等于」与「前缀 + /」两种形态）。
+		{get, apiPrefix + "/search/suggest", i.handleSuggest},
 		{get, apiPrefix + "/static/cover", i.handleCover},
 
 		// ── 歌词

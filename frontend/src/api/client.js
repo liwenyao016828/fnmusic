@@ -51,6 +51,13 @@ export const MusicDLAPI = {
   // sidecar 会因瞬时原因挂掉（OOM / 装依赖断网 / 端口被占），没有这个入口
   // 用户只能看着「启动失败」，要么去动一个音源开关，要么重启整个应用。
   restart: () => api.post('/musicdl/restart', null, { timeout: 60000 }).then(res => res.data),
+  // 试运行（预览一个未启用的源）：临时拉起 → 看状态 → 手动停。
+  // 服务端默认 TTL 300 秒，到点自动回收（进程也停），**不写配置、不进搜索**。
+  previewStatus: () => api.get('/musicdl/preview').then(res => res.data),
+  // 起进程可能要等 sidecar 自己的状态机（首次建 venv 一两分钟），但接口是
+  // **异步返回**的（真实进度看 previewStatus 的 state），所以超时不用给太长。
+  previewStart: (source) => api.post('/musicdl/preview', { source }, { timeout: 60000 }).then(res => res.data),
+  previewStop: () => api.delete('/musicdl/preview', { timeout: 30000 }).then(res => res.data),
 }
 
 export const ChartsAPI = {

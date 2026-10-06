@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"fn-lx-player/pkg/online"
 )
@@ -32,6 +33,79 @@ func (s *Server) SetMusicDL(status func() map[string]any, client func() *online.
 // 与 SetMusicDL 分开是为了不动它的签名 —— 那边两个函数是「读状态」，这边是「做动作」，
 // 混在一起会让 main 的调用点变成三个参数、且语义不清。
 func (s *Server) SetMusicDLRestart(fn func()) { s.musicdlRestart = fn }
+
+// SetMusicDLPreview 注入「试运行」的三个动作（见 handleMusicDLPreview）。
+//
+// 三个都要传：start/status/stop 是一件事的三个面（拉起、看状态、收回），
+// 分开注册只会出现「能起不能停」这种半截能力。
+func (s *Server) SetMusicDLPreview(
+	start func(source string) (map[string]any, error),
+	status func() map[string]any,
+	stop func() map[string]any,
+) {
+	s.musicdlPreviewStart = start
+	s.musicdlPreviewStatus = status
+	s.musicdlPreviewStop = stop
+}
+
+// handleMusicDLPreview 试运行一个**未启用**的源：临时拉起它、能看状态、能手动停，
+// TTL（默认 5 分钟）内没有保存就自动回收。
+//
+// # 为什么需要它
+//
+// 「注册了」不代表「能用」—— musicdl 真机 56 个源里一大半在国内出不了结果。
+// 此前要判断一个源行不行只能先**真的启用**它（=写进配置、进搜索与解析池），
+// 不合适再关掉；而启用一个坏源是有代价的（每次搜索都要为它等满单源预算）。
+//
+// # 与「正式启用」的区别（用户最需要知道的一句话）
+//
+// 试运行**不写配置、不注册解析器/搜索器、不影响搜索结果**，到点自动收回。
+// 想留下它，得去点那个源的开关并保存 —— 那才是正式启用。
+//
+// 方法：GET 读状态 / POST 开始（body `{"source":"bq"}`）/ DELETE 手动停止。
+func (s *Server) handleMusicDLPreview(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		if s.musicdlPreviewStatus == nil {
+			musicdlUnavailable(w, "外挂音源没启用")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"code": 200, "data": s.musicdlPreviewStatus()})
+
+	case http.MethodPost:
+		if s.musicdlPreviewStart == nil {
+			musicdlUnavailable(w, "外挂音源没启用")
+			return
+		}
+		var body struct {
+			Source string `json:"source"`
+		}
+		if r.Body != nil {
+			_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&body)
+		}
+		// 参数名两种都收：`source` 是这里的正式写法，`id` 是音源管理页里那个字段名
+		// （界面上的源清单每项就是 `id`），省得两处叫法不一致时静默拿不到值。
+		if body.Source == "" {
+			body.Source = strings.TrimSpace(r.URL.Query().Get("source"))
+		}
+		data, err := s.musicdlPreviewStart(body.Source)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"code": 400, "msg": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"code": 200, "data": data})
+
+	case http.MethodDelete:
+		if s.musicdlPreviewStop == nil {
+			musicdlUnavailable(w, "外挂音源没启用")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"code": 200, "data": s.musicdlPreviewStop()})
+
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"code": 405, "message": "只支持 GET / POST / DELETE"})
+	}
+}
 
 // musicdlUnavailable 是「外挂音源没开 / 没起来」时的统一应答。
 //

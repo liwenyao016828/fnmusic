@@ -188,6 +188,9 @@ func main() {
 	server.SetMusicDL(mdl.Status, mdl.Client)
 	// 界面上的「重试启动」= 拿当前配置再 Apply 一次（配置没变就不会重建，只拉起进程）。
 	server.SetMusicDLRestart(func() { mdl.Apply(cfgMgr.Get()) })
+	// 「试运行」：临时拉起一个**未启用**的源给用户看（不写配置、不进搜索，
+	// TTL 到点自动回收），见 musicdl_wiring.go 的 StartPreview。
+	server.SetMusicDLPreview(mdl.StartPreview, mdl.PreviewStatus, mdl.StopPreview)
 
 	// 服务端洛雪宿主（goal-a5eb2a23 ⑤ 方案 b）—— 缺省关。
 	// 它与 musicdl 的 sidecar 是两回事：那个跑的是 Python 音乐平台客户端，

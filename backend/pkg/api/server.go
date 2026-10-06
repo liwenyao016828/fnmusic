@@ -34,7 +34,7 @@ import (
 )
 
 // CurrentVersion 应用版本号。发布新版本时与 fpk-package/manifest 的 version 同步修改。
-const CurrentVersion = "2.1.115"
+const CurrentVersion = "2.1.116"
 
 // CurrentAppName 对外暴露的应用标识，必须与 fpk-package/manifest 的 appname 一致。
 //
@@ -104,6 +104,12 @@ type Server struct {
 	musicdlClientFn func() *online.MusicDL
 	// musicdlRestart 让界面上的「重试启动」能真的把挂掉的 sidecar 拉起来。
 	musicdlRestart func()
+	// 试运行（预览一个未启用的源）的三个动作，见 pkg/api/musicdl.go 的
+	// handleMusicDLPreview。都是函数：状态在变（进程准备中 / 就绪 / 失败），
+	// 而且**必须**现取 —— 抓一份就等于永远指向启动时的那一刻。
+	musicdlPreviewStart  func(source string) (map[string]any, error)
+	musicdlPreviewStatus func() map[string]any
+	musicdlPreviewStop   func() map[string]any
 
 	apiToken string
 	// authMode 生效的鉴权模式（none / lan / token），由 FN_AUTH_MODE + FN_API_TOKEN 解析

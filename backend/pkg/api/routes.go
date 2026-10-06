@@ -96,6 +96,9 @@ var routeTable = []routeSpec{
 	{Path: "/api/musicdl/sources", Handler: func(s *Server) http.HandlerFunc { return s.handleMusicDLSources }},
 	{Path: "/api/musicdl/probe", Handler: func(s *Server) http.HandlerFunc { return s.handleMusicDLProbe }},
 	{Path: "/api/musicdl/restart", Handler: func(s *Server) http.HandlerFunc { return s.handleMusicDLRestart }},
+	// 试运行一个未启用的源：POST 开始 / GET 状态 / DELETE 手动停（TTL 到点自动回收）。
+	// 一条路由三个方法 —— 它是同一件事的三个面，拆成三条路径只会让界面多记两个名字。
+	{Path: "/api/musicdl/preview", Handler: func(s *Server) http.HandlerFunc { return s.handleMusicDLPreview }},
 	{Path: "/api/charts/playlists", Handler: func(s *Server) http.HandlerFunc { return s.chartMgr.HandlePlaylists }},
 	{Path: "/api/charts/playlist/detail", Handler: func(s *Server) http.HandlerFunc { return s.chartMgr.HandlePlaylistDetail }},
 	{Path: "/api/charts/playlist/categories", Handler: func(s *Server) http.HandlerFunc { return s.chartMgr.HandlePlaylistCategories }},
