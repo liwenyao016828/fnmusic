@@ -1,2 +1,42 @@
 #!/bin/bash
+# ==============================================================================
+#  曲率（yinshu-ai）—— 卸载**前**把用户数据打包成 tar.gz
+#
+#  落点：卷根 /vol{n}/yinshu-ai-backup-<YYYYmmddHHMMSS>.tar.gz
+#  保留：最近 5 份（旧的自动删；轮转只碰本前缀 + 14 位时间戳的 .tar.gz）
+#  失败/超时：记日志然后**继续卸载** —— 备份是保险，不能变成新的故障点。
+#
+#  为什么落在卷根而不是数据目录里：卸载会删掉应用自己的目录；至于
+#  @appdata/<appname> 会不会一起删，我没有真机依据（推断依据写在 _backup 的
+#  注释里），所以按最坏情况办 —— 落到数据目录之外。这一层判断参考实现
+#  （fnmusic-ext）也是同一个结论，而且它有真机依据。
+#
+#  还原方式同时写进备份日志，也就是：
+#      sudo tar -xzf '/vol1/yinshu-ai-backup-<时间戳>.tar.gz' -C '/vol1/@appdata/yinshu-ai'
+#  （归档以数据目录的**根**为根：里面是 data/ 与 .env）
+# ==============================================================================
+set -u
+
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# 兼容历史的向导开关（与参考实现同口径）：**显式** false/0/no 才跳过备份。
+# 曲率当前没有 wizard 配置，真机上不会把这个变量设成 false；保留是为了口径
+# 一致，万一以后加了「卸载时要不要保留数据」的向导。
+case "${wizard_keep_data:-true}" in
+    false|False|FALSE|0|no)
+        echo "[qulv-backup] wizard_keep_data=${wizard_keep_data}，按用户选择跳过卸载前备份"
+        exit 0
+        ;;
+esac
+
+# _backup 缺失（旧安装包装出来的、或者打包漏了这个文件）时**不能**让卸载失败：
+# 卸载永远要能走完，宁可这一次没有备份。
+if [ -f "${SELF_DIR}/_backup" ]; then
+    # shellcheck source=/dev/null
+    . "${SELF_DIR}/_backup"
+    qulv_make_backup uninstall
+else
+    echo "[qulv-backup] 未找到 ${SELF_DIR}/_backup，跳过卸载前备份（不阻塞卸载）" >&2
+fi
+
 exit 0

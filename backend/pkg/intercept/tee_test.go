@@ -103,7 +103,7 @@ func TestTeeDiscardsIncompleteFile(t *testing.T) {
 }
 
 func TestTeeSkipsWhenItShould(t *testing.T) {
-	h, _ := teeHarness(t)
+	h, dir := teeHarness(t)
 	tr := teeTrack("3", "甲", "乙")
 	req := httptest.NewRequest(http.MethodGet, "/music/api/v1/track/stream?guid=g3", nil)
 	full := func() *http.Response {
@@ -113,10 +113,15 @@ func TestTeeSkipsWhenItShould(t *testing.T) {
 	if tt := h.it.beginTee("g3", tr, full(), req); tt == nil {
 		t.Fatal("基线：该开 tee")
 	}
-	// ① 开关关着
+	// ① 开关关着 → **不进曲库**：曲库暂存目录里不该多出文件。
+	// （它会改走滚动试听缓存 —— 那是另一条路径，见 tee_rolling_test.go。）
+	before, _ := filepath.Glob(filepath.Join(dir, teeSubdir, "*"))
 	h.it.cfg.TeeEnabled = func() bool { return false }
-	if tt := h.it.beginTee("g3", tr, full(), req); tt != nil {
-		t.Fatal("开关关着不该 tee")
+	if tt := h.it.beginTee("g3", tr, full(), req); tt != nil && !tt.rolling {
+		t.Fatal("开关关着绝不能走「提升进曲库」那条路")
+	}
+	if left, _ := filepath.Glob(filepath.Join(dir, teeSubdir, "*")); len(left) != len(before) {
+		t.Fatalf("开关关着时不该往曲库暂存目录里写：%v → %v", before, left)
 	}
 	h.it.cfg.TeeEnabled = func() bool { return true }
 	// ② 206 分片

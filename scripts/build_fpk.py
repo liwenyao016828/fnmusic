@@ -15,7 +15,8 @@ fnpack 工具。但仓库内的 `fn-lx-player.fpk` 已确认就是**标准 gzip 
   tar 格式为 **POSIX ustar**（magic `ustar\\0` + 版本 `00`），无 PAX/GNU 扩展头，
   结尾仅 1024 字节零块（不做 10240 字节记录对齐）。
 * 成员顺序：
-    外层 : app.tgz, cmd/(+9 个脚本), config/(privilege, resource),
+    外层 : app.tgz, cmd/(+10 个：9 个钩子 + 被 source 的 _backup),
+           config/(privilege, resource),
            ICON.PNG, ICON_256.PNG, manifest, wizard/(空目录)
     app.tgz: <appname>, ui/, ui/config, ui/images/(+PNG), config/(privilege, resource)
       ↑ 主程序与图标名都取自 `fpk-package/manifest` 的 `appname`（见 read_manifest_appname）
@@ -108,7 +109,13 @@ MODE_EXEC_LEGACY = 0o666
 GZIP_LEVEL = 6          # 与原 fpk 的 XFL=0（非 1、非 9）一致
 MANIFEST_KEY_WIDTH = 21  # 原 fpk manifest 的 key 左对齐宽度（= 最长 key 长度）
 
+# ⚠️ 这份清单是**存在性断言**（下面 step 3 会逐个 need()），不是打包白名单：
+# 打包时按目录扫描 cmd/，所以漏在这份清单里的文件照样会被打进包 —— 但没人断言它存在。
+# `_backup`（卸载/升级前备份用户数据的共用实现，被 uninstall_init / upgrade_init
+# source）必须列在这里：它要是没进包，两个钩子会静默退化成「不备份」，而
+# 那正是这个功能唯一要防的事故。
 CMD_FILES = [
+    "_backup",
     "config_callback",
     "config_init",
     "install_callback",
@@ -120,9 +127,12 @@ CMD_FILES = [
     "upgrade_init",
 ]
 
-# 既有 fpk 的成员集合，用于打包后结构比对
+# 既有 fpk 的成员集合，用于打包后结构比对。
+# cmd/_backup 是 v2.1.116 新增的（卸载/升级前备份用户数据），补进来是为了让这份
+# 比对重新回到「一致」——否则每次打包都会报一条「多出：['cmd/_backup']」噪声，
+# 噪声一多，真正漂移时就没人看了。
 REF_OUTER = [
-    "app.tgz", "cmd", "cmd/config_callback", "cmd/config_init",
+    "app.tgz", "cmd", "cmd/_backup", "cmd/config_callback", "cmd/config_init",
     "cmd/install_callback", "cmd/install_init", "cmd/main",
     "cmd/uninstall_callback", "cmd/uninstall_init", "cmd/upgrade_callback",
     "cmd/upgrade_init", "config", "config/privilege", "config/resource",

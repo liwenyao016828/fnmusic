@@ -3,8 +3,10 @@ package intercept
 import (
 	"context"
 	"encoding/json"
+	"hash/fnv"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -46,6 +48,15 @@ const (
 	vFetchTimeout = 6 * time.Second
 	// vSongBatch 是网易 `song/detail` 一次批量取多少首。
 	vSongBatch = 100
+
+	// vDailyRecentPlayWindow 是每日推荐「最近播放」的排除窗口：最近这么多次播放过的
+	// 曲目不再推给他。
+	//
+	// 为什么是**窗口**而不是全部历史：历史最多留 500 条，而每日推荐只有 20 个名额、
+	// 候选来自关键词搜索。把 500 首都排除掉会先把候选池吃干净 —— 那是「推荐变少」，
+	// 不是「推荐变准」。20 与参考实现的口径一致（`recommend.py:43` 的 `SEED_LIMIT`：
+	// 它把最近播放当种子收集，`collect_exclude_sets` 再把这批种子整体当排除集）。
+	vDailyRecentPlayWindow = 20
 )
 
 // vChartID 是「热门推荐」取的网易公开榜单。
@@ -148,11 +159,14 @@ func vNMGUID(id string) string { return vNMPrefix + strings.TrimSpace(id) }
 //  3. 按日期轮换的关键词（信号不足时补足）
 //
 // 候选全部来自 `collectOnline`，它内部已经做了**可播放性**过滤 —— 查得到点不动
-// 比查不到更糟，所以解析不出直链的曲目根本不进列表。已经收藏过的也会被排除：
-// 推一首他早就收藏的歌没有意义。
+// 比查不到更糟，所以解析不出直链的曲目根本不进列表。排除集见 `dailyExclude`：
+// 已收藏的、以及最近播放过的都不再推（推一首他早就收藏过、或者刚听完的歌没有意义）。
+//
+// 在线候选不足 `vDailySize` 时，用**本地已有文件**的曲目补满空位（见
+// `localDailyFill`）—— 只补空位，在线推荐永远排在前面。
 func (i *Interceptor) dailyPlaylist(ctx context.Context, r *http.Request, now time.Time) vPlaylist {
 	user := i.userKey(r)
-	favs := i.store.FavoriteGUIDs(user)
+	ex := i.dailyExclude(user)
 
 	var out []online.Track
 	seen := make(map[string]bool, vDailySize*2)
@@ -165,9 +179,18 @@ func (i *Interceptor) dailyPlaylist(ctx context.Context, r *http.Request, now ti
 			if len(out) >= vDailySize {
 				break
 			}
-			if seen[t.RealID()] || favs[t.FakeID()] {
+			if seen[t.RealID()] || ex.has(t.FakeID(), t) {
 				continue
 			}
+			seen[t.RealID()] = true
+			out = append(out, t)
+		}
+	}
+
+	// 本地兜底：**只在在线候选不够时**、且只补空位。它绝不能挤掉在线推荐的位置 ——
+	// 在线的「没听过的新歌」才是推荐的主体，本地那批只是让他不至于点开一个空歌单。
+	if len(out) < vDailySize {
+		for _, t := range i.localDailyFill(ex, seen, now, vDailySize-len(out)) {
 			seen[t.RealID()] = true
 			out = append(out, t)
 		}
@@ -181,6 +204,173 @@ func (i *Interceptor) dailyPlaylist(ctx context.Context, r *http.Request, now ti
 		UpdatedAt: ts,
 		Tracks:    out,
 	}
+}
+
+// vTrackKey 是曲目的「身份键」：歌名 + 歌手，只用于**跨平台**认出同一首歌。
+//
+// 为什么排除集不能只按虚拟 id 比：虚拟 id 是 `平台 + 平台内 id` 的哈希。他刚在网易
+// 听完《晴天》，QQ 上那条同名单曲是**另一个**虚拟 id —— 只比 id 就会把同一首歌换个
+// 平台又推给他一遍。标题为空时返回空串（调用方跳过），免得一堆空标题互相撞键。
+func vTrackKey(t online.Track) string {
+	title := strings.ToLower(strings.TrimSpace(t.Title))
+	if title == "" {
+		return ""
+	}
+	return title + "\x1f" + strings.ToLower(strings.TrimSpace(t.Artist()))
+}
+
+// vDailyExclude 是每日推荐的排除集，外加「听过的程度」。
+//
+// 三件事分开记，因为用途不同：
+//   - favs：收藏过的（按虚拟 id）—— 推他早就收藏过的歌没有意义；
+//   - recent / recentKey：**最近播放过**的（虚拟 id + 身份键，窗口见
+//     `vDailyRecentPlayWindow`）；
+//   - last / lastKey：**全量**历史里每首曲目的最近一次播放时间。本地兜底要靠它
+//     排「最久未听」，所以不能只留最近窗口那 20 条。
+type vDailyExclude struct {
+	favs      map[string]bool
+	recent    map[string]bool
+	recentKey map[string]bool
+	last      map[string]int64
+	lastKey   map[string]int64
+}
+
+// dailyExclude 读一次播放历史与收藏，折成排除集。
+func (i *Interceptor) dailyExclude(user string) vDailyExclude {
+	ex := vDailyExclude{
+		favs:      i.store.FavoriteGUIDs(user),
+		recent:    map[string]bool{},
+		recentKey: map[string]bool{},
+		last:      map[string]int64{},
+		lastKey:   map[string]int64{},
+	}
+	// History 已经是「新的在前」（store 按 PlayedAt 倒序），所以前 N 条就是最近播放。
+	for idx, h := range i.store.History(user) {
+		if h.GUID != "" {
+			if h.PlayedAt > ex.last[h.GUID] {
+				ex.last[h.GUID] = h.PlayedAt
+			}
+			if idx < vDailyRecentPlayWindow {
+				ex.recent[h.GUID] = true
+			}
+		}
+		if key := vTrackKey(h.Track); key != "" {
+			if h.PlayedAt > ex.lastKey[key] {
+				ex.lastKey[key] = h.PlayedAt
+			}
+			if idx < vDailyRecentPlayWindow {
+				ex.recentKey[key] = true
+			}
+		}
+	}
+	return ex
+}
+
+// has 判断一首曲目是否在排除集里（收藏过 / 最近播放过）。
+//
+// ⚠️ fake 必须由调用方传**曲目算出来的**虚拟 id（`t.FakeID()`）：本地池里的曲目
+// 手上只有自身描述符，两边都要能过同一套判断。
+func (ex vDailyExclude) has(fake string, t online.Track) bool {
+	if fake != "" && (ex.favs[fake] || ex.recent[fake]) {
+		return true
+	}
+	key := vTrackKey(t)
+	return key != "" && ex.recentKey[key]
+}
+
+// lastPlayed 返回这首曲目最近一次播放的时间（0 = 从没听过）。
+func (ex vDailyExclude) lastPlayed(fake string, t online.Track) int64 {
+	last := ex.last[fake]
+	if key := vTrackKey(t); key != "" && ex.lastKey[key] > last {
+		last = ex.lastKey[key]
+	}
+	return last
+}
+
+// localDailyFill 用「本地已经有文件」的曲目补齐每日推荐的**空位**。
+//
+// # 为什么本地池是这一批曲目
+//
+// 曲率能推的本地曲目只有**我们自己知道身份**的那些：飞牛没有「列出全部曲目」的
+// 接口（HANDOVER §3.2），用户在别处放进曲库的文件拿不到官方 guid —— 塞进推荐就是
+// 一张点不动的死条目，比不推更糟（「查得到点不动比查不到更糟」）。所以本地池 =
+// 已经落本地（收藏自动下载 / 边听边下）且描述符还在登记表里的曲目。
+// 它们本来就在磁盘上：推给他等于零带宽、瞬时播放。
+//
+// # 顺位（与参考实现的 local-random 层同一条口径，见 `recommend.py:8-9`）
+//
+//  1. **从未听过**的在前：让曲库里还没被听过的那些有机会被听见。
+//  2. 不够再按**最久未听**补齐：最近一次播放时间最早的先上。
+//
+// 从未听过那组的相对顺序由「日期 + 虚拟 id」的哈希决定：同一天可复现（推荐要能进
+// 缓存、要能被用例钉住），隔天会换（否则一个小曲库每天推的都是同一批）。
+func (i *Interceptor) localDailyFill(ex vDailyExclude, seen map[string]bool, now time.Time, need int) []online.Track {
+	if need <= 0 || i.downloaded == nil {
+		return nil
+	}
+	type cand struct {
+		track online.Track
+		last  int64
+		rank  string
+	}
+	fresh := make([]cand, 0, need)
+	played := make([]cand, 0, need)
+
+	for _, it := range i.downloaded.All() {
+		if it.GUID == "" {
+			continue
+		}
+		// 描述符不在登记表里 → 说不清这是哪首歌（虚拟 id 是单向后指），不推。
+		t, ok := i.registry.Lookup(it.GUID)
+		if !ok {
+			continue
+		}
+		if seen[t.RealID()] || ex.has(it.GUID, t) {
+			continue
+		}
+		// 文件被删了 / 是条空登记 → 推了也点不动，跳过（不在此处摘登记，
+		// 摘登记是 serveDownloadedIfAny 的职责，这里只负责不推）。
+		if !fileExists(it.Path) {
+			continue
+		}
+		c := cand{track: t, rank: vDailyRank(now, it.GUID)}
+		if last := ex.lastPlayed(it.GUID, t); last > 0 {
+			c.last = last
+			played = append(played, c)
+			continue
+		}
+		fresh = append(fresh, c)
+	}
+
+	// 同一天里排序必须稳定：map 遍历顺序 + 并列的 mtime/时间戳都会让「每天推哪些」
+	// 变成不可复现的随机，用例也就钉不住了。rank 兼作并列时的破平键。
+	sort.SliceStable(fresh, func(a, b int) bool { return fresh[a].rank < fresh[b].rank })
+	sort.SliceStable(played, func(a, b int) bool {
+		if played[a].last != played[b].last {
+			return played[a].last < played[b].last // 最久未听在前
+		}
+		return played[a].rank < played[b].rank
+	})
+
+	out := make([]online.Track, 0, need)
+	for _, group := range [][]cand{fresh, played} {
+		for _, c := range group {
+			if len(out) >= need {
+				return out
+			}
+			out = append(out, c.track)
+		}
+	}
+	return out
+}
+
+// vDailyRank 给本地兜底候选一个「当天稳定、隔天会换」的排序键。
+func vDailyRank(now time.Time, key string) string {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(now.Format("20060102")))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(key))
+	return strconv.FormatUint(h.Sum64(), 16)
 }
 
 // dailySeeds 排出每日推荐要搜的种子词。

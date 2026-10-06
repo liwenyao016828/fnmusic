@@ -59,6 +59,12 @@ func (i *Interceptor) handleStream(w http.ResponseWriter, r *http.Request) bool 
 		return true
 	}
 
+	// 「边听边存」**关着**时留下的滚动试听缓存：命中就完全不出网（见 tee.go）。
+	// 刻意排在「已进曲库」之后 —— 永久那一份更权威，缓存只是临时的。
+	if i.serveRollingIfAny(w, r, fake) {
+		return true
+	}
+
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
 
@@ -127,8 +133,9 @@ func (i *Interceptor) proxyMedia(w http.ResponseWriter, r *http.Request, t onlin
 	if r.Method == http.MethodHead {
 		return
 	}
-	// 边听边下：把同一条流转手写一份到磁盘。开关关着 / 已经在库里 / 客户端要的是
-	// 分片 / 上游没给总长 → beginTee 返回 nil，走原来的纯转发。
+	// 边听边下：把同一条流转手写一份到磁盘。开关决定归宿 —— 开着落曲库，
+	// 关着只留滚动试听缓存（见 tee.go）。已经在库里 / 客户端要的是分片 /
+	// 上游没给总长 → beginTee 返回 nil，走原来的纯转发。
 	tt := i.beginTee(fake, t, resp, r)
 	if tt == nil {
 		// io.Copy 会流式转发，不缓冲整首歌。

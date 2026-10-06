@@ -1,0 +1,499 @@
+#!/bin/bash
+# ==============================================================================
+#  曲率（yinshu-ai）—— 生命周期脚本共用的「用户数据备份」实现（被 source，不单独执行）
+#
+#  为什么单独一个文件：卸载与升级两条路径要做**同一件**事（定位数据目录 → 限时
+#  打包 → 轮转保留）。写成两份拷贝迟早漂移，而漂移的方向正好是「丢数据」那一侧。
+#
+#  ⚠️ 纪律：本文件里每一处都**不许让调用方失败**。
+#     备份是保险，不能变成新的故障点 —— 打包失败、超时、没权限、目录不存在，
+#     一律记日志后 return 0，卸载/升级照常走完。
+#     （参考实现 fnmusic-ext 在这一点上是相反的：那边 tar 失败会 fnmusic_fail
+#       并**中止卸载**。曲率明确不要那个行为 —— 见任务 E 第 2 条。）
+#
+#  ⚠️ 本文件只用 POSIX sh 也认的语法（没有数组、没有 mapfile），这样 cmd/ 下
+#     所有脚本都还能用 `sh -n` 做语法检查 —— 与既有脚本保持一致。用到的
+#     `local` 是 dash 也支持的扩展。
+#
+#  调用方约定：
+#    · 先设 SELF_DIR=<cmd 目录绝对路径>
+#    · 不要开 set -e
+# ==============================================================================
+
+# 技术标识：manifest 里的 appname。**刻意写死字面量、不取 TRIM_APPNAME** ——
+# 归档名前缀和轮转通配都靠它，一旦两次生命周期调用取值不同，旧归档就再也轮转
+# 不掉。（manifest 里也写着 appname 不能改：改了飞牛会当成新应用安装。）
+QULV_APP_NAME="yinshu-ai"
+QULV_ARCHIVE_PREFIX="${QULV_APP_NAME}-backup-"
+
+# 保留份数与限时，可用环境变量覆盖（运维口子 + 测试口子）。
+QULV_KEEP_BACKUPS="${QULV_KEEP_BACKUPS:-5}"
+QULV_BACKUP_TIMEOUT="${QULV_BACKUP_TIMEOUT:-120}"
+# 归档复核的单独预算：只有 tar 出错时才用到（见 qulv_archive_readable）。
+# 归档本来就小（缓存都排除了），所以这个值给得很短 —— 短才对，它的作用是
+# 「快速判定这份 .part 能不能用」，不是「耐心等它读完」。
+QULV_BACKUP_VERIFY_TIMEOUT="${QULV_BACKUP_VERIFY_TIMEOUT:-30}"
+
+# ── 日志 ─────────────────────────────────────────────────────────────────────
+# 每一行都同时进 **stderr** 和 ${VAR_DIR}/qulv-backup.log。
+#
+# ⚠️ 必须走 stderr，不能走 stdout：本文件里的定位函数（qulv_var_dir /
+#    qulv_backup_root）是**用 stdout 返回路径值**的，而调用处是
+#    `root="$(qulv_backup_root ...)"` —— 只要函数里往 stdout 打一行日志，那行
+#    日志就会被当成返回值吃进 root（本地干跑抓到的：root 变成一个两行的字符串，
+#    后面所有 [ -d ] 判断全部走偏）。stdout 只留给机器可读的值。
+#    成功时 qulv_make_backup 额外往 stdout 打一行**只有归档路径**，给工具用
+#    （参考实现的 uninstall_init 也是把归档路径 echo 到 stdout）。
+#
+# 已知局限：日志文件在数据目录里，卸载成功后它自己也随之消失 —— 所以每一条都
+# 同时打到 stderr（飞牛会收走生命周期脚本的输出）。参考实现同样把日志放在
+# TRIM_PKGVAR 下，只是另有一份不随回滚删除的 /var/log 副本；曲率不新建系统级
+# 日志目录，保持「只碰自己的数据目录」。
+QULV_BACKUP_LOG=""
+qulv_log() {
+    local line
+    line="[qulv-backup] $(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo '?') $*"
+    printf '%s\n' "${line}" >&2
+    if [ -n "${QULV_BACKUP_LOG}" ]; then
+        printf '%s\n' "${line}" >> "${QULV_BACKUP_LOG}" 2>/dev/null || true
+    fi
+}
+
+# ── 目录定位：数据目录的根（= ${TRIM_PKGVAR}） ───────────────────────────────
+# 唯一真源是 cmd/main 里的两行：
+#     VAR_DIR="${TRIM_PKGVAR:-${APP_DIR}/var}"     真机 = /vol1/@appdata/yinshu-ai
+#     DATA_DIR="${VAR_DIR}/data"                   真机 = /vol1/@appdata/yinshu-ai/data
+# 后端只知道自己被 --data 指到哪（backend/main.go 的 flag "data"）。
+# 真机旁证：scripts/nas-acceptance.mjs 直接读 .../yinshu-ai/data/online/downloaded.json；
+#           HANDOVER.md 记同目录的 .env（/vol1/@appdata/yinshu-ai/.env 与
+#           /var/apps/yinshu-ai/var/.env 是同一份，后者是前者的软链）。
+qulv_var_dir() {
+    local cand
+    if [ -n "${TRIM_PKGVAR:-}" ] && [ -d "${TRIM_PKGVAR}" ]; then
+        printf '%s\n' "${TRIM_PKGVAR%/}"
+        return 0
+    fi
+    # TRIM_PKGVAR 缺失时的兜底：真机形态 /vol{n}/@appdata/<appname>。
+    # 刻意**不硬编码 /vol1** —— 应用可以被装到任意卷（参考实现里整套「迁卷自愈」
+    # 逻辑就说明换卷是真实场景）。
+    for cand in /vol*/@appdata/"${QULV_APP_NAME}"; do
+        if [ -d "${cand}" ]; then
+            printf '%s\n' "${cand}"
+            return 0
+        fi
+    done
+    # 最后退回与 cmd/main 完全相同的表达式：APP_ROOT/var
+    if [ -n "${SELF_DIR:-}" ] && [ -d "${SELF_DIR}/.." ]; then
+        printf '%s\n' "$(cd "${SELF_DIR}/.." && pwd)/var"
+        return 0
+    fi
+    return 1
+}
+
+# 从一条路径里抠出卷根 /vol{n}（抠不出来什么都不打印）。
+# 写成独立函数是为了让下面三个候选各调一次，而不是去维护一个候选数组
+# （候选数组在 POSIX sh 下得靠字符串拼接，比这个难读）。
+#
+# 正则要点：`\(/.*\)\{0,1\}#!/bin/bash
+# ==============================================================================
+#  曲率（yinshu-ai）—— 生命周期脚本共用的「用户数据备份」实现（被 source，不单独执行）
+#
+#  为什么单独一个文件：卸载与升级两条路径要做**同一件**事（定位数据目录 → 限时
+#  打包 → 轮转保留）。写成两份拷贝迟早漂移，而漂移的方向正好是「丢数据」那一侧。
+#
+#  ⚠️ 纪律：本文件里每一处都**不许让调用方失败**。
+#     备份是保险，不能变成新的故障点 —— 打包失败、超时、没权限、目录不存在，
+#     一律记日志后 return 0，卸载/升级照常走完。
+#     （参考实现 fnmusic-ext 在这一点上是相反的：那边 tar 失败会 fnmusic_fail
+#       并**中止卸载**。曲率明确不要那个行为 —— 见任务 E 第 2 条。）
+#
+#  ⚠️ 本文件只用 POSIX sh 也认的语法（没有数组、没有 mapfile），这样 cmd/ 下
+#     所有脚本都还能用 `sh -n` 做语法检查 —— 与既有脚本保持一致。用到的
+#     `local` 是 dash 也支持的扩展。
+#
+#  调用方约定：
+#    · 先设 SELF_DIR=<cmd 目录绝对路径>
+#    · 不要开 set -e
+# ==============================================================================
+
+# 技术标识：manifest 里的 appname。**刻意写死字面量、不取 TRIM_APPNAME** ——
+# 归档名前缀和轮转通配都靠它，一旦两次生命周期调用取值不同，旧归档就再也轮转
+# 不掉。（manifest 里也写着 appname 不能改：改了飞牛会当成新应用安装。）
+QULV_APP_NAME="yinshu-ai"
+QULV_ARCHIVE_PREFIX="${QULV_APP_NAME}-backup-"
+
+# 保留份数与限时，可用环境变量覆盖（运维口子 + 测试口子）。
+QULV_KEEP_BACKUPS="${QULV_KEEP_BACKUPS:-5}"
+QULV_BACKUP_TIMEOUT="${QULV_BACKUP_TIMEOUT:-120}"
+# 归档复核的单独预算：只有 tar 出错时才用到（见 qulv_archive_readable）。
+# 归档本来就小（缓存都排除了），所以这个值给得很短 —— 短才对，它的作用是
+# 「快速判定这份 .part 能不能用」，不是「耐心等它读完」。
+QULV_BACKUP_VERIFY_TIMEOUT="${QULV_BACKUP_VERIFY_TIMEOUT:-30}"
+
+# ── 日志 ─────────────────────────────────────────────────────────────────────
+# 每一行都同时进 **stderr** 和 ${VAR_DIR}/qulv-backup.log。
+#
+# ⚠️ 必须走 stderr，不能走 stdout：本文件里的定位函数（qulv_var_dir /
+#    qulv_backup_root）是**用 stdout 返回路径值**的，而调用处是
+#    `root="$(qulv_backup_root ...)"` —— 只要函数里往 stdout 打一行日志，那行
+#    日志就会被当成返回值吃进 root（本地干跑抓到的：root 变成一个两行的字符串，
+#    后面所有 [ -d ] 判断全部走偏）。stdout 只留给机器可读的值。
+#    成功时 qulv_make_backup 额外往 stdout 打一行**只有归档路径**，给工具用
+#    （参考实现的 uninstall_init 也是把归档路径 echo 到 stdout）。
+#
+# 已知局限：日志文件在数据目录里，卸载成功后它自己也随之消失 —— 所以每一条都
+# 同时打到 stderr（飞牛会收走生命周期脚本的输出）。参考实现同样把日志放在
+# TRIM_PKGVAR 下，只是另有一份不随回滚删除的 /var/log 副本；曲率不新建系统级
+# 日志目录，保持「只碰自己的数据目录」。
+QULV_BACKUP_LOG=""
+qulv_log() {
+    local line
+    line="[qulv-backup] $(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo '?') $*"
+    printf '%s\n' "${line}" >&2
+    if [ -n "${QULV_BACKUP_LOG}" ]; then
+        printf '%s\n' "${line}" >> "${QULV_BACKUP_LOG}" 2>/dev/null || true
+    fi
+}
+
+# ── 目录定位：数据目录的根（= ${TRIM_PKGVAR}） ───────────────────────────────
+# 唯一真源是 cmd/main 里的两行：
+#     VAR_DIR="${TRIM_PKGVAR:-${APP_DIR}/var}"     真机 = /vol1/@appdata/yinshu-ai
+#     DATA_DIR="${VAR_DIR}/data"                   真机 = /vol1/@appdata/yinshu-ai/data
+# 后端只知道自己被 --data 指到哪（backend/main.go 的 flag "data"）。
+# 真机旁证：scripts/nas-acceptance.mjs 直接读 .../yinshu-ai/data/online/downloaded.json；
+#           HANDOVER.md 记同目录的 .env（/vol1/@appdata/yinshu-ai/.env 与
+#           /var/apps/yinshu-ai/var/.env 是同一份，后者是前者的软链）。
+qulv_var_dir() {
+    local cand
+    if [ -n "${TRIM_PKGVAR:-}" ] && [ -d "${TRIM_PKGVAR}" ]; then
+        printf '%s\n' "${TRIM_PKGVAR%/}"
+        return 0
+    fi
+    # TRIM_PKGVAR 缺失时的兜底：真机形态 /vol{n}/@appdata/<appname>。
+    # 刻意**不硬编码 /vol1** —— 应用可以被装到任意卷（参考实现里整套「迁卷自愈」
+    # 逻辑就说明换卷是真实场景）。
+    for cand in /vol*/@appdata/"${QULV_APP_NAME}"; do
+        if [ -d "${cand}" ]; then
+            printf '%s\n' "${cand}"
+            return 0
+        fi
+    done
+    # 最后退回与 cmd/main 完全相同的表达式：APP_ROOT/var
+    if [ -n "${SELF_DIR:-}" ] && [ -d "${SELF_DIR}/.." ]; then
+        printf '%s\n' "$(cd "${SELF_DIR}/.." && pwd)/var"
+        return 0
+    fi
+    return 1
+}
+
+# 从一条路径里抠出卷根 /vol{n}（抠不出来什么都不打印）。
+# 写成独立函数是为了让下面三个候选各调一次，而不是去维护一个候选数组
+# （候选数组在 POSIX sh 下得靠字符串拼接，比这个难读）。
+#
+# 正则要点：结尾那段可选的「斜杠 + 任意」让「正好是 /vol1」也能匹配
+# （不要求它后面还有斜杠）；开头锚定的 ^ 保证 /tmp/vol1/... 这种
+# **路径中间**出现 /volN 的不会被误判成卷根 —— 沙箱路径就在 /tmp 下，
+# 这条成立才轮得到「真的装在 /vol{n} 上」那几条断言。
+qulv_vol_root_of() {
+    readlink -f -- "${1:-}" 2>/dev/null | sed -n 's#^\(/vol[0-9][0-9]*\)\(/.*\)\{0,1\}$#\1#p'
+}
+
+# ── 备份落点：必须是「卸载会删的那棵树」之外 ─────────────────────────────────
+# 参考实现（fnmusic-ext）给的答案是**卷根** /vol{n}/，它有真机依据：那边注释写明
+# "uninstall deletes the app directory; the archive is the user's escape hatch"。
+#
+# 曲率的情况：数据目录本来就不在应用目录里（/vol1/@appdata/yinshu-ai 与
+# /vol1/@appcenter 下的应用目录是两棵树），所以「卸载删应用目录」这一条不带它。
+# 但 fNOS 卸载**可能**连 @appdata/<appname> 一起删 —— 参考实现里那个
+# wizard_keep_data 向导开关就是为这件事存在的（一个「要不要保留数据」的卸载
+# 向导，意味着卸载确实会删数据）。既然确定不了，就按最坏情况办：落到卷根。
+# ⚠️ 「fNOS 卸载会删 @appdata/<appname>」这一句是**推断**（依据是向导开关的
+#    存在 + 参考实现的落点选择），没有在真机上验过。
+#
+# 返回：0 = 推导出的落点；2 = 用了兜底落点（调用方要打警告）；1 = 定位不到。
+qulv_backup_root() {
+    local var_dir="${1:-}"
+    local vol
+
+    if [ -n "${QULV_BACKUP_DIR:-}" ]; then
+        if [ -d "${QULV_BACKUP_DIR}" ] && [ -w "${QULV_BACKUP_DIR}" ]; then
+            printf '%s\n' "${QULV_BACKUP_DIR%/}"
+            return 0
+        fi
+        qulv_log "QULV_BACKUP_DIR=${QULV_BACKUP_DIR} 不存在或不可写，改用自动推导的落点"
+    fi
+
+    vol="$(qulv_vol_root_of "${var_dir}")"
+    [ -n "${vol}" ] || vol="$(qulv_vol_root_of "${SELF_DIR:-}")"
+    [ -n "${vol}" ] || vol="$(qulv_vol_root_of "${SELF_DIR:-}/target")"
+    if [ -n "${vol}" ]; then
+        printf '%s\n' "${vol%/}"
+        return 0
+    fi
+
+    # 兜底：数据目录的父目录。被删的是 <VAR_DIR> 自己、不是 @appdata，所以它一定
+    # 在「会被删的那棵树」之外；缺点是不如卷根干净（会出现在别的应用旁边），
+    # 所以只在上面三条都推不出来时才用，并且调用方会打一条警告。
+    if [ -n "${var_dir}" ] && [ -d "${var_dir}/.." ]; then
+        printf '%s\n' "$(cd "${var_dir}/.." && pwd)"
+        return 2
+    fi
+    return 1
+}
+
+# ── 归档内容 ─────────────────────────────────────────────────────────────────
+# 口径：**能重建的 = 缓存，不进备份**。
+#
+# 用「默认整个 data/ 都进 + 一份排除清单」而不是白名单，是刻意选的：
+# 白名单碰上「以后某个版本新增了一个数据文件、但没人记得回来改这里」会**静默丢
+# 数据**（只有真要还原的那天才发现）；排除清单碰上同一场景只是让备份大一点。
+# 所以默认往「不丢数据」一侧偏，体积与耗时的代价由下面这份清单逐条钉死：
+#
+#   data/sidecar           Python venv + work 目录（数千文件、上百 MB），由
+#                          requirements.txt 重建（真机实测重装约 64 秒，见
+#                          docs/变更记录/2026-10-06.md:1297）。打进备份会直接吃掉
+#                          限时预算 → 让**整份**备份超时失败，得不偿失。
+#   data/ai_backup         「AI 补全」的可撤销副本，内容是**用户音频文件的整份拷贝**
+#                          （backend/pkg/complete/backup.go 顶注：故意整文件备份，
+#                          「音频文件不算大，宁可多占点磁盘」）→ 真机可能 GB 级；
+#                          而且它只是「一次已完成操作的撤销缓冲」，同盘备份无意义。
+#   data/library_index.json 本地曲库索引，重扫即得。
+#   data/scan_cache.json    NAS 扫描缓存，重扫即得。
+#   data/fnos_rescan.json   重扫节流标记，就是一个时间戳。
+#   data/online/covers      封面缓存，键是虚拟 id（确定性哈希），联网可重下；
+#                           backend/pkg/intercept/cover.go 自己就写着「缓存」。
+#   data/music              只在 /vol1 不存在时才创建的兜底曲库目录
+#                          （backend/pkg/config/config.go:426-428），真机上不存在。
+#                          若真存在，里面是用户音频本体 —— 同盘打包只会超时。
+#   *.sock                  takeover 的瞬态 unix socket（打进 tar 没意义）。
+#
+# ⚠️ 这是一串**参数**，靠调用处的词拆分展开（shellcheck 会报 SC2086，是故意的）：
+#    每个值都没有空格/通配符，所以拆分是安全的。
+QULV_TAR_EXCLUDES="--exclude=data/sidecar --exclude=data/ai_backup --exclude=data/library_index.json --exclude=data/scan_cache.json --exclude=data/fnos_rescan.json --exclude=data/online/covers --exclude=data/music --exclude=*.sock"
+
+# 打包 + 自校验：打完再 tar -t 读一遍，确认它是**能解开的**归档。
+# 两步都在同一个被限时的调用里，所以校验也吃同一份时间预算。
+# 调用：qulv_pack <归档落点> <基准目录> <要打包的相对路径...>
+qulv_pack() {
+    local out="$1"
+    local root="$2"
+    shift 2
+    # shellcheck disable=SC2086  # QULV_TAR_EXCLUDES 按词拆分是上面注释里的约定
+    # --ignore-failed-read：服务残余进程还在写（在线播放历史、下载登记表）时，
+    # 单个文件读到一半消失只记 warning，不让整份归档失败。
+    # ⚠️ 它**不管**「路径压根不存在」—— 那种情况 tar 直接 exit 2。所以调用方
+    # 已经用 [ -d ] / [ -f ] 把不存在的候选过滤掉了，绝不会把幽灵路径交给 tar。
+    tar --ignore-failed-read -czf "${out}" -C "${root}" \
+        ${QULV_TAR_EXCLUDES} "$@" \
+        && tar -tzf "${out}" >/dev/null 2>&1
+}
+
+# ── 限时执行 ─────────────────────────────────────────────────────────────────
+# 后台跑 + 轮询 + 到点**连子孙一起** TERM（宽限 5 秒再 KILL），超时返回 124
+# （与 coreutils timeout 同码，调用方据此把日志写成「超时」）。
+#
+# 为什么不用 timeout(1)：本脚本对「fnOS 上究竟有什么命令」尽量少押注；而且纯
+# sh 实现让超时行为在开发机上能**真的**测出来（把 QULV_BACKUP_TIMEOUT 调成
+# 1 秒 + 一条慢命令即可，见 scripts/backup-dryrun.sh）。
+#
+# ⚠️ 两个坑都是本地干跑测出来的，别再改回去：
+#   ① 不要用「另起一个 sleep 看门狗到点杀它」的写法。看门狗和它的 sleep 都继承
+#      调用方的 stdout，成功路径上只 kill 看门狗那层子 shell，它的 sleep 会变成
+#      孤儿继续攥着 stdout —— 调用方用 $(...) 收输出时会等到那个 sleep 睡醒，
+#      表现是「备份明明成功了，卸载还要多等一整个限时」。
+#   ② 超时不能只 kill 最外层那个 pid。被限时的命令是 qulv_pack（一个后台子
+#      shell），它下面还有 tar，tar 下面还有 gzip。只杀子 shell 的话 tar/gzip
+#      变孤儿继续跑，而且同样攥着 stdout 和 .part 文件 —— 表现是「备份超时了，
+#      卸载却还是卡着」，正好废掉这个限时的全部意义。
+# 收尾：子孙都被 TERM/KILL 了，不存在需要额外收拾的后台进程。（真机上 tar 起的
+# gzip 本来也会因为管道关闭自己退出，这里只是不依赖这一点。）
+qulv_tree_pids() {
+    # 打印 $1 及它的所有子孙 pid（深先序）。pgrep 缺失时退化成只有 $1 自己。
+    local root="$1"
+    local kid
+    printf '%s\n' "${root}"
+    if command -v pgrep >/dev/null 2>&1; then
+        for kid in $(pgrep -P "${root}" 2>/dev/null); do
+            qulv_tree_pids "${kid}"
+        done
+    fi
+}
+
+qulv_signal_tree() {
+    local root="$1"
+    local sig="$2"
+    local p
+    for p in $(qulv_tree_pids "${root}"); do
+        kill "-${sig}" "${p}" 2>/dev/null || true
+    done
+}
+
+qulv_run_bounded() {
+    local limit="$1"
+    shift
+    local pid waited=0 grace
+    "$@" &
+    pid=$!
+    while kill -0 "${pid}" 2>/dev/null; do
+        if [ "${waited}" -ge "${limit}" ]; then
+            qulv_signal_tree "${pid}" TERM
+            grace=0
+            while [ "${grace}" -lt 25 ] && kill -0 "${pid}" 2>/dev/null; do
+                sleep 0.2
+                grace=$((grace + 1))
+            done
+            # 再收一遍：TERM 到 KILL 之间可能有进程还没走，也可能有子进程是
+            # TERM 之后才被 fork 出来的
+            qulv_signal_tree "${pid}" KILL
+            wait "${pid}" 2>/dev/null || true
+            return 124
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+    wait "${pid}"
+}
+
+# 归档能不能解开 —— 也用限时调用包住，理由见调用处注释。
+qulv_archive_readable() {
+    qulv_run_bounded "${QULV_BACKUP_VERIFY_TIMEOUT}" tar -tzf "$1" >/dev/null 2>&1
+}
+
+# ── 轮转 ─────────────────────────────────────────────────────────────────────
+# 只保留按名字排序最新的 N 份。安全性靠两点：
+#   ① 通配严格限定为「本应用前缀 + 14 位时间戳 + .tar.gz」—— 手工 cp 出来的
+#      副本（-copy / -1 之类）或目录里别的文件**永远不会**被这个 rm 碰到；
+#   ② 刚写好的那份即使因时钟回跳排不到第一，也显式跳过。
+# 名字里带 14 位时间戳，所以按名字倒序排 == 按时间倒序排（不依赖 mtime，
+# 拷贝/同步改过 mtime 也不会影响轮转结果）。
+qulv_rotate() {
+    local dir="$1"
+    local keep="$2"
+    local protect="$3"
+    local f n=0
+    while IFS= read -r f; do
+        [ -n "${f}" ] || continue
+        n=$((n + 1))
+        [ "${n}" -le "${keep}" ] && continue
+        [ "${f}" = "${protect}" ] && continue
+        if rm -f -- "${f}"; then
+            qulv_log "轮转：删除更旧的备份 ${f}（保留最近 ${keep} 份）"
+        fi
+    done <<QULV_ROTATE_EOF
+$(for f in "${dir}/${QULV_ARCHIVE_PREFIX}"[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]".tar.gz"; do
+    [ -e "${f}" ] && printf '%s\n' "${f}"
+done | sort -r)
+QULV_ROTATE_EOF
+    return 0
+}
+
+# ── 主入口 ───────────────────────────────────────────────────────────────────
+# qulv_make_backup <阶段名>   —— 阶段名只进日志（uninstall / upgrade）
+# 永远 return 0。
+qulv_make_backup() {
+    local phase="${1:-backup}"
+    local var_dir data_dir root root_rc stamp final part rc size items readable
+    local items_count
+
+    case "${QULV_KEEP_BACKUPS}" in
+        '' | *[!0-9]*) QULV_KEEP_BACKUPS=5 ;;
+    esac
+    case "${QULV_BACKUP_TIMEOUT}" in
+        '' | *[!0-9]*) QULV_BACKUP_TIMEOUT=120 ;;
+    esac
+    case "${QULV_BACKUP_VERIFY_TIMEOUT}" in
+        '' | *[!0-9]*) QULV_BACKUP_VERIFY_TIMEOUT=30 ;;
+    esac
+    [ "${QULV_KEEP_BACKUPS}" -ge 1 ] || QULV_KEEP_BACKUPS=1
+    [ "${QULV_BACKUP_TIMEOUT}" -ge 1 ] || QULV_BACKUP_TIMEOUT=1
+    [ "${QULV_BACKUP_VERIFY_TIMEOUT}" -ge 1 ] || QULV_BACKUP_VERIFY_TIMEOUT=1
+
+    var_dir="$(qulv_var_dir)"
+    if [ -z "${var_dir}" ]; then
+        qulv_log "${phase}：定位不到应用数据目录，跳过备份（不阻塞卸载/升级）"
+        return 0
+    fi
+    QULV_BACKUP_LOG="${var_dir}/qulv-backup.log"
+
+    # 只把**确实存在**的路径交给 tar（见 qulv_pack 里的说明）。
+    data_dir="${var_dir}/data"
+    items=""
+    if [ -d "${data_dir}" ]; then
+        items="data"
+    fi
+    if [ -f "${var_dir}/.env" ]; then
+        items="${items:+${items} }.env"
+    fi
+    if [ -z "${items}" ]; then
+        qulv_log "${phase}：${var_dir} 下没有可备份的数据（既无 data/ 也无 .env），跳过"
+        return 0
+    fi
+
+    root_rc=0
+    root="$(qulv_backup_root "${var_dir}")" || root_rc=$?
+    if [ -z "${root}" ]; then
+        qulv_log "${phase}：定位不到备份落点，跳过备份（不阻塞卸载/升级）"
+        return 0
+    fi
+    if [ ! -d "${root}" ]; then
+        qulv_log "${phase}：备份落点 ${root} 不存在，跳过备份（不阻塞卸载/升级）"
+        return 0
+    fi
+    if [ ! -w "${root}" ]; then
+        qulv_log "${phase}：备份落点 ${root} 不可写（需要 root？），跳过备份（不阻塞卸载/升级）"
+        return 0
+    fi
+    if [ "${root_rc}" -eq 2 ]; then
+        qulv_log "警告：推不出卷根 /vol{n}，退回数据目录的父目录 ${root}；它仍在卸载会删的那棵树之外，但不如卷根干净"
+    fi
+
+    # 清掉上次被强杀留下的半成品（前缀是我们自己的，碰不到别人的文件）
+    rm -f "${root}/${QULV_ARCHIVE_PREFIX}"*.part 2>/dev/null || true
+
+    stamp="$(date '+%Y%m%d%H%M%S' 2>/dev/null || echo 19700101000000)"
+    final="${root}/${QULV_ARCHIVE_PREFIX}${stamp}.tar.gz"
+    part="${final}.part"
+
+    # shellcheck disable=SC2086  # items 与 QULV_TAR_EXCLUDES 按词拆分是刻意的
+    items_count="$(printf '%s\n' ${items} | wc -l)"
+    qulv_log "${phase}：开始打包 ${items_count} 项（${items}）→ ${root}（限时 ${QULV_BACKUP_TIMEOUT}s，排除缓存：${QULV_TAR_EXCLUDES}）"
+
+    # shellcheck disable=SC2086
+    qulv_run_bounded "${QULV_BACKUP_TIMEOUT}" qulv_pack "${part}" "${var_dir}" ${items}
+    rc=$?
+
+    # 合不合格以**能不能解开**为准，不以 tar 的退出码为准：超时和「刚好在超时那
+    # 一刻完成」在退出码上分不开，而 tar -t 能分开。半成品（没有 gzip 尾）过不了。
+    #
+    # rc=0 时不再重复解一遍：qulv_pack 里已经 `tar -tzf` 校验过，rc=0 就意味着
+    # 校验通过（那一步还吃着限时预算）。
+    # rc!=0 才复核 —— 而且这次复核**也必须限时**：本地干跑抓到过一版，卡死的 tar
+    # 在打包那步被掐掉了，却挂在紧随其后的裸 `tar -tzf` 上不动，限时等于白做。
+    readable=0
+    if [ "${rc}" -eq 0 ]; then
+        readable=1
+    elif qulv_archive_readable "${part}"; then
+        readable=1
+        qulv_log "${phase}：tar 退出码 ${rc}，但归档可读 —— 判为「刚好在限时那一刻写完」，照常转正"
+    fi
+
+    if [ "${readable}" -eq 1 ]; then
+        if mv -f -- "${part}" "${final}"; then
+            size="$(wc -c < "${final}" 2>/dev/null || echo '?')"
+            qulv_log "${phase}：备份完成 ${final}（${size} 字节；tar 退出码 ${rc}）"
+            qulv_rotate "${root}" "${QULV_KEEP_BACKUPS}" "${final}"
+            qulv_log "${phase}：还原方式：先停掉曲率，再执行 sudo tar -xzf '${final}' -C '${var_dir}'"
+            # 机器可读的一行：只有路径（日志都走 stderr，见 qulv_log 的说明）
+            printf '%s\n' "${final}"
+            return 0
+        fi
+        qulv_log "${phase}：归档已打好但改名到 ${final} 失败，已丢弃（不阻塞卸载/升级）"
+    else
+        case "${rc}" in
+            124 | 143 | 137) qulv_log "${phase}：备份超时（或被中断），已丢弃半成品（不阻塞卸载/升级）" ;;
+            *) qulv_log "${phase}：备份失败（tar 退出码 ${rc}），已丢弃半成品（不阻塞卸载/升级）" ;;
+        esac
+    fi
+    rm -f -- "${part}" 2>/dev/null || true
+    return 0
+}
