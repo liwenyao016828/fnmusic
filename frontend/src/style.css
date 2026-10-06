@@ -1,0 +1,488 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================================================
+   移动端基础层（2026-09-26 添加）
+
+   这一层只做「桌面端不需要、移动端必须有」的四件事，不碰任何视觉风格：
+     1. 动态视口高度（`.app-viewport`）—— 移动端浏览器地址栏/工具栏会吃掉
+        100vh 的一部分，直接用 h-screen 会把底部播放条挤出可视区。
+     2. 安全区（刘海 / Home 指示条）—— index.html 已开 viewport-fit=cover，
+        所以这里必须自己补上，否则控件会被压住。
+     3. 触屏手感 —— 去掉点击高亮方块、去掉双击缩放延迟、触摸设备上收细滚动条。
+     4. 横向滚动容器滚到底不再带着整页一起晃。
+
+   ⚠️ 判定断点一律用 `@media (hover: none) and (pointer: coarse)`
+      （= 真的用手指点的设备），不用屏宽 —— 手机横屏、平板、触屏笔记本都能覆盖，
+      而桌面浏览器即使窗口很窄也不会被误伤。
+   ============================================================================ */
+
+:root {
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+}
+
+@layer base {
+  /* 动态视口：先写 vh（老 WebView 兜底），再写 dvh（支持的浏览器覆盖） */
+  .app-viewport {
+    height: 100vh;
+    height: 100dvh;
+  }
+}
+
+@layer utilities {
+  /* 安全区工具类 —— 顶栏避让刘海、底部条避让 Home 指示条 */
+  .pt-safe    { padding-top: var(--safe-top); }
+  .pb-safe    { padding-bottom: var(--safe-bottom); }
+  .pl-safe    { padding-left: var(--safe-left); }
+  .pr-safe    { padding-right: var(--safe-right); }
+
+  /* 横向滚动但不要可见滚动条（移动端导航条用） */
+  .no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
+  .no-scrollbar::-webkit-scrollbar { width: 0; height: 0; display: none; }
+
+  /* 手指可点区域：把视觉高度不足的控件撑到 ≥44px 的实际命中区 */
+  .tap-target {
+    position: relative;
+  }
+  .tap-target::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 44px;
+    height: 44px;
+    transform: translate(-50%, -50%);
+  }
+}
+
+/* Custom Scrollbar - light theme */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: #f8fafc;
+}
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 6px;
+  border: 2px solid #f8fafc;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #10b981;
+}
+
+/* Vinyl Tonearm Animation */
+.tonearm {
+  transform-origin: 24px 24px;
+  transition: transform 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.tonearm-playing { transform: rotate(26deg); }
+.tonearm-paused  { transform: rotate(0deg); }
+
+/* Lyrics Active */
+.lyric-active {
+  color: #10b981;
+  font-size: 1.15rem;
+  font-weight: 700;
+  transform: scale(1.04);
+}
+
+/* ── 触屏设备专属调整 ── */
+@media (hover: none) and (pointer: coarse) {
+  /* 手指点击不该出现灰色高亮方块 */
+  * {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* 可点元素：交给浏览器立刻响应，去掉 300ms 双击缩放延迟 */
+  button,
+  a,
+  [role="button"],
+  label,
+  input[type="range"],
+  select,
+  summary {
+    touch-action: manipulation;
+  }
+
+  /* 触摸设备上滚动条只有视觉噪音，且 10px 太宽会挤压内容 */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    border-width: 1px;
+  }
+
+  /* 横向滚动容器（曲库表格等）滚到底不要带着整页一起晃 */
+  .overflow-x-auto,
+  [class*="overflow-x-auto"] {
+    overscroll-behavior-x: contain;
+  }
+
+  /* 触屏没有 hover：「悬停才出现」的东西（进度条拇指）必须常显，
+     否则用户完全看不出进度拖到哪儿了。 */
+  .show-on-touch {
+    opacity: 1 !important;
+  }
+
+  /* 「桌面靠 hover 切换的两个元素」在触屏上要直接定死：
+     典型场景是歌曲行的「序号 ↔ 播放图标」——触屏没有 hover，永远是序号，
+     用户看不出这一行可以点。触屏改成常显播放图标（序号在手机上本来也没用）。 */
+  .show-on-touch-flex {
+    display: flex !important;
+  }
+  .hide-on-touch {
+    display: none !important;
+  }
+}
+
+/* ============================================================================
+   顶栏软件图标 = 开放接口入口（2026-09-27）
+
+   原先「开放接口」是右上角一个**带文字**的按钮；用户要求把入口换到左上角的软件图标上，
+   并且「保留软件图标、用动态图标提示（非文字）让用户知道可以点」。
+
+   2026-09-28 用户反馈「logo 外圈旋转的方框不需要了」——**外圈光环（.brand-halo-ring）已删除**，
+   只留两个更安静的动作：
+     · `.brand-disc circle:last-of-type` —— Disc 的**内圈实心圆**自己放大缩小（呼吸）；
+     · `.brand-core-glow`                 —— 内圈呼吸时透出一层柔光。
+   悬停时底色变深（Tailwind 的 group-hover 管底色）；抽屉已经开着就暂停动效 ——
+   不需要再提示「这里能点」了。`prefers-reduced-motion` 下全部静止（只留图标本身、不发散）。
+   ============================================================================ */
+/* 呼吸的节奏：0 → 45% 放大、45~55% 停在顶点、再收回来 —— 中间留个「停顿」才像呼吸，
+   两个关键帧硬碰硬（0/50/100）在慢速下会看出「一顿一顿」。缓动用 sine 型贝塞尔，别用 ease-in-out。 */
+@keyframes yinshu-brand-core-ring {
+  0%   { transform: translate3d(0, 0, 0) scale(0.84); opacity: 0.95; }
+  45%  { transform: translate3d(0, 0, 0) scale(1.52); opacity: 0.5; }
+  55%  { transform: translate3d(0, 0, 0) scale(1.52); opacity: 0.5; }
+  100% { transform: translate3d(0, 0, 0) scale(0.84); opacity: 0.95; }
+}
+@keyframes yinshu-brand-core-glow {
+  0%   { opacity: 0.3; }
+  45%  { opacity: 0.85; }
+  55%  { opacity: 0.85; }
+  100% { opacity: 0.3; }
+}
+
+.brand-halo {
+  -webkit-tap-highlight-color: transparent;
+}
+/* 2026-09-28 用户口径：「可以采用呼吸感，logo的内圈圆形放大缩小」；同日晚些时候又反馈
+   「logo的呼吸灯，可以增加点帧率，看起来比较卡」—— 卡的原因有两个，都修在这里：
+     ① 原来呼吸的是 SVG 里的 `circle`（配 `transform-box: fill-box`）：SVG 的 transform
+        **不参与合成**，每帧都要重绘那一小块，慢速动画下就是可见的顿。
+     ② 柔光那层同时动 `opacity` + `scale`，缩放一个 radial-gradient 等于每帧重新栅格化。
+   现在改为：中间那个**圆点 `.brand-core` 固定不动**，呼吸交给它**外层那个圆圈 `.brand-core-ring`**
+   —— 都是绝对定位的 HTML 元素，只动 `transform` / `opacity`，`will-change` 提到合成层走 GPU；
+   柔光**只动 opacity**（图层不重新栅格化）。SVG 里的内圈保持静止，被圆点正好盖住。
+
+   ⚠️ 用户 2026-09-28 的最终口径：「**圆点不变，是圆点外层的圆圈呼吸效果**」——
+   别再让圆点自己缩放（我第一版就做错了）。 */
+.brand-halo .brand-disc circle:last-of-type {
+  animation: none;
+}
+/* 中间的圆点：**静止**，只负责当参考物 */
+.brand-halo .brand-core {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 5px;
+  height: 5px;
+  margin: -2.5px 0 0 -2.5px;
+  border-radius: 9999px;
+  background: rgb(255 255 255 / 0.96);
+  pointer-events: none;
+}
+/* 圆点外层那个圆圈：**它**呼吸（放大时顺带淡一点，才像呼吸而不是硬脉冲） */
+.brand-halo .brand-core-ring {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 12px;
+  height: 12px;
+  margin: -6px 0 0 -6px;
+  border-radius: 9999px;
+  border: 1.5px solid rgb(255 255 255 / 0.92);
+  pointer-events: none;
+  will-change: transform, opacity;
+  backface-visibility: hidden;
+  animation: yinshu-brand-core-ring 3.2s cubic-bezier(0.37, 0, 0.63, 1) infinite;
+}
+.brand-halo .brand-core-glow {
+  position: absolute;
+  inset: 5px;
+  border-radius: 9999px;
+  background: radial-gradient(circle, rgb(255 255 255 / 0.5) 0%, rgb(16 185 129 / 0.32) 46%, rgb(16 185 129 / 0) 72%);
+  pointer-events: none;
+  will-change: opacity;
+  animation: yinshu-brand-core-glow 3.2s cubic-bezier(0.37, 0, 0.63, 1) infinite;
+}
+.brand-halo:active {
+  transform: scale(0.97);
+}
+/* 抽屉开着 = 用户已经知道这里是什么了，动效停住，别一直晃 */
+.brand-halo-open .brand-core-ring,
+.brand-halo-open .brand-core-glow {
+  animation-play-state: paused;
+}
+
+/* v2.1.66：页面不可见 / 窗口失焦时也停 —— 在飞牛宿主里 iframe 被别的窗格盖住、用户正在拖
+   分栏的时候，品牌呼吸没必要继续跑。<html> 上的 ys-app-idle 由 ImmersivePlayer 里
+   的 visibilitychange + window blur/focus 维护。 */
+html.ys-app-idle .brand-halo .brand-core-ring,
+html.ys-app-idle .brand-halo .brand-core-glow {
+  animation-play-state: paused;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .brand-halo .brand-core-glow,
+  .brand-halo .brand-core-ring,
+  .ys-ambient__orb {
+    animation: none !important;
+  }
+}
+
+/* ── 环境光光斑：默认「静止」，不再一直飘（2026-10-06） ────────────────────
+   YG 反馈播放页动效影响性能。定位后的结论是：贵的不是「模糊」，而是
+   **让带大半径模糊的巨层一直动**。
+
+   静态模糊只会光栅化一次然后被缓存；但这里三个 42vmax（接近全屏）的光斑
+   各自带 `blur(46px) saturate(1.45)` 且挂着无限 `transform` 动画 —— 每帧都
+   要把三张接近全屏的模糊图层重新光栅化一遍。这正是手机上最贵的那类开销。
+
+   所以保留光斑的**样子**（配色、位置、模糊半径全不动），只去掉「动」：
+   播放时背景静止，视觉身份还在，每帧成本回到接近零。
+
+   想恢复飘动：给 <html> 加上 `ys-ambient-anim` 这个类即可（不用改这里）。
+   上面 `prefers-reduced-motion` 与 `ys-app-idle` 两处原有开关行为不变。 */
+html:not(.ys-ambient-anim) .ys-ambient__orb {
+  animation: none !important;
+}
+
+
+/* ============================================================================
+   深色半透明「玻璃悬浮」皮肤（2026-09-28，播放栏 + 沉浸页共用）
+
+   YG 给了 trim.music 的风格说明（深黑紫底 + 半透明面板 + 轻磨砂 + 极细描边 + 大圆角 +
+   克制阴影），我把那个 fpk 解开核了它真实的令牌，这里是落地版：
+     --ds-bg-gradient-primary: linear-gradient(#2d293a → #14121b)   ← 「深黑紫」来源
+     --ds-bg-modal 暗色 #1e1c26eb    --ds-glass-control-filter blur(12px)
+     --ds-glass-control-border #ffffff1f（0.12 白）  --shadow 0 4px 16px #0000001f
+     环境光：radial-gradient + blur(46px) saturate(1.45) 的 42vmax 光斑，播放时才动
+   唯一**没照搬**的是强调色：trim.music 用红 #f62c55，音枢的牌子色是翡翠绿，保留 emerald。
+
+   ⚠️ 三条禁令（用户原文）：不要用整体 transform: scale() 做响应式、不要厚阴影、
+      不要过度模糊（blur 20px 上下就够）。宽度流式、靠分级隐藏与间距自适应。
+   ============================================================================ */
+:root {
+  --ys-deep-top: #2d293a;
+  --ys-deep-bottom: #14121b;
+  --ys-gradient: linear-gradient(to bottom, var(--ys-deep-top) 0%, var(--ys-deep-bottom) 100%);
+  --ys-panel: rgb(30 28 38 / 0.72);
+  --ys-panel-strong: rgb(23 21 30 / 0.86);
+  --ys-panel-soft: rgb(255 255 255 / 0.07);
+  --ys-line: rgb(255 255 255 / 0.1);
+  --ys-line-strong: rgb(255 255 255 / 0.16);
+  --ys-text: rgb(255 255 255 / 0.94);
+  --ys-text-dim: rgb(255 255 255 / 0.62);
+  --ys-text-faint: rgb(255 255 255 / 0.42);
+  --ys-accent: #10b981;
+  --ys-shadow: 0 8px 30px rgb(0 0 0 / 0.25);
+  --ys-shadow-soft: 0 4px 16px rgb(0 0 0 / 0.18);
+  --ys-ambient-primary: #2c4a44;
+  --ys-ambient-secondary: #262f4b;
+  --ys-ambient-tertiary: #3a2f4d;
+}
+
+/* 玻璃面板：背景半透明、**内容不透明**（不是给整块加 opacity） */
+.ys-glass {
+  background: var(--ys-panel);
+  backdrop-filter: blur(20px) saturate(120%);
+  -webkit-backdrop-filter: blur(20px) saturate(120%);
+  border: 1px solid var(--ys-line);
+  box-shadow: var(--ys-shadow);
+}
+.ys-glass-soft {
+  background: var(--ys-panel-soft);
+  border: 1px solid var(--ys-line);
+}
+
+/* 播放栏 = 浮动胶囊。
+   ⚠️ 尺寸照 trim.music 的真实实现来（2026-09-28 从它的 JS 里挖到）：
+      `flex h-[72px] items-center gap-2 px-4` + `style={{ width: 576, marginInline: 'auto', borderRadius: 44 }}`
+      —— 所以是**宽 576 / 高 72 / 居中 / 圆角≈胶囊**，不是我第一版猜的 900px。 */
+.ys-player {
+  width: min(576px, calc(100vw - 24px));
+  border-radius: 9999px;
+}
+/* trim.music 的 .music-player-glass：`backdrop-filter: blur(12px)` + 一点阴影，边框跟主题走。
+   这里保留同一个模糊量级（12px），并留一个变量便于调。 */
+.ys-player-glass {
+  backdrop-filter: var(--ys-player-glass-filter, blur(12px)) saturate(120%);
+  -webkit-backdrop-filter: var(--ys-player-glass-filter, blur(12px)) saturate(120%);
+}
+
+/* ── 环境光（沉浸页背景，trim.music 的 ambient 光斑做法） ──
+   未播放时静止、播放时才动；`prefers-reduced-motion` 下全部停。 */
+.ys-ambient {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+/* 封面取色层：放大 + 重模糊 + 压暗，播放页的底色就跟着当前封面走（不采样、零成本） */
+.ys-ambient__cover {
+  position: absolute;
+  inset: -12%;
+  width: 124%;
+  height: 124%;
+  object-fit: cover;
+  filter: blur(28px) saturate(1.3);
+  /* 2026-10-06：60px → 28px。这是整页最大的一次光栅化（124% 铺满 + 半径 60
+     的重模糊）。它本来就压到 0.5 透明度、上面还盖着渐变层，28px 与 60px 在
+     屏幕上几乎看不出差别，但光栅化面积与次数明显下降。 */
+  opacity: 0.5;
+  transform: scale(1.05);
+}
+.ys-ambient__base {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  transition: opacity 0.8s ease;
+  background-image:
+    radial-gradient(150% 126% at 6% 4%, rgb(44 74 68 / 0.72) 0%, rgb(44 74 68 / 0.26) 46%, transparent 76%),
+    radial-gradient(120% 120% at 90% 10%, rgb(38 47 75 / 0.55) 0%, transparent 70%);
+}
+.ys-ambient__orb {
+  position: absolute;
+  width: 42vmax;
+  height: 42vmax;
+  border-radius: 9999px;
+  filter: blur(46px) saturate(1.45);
+  opacity: 0;
+  transition: opacity 0.8s ease;
+  will-change: transform, opacity;
+}
+.ys-ambient__orb--a {
+  left: -12%;
+  top: -18%;
+  background: radial-gradient(circle, rgb(44 74 68 / 0.7) 0%, transparent 66%);
+  animation: ys-orb-a 18s ease-in-out infinite;
+}
+.ys-ambient__orb--b {
+  right: -16%;
+  top: 4%;
+  background: radial-gradient(circle, rgb(38 47 75 / 0.66) 0%, transparent 68%);
+  animation: ys-orb-b 22s ease-in-out infinite;
+}
+.ys-ambient__orb--c {
+  left: 16%;
+  bottom: -20%;
+  background: radial-gradient(circle, rgb(58 47 77 / 0.6) 0%, transparent 70%);
+  animation: ys-orb-c 26s ease-in-out infinite;
+}
+.ys-ambient[data-playing='true'] .ys-ambient__base,
+.ys-ambient[data-playing='true'] .ys-ambient__orb {
+  opacity: 1;
+}
+.ys-ambient[data-playing='false'] .ys-ambient__orb {
+  animation-play-state: paused;
+}
+@keyframes ys-orb-a {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+  50% { transform: translate3d(6%, 4%, 0) scale(1.12); }
+}
+@keyframes ys-orb-b {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1.05); }
+  50% { transform: translate3d(-5%, 6%, 0) scale(1); }
+}
+@keyframes ys-orb-c {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+  50% { transform: translate3d(4%, -5%, 0) scale(1.15); }
+}
+
+/* 深色区域里的滚动条（沉浸页歌词区）：细、低对比，不要亮色 */
+.ys-scroll-dark {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(255 255 255 / 0.18) transparent;
+}
+.ys-scroll-dark::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.ys-scroll-dark::-webkit-scrollbar-track {
+  background: transparent;
+}
+.ys-scroll-dark::-webkit-scrollbar-thumb {
+  background: rgb(255 255 255 / 0.16);
+  border-radius: 9999px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ys-ambient__base,
+  .ys-ambient__orb {
+    transition: none;
+  }
+  .ys-ambient[data-playing='true'] .ys-ambient__base,
+  .ys-ambient[data-playing='true'] .ys-ambient__orb {
+    opacity: 1;
+  }
+}
+
+
+/* ============================================================================
+   飞牛音乐式歌词区（2026-09-28）
+   照它源码里的 `.music-player-karaoke-lyrics` 做：隐藏滚动条、逐行过渡用 opacity/filter/transform。
+   ============================================================================ */
+.ys-karaoke {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.ys-karaoke::-webkit-scrollbar {
+  display: none;
+}
+.ys-karaoke__line {
+  transition: opacity 520ms cubic-bezier(0.4, 0, 0.2, 1), filter 280ms ease, transform 280ms ease;
+  will-change: opacity, transform;
+}
+.ys-karaoke__line--active {
+  filter: none;
+}
+.ys-karaoke__line--idle {
+  filter: blur(0.3px);
+}
+@media (prefers-reduced-motion: reduce) {
+  .ys-karaoke__line {
+    transition-duration: 0ms;
+  }
+}
+
+
+/* ============================================================================
+   滑动切页的降本（2026-09-28）—— 手机上卡在"光栅化"，不在 JS
+   ① 非当前页用 content-visibility: auto 跳过渲染：轨道宽 500%，不跳过的话每帧都要为
+      5 页宽的图层付出光栅化代价；滑进来的那一页浏览器会自己按需渲染。
+      ⚠️ 只在**非当前页**上加：content-visibility 会带上 contain: layout paint，
+         当前页里的 fixed 弹窗（二维码登录等）会被它当成包含块，所以当前页绝不能用。
+   ② 滑动期间关掉玻璃模糊：背景内容在动时 backdrop-filter 每帧都要重算，很贵。
+      用 html[data-swiping] 一个开关控制，手势结束就恢复。
+   ============================================================================ */
+.swipe-page-idle {
+  content-visibility: auto;
+  contain-intrinsic-size: 800px 900px;
+}
+
+html[data-swiping='1'] .ys-glass,
+html[data-swiping='1'] .ys-player-glass {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}

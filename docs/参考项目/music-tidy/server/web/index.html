@@ -1,0 +1,1461 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>AI 音乐整理</title>
+<style>
+:root{
+  --bg:#000000; --card:rgba(28,28,30,.55); --border:rgba(255,255,255,.09);
+  --text:#f5f5f7; --sub:#98989d; --accent:#0a84ff; --accent-soft:#6cb2ff;
+  --warn:#ff9f0a; --danger:#ff453a; --ok:#30d158; --err:#ff453a;
+  --radius:18px;
+  --glass:linear-gradient(160deg,rgba(48,48,54,.58),rgba(22,22,26,.52));
+  --glass-strong:linear-gradient(160deg,rgba(52,52,58,.82),rgba(24,24,28,.74));
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{color-scheme:dark}
+body{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC","Microsoft YaHei",Segoe UI,Roboto,sans-serif;
+  background:var(--bg);color:var(--text);font-size:15px;line-height:1.6;min-height:100vh;
+  -webkit-font-smoothing:antialiased}
+/* 背景光晕 */
+.bgfx{position:fixed;inset:0;z-index:-1;overflow:hidden;background:#000}
+.bgfx .orb{position:absolute;border-radius:50%;filter:blur(90px)}
+.bgfx .orb1{width:540px;height:540px;left:-150px;top:-140px;background:radial-gradient(circle,rgba(10,132,255,.34),transparent 70%)}
+.bgfx .orb2{width:480px;height:480px;right:-130px;top:18%;background:radial-gradient(circle,rgba(94,92,230,.28),transparent 70%)}
+.bgfx .orb3{width:560px;height:560px;left:32%;bottom:-220px;background:radial-gradient(circle,rgba(255,55,95,.14),transparent 70%)}
+/* 液态玻璃 */
+.glass,.sidebar,.panel,.card,.taskbox,.logbox,.dup-group,.mbox,.dlc-panel,.toast{
+  background:var(--glass);backdrop-filter:blur(28px) saturate(180%);-webkit-backdrop-filter:blur(28px) saturate(180%);
+  border:1px solid var(--border);box-shadow:0 10px 34px rgba(0,0,0,.42),inset 0 1px 0 rgba(255,255,255,.06)}
+/* 布局：左侧边栏 + 主区域 */
+.shell{display:flex;min-height:100vh;align-items:stretch}
+.sidebar{position:sticky;top:0;height:100vh;width:236px;flex:none;display:flex;flex-direction:column;
+  padding:20px 14px 14px;border-radius:0;z-index:20;border-left:none;border-top:none;border-bottom:none}
+.brand{display:flex;align-items:center;gap:11px;padding:2px 8px 18px}
+.brand .logo{width:40px;height:40px;flex:none;border-radius:11px;overflow:hidden;display:flex;align-items:center;justify-content:center;
+  background:rgba(255,255,255,.06);box-shadow:inset 0 1px 0 rgba(255,255,255,.1)}
+.brand h1{font-size:16px;font-weight:700;letter-spacing:.2px}
+.brand .sub{font-size:11.5px;color:var(--sub);margin-top:1px}
+.sidefoot{margin-top:auto;padding:12px 10px 2px;font-size:12px;color:var(--sub);opacity:.75}
+.sidefoot a{color:var(--accent-soft);text-decoration:none}
+.sidefoot a:hover{text-decoration:underline}
+.main{flex:1;min-width:0;padding:24px clamp(14px,3vw,32px) 90px;width:100%;max-width:1100px;margin:0 auto}
+/* 侧边栏导航 */
+.tabnav{display:flex;flex-direction:column;gap:4px}
+.tab{display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:10px 12px;border-radius:12px;
+  font-size:14px;color:var(--sub);cursor:pointer;border:none;background:transparent;transition:.18s;white-space:nowrap}
+.tab svg{width:18px;height:18px;fill:currentColor;flex:none;opacity:.85}
+.tab:hover{background:rgba(255,255,255,.06);color:var(--text)}
+.tab.active{background:linear-gradient(135deg,rgba(10,132,255,.34),rgba(94,92,230,.26));color:#fff;font-weight:600;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.12),0 4px 14px rgba(10,132,255,.18)}
+.tab.active svg{opacity:1}
+/* 设置页顶部分类标签（与侧边栏同源的分段玻璃控件） */
+.subtabs{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:16px;padding:5px;border-radius:16px;
+  background:rgba(255,255,255,.05);border:1px solid var(--border);
+  backdrop-filter:blur(20px) saturate(170%);-webkit-backdrop-filter:blur(20px) saturate(170%)}
+.subtab{display:inline-flex;align-items:center;gap:7px;border:none;background:transparent;border-radius:11px;
+  padding:8px 15px;font-family:inherit;font-size:13.5px;font-weight:500;color:var(--sub);cursor:pointer;
+  transition:.18s;white-space:nowrap}
+.subtab svg{width:15px;height:15px;fill:currentColor;flex:none;opacity:.85}
+.subtab:hover{background:rgba(255,255,255,.07);color:var(--text)}
+.subtab.active{background:linear-gradient(135deg,rgba(10,132,255,.34),rgba(94,92,230,.26));color:#fff;font-weight:600;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.12),0 4px 14px rgba(10,132,255,.18)}
+.subtab.active svg{opacity:1}
+/* 统计卡片 */
+.cards{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:16px}
+.card{flex:1 1 150px;min-width:130px;border-radius:var(--radius);padding:15px 17px}
+.card .label{font-size:12px;color:var(--sub)}
+.card .value{font-size:24px;font-weight:700;margin-top:4px;letter-spacing:.2px}
+.card .value small{font-size:12px;color:var(--sub);font-weight:400}
+/* 面板 */
+.panel{border-radius:var(--radius);padding:18px;margin-bottom:16px}
+.panel h2{font-size:15px;font-weight:600;margin-bottom:12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.panel h2 .tag{font-size:11px;background:rgba(255,255,255,.08);color:var(--sub);padding:2px 9px;border-radius:20px;font-weight:400;
+  border:1px solid rgba(255,255,255,.06)}
+/* 按钮 */
+.btn{display:inline-flex;align-items:center;gap:6px;border:none;border-radius:11px;
+  padding:9px 16px;font-size:14px;font-weight:500;cursor:pointer;transition:.18s;text-decoration:none;color:var(--text)}
+.btn-primary{background:linear-gradient(135deg,#0a84ff,#5e5ce6);color:#fff;box-shadow:0 4px 14px rgba(10,132,255,.28)}
+.btn-primary:hover{filter:brightness(1.14)}
+.btn-ghost{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.14);color:var(--text);
+  backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
+.btn-ghost:hover{border-color:rgba(10,132,255,.6);color:var(--accent-soft);background:rgba(10,132,255,.12)}
+.btn-danger{background:rgba(255,69,58,.12);color:#ff6961;border:1px solid rgba(255,69,58,.35)}
+.btn-danger:hover{background:var(--danger);color:#fff}
+.btn-sm{padding:5px 10px;font-size:12.5px;border-radius:8px}
+.btn svg{width:15px;height:15px;fill:currentColor;flex:none}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.icobtn{padding:6px;min-width:30px;min-height:30px;justify-content:center;line-height:0}
+.icobtn svg{width:17px;height:17px;fill:currentColor}
+.btn-sm.icobtn{padding:5px;min-width:26px;min-height:26px}
+.btn-sm.icobtn svg{width:15px;height:15px}
+@keyframes ico-spin{to{transform:rotate(360deg)}}
+.icospin svg{animation:ico-spin .9s linear infinite}
+/* 行布局 + 输入控件 */
+.row{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.input,select,textarea.input{width:100%;min-width:0;border:1px solid rgba(255,255,255,.12);border-radius:11px;
+  padding:10px 13px;font-size:14px;font-family:inherit;color:var(--text);
+  background:rgba(255,255,255,.06);transition:.18s;line-height:1.5}
+.row>.input,.row>select{flex:1 1 220px;width:auto}
+.input::placeholder,textarea::placeholder{color:rgba(255,255,255,.32)}
+.input:hover,select:hover,textarea.input:hover{border-color:rgba(255,255,255,.2)}
+.input:focus,select:focus,textarea.input:focus{outline:none;border-color:rgba(10,132,255,.75);
+  background:rgba(255,255,255,.09);box-shadow:0 0 0 3.5px rgba(10,132,255,.18)}
+select option{background:#1c1c1e;color:#f5f5f7}
+textarea.input{resize:vertical;white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;
+  min-height:64px;overflow-y:auto}
+label.fld{display:block;font-size:13px;color:var(--sub);margin:12px 0 6px}
+.srcbox{display:inline-flex;align-items:center;gap:7px;cursor:pointer;font-size:13.5px;
+  padding:7px 13px;border-radius:11px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.11);transition:.18s;user-select:none}
+.srcbox:hover{border-color:rgba(255,255,255,.22)}
+.srcbox input[type=checkbox]{width:15px;height:15px;accent-color:var(--ok);cursor:pointer;margin:0}
+.srcbox:has(input:checked){background:rgba(48,209,88,.14);border-color:rgba(48,209,88,.42);color:#eaffef}
+.ms-api-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;background:rgba(255,255,255,.05);
+  border:1px solid rgba(255,255,255,.1);border-radius:12px;padding:9px 11px}
+/* 开关 */
+.switch{position:relative;display:inline-block;width:46px;height:26px;vertical-align:middle;flex:none}
+.switch input{opacity:0;width:0;height:0}
+.slider{position:absolute;inset:0;background:rgba(255,255,255,.16);border-radius:26px;transition:.22s}
+.slider:before{content:"";position:absolute;width:20px;height:20px;left:3px;top:3px;background:#fff;
+  border-radius:50%;transition:.22s;box-shadow:0 1px 4px rgba(0,0,0,.4)}
+.switch input:checked+.slider{background:var(--ok)}
+.switch input:checked+.slider:before{transform:translateX(20px)}
+.switch-row{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  padding:11px 0;border-bottom:1px dashed rgba(255,255,255,.1)}
+.switch-row:last-child{border-bottom:none}
+.switch-row .txt{font-size:14px}
+.switch-row .hint{font-size:12px;color:var(--sub)}
+.hint{color:var(--sub)}
+input[type=checkbox],input[type=radio]{accent-color:var(--accent);cursor:pointer}
+input[type=number]{-moz-appearance:textfield}
+::selection{background:rgba(10,132,255,.4);color:#fff}
+/* 表格 */
+table{width:100%;border-collapse:collapse;font-size:13.5px}
+th,td{text-align:left;padding:9px 6px;border-bottom:1px solid rgba(255,255,255,.07);vertical-align:top}
+th{color:var(--sub);font-weight:500;font-size:12.5px;white-space:nowrap}
+/* 徽章 */
+.badge{display:inline-block;font-size:11px;padding:2px 8px;border-radius:20px;font-weight:500}
+.badge-ok{background:rgba(48,209,88,.15);color:var(--ok)}
+.badge-warn{background:rgba(255,159,10,.15);color:var(--warn)}
+.badge-danger{background:rgba(255,69,58,.15);color:#ff6961}
+.badge-gray{background:rgba(255,255,255,.08);color:var(--sub)}
+/* 进度 */
+.progress{height:8px;background:rgba(255,255,255,.1);border-radius:8px;overflow:hidden;margin-top:8px}
+.progress>div{height:100%;background:linear-gradient(90deg,#0a84ff,#5e5ce6);width:0;transition:.3s;border-radius:8px}
+/* 分母未知的任务（枚举中）：与其摆一个永远 0% 的条，不如给条来回跑的动效，至少看得出在动 */
+.progress.indet{position:relative}
+.progress.indet>div{width:34%;transition:none;animation:indet 1.25s cubic-bezier(.4,0,.2,1) infinite}
+@keyframes indet{0%{transform:translateX(-100%)}100%{transform:translateX(300%)}}
+/* 增量监听徽标：每轮枚举要跑几十秒，不给动静会被当成没生效 */
+.wt{margin-left:2px}
+.wt-off{opacity:.7}
+.wt-idle{background:rgba(48,209,88,.14);color:#3ddc84;border-color:rgba(48,209,88,.28)}
+.wt-busy{background:rgba(10,132,255,.18);color:#6cb2ff;border-color:rgba(10,132,255,.35);animation:wtpulse 1.2s ease-in-out infinite}
+@keyframes wtpulse{0%,100%{opacity:1}50%{opacity:.42}}
+.taskbox{border-radius:14px;padding:13px 15px;font-size:13px;color:var(--sub);border-style:dashed}
+.folder-item{display:flex;align-items:center;justify-content:space-between;gap:10px;
+  padding:11px 0;border-bottom:1px dashed rgba(255,255,255,.1);font-size:14px;word-break:break-all}
+.folder-item:last-child{border:none}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;color:#a1a1a6}
+/* 目录选择树（「指定目录扫描」） */
+.sc-row{display:flex;align-items:center;gap:7px;padding:3px 0;font-size:13.5px;min-width:0}
+.sc-caret{width:16px;flex:0 0 auto;text-align:center;cursor:pointer;color:var(--sub);
+  user-select:none;font-size:11px;line-height:1.6}
+.sc-caret.leaf{cursor:default;opacity:.35}
+.sc-name{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sc-name.sel{color:#6cb2ff;font-weight:600}
+.sc-n{flex:0 0 auto;color:var(--sub);font-size:11.5px;white-space:nowrap}
+.sc-kids{margin-left:15px;padding-left:7px;border-left:1px dashed rgba(255,255,255,.12)}
+.sc-tip{color:#8e8e93;font-size:12px;padding:3px 0 3px 23px}
+.logbox{max-height:300px;overflow:auto;font-family:ui-monospace,Menlo,monospace;
+  font-size:12px;color:#a1a1a6;background:rgba(0,0,0,.4);border:1px solid rgba(255,255,255,.08);
+  border-radius:14px;padding:11px 13px;line-height:1.7;word-break:break-all;backdrop-filter:blur(14px)}
+.logbox .warn{color:var(--warn)}.logbox .error{color:#ff6961}.logbox .info{color:#d1d1d6}
+.dup-group{border-radius:14px;padding:13px;margin-bottom:12px}
+.dup-item{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px dashed rgba(255,255,255,.08);font-size:13px}
+.dup-item:last-child{border:none}
+.dup-item .radio{accent-color:var(--accent);width:16px;height:16px}
+.empty{color:var(--sub);text-align:center;padding:24px 0;font-size:13.5px}
+.toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--glass-strong);color:#fff;
+  padding:11px 20px;border-radius:14px;font-size:13.5px;z-index:99;opacity:0;transition:.25s;max-width:86%}
+.toast.show{opacity:1}
+.pager{display:flex;gap:10px;align-items:center;justify-content:center;margin-top:14px;font-size:13px;color:var(--sub)}
+/* 统一隐藏开关：!important 防止后声明的 .mgrid/.plgrid 等 display 规则把它压住 */
+.hidden{display:none!important}
+/* 音乐库卡片 */
+.dropzone{border:2px dashed rgba(255,255,255,.18);border-radius:14px;padding:20px 14px;text-align:center;cursor:pointer;
+  transition:.18s;background:rgba(255,255,255,.035)}
+.dropzone:hover{border-color:rgba(255,255,255,.28)}
+.dropzone.over{border-color:var(--accent);background:rgba(10,132,255,.1)}
+.aprompt{margin:12px 0 0;padding:9px 11px;border-radius:12px;background:rgba(255,255,255,.05);
+  border:1px solid rgba(255,255,255,.1)}
+.aprompt>summary{cursor:pointer;font-size:12.5px;color:var(--sub);outline:none;list-style:none}
+.aprompt>summary::-webkit-details-marker{display:none}
+.aprompt>summary:before{content:"▸ ";color:var(--accent-soft)}
+.aprompt[open]>summary:before{content:"▾ "}
+.aprompt[open]>summary{color:var(--text);margin-bottom:2px}
+.copyright{font-size:12px;color:var(--sub)}
+.copyright a{color:var(--accent-soft);text-decoration:none}
+.copyright a:hover{text-decoration:underline;opacity:1}
+/* 下载中心（右下角悬浮） */
+.dlcenter{position:fixed;right:16px;bottom:16px;z-index:40;font-size:13px}
+.dlc-fab{display:inline-flex;align-items:center;gap:8px;background:linear-gradient(135deg,#0a84ff,#5e5ce6);color:#fff;
+  border:none;border-radius:24px;padding:10px 17px;font-size:13px;font-weight:500;cursor:pointer;
+  box-shadow:0 6px 20px rgba(10,132,255,.4),inset 0 1px 0 rgba(255,255,255,.2)}
+.dlc-fab:hover{filter:brightness(1.14)}
+.dlc-fab .dlc-ico{width:16px;height:16px;fill:currentColor;flex:none}
+.dlc-badge{background:#fff;color:#0a84ff;border-radius:10px;min-width:18px;height:18px;line-height:18px;text-align:center;font-size:11px;font-weight:700;padding:0 5px}
+/* 下载结果上方粘性工具条：选中后“下载选中”始终在列表上方可见（旧版在列表下方，长列表要滚到底） */
+.dl-selbar{position:sticky;top:6px;z-index:6;display:flex;align-items:center;gap:10px;margin-top:12px;
+  padding:8px 12px;border-radius:14px;font-size:13px;font-weight:500;
+  background:var(--glass-strong);backdrop-filter:blur(26px) saturate(180%);-webkit-backdrop-filter:blur(26px) saturate(180%);
+  border:1px solid rgba(10,132,255,.34);box-shadow:0 10px 30px rgba(0,0,0,.42)}
+.dl-selbar .grow{flex:1}
+.dl-selbar .dl-sel-n{color:var(--accent-soft)}
+.dlc-panel{display:none;position:absolute;right:0;bottom:54px;width:330px;max-height:430px;overflow-y:auto;
+  background:var(--glass-strong);backdrop-filter:blur(30px) saturate(180%);-webkit-backdrop-filter:blur(30px) saturate(180%);
+  border:1px solid rgba(255,255,255,.12);border-radius:18px;box-shadow:0 14px 44px rgba(0,0,0,.55),inset 0 1px 0 rgba(255,255,255,.08);
+  padding:13px 15px}
+.dlc-panel.open{display:block}
+.dlc-panel h3{font-size:13px;font-weight:600;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between}
+.dlc-item{border-top:1px dashed rgba(255,255,255,.1);padding:8px 0 6px}
+.dlc-logs{margin-top:6px;padding:6px 8px;border-radius:10px;background:rgba(0,0,0,.26);
+  border:1px solid rgba(255,255,255,.07);font-size:11.5px;line-height:1.5;color:var(--sub)}
+.dlc-logs div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dlc-logs .w{color:#ff9f0a}
+.dlc-note{margin-top:5px;font-size:11.5px;color:#ff9f0a;line-height:1.5}
+.dlc-item:first-of-type{border-top:none}
+.dlc-name{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:500}
+.dlc-meta{color:var(--sub);font-size:11.5px;margin-top:2px;display:flex;gap:8px;flex-wrap:wrap}
+.dlc-bar{height:5px;background:rgba(255,255,255,.1);border-radius:4px;margin-top:6px;overflow:hidden}
+.dlc-bar i{display:block;height:100%;background:linear-gradient(90deg,#0a84ff,#5e5ce6);border-radius:4px;transition:width .3s}
+.dlc-state{font-size:11px;padding:1px 8px;border-radius:8px;white-space:nowrap}
+.dlc-state.run{background:rgba(10,132,255,.18);color:var(--accent-soft)}
+.dlc-state.pause{background:rgba(255,159,10,.16);color:var(--warn)}
+.dlc-state.done{background:rgba(48,209,88,.15);color:var(--ok)}
+.dlc-state.err{background:rgba(255,69,58,.15);color:#ff6961}
+.dlc-state.stop{background:rgba(255,255,255,.08);color:var(--sub)}
+.dlc-ctrl{display:flex;gap:6px;margin-top:7px}
+.dlc-ctrl button{border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.07);border-radius:8px;
+  padding:3px 10px;font-size:11.5px;color:var(--text);cursor:pointer;transition:.15s}
+.dlc-ctrl button:hover{border-color:rgba(10,132,255,.6);color:var(--accent-soft)}
+.dlc-empty{color:var(--sub);font-size:12px;text-align:center;padding:6px 0}
+.dropzone .dz-inner{font-size:13px;color:var(--sub)}
+.dropzone .dz-files{margin-top:8px;display:flex;flex-wrap:wrap;gap:6px;justify-content:center}
+.dropzone .dz-files span{font-size:12px;background:rgba(255,255,255,.09);color:#d1d1d6;border-radius:8px;padding:3px 10px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 下载搜索：筛选 / 排序工具栏 */
+.dlbar{margin-top:10px;background:rgba(255,255,255,.045);border:1px solid var(--border);
+  border-radius:14px;padding:11px 13px;display:flex;flex-direction:column;gap:9px;
+  backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}
+.dlbar.hidden{display:none}
+.dlbar-row{display:flex;flex-wrap:wrap;gap:8px 10px;align-items:center}
+.dlbar-lb{font-size:12px;color:var(--sub);flex:none;letter-spacing:.02em}
+.dlbar select,.dlbar .input{flex:0 1 auto;width:auto;min-width:96px;padding:6px 10px;font-size:12.5px;
+  border-radius:9px;line-height:1.4}
+.dlbar .dlbar-q{flex:1 1 168px;min-width:132px}
+.dlbar .dl-num{flex:0 0 auto;width:80px;min-width:0}
+.dlbar .dl-sep{color:var(--sub);font-size:12px;flex:none}
+.dlbar-chips{display:flex;flex-wrap:wrap;gap:7px;align-items:center;flex:1 1 auto}
+.chip{display:inline-flex;align-items:center;gap:5px;font-size:12px;line-height:1;padding:6px 11px;border-radius:16px;
+  cursor:pointer;font-family:inherit;user-select:none;white-space:nowrap;transition:.16s;
+  border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.06);color:#d1d1d6}
+.chip:hover{border-color:rgba(255,255,255,.26);background:rgba(255,255,255,.1)}
+.chip b{font-weight:500;font-size:11px;color:var(--sub)}
+.chip.on{background:linear-gradient(135deg,rgba(10,132,255,.34),rgba(94,92,230,.26));
+  border-color:rgba(10,132,255,.62);color:#fff;box-shadow:inset 0 1px 0 rgba(255,255,255,.16)}
+.chip.on b{color:rgba(255,255,255,.7)}
+.dl-chk{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:#d1d1d6;cursor:pointer;
+  user-select:none;white-space:nowrap}
+.dl-chk input{width:15px;height:15px;accent-color:var(--accent);margin:0;cursor:pointer}
+.dl-plain{background:none;border:none;padding:2px 3px;font-family:inherit;font-size:12.5px;
+  color:var(--accent-soft);cursor:pointer;white-space:nowrap}
+.dl-plain:hover{text-decoration:underline}
+#dl-filter-info{font-size:12px;color:var(--sub);margin-left:auto;white-space:nowrap}
+.dl-empty-f{padding:20px 0;text-align:center;color:var(--sub);font-size:13px;
+  background:rgba(255,255,255,.05);border:1px dashed var(--border);border-radius:10px}
+.libbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+.viewtoggle{display:flex;border:1px solid rgba(255,255,255,.12);border-radius:10px;overflow:hidden;background:rgba(255,255,255,.05)}
+.viewtoggle button{border:none;background:transparent;padding:7px 12px;font-size:13px;color:var(--sub);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;line-height:0;transition:.15s}
+.viewtoggle button.active{background:linear-gradient(135deg,#0a84ff,#5e5ce6);color:#fff}
+.viewtoggle button svg{width:18px;height:18px;fill:currentColor}
+.mgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:12px}
+.mcard{background:var(--glass);border:1px solid var(--border);border-radius:14px;overflow:hidden;
+  display:flex;flex-direction:column;transition:.18s;backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}
+.mcard:hover{box-shadow:0 10px 28px rgba(0,0,0,.5);transform:translateY(-2px);border-color:rgba(255,255,255,.16)}
+.mcover{aspect-ratio:1/1;width:100%;background:linear-gradient(135deg,#1c1c1e,#2c2c2e);
+  display:flex;align-items:center;justify-content:center;font-size:34px;color:#48484a;cursor:pointer;position:relative}
+.mcover img{width:100%;height:100%;object-fit:cover;display:block}
+.mcover .playmask{position:absolute;inset:0;background:rgba(0,0,0,.5);color:#fff;font-size:30px;
+  display:none;align-items:center;justify-content:center;backdrop-filter:blur(2px)}
+.mcover:hover .playmask{display:flex}
+.mcard.selected{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent) inset}
+.msel{position:absolute;top:6px;left:6px;z-index:3;display:flex;align-items:center;justify-content:center;
+  width:22px;height:22px;border-radius:6px;background:rgba(28,28,30,.85);backdrop-filter:blur(8px);cursor:pointer;
+  border:1px solid rgba(255,255,255,.15)}
+.msel input{width:16px;height:16px;accent-color:var(--accent);cursor:pointer;margin:0}
+td.msel-td{width:34px;text-align:center}
+td.msel-td input{width:16px;height:16px;accent-color:var(--accent);cursor:pointer}
+#lib-selbar{display:flex;gap:10px;align-items:center;margin-bottom:10px;padding:9px 13px;flex-wrap:wrap;
+  background:rgba(10,132,255,.12);border:1px solid rgba(10,132,255,.35);border-radius:11px;font-size:13px;color:var(--accent-soft)}
+#lib-selbar.hidden{display:none}
+#lib-selbar .grow{flex:1}
+.mbody{padding:9px 10px 10px;display:flex;flex-direction:column;gap:4px;flex:1}
+.mtitle{font-size:13.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.martist{font-size:12px;color:var(--sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mpath{font-size:10.5px;color:#636366;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;direction:rtl;text-align:left}
+.mstat{display:flex;gap:5px;margin-top:2px;flex-wrap:wrap}
+.mbtns{display:flex;gap:6px;margin-top:7px;flex-wrap:wrap}
+.mbtns .btn{flex:1 1 auto;min-width:30px;justify-content:center}
+/* 播放器/歌词弹窗 */
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.62);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
+  z-index:50;display:none;align-items:center;justify-content:center;padding:16px}
+.modal.show{display:flex}
+.mbox{background:var(--glass-strong);border-radius:20px;max-width:760px;width:100%;max-height:88vh;overflow:hidden;
+  display:flex;flex-direction:column;box-shadow:0 24px 70px rgba(0,0,0,.65),inset 0 1px 0 rgba(255,255,255,.09);
+  border:1px solid rgba(255,255,255,.12)}
+.mhead{display:flex;align-items:center;gap:12px;padding:14px 16px;border-bottom:1px solid rgba(255,255,255,.09)}
+.mhead img{width:56px;height:56px;border-radius:11px;object-fit:cover;background:#1c1c1e}
+.mhead .t{font-weight:700;font-size:15px}
+.mhead .a{font-size:12.5px;color:var(--sub)}
+.mhead .x{margin-left:auto;border:none;background:rgba(255,255,255,.09);border-radius:9px;width:32px;height:32px;
+  font-size:16px;cursor:pointer;color:var(--sub);transition:.15s;flex:none}
+.mhead .x:hover{background:rgba(255,255,255,.16);color:var(--text)}
+.mmain{display:flex;gap:0;flex:1;min-height:0}
+.mlyric{flex:1;min-width:0;overflow-y:auto;padding:16px 18px;scroll-behavior:smooth;max-height:52vh;
+  /* position:relative 是必须：歌词行要用 offsetTop 算居中位置，没这个参照物会算到外层容器上，
+     导致一开歌歌词就“滚到底 / 不从头开始” */
+  position:relative;
+  -webkit-mask-image:linear-gradient(180deg,transparent,#000 10%,#000 90%,transparent);
+  mask-image:linear-gradient(180deg,transparent,#000 10%,#000 90%,transparent)}
+.mlyric::-webkit-scrollbar{width:0;height:0}
+.mlyric .ln{padding:7px 5px;font-size:14px;color:#8e8e93;border-radius:9px;transition:.2s;line-height:1.55;word-break:break-word}
+.mlyric .ln[data-i]{cursor:pointer}
+.mlyric .ln[data-i]:hover{color:rgba(235,235,245,.86);background:rgba(255,255,255,.06)}
+.mlyric .ln.on{color:#fff;font-weight:700;font-size:15.5px;background:rgba(10,132,255,.14)}
+.mlyric .empty{color:var(--sub);text-align:center;padding:40px 0;font-size:13px}
+.mfoot{padding:12px 16px;border-top:1px solid rgba(255,255,255,.09)}
+.mfoot audio{width:100%}
+/* 底部迷你播放器（液态玻璃） */
+.miniplayer{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);z-index:45;display:none;
+  align-items:center;gap:12px;width:min(680px,calc(100vw - 32px));padding:10px 14px;border-radius:18px;
+  background:var(--glass-strong);backdrop-filter:blur(30px) saturate(180%);-webkit-backdrop-filter:blur(30px) saturate(180%);
+  border:1px solid rgba(255,255,255,.14);box-shadow:0 18px 50px rgba(0,0,0,.55),inset 0 1px 0 rgba(255,255,255,.1)}
+.miniplayer.show{display:flex}
+.mp-cover{width:46px;height:46px;border-radius:11px;object-fit:cover;background:#1c1c1e;flex:none}
+.mp-mid{flex:1;min-width:0}
+.mp-title{font-size:13.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mp-lyric{height:18px;overflow:hidden;position:relative;margin-top:2px}
+.mp-lyric span{display:inline-block;white-space:nowrap;font-size:12px;color:var(--sub);will-change:transform}
+@keyframes mpmarquee{0%{transform:translateX(0)}100%{transform:translateX(var(--mpdist,-100px))}}
+.mp-ctrl{display:flex;align-items:center;gap:6px;flex:none}
+.mp-ctrl button,.mp-expand{border:none;background:rgba(255,255,255,.08);color:var(--text);width:34px;height:34px;
+  border-radius:10px;cursor:pointer;font-size:14px;transition:.15s;flex:none;display:inline-flex;align-items:center;justify-content:center}
+.mp-ctrl button:hover,.mp-expand:hover{background:rgba(10,132,255,.22);color:#fff}
+#mp-play{width:40px;height:40px;border-radius:50%;background:var(--accent);color:#fff;font-size:14px}
+#mp-play:hover{background:#3b9dff}
+/* 全屏播放器：占满整个页面 + 封面液态玻璃背景（支持显示器全屏） */
+.fmodal{padding:0;background:rgba(0,0,0,.78);align-items:stretch;justify-content:stretch;backdrop-filter:blur(30px) saturate(160%);
+  -webkit-backdrop-filter:blur(30px) saturate(160%)}
+.fbox{position:relative;width:100%;height:100%;max-height:none;border-radius:0;display:flex;flex-direction:column;
+  overflow:hidden;background:#08080a;box-shadow:none}
+.fglass{position:absolute;inset:0;z-index:0;background-size:cover;background-position:center;
+  filter:blur(70px) saturate(190%) brightness(.5);transform:scale(1.18);transition:opacity .5s}
+.fglass:after{content:"";position:absolute;inset:0;background:
+  radial-gradient(120% 95% at 24% 12%,rgba(0,0,0,.12),rgba(0,0,0,.68) 62%,rgba(0,0,0,.86) 100%),
+  linear-gradient(180deg,rgba(8,8,10,.28),rgba(8,8,10,.78))}
+.fbox>.fbar,.fbox>.fbody,.fbox>.ffoot{position:relative;z-index:1}
+.fbar{display:flex;align-items:center;gap:10px;padding:13px 18px;flex-wrap:wrap;
+  border-bottom:1px solid rgba(255,255,255,.08)}
+.fbar .fb-mode{font-size:12.5px;color:var(--sub);letter-spacing:.5px}
+.fbar .fb-qual{font-size:11px;padding:2px 9px;border-radius:20px;background:rgba(255,255,255,.1);
+  border:1px solid rgba(255,255,255,.1);color:var(--accent-soft)}
+.fbar .grow{flex:1}
+.fbar button{border:none;background:rgba(255,255,255,.09);color:var(--text);width:36px;height:36px;border-radius:11px;
+  cursor:pointer;font-size:16px;transition:.15s;display:inline-flex;align-items:center;justify-content:center;flex:none}
+.fbar button:hover{background:rgba(255,255,255,.2)}
+.fbody{display:flex;gap:clamp(18px,4vw,56px);padding:clamp(12px,2.4vh,30px) clamp(16px,4vw,54px);
+  flex:1;min-height:0;align-items:center}
+.fleft{flex:none;width:clamp(230px,30vw,370px);display:flex;flex-direction:column;align-items:center;gap:14px;text-align:center;min-width:0}
+.fdisc{position:relative;width:100%;max-width:330px;aspect-ratio:1/1}
+.fdisc:before{content:"";position:absolute;inset:6%;border-radius:50%;
+  background:repeating-radial-gradient(circle at 50% 50%,rgba(255,255,255,.07) 0 2px,rgba(0,0,0,.28) 2px 5px);
+  opacity:.75;filter:blur(.4px)}
+.fdisc img{position:relative;width:88%;height:88%;margin:6%;border-radius:50%;object-fit:cover;background:#1c1c1e;
+  box-shadow:0 22px 60px rgba(0,0,0,.7),inset 0 0 0 1px rgba(255,255,255,.1);transition:transform .4s}
+.fdisc:after{content:"";position:absolute;left:50%;top:50%;width:8%;height:8%;margin:-4%;border-radius:50%;
+  background:#0b0b0d;box-shadow:inset 0 0 0 1px rgba(255,255,255,.18);z-index:2}
+@keyframes discspin{to{transform:rotate(360deg)}}
+.fbox.playing .fdisc img{animation:discspin 22s linear infinite}
+.fmeta{min-width:0;width:100%}
+.fmeta .t{font-size:clamp(20px,2.5vw,29px);font-weight:800;line-height:1.28;overflow-wrap:anywhere}
+.fmeta .a{font-size:clamp(14px,1.4vw,18px);color:var(--sub);margin-top:5px;overflow-wrap:anywhere}
+.fmeta .al{font-size:12.5px;color:#8e8e93;margin-top:4px;overflow-wrap:anywhere}
+.facts{display:flex;align-items:center;justify-content:center;gap:9px;flex-wrap:wrap}
+.pillbtn{display:inline-flex;align-items:center;gap:6px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.09);
+  color:var(--text);border-radius:20px;padding:8px 15px;font-size:13px;font-family:inherit;cursor:pointer;transition:.18s}
+.pillbtn:hover{border-color:rgba(10,132,255,.6);background:rgba(10,132,255,.16)}
+.pillbtn.on{background:rgba(255,59,92,.18);border-color:rgba(255,59,92,.5);color:#ff6b85}
+.pillbtn svg{width:15px;height:15px;fill:currentColor}
+.fright{flex:1;min-width:0;display:flex;flex-direction:column;height:100%;align-self:stretch}
+/* 全屏播放器歌词：不能用 justify-content:center——内容高出容器时 flex 会把第一行顶到滚动区外（滚不回去），
+   所以改成普通流 + JS 给首尾加居中式留白 */
+.fright .mlyric{flex:1;max-height:none;margin-top:6px;padding:0 18px 0 10px;display:block;scrollbar-width:none}
+.fright .mlyric .ln{font-size:clamp(15px,1.5vw,19px);padding:10px 12px;border-radius:12px;line-height:1.42;
+  color:rgba(235,235,245,.42);transition:color .3s,opacity .3s,transform .3s,background .3s;
+  text-shadow:0 1px 12px rgba(0,0,0,.4)}
+.fright .mlyric .ln.on{font-size:clamp(23px,2.6vw,34px);font-weight:800;color:#fff;line-height:1.32;background:
+  linear-gradient(90deg,rgba(10,132,255,.2),rgba(10,132,255,.04) 58%,transparent);
+  box-shadow:inset 3px 0 0 rgba(10,132,255,.8);
+  text-shadow:0 2px 22px rgba(0,0,0,.6),0 0 30px rgba(10,132,255,.22);animation:lyon .45s ease}
+@keyframes lyon{from{opacity:.25;transform:translateY(9px)}to{opacity:1;transform:none}}
+.fright .mlyric .ln.nx{color:rgba(235,235,245,.62)}
+.ffoot{padding:12px clamp(16px,4vw,54px) clamp(14px,2.6vh,26px);border-top:1px solid rgba(255,255,255,.08)}
+.ftime{display:flex;align-items:center;gap:10px;font-size:12px;color:var(--sub);font-variant-numeric:tabular-nums}
+.ftime input[type=range]{flex:1}
+/* 进度条 / 音量条自己画填充：accent-color 只能上一个单色，看不到已走比例。
+   JS 会把百分比写进 --p（seek 在 pSync、音量在 pApplyVol） */
+.ftime input[type=range],.fvol input[type=range]{-webkit-appearance:none;appearance:none;background:transparent;
+  height:16px;cursor:pointer}
+.ftime input[type=range]::-webkit-slider-runnable-track,.fvol input[type=range]::-webkit-slider-runnable-track{
+  height:5px;border-radius:6px;
+  background:linear-gradient(90deg,var(--accent) calc(var(--p,0) * 1%),rgba(255,255,255,.16) 0)}
+.ftime input[type=range]::-webkit-slider-thumb,.fvol input[type=range]::-webkit-slider-thumb{
+  -webkit-appearance:none;width:13px;height:13px;border-radius:50%;background:#fff;margin-top:-4px;
+  box-shadow:0 0 0 4px rgba(10,132,255,.22);transition:box-shadow .15s}
+.ftime input[type=range]:hover::-webkit-slider-thumb,.fvol input[type=range]:hover::-webkit-slider-thumb{
+  box-shadow:0 0 0 6px rgba(10,132,255,.32)}
+.ftime input[type=range]::-moz-range-track,.fvol input[type=range]::-moz-range-track{
+  height:5px;border-radius:6px;background:rgba(255,255,255,.16)}
+.ftime input[type=range]::-moz-range-progress,.fvol input[type=range]::-moz-range-progress{
+  height:5px;border-radius:6px;background:var(--accent)}
+.ftime input[type=range]::-moz-range-thumb,.fvol input[type=range]::-moz-range-thumb{
+  width:13px;height:13px;border:none;border-radius:50%;background:#fff}
+.fctrl{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:12px;margin-top:12px}
+.fctrl .c-c{display:flex;align-items:center;justify-content:center;gap:14px}
+.fctrl .c-l{display:flex;align-items:center;gap:9px;min-width:0}
+.fctrl .c-r{display:flex;align-items:center;justify-content:flex-end;gap:9px}
+.fctrl .c-c button{border:none;background:rgba(255,255,255,.08);color:var(--text);width:46px;height:46px;border-radius:50%;
+  cursor:pointer;font-size:17px;transition:.15s;display:inline-flex;align-items:center;justify-content:center}
+.fctrl .c-c button:hover{background:rgba(10,132,255,.24)}
+.fvol{display:flex;align-items:center;gap:8px;min-width:0}
+.fvol button{border:none;background:rgba(255,255,255,.08);color:var(--text);width:36px;height:36px;border-radius:11px;
+  cursor:pointer;font-size:15px;display:inline-flex;align-items:center;justify-content:center;flex:none;transition:.15s}
+.fvol button:hover{background:rgba(255,255,255,.18)}
+.fvol input[type=range]{width:clamp(80px,10vw,132px)}
+.fvol .voln{font-size:12px;color:var(--sub);width:30px;text-align:right;font-variant-numeric:tabular-nums}
+#pl-play{width:58px;height:58px;background:var(--accent);color:#fff;font-size:19px}
+#pl-play:hover{background:#3b9dff}
+.mini-fav{position:relative}
+.mini-fav.on{background:rgba(255,59,92,.22);color:#ff6b85}
+/* 歌单页：我的喜欢 / 我的歌单 */
+.pltabs{display:flex;gap:12px;flex-wrap:wrap}
+.plcard{flex:1 1 200px;min-width:180px;text-align:left;border:1px solid rgba(255,255,255,.12);border-radius:16px;
+  padding:13px 15px;background:rgba(255,255,255,.06);cursor:pointer;transition:.18s;color:var(--text);font-family:inherit;
+  display:flex;align-items:center;gap:12px;backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px)}
+.plcard:hover{border-color:rgba(10,132,255,.55);background:rgba(10,132,255,.12)}
+.plcard.active{background:linear-gradient(135deg,rgba(10,132,255,.34),rgba(94,92,230,.26));border-color:rgba(10,132,255,.6);
+  box-shadow:0 4px 16px rgba(10,132,255,.2)}
+.plcard .pico{width:42px;height:42px;border-radius:13px;display:flex;align-items:center;justify-content:center;font-size:19px;
+  background:rgba(255,255,255,.1);flex:none}
+.plcard .pico svg{width:21px;height:21px;fill:currentColor}
+.plcard .pnm{font-size:14.5px;font-weight:600}
+.plcard .pnum{font-size:11.5px;color:var(--sub);margin-top:2px}
+.plgrid{display:flex;flex-wrap:wrap;gap:10px;margin-top:12px}
+.plitem{flex:1 1 232px;min-width:210px;border:1px solid rgba(255,255,255,.1);border-radius:14px;padding:12px 14px;
+  background:rgba(255,255,255,.05);cursor:pointer;transition:.18s}
+.plitem:hover{background:rgba(10,132,255,.1);border-color:rgba(10,132,255,.4)}
+.plitem.on{border-color:rgba(10,132,255,.6);background:rgba(10,132,255,.14)}
+.plitem .nm{font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.plitem .mt{font-size:11.5px;color:var(--sub);margin-top:4px;display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.plitem .mt .badge{font-size:10.5px;padding:1px 7px}
+.warnbox{font-size:12.5px;line-height:1.7;padding:10px 12px;border-radius:12px;margin:10px 0;
+  background:rgba(255,159,10,.12);border:1px solid rgba(255,159,10,.34);color:#ffcf8a}
+.mono-link{word-break:break-all;background:rgba(0,0,0,.34);border:1px solid rgba(255,255,255,.1);padding:10px 12px;
+  border-radius:12px;font-size:12.5px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;line-height:1.6}
+.shr{display:flex;align-items:center;gap:9px;padding:9px 11px;border-radius:12px;margin-top:8px;flex-wrap:wrap;
+  background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.09);font-size:12.5px;color:var(--sub)}
+#pl-list.hidden{display:none}
+.plrow{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px dashed rgba(255,255,255,.08);font-size:13px}
+.plrow:last-child{border-bottom:none}
+.plrow .nm{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.plrow .op{display:flex;gap:6px;flex:none;align-items:center}
+@media(max-width:860px){
+  .fbody{flex-direction:column;align-items:stretch;overflow-y:auto;justify-content:flex-start}
+  .fleft{width:100%;max-width:300px;margin:0 auto}
+  .fright .mlyric{max-height:38vh;flex:none;padding:0 12px}
+  .fctrl{grid-template-columns:1fr;gap:10px}
+  .fctrl .c-l,.fctrl .c-r{justify-content:center}
+}
+audio{filter:invert(92%) hue-rotate(180deg) brightness(1.05) contrast(.92);border-radius:8px}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-thumb{background:rgba(255,255,255,.16);border-radius:8px;border:2px solid transparent;background-clip:padding-box}
+::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,.28);border:2px solid transparent;background-clip:padding-box}
+::-webkit-scrollbar-track{background:transparent}
+@media(max-width:860px){
+  .shell{flex-direction:column}
+  .sidebar{position:sticky;top:0;height:auto;width:100%;flex-direction:row;align-items:center;gap:12px;
+    padding:10px 12px;border-radius:0;border-left:none;border-right:none;border-top:none}
+  .brand{padding:0;flex:none}
+  .brand .logo{width:32px;height:32px}
+  .brand h1{font-size:14px}
+  .brand .sub{display:none}
+  .tabnav{flex-direction:row;overflow-x:auto;flex:1;gap:4px;padding-bottom:2px;overscroll-behavior-x:contain;
+    scrollbar-width:none;-webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 26px),transparent);mask-image:linear-gradient(90deg,#000 calc(100% - 26px),transparent)}
+  .tabnav::-webkit-scrollbar{display:none}
+  .tab{width:auto;flex:none;padding:8px 12px;font-size:13px}
+  .subtabs{gap:4px;padding:4px}
+  .subtab{flex:1 1 auto;justify-content:center;padding:8px 12px;font-size:13px}
+  .dlbar-row{gap:7px 8px}
+  .dlbar select,.dlbar .input{flex:1 1 46%;min-width:0}
+  .dlbar .dlbar-q{flex:1 1 100%}
+  .dlbar .dl-num{flex:0 0 auto;width:72px}
+  #dl-filter-info{margin-left:0;flex:1 1 100%}
+  .sidefoot{display:none}
+  .main{padding:16px 14px 90px}
+}
+@media(max-width:560px){.mmain{flex-direction:column}.mgrid{grid-template-columns:repeat(auto-fill,minmax(140px,1fr))}}
+@media(max-width:520px){
+  .card{flex:1 1 100%}
+  th:nth-child(n+5),td:nth-child(n+5){display:none}
+}
+</style>
+</head>
+<body>
+<div class="bgfx" aria-hidden="true"><div class="orb orb1"></div><div class="orb orb2"></div><div class="orb orb3"></div></div>
+<div class="shell">
+<aside class="sidebar">
+  <div class="brand">
+    <div class="logo" aria-hidden="true">
+      <svg width="40" height="40" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="lg-bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" style="stop-color:#667eea;stop-opacity:1"/>
+            <stop offset="100%" style="stop-color:#764ba2;stop-opacity:1"/>
+          </linearGradient>
+          <linearGradient id="lg-noteGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" style="stop-color:#ffffff;stop-opacity:1"/>
+            <stop offset="100%" style="stop-color:#e0e7ff;stop-opacity:1"/>
+          </linearGradient>
+        </defs>
+        <circle cx="256" cy="256" r="240" fill="url(#lg-bgGrad)"/>
+        <circle cx="256" cy="256" r="200" fill="none" stroke="#ffffff" stroke-opacity="0.15" stroke-width="2"/>
+        <g transform="translate(256, 256)">
+          <rect x="-8" y="-140" width="16" height="200" rx="4" fill="url(#lg-noteGrad)"/>
+          <path d="M 8 -140 Q 80 -120 80 -60 Q 80 -20 40 -10 L 40 -50 Q 55 -55 55 -75 Q 55 -95 8 -100 Z" fill="url(#lg-noteGrad)"/>
+          <ellipse cx="-40" cy="70" rx="48" ry="36" fill="url(#lg-noteGrad)" transform="rotate(-20 -40 70)"/>
+          <ellipse cx="60" cy="50" rx="48" ry="36" fill="url(#lg-noteGrad)" transform="rotate(-20 60 50)"/>
+          <rect x="-40" y="30" width="120" height="14" rx="4" fill="url(#lg-noteGrad)" transform="rotate(-8 20 37)"/>
+        </g>
+        <ellipse cx="180" cy="140" rx="60" ry="30" fill="#ffffff" fill-opacity="0.12" transform="rotate(-30 180 140)"/>
+      </svg>
+    </div>
+    <div>
+      <h1>AI 音乐整理</h1>
+      <div class="sub">歌词 · 封面 · 分类 · 去重</div>
+    </div>
+  </div>
+  <!-- 侧边栏导航 -->
+  <nav class="tabnav" id="tabnav">
+    <button class="tab active" data-tab="overview"><svg viewBox="0 0 24 24"><path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/></svg><span>概览</span></button>
+    <button class="tab" data-tab="folders"><svg viewBox="0 0 24 24"><path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg><span>目录</span></button>
+    <button class="tab" data-tab="library"><svg viewBox="0 0 24 24"><path d="M20 2H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-2 5h-3v5.5a2.5 2.5 0 0 1-3.35 2.36A2.5 2.5 0 0 1 11.5 12c0-1.09.71-2.01 1.69-2.34.32-.11.53-.16.81-.16 1.1 0 2 .9 2 2V7h2V5zM4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6z"/></svg><span>音乐库</span></button>
+    <button class="tab" data-tab="playlist"><svg viewBox="0 0 24 24"><path d="M15 6H3v2h12V6zm0 4H3v2h12v-2zM3 16h8v-2H3v2zM17 6v8.18c-.31-.11-.65-.18-1-.18-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3V8h3V6h-5z"/></svg><span>歌单</span></button>
+    <button class="tab" data-tab="download"><svg viewBox="0 0 24 24"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg><span>下载</span></button>
+    <button class="tab" data-tab="convert"><svg viewBox="0 0 24 24"><path d="M22 18v-2H8V4h2L7 1 4 4h2v2H2v2h4v8c0 1.1.9 2 2 2h8v2h-2l3 3 3-3h-2v-2h4zM10 8h6v6h2V8c0-1.1-.9-2-2-2h-6v2z"/></svg><span>转换</span></button>
+    <button class="tab" data-tab="dedupe"><svg viewBox="0 0 24 24"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg><span>去重</span></button>
+    <button class="tab" data-tab="settings"><svg viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg><span>设置</span></button>
+    <button class="tab" data-tab="log"><svg viewBox="0 0 24 24"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg><span>日志</span></button>
+  </nav>
+  <div class="sidefoot copyright">© <a href="https://11.qlj.ink" target="_blank" rel="noopener">@拾壹</a></div>
+</aside>
+
+<main class="main">
+  <!-- 概览 -->
+  <div id="tab-overview">
+    <div class="cards" id="statcards"></div>
+    <div id="denied-bar" class="hidden" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 12px;padding:11px 14px;border-radius:12px;background:rgba(255,159,10,.13);border:1px solid rgba(255,159,10,.4);color:#ffb043;font-size:13px;line-height:1.6">
+      <span id="denied-txt">—</span>
+      <button class="btn btn-ghost btn-sm" id="btn-denied" style="flex:0 0 auto" title="逐条看是哪几个文件夹、缺哪一位权限、怎么修">查看并处理</button>
+    </div>
+    <div class="panel">
+      <h2>整理任务 <span class="tag" id="task-tag">空闲</span><span class="tag wt wt-off" id="watch-tag">增量监听 未开启</span></h2>
+      <div class="taskbox" id="taskbox">暂无任务。</div>
+      <div class="row" style="margin-top:12px;align-items:center;gap:8px;flex-wrap:wrap">
+        <span class="tag" id="scope-tag" title="下面几个按钮当前只作用在这个范围上">全部授权目录</span>
+        <button class="btn btn-ghost btn-sm" id="btn-scope" title="只在授权目录里的指定子目录上扫描/整理">选择扫描目录…</button>
+        <button class="btn btn-ghost btn-sm hidden" id="btn-scope-clear">改为全部授权目录</button>
+      </div>
+      <div class="row" style="margin-top:14px">
+        <button class="btn btn-primary" id="btn-scan">扫描音乐库</button>
+        <button class="btn btn-ghost" id="btn-probe" title="仅全量扫描：只遍历目录、只数文件（不入库 / 不算 SHA-1 / 不改动任何文件），并把每个没扫出来的文件夹及其原因逐条写进日志，最后对账「磁盘音频 ↔ 已入库」差多少">仅全量扫描（数文件）</button>
+        <button class="btn btn-primary" id="btn-tidy">开始整理</button>
+        <button class="btn btn-ghost" id="btn-refresh">刷新状态</button>
+        <button class="btn btn-ghost hidden" id="btn-pause">暂停</button>
+        <button class="btn btn-ghost hidden" id="btn-resume">继续</button>
+        <button class="btn btn-danger hidden" id="btn-stop">停止</button>
+        <button class="btn btn-ghost" id="btn-retidy">重新整理</button>
+      </div>
+      <div class="hint" style="font-size:12px;color:var(--sub);margin-top:10px">
+        提示：先在「目录」页添加音乐目录，或在飞牛「应用设置 → 授权目录」中添加，然后扫描 → 整理。
+        拿不准有没有漏扫（曲库数量比磁盘上少）就先点「仅全量扫描」：它不改动任何东西，只把「哪个文件夹因为权限 / 深度 / 软链 / 排除规则没被扫到」逐条写进「日志」页。
+        有目录本应用读不到时，这条提示会一直挂在概览页顶部（重启也在），点「查看并处理」看缺哪一位权限、怎么修 —— 首选在那个大目录上右键「详细信息 → 权限 → 高级 → 启用继承父级权限」：飞牛主目录授权后没法再单独挑子目录，只能靠继承把授权传下去。
+        曲库太大、只想先跑几个文件夹？点「选择扫描目录」在授权目录里下钻勾选，上面的扫描 / 仅全量扫描 / 开始整理 / 重新整理以及「音乐库」页的「扫描体检」就只在这些目录里执行（选中的目录含其全部子目录）；这个选择只存在当前浏览器里。
+        扫描与整理的进度会实时存盘：中途关应用、升级或进程被杀，重新打开后这里会出现「继续上次…」，用原来那批目录接着跑，已完成的不会重做。
+        右上角的「增量监听」徽标是后台自动识别新文件的状态：显示「工作中」时正在遍历目录或补入库（每轮要几十秒，属正常），空闲后回到「已开启」。
+      </div>
+    </div>
+  </div>
+
+  <!-- 目录 -->
+  <div id="tab-folders" class="hidden">
+    <div class="panel">
+      <h2>指定目录扫描 <span class="tag" id="scope-tag2">全部授权目录</span></h2>
+      <div class="row">
+        <button class="btn btn-primary" id="btn-scope2" title="在下面的授权目录里逐层勾选，只有被选中目录（含其子目录）里的音乐参与扫描与整理">选择扫描目录…</button>
+        <button class="btn btn-ghost hidden" id="btn-scope-clear2">改为全部授权目录</button>
+      </div>
+      <div class="hint" style="font-size:12px;color:var(--sub);margin-top:8px">
+        不指定时，「扫描音乐库 / 仅全量扫描 / 开始整理 / 重新整理 / 扫描体检」都在全部授权目录上执行；
+        指定后只在选中的目录（含其子目录）上执行，范围外的入库记录不会被改动。这个选择只存在当前浏览器里，刷新仍在、换设备需重选。
+      </div>
+    </div>
+    <div class="panel">
+      <h2>系统授权目录 <span class="tag">来自应用设置</span></h2>
+      <div id="sysfolders"></div>
+    </div>
+    <div class="panel">
+      <h2>手动添加目录</h2>
+      <div class="row">
+        <input class="input" id="folder-input" placeholder="输入 NAS 上的音乐目录，如 /vol1/1000/Music">
+        <button class="btn btn-primary" id="btn-add-folder">添加</button>
+      </div>
+      <div class="hint" style="font-size:12px;color:var(--sub);margin-top:8px">
+        手动添加需要应用运行用户对该目录有读/写权限。推荐用系统「授权目录」方式获得正式授权。
+      </div>
+      <div id="manualfolders" style="margin-top:8px"></div>
+    </div>
+  </div>
+
+  <!-- 音乐库 -->
+  <div id="tab-library" class="hidden">
+    <div class="panel">
+      <div class="row">
+        <input class="input" id="lib-search" placeholder="搜索歌名 / 歌手 / 文件名">
+        <select id="lib-tidied" style="flex:0 1 150px">
+          <option value="">全部状态</option>
+          <option value="0">未整理</option>
+          <option value="1">已整理</option>
+          <option value="2">失败</option>
+        </select>
+        <select id="lib-missing" style="flex:0 1 150px">
+          <option value="">全部素材</option>
+          <option value="any">缺歌词或封面</option>
+          <option value="lyric">缺歌词</option>
+          <option value="cover">缺封面</option>
+        </select>
+        <select id="lib-code" style="flex:0 1 170px">
+          <option value="">全部分类</option>
+        </select>
+        <button class="btn btn-ghost icobtn" id="btn-lib-query" title="查询"><svg viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg></button>
+      </div>
+      <div class="libbar" style="margin-top:12px">
+        <div class="viewtoggle">
+          <button id="view-card" class="active" title="卡片视图"><svg viewBox="0 0 24 24"><path d="M4 11h5V5H4v6zm0 7h5v-6H4v6zm6 0h5v-6h-5v6zm6 0h5v-6h-5v6zm-6-7h5V5h-5v6zm6-6v6h5V5h-5z"/></svg></button>
+          <button id="view-table" title="列表视图"><svg viewBox="0 0 24 24"><path d="M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z"/></svg></button>
+        </div>
+        <button class="btn btn-ghost btn-sm icobtn" id="btn-libsel" style="margin-left:auto" title="多选删除（连同本地文件）"><svg viewBox="0 0 24 24"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg></button>
+        <button class="btn btn-ghost btn-sm" id="btn-classify" title="一键分类：把风格写入歌曲内嵌标签（genre），飞牛音乐「风格」页即可按风格归类"><svg viewBox="0 0 24 24"><path d="M21.41 11.58l-9-9C12.05 2.22 11.55 2 11 2H4c-1.1 0-2 .9-2 2v7c0 .55.22 1.05.59 1.42l9 9c.36.36.86.58 1.41.58s1.05-.22 1.41-.59l7-7c.37-.36.59-.86.59-1.41s-.22-1.06-.59-1.42zM5.5 7C4.67 7 4 6.33 4 5.5S4.67 4 5.5 4 7 4.67 7 5.5 6.33 7 5.5 7z"/></svg>一键分类</button>
+        <button class="btn btn-ghost btn-sm" id="btn-touch" title="触发重扫：把音乐库文件的修改时间刷新到当下（不改动任何内容），让飞牛音乐下次扫描时重新读取标签和歌词"><svg viewBox="0 0 24 24"><path d="M17.65 6.35A7.95 7.95 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>触发重扫</button>
+        <button class="btn btn-ghost btn-sm" id="btn-split-cue" title="CUE 整轨拆分：扫描库内所有 .cue 文件，按时间戳拆分为逐曲 FLAC，拆分后的文件自动入库"><svg viewBox="0 0 24 24"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>CUE 拆分</button>
+        <button class="btn btn-ghost btn-sm icobtn" id="btn-audit" title="扫描体检：逐目录核对「磁盘上有多少音频 / 哪些没被扫到 / 为什么」（只走目录树，不读文件内容）"><svg viewBox="0 0 24 24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/></svg></button>
+        <button class="btn btn-ghost btn-sm icobtn" id="btn-organize" title="一键把全部已整理文件按「歌手/专辑」格式移动到指定文件夹"><svg viewBox="0 0 24 24"><path d="M20 6h-8l-2-2H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm-6 12v-3h-2v-2h2V10l4 4-4 4z"/></svg></button>
+        <button class="btn btn-ghost btn-sm icobtn" id="btn-codepl" title="导出分类歌单"><svg viewBox="0 0 24 24"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg></button>
+        <button class="btn btn-primary btn-sm" id="btn-aibatch" title="AI 补全全部缺失"><svg viewBox="0 0 24 24"><path d="M19 9l1.25-2.75L23 5l-2.75-1.25L19 1l-1.25 2.75L15 5l2.75 1.25L19 9zm-7.5.5L9 4 6.5 9.5 1 12l5.5 2.5L9 20l2.5-5.5L17 12l-5.5-2.5zM19 15l-1.25 2.75L15 19l2.75 1.25L19 23l1.25-2.75L23 19l-2.75-1.25L19 15z"/></svg>AI 补全</button>
+      </div>
+      <div id="lib-selbar" class="hidden"></div>
+      <div id="lib-cards" class="mgrid"></div>
+      <div id="lib-tablewrap" class="hidden" style="overflow-x:auto">
+        <table>
+          <thead id="lib-thead"><tr><th>文件</th><th>歌手</th><th>歌名</th><th>歌词</th><th>封面</th><th>状态</th><th>操作</th></tr></thead>
+          <tbody id="lib-body"></tbody>
+        </table>
+      </div>
+      <div class="pager">
+        <button class="btn btn-ghost btn-sm icobtn" id="lib-prev" title="上一页"><svg viewBox="0 0 24 24"><path d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg></button>
+        <span id="lib-pageinfo"></span>
+        <button class="btn btn-ghost btn-sm icobtn" id="lib-next" title="下一页"><svg viewBox="0 0 24 24"><path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg></button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 歌单 -->
+  <div id="tab-playlist" class="hidden">
+    <div class="panel">
+      <h2>我的音乐 <span class="tag" id="pl-sum">未加载</span></h2>
+      <div class="hint" style="font-size:12px;color:var(--sub);margin-bottom:10px">
+        「我的喜欢」是内置歌单：全屏播放器的红心、播放条的 ♥ 以及列表里的收藏按钮都会记到这里，不能再删除它。
+        两个入口分开看：「我的喜欢」直接打开收藏明细，「我的歌单」列出你自己建的歌单。
+      </div>
+      <div class="pltabs">
+        <button class="plcard" id="plc-fav" data-view="fav">
+          <span class="pico"><svg viewBox="0 0 24 24"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg></span>
+          <span style="min-width:0"><span class="pnm">我的喜欢</span><span class="pnum" id="plc-fav-n">0 首</span></span>
+        </button>
+        <button class="plcard" id="plc-my" data-view="my">
+          <span class="pico"><svg viewBox="0 0 24 24"><path d="M15 6H3v2h12V6zm0 4H3v2h12v-2zM3 16h8v-2H3v2zM17 6v8.18c-.31-.11-.65-.18-1-.18-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3V8h3V6h-5z"/></svg></span>
+          <span style="min-width:0"><span class="pnm">我的歌单</span><span class="pnum" id="plc-my-n">0 个歌单</span></span>
+        </button>
+      </div>
+      <div class="row hidden" id="pl-newwrap" style="margin-top:12px">
+        <input class="input" id="pl-newname" placeholder="新歌单名称（如：睡前轻音乐）" style="flex:0 1 260px">
+        <button class="btn btn-primary btn-sm" id="btn-pl-create">创建歌单</button>
+        <button class="btn btn-ghost btn-sm" id="btn-pl-create-cancel">取消</button>
+      </div>
+      <div class="row" style="margin-top:12px;gap:8px">
+        <button class="btn btn-ghost btn-sm" id="btn-pl-new">+ 新建歌单</button>
+        <button class="btn btn-ghost btn-sm" id="btn-pl-refresh">刷新</button>
+      </div>
+      <div class="plgrid hidden" id="pl-list"></div>
+      <div class="hint" id="pl-empty" style="font-size:12px;color:var(--sub);margin-top:10px"></div>
+    </div>
+
+    <div class="panel hidden" id="pl-detail">
+      <h2><span id="pld-title">歌单</span> <span class="tag" id="pld-count">0 首</span>
+        <span class="tag" id="pld-share-tag" style="display:none">已分享</span></h2>
+      <div class="hint" id="pld-sub" style="font-size:12px;color:var(--sub);margin-bottom:10px"></div>
+      <div class="row" style="gap:8px;margin-bottom:10px;flex-wrap:wrap">
+        <button class="btn btn-primary btn-sm" id="pld-playall">▶ 连续播放</button>
+        <button class="btn btn-ghost btn-sm" id="pld-share">分享歌单链接</button>
+        <button class="btn btn-ghost btn-sm" id="pld-fetch" title="把本地没有的歌从分享人的直链补下到本机">补下缺失</button>
+        <button class="btn btn-ghost btn-sm" id="pld-archive">归档到同名文件夹</button>
+        <button class="btn btn-ghost btn-sm" id="pld-rename">改名</button>
+        <button class="btn btn-danger btn-sm" id="pld-del">删除歌单</button>
+      </div>
+      <label class="fld">归档：把本歌单的歌另存/移动到「归档目录/歌单名/」</label>
+      <div class="row" style="gap:8px">
+        <input class="input" id="pld-archdir" placeholder="留空用设置里的归档根目录，如 /vol1/1000/Music/歌单归档">
+        <select id="pld-archmode" style="flex:0 1 130px"><option value="copy">另存副本</option><option value="move">移动文件</option></select>
+        <label class="srcbox" style="flex:0 0 auto"><input type="checkbox" id="pld-autosync"> 后续加入自动执行</label>
+        <button class="btn btn-ghost btn-sm" id="pld-savearch" style="flex:0 0 auto">保存归档设置</button>
+      </div>
+      <div id="pld-box" style="margin-top:12px"></div>
+    </div>
+
+    <div class="panel">
+      <h2>导入别人的分享歌单 <span class="tag">粘贴分享链接</span></h2>
+      <div class="hint" style="font-size:12px;color:var(--sub);margin-bottom:8px">
+        粘贴朋友给你的 music-tidy 歌单分享链接（形如 http://NAS地址:端口/app/music-tidy/api/share/xxxx）。
+        本地已有的歌直接挂上；本地没有的会先记为待下载，可再点「从分享人下载」从对方的直链把歌拉到本机（占用对方带宽）。
+      </div>
+      <label class="fld">分享链接</label>
+      <input class="input" id="isp-url" placeholder="http://192.168.1.10:5666/app/music-tidy/api/share/xxxxxxxxxxxx">
+      <div class="row" style="margin-top:10px;gap:8px">
+        <input class="input" id="isp-name" placeholder="导入后的歌单名（留空用对方歌单名）" style="flex:1 1 240px">
+        <button class="btn btn-ghost" id="btn-isp-preview">预览</button>
+        <button class="btn btn-primary" id="btn-isp-import">导入到我的歌单</button>
+      </div>
+      <div id="isp-box" style="margin-top:10px"></div>
+    </div>
+
+    <div class="panel">
+      <h2>导入歌单 <span class="tag">网忆云 / 秋秋 / 库狗 / 库我</span></h2>
+      <div class="hint" style="font-size:12px;color:var(--sub);margin-bottom:8px">
+        粘贴歌单分享链接，应用会拉取歌单歌曲，与本地音乐库匹配，未匹配的列出清单。
+      </div>
+      <label class="fld">歌单链接或歌单 ID</label>
+      <textarea class="input" id="pl-link" rows="2" placeholder="如 https://music.163.com/#/playlist?id=3778678  /  https://y.qq.com/n/ryqq/playlist/12345  /  https://www.kugou.com/yy/special/single/12345.html  /  https://www.kuwo.cn/playlist_detail/12345"></textarea>
+      <div class="row" style="margin-top:10px">
+        <select id="pl-mode" style="flex:0 1 240px">
+          <option value="m3u">生成 m3u8 播放列表</option>
+          <option value="album">整理为专辑目录（硬链接）</option>
+        </select>
+        <input class="input" id="pl-outdir" placeholder="输出目录，如 /vol1/1000/Music/歌单">
+        <button class="btn btn-ghost" id="btn-pl-parse">解析预览</button>
+        <button class="btn btn-primary" id="btn-pl-import">导入并匹配</button>
+      </div>
+      <div id="pl-preview"></div>
+      <div id="pl-result"></div>
+    </div>
+  </div>
+  <!-- 下载 -->
+  <div id="tab-download" class="hidden">
+    <div class="panel">
+      <h2>搜索下载 <span class="tag">网络音源</span></h2>
+      <div class="hint" style="font-size:12px;color:var(--sub);margin-bottom:8px">
+        从网络音源搜索歌曲（多源混合，按相关度排序），支持试听预览、查看歌词/封面/专辑/音质信息，下载后自动整理刮削（歌词/封面/标签）。
+        搜索完成后可用下方工具栏按平台 / 分类 / 歌手 / 大小 / 码率等筛选与排序，仅作用于当前结果、不重新请求。
+      </div>
+      <div class="row">
+        <input class="input" id="dl-keyword" placeholder="搜索歌曲：歌手 歌名" style="flex:1">
+        <button class="btn btn-ghost" id="btn-dl-search">搜索</button>
+      </div>
+      <div class="dlbar hidden" id="dl-bar">
+        <div class="dlbar-row">
+          <span class="dlbar-lb">排序</span>
+          <select id="dl-sort">
+            <option value="relevance">相关度（默认）</option>
+            <option value="bitrate-desc">码率 高→低</option>
+            <option value="bitrate-asc">码率 低→高</option>
+            <option value="size-desc">大小 大→小</option>
+            <option value="size-asc">大小 小→大</option>
+            <option value="duration-desc">时长 长→短</option>
+            <option value="duration-asc">时长 短→长</option>
+            <option value="artist">歌手 A→Z</option>
+            <option value="name">歌名 A→Z</option>
+            <option value="source">按平台分组</option>
+          </select>
+          <input class="input dlbar-q" id="dl-q" placeholder="在结果中搜索：歌名 / 歌手 / 专辑">
+          <span class="dlbar-lb">歌手</span>
+          <select id="dl-artist"><option value="">全部歌手</option></select>
+          <label class="dl-chk"><input type="checkbox" id="dl-f-playable">仅可播</label>
+          <label class="dl-chk"><input type="checkbox" id="dl-f-lyric">仅有歌词</label>
+          <label class="dl-chk"><input type="checkbox" id="dl-f-cover">仅有封面</label>
+          <button type="button" class="dl-plain" id="dl-reset">重置筛选</button>
+          <span id="dl-filter-info"></span>
+        </div>
+        <div class="dlbar-row">
+          <span class="dlbar-lb">平台</span>
+          <div class="dlbar-chips" id="dl-f-platform"></div>
+        </div>
+        <div class="dlbar-row">
+          <span class="dlbar-lb">分类</span>
+          <div class="dlbar-chips" id="dl-f-quality"></div>
+        </div>
+        <div class="dlbar-row">
+          <span class="dlbar-lb">格式</span>
+          <div class="dlbar-chips" id="dl-f-format"></div>
+        </div>
+        <div class="dlbar-row">
+          <span class="dlbar-lb">大小</span>
+          <input class="input dl-num" id="dl-size-min" type="number" min="0" max="99999" step="1" placeholder="≥ MB">
+          <span class="dl-sep">~</span>
+          <input class="input dl-num" id="dl-size-max" type="number" min="0" max="99999" step="1" placeholder="≤ MB">
+          <span class="dlbar-lb">码率≥</span>
+          <input class="input dl-num" id="dl-br-min" type="number" min="0" max="9999" step="1" placeholder="kbps">
+          <span class="dlbar-lb">时长≥</span>
+          <input class="input dl-num" id="dl-dur-min" type="number" min="0" max="99999" step="1" placeholder="秒">
+        </div>
+      </div>
+      <div class="row dl-selbar" id="dl-actions" style="display:none">
+        <span class="dl-sel-n" id="dl-sel-count"></span>
+        <span class="grow"></span>
+        <button class="btn btn-ghost btn-sm" id="btn-dl-uns">取消选择</button>
+        <button class="btn btn-primary" id="btn-dl-sel">下载选中</button>
+      </div>
+      <div id="dl-results" style="margin-top:12px"></div>
+    </div>
+    <div class="panel" style="margin-top:16px">
+      <h2>歌单下载 <span class="tag" id="dl-pl-platforms">网忆云 / 秋秋 / 库狗 / 库我</span></h2>
+      <div class="hint" style="font-size:12px;color:var(--sub);margin-bottom:8px">
+        粘贴歌单链接，自动解析歌单歌曲并逐首搜索下载，下载后自动整理刮削入库。
+      </div>
+      <label class="fld">歌单链接</label>
+      <textarea class="input" id="dl-pl-link" rows="2" placeholder="如 https://music.163.com/#/playlist?id=3778678"></textarea>
+      <div class="row" style="margin-top:10px">
+        <button class="btn btn-primary" id="btn-dl-playlist">下载歌单</button>
+      </div>
+    </div>
+  </div>
+  <!-- 转换 -->
+  <div id="tab-convert" class="hidden">
+    <div class="panel">
+      <h2>格式转换 <span class="tag">NCM / QMC → 通用格式</span></h2>
+      <div class="hint" style="font-size:12px;color:var(--sub);margin-bottom:8px">
+        将<span data-alias="netease">网忆云</span>（NCM）与 <span data-alias="qq">秋秋音乐</span>（QMC/MFLAC/MGG/QMC0/QMC3 等）加密格式转为通用 MP3 / FLAC / OGG，
+        自动提取内嵌封面与元数据，并写入歌词。
+        <br>注意：仅支持<b>文件内已写入密钥</b>的 QMC（QTag / 老式尾部密钥）；新版 <span data-alias="qq">秋秋音乐</span> 下载的
+        STag 或无密钥 mflac/mgg 需先从客户端导出密钥，否则无法解密（会明确报错，不会生成无法播放的文件）。
+      </div>
+      <label class="fld">本地上传（可多选，支持拖拽）</label>
+      <div class="dropzone" id="cv-drop">
+        <input type="file" id="cv-upload" multiple accept=".ncm,.qmc,.qmc0,.qmc2,.qmc3,.qmc4,.qmc6,.qmc8,.qmcflac,.qmcogg,.mflac,.mflac0,.mgg,.mgg0,.mggl,.mgg1,.mmp4,.tkm,.bkcmp3,.bkcm4a,.bkcflac,.bkcwav,.bkcape,.bkcogg,.bkcwma" hidden>
+        <div class="dz-inner">点击选择或拖拽加密音乐文件到此处</div>
+        <div class="dz-files" id="cv-ufiles"></div>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <button class="btn btn-primary" id="btn-upload-convert">上传并转换</button>
+        <span class="hint" id="cv-uprog" style="align-self:center"></span>
+      </div>
+      <div style="border-top:1px dashed rgba(255,255,255,.12);margin:14px 0 10px"></div>
+      <label class="fld">服务器文件路径（每行一个）</label>
+      <textarea class="input" id="cv-files" rows="4" placeholder="/vol1/1000/Music/周杰伦 - 晴天.ncm&#10;/vol1/1000/Music/林俊杰 - 江南.mflac"></textarea>
+      <label class="fld">输出目录</label>
+      <input class="input" id="cv-outdir" placeholder="/vol1/1000/Music/已转换">
+      <div class="switch-row" style="margin-top:10px">
+        <div><div class="txt">转换后自动刮削整理</div><div class="hint">自动入库、补歌词与封面、去重分类</div></div>
+        <label class="switch"><input type="checkbox" id="cv-autotidy" checked><span class="slider"></span></label>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button class="btn btn-primary" id="btn-convert">开始转换</button>
+        <button class="btn" id="btn-convert-selftest" title="用内置向量验证 NCM/QMC 解密算法在当前环境是否可用">解密自检</button>
+      </div>
+      <div id="cv-selftest"></div>
+      <div id="cv-result"></div>
+    </div>
+  </div>
+  <!-- 去重 -->
+  <div id="tab-dedupe" class="hidden">
+    <div class="panel">
+      <h2>重复文件 <span class="tag" id="dup-total"></span></h2>
+      <div class="row" style="margin-bottom:12px">
+        <select id="dup-kind" style="flex:0 1 200px">
+          <option value="both">综合检查（内容+名称）</option>
+          <option value="content">仅内容重复（SHA-1）</option>
+          <option value="name">仅名称重复（同曲不同版本）</option>
+        </select>
+        <select id="dup-mode" style="flex:0 1 220px">
+          <option value="delete">一键去重删除（直接删除）</option>
+          <option value="move">一键去重不删（移入项目外目录）</option>
+          <option value="trash">一键移入回收站</option>
+        </select>
+        <input class="input" id="dup-outdir" placeholder="移出目录（选「移入项目外目录」时必填），如 /vol1/1000/音乐_重复备份" style="flex:2 1 260px">
+        <button class="btn btn-primary" id="btn-dedupe-all">一键处理全部重复</button>
+        <button class="btn btn-ghost" id="btn-dedupe-ai">AI 去重（智能判断保留项）</button>
+      </div>
+      <div class="hint" style="font-size:12px;color:var(--sub);margin-bottom:10px">
+        综合检查 = 内容重复（文件字节完全一致）+ 名称重复（歌手+歌名相同但内容不同，如同一首歌的 flac/320k 双版本）。内容组默认保留最优文件；名称组默认保留无损/高码率版本；「AI 去重」会逐组调用大模型按音质/命名/路径判断保留项，AI 失败时自动回退默认策略。
+      </div>
+      <div id="dup-list"></div>
+    </div>
+    <div class="panel">
+      <h2>重复封面检测 <span class="tag" id="dcov-total"></span></h2>
+      <div class="row" style="margin-bottom:12px">
+        <label class="fld" style="flex:0 0 auto;margin:0">相同封面跨目录数 ≥</label>
+        <input class="input" id="dcov-threshold" type="number" min="2" value="3" style="flex:0 0 80px;width:80px">
+        <button class="btn btn-ghost" id="btn-dcov-scan">检测重复封面</button>
+        <button class="btn btn-primary" id="btn-dcov-fix">AI 重新获取并更换</button>
+      </div>
+      <div class="hint" style="font-size:12px;color:var(--sub);margin-bottom:10px">
+        同一张封面图出现在多个不同目录的歌曲上，通常是刮削匹配错了。点「检测」列出可疑组，再点「AI 重新获取并更换」逐首识别歌手/歌名并从曲库重新下载封面（需先在设置页启用 LLM；同专辑共用封面属正常，不会误报）。
+      </div>
+      <div id="dcov-list"></div>
+    </div>
+  </div>
+
+  <!-- 设置 -->
+  <div id="tab-settings" class="hidden">
+    <div class="subtabs" id="set-subtabs">
+      <button class="subtab active" data-sub="strategy"><svg viewBox="0 0 24 24"><path d="M3 17v2h6v-2H3zM3 5v2h10V5H3zm10 16v-2h8v-2h-8v-2h-2v6h2zM7 9v2H3v2h4v2h2V9H7zm14 4v-2H11v2h10zm-6-4h2V7h4V5h-4V3h-2v6z"/></svg><span>整理策略</span></button>
+      <button class="subtab" data-sub="ai"><svg viewBox="0 0 24 24"><path d="M19 9l1.25-2.75L23 5l-2.75-1.25L19 1l-1.25 2.75L15 5l2.75 1.25L19 9zm-7.5.5L9 4 6.5 9.5 1 12l5.5 2.5L9 20l2.5-5.5L17 12l-5.5-2.5zM19 15l-1.25 2.75L15 19l2.75 1.25L19 23l1.25-2.75L23 19l-2.75-1.25L19 15z"/></svg><span>AI 大模型</span></button>
+      <button class="subtab" data-sub="source"><svg viewBox="0 0 24 24"><path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96z"/></svg><span>网络音源</span></button>
+      <button class="subtab" data-sub="playlist"><svg viewBox="0 0 24 24"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg><span>歌单分享</span></button>
+      <button class="subtab" data-sub="rules"><svg viewBox="0 0 24 24"><path d="M5 17v2h14v-2H5zm4.5-4.2h5l.9 2.2h2.4L12.9 4h-2L7.2 15h2.4l.9-2.2zM12 5.98L13.17 9h-2.34L12 5.98z"/></svg><span>名称规则</span></button>
+    </div>
+
+    <div class="subpane" id="sp-strategy">
+      <div class="panel">
+        <h2>整理策略</h2>
+        <div class="switch-row">
+          <div><div class="txt">在线刮削歌词与封面</div><div class="hint">从 <span data-alias="netease">网忆云</span> / <span data-alias="qq">秋秋音乐</span> 等平台匹配并补全</div></div>
+          <label class="switch"><input type="checkbox" id="cfg-scrape"><span class="slider"></span></label>
+        </div>
+        <div class="switch-row">
+          <div><div class="txt">覆盖已有歌词</div><div class="hint">关闭则保留已存在的 .lrc</div></div>
+          <label class="switch"><input type="checkbox" id="cfg-ow-lyric"><span class="slider"></span></label>
+        </div>
+        <div class="switch-row">
+          <div><div class="txt">覆盖已有封面</div><div class="hint">关闭则保留已存在的封面图</div></div>
+          <label class="switch"><input type="checkbox" id="cfg-ow-cover"><span class="slider"></span></label>
+        </div>
+        <div class="switch-row">
+          <div><div class="txt">写内嵌标签</div><div class="hint">检测到 mutagen / ffmpeg 时写入音频内嵌信息</div></div>
+          <label class="switch"><input type="checkbox" id="cfg-embed"><span class="slider"></span></label>
+        </div>
+        <div class="switch-row">
+          <div><div class="txt">按歌手/专辑分类移动</div><div class="hint">整理为「歌手/专辑/歌曲」目录结构</div></div>
+          <label class="switch"><input type="checkbox" id="cfg-classify"><span class="slider"></span></label>
+        </div>
+        <div class="switch-row">
+          <div><div class="txt">增量监听自动整理</div><div class="hint">音乐目录新增/变化文件时，自动入库并补歌词封面</div></div>
+          <label class="switch"><input type="checkbox" id="cfg-watch"><span class="slider"></span></label>
+        </div>
+        <div class="switch-row">
+          <div><div class="txt">监听间隔（秒）</div><div class="hint">轮询目录发现新文件的间隔，最小 5 秒</div></div>
+          <input class="input" id="cfg-watch-interval" style="flex:0 1 120px;width:120px" value="30">
+        </div>
+        <div class="row" style="margin-top:14px">
+          <button class="btn btn-primary" id="btn-save-strategy">保存策略</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="subpane hidden" id="sp-ai">
+      <div class="panel">
+        <h2>AI 大模型（可选）</h2>
+        <label class="fld">API 地址（OpenAI 兼容，如 https://ark.cn-beijing.volces.com/api/v3）</label>
+        <input class="input" id="cfg-llm-url" placeholder="https://ark.cn-beijing.volces.com/api/v3">
+        <label class="fld">API Key</label>
+        <input class="input" id="cfg-llm-key" type="password" placeholder="sk-...">
+        <label class="fld">模型名</label>
+        <input class="input" id="cfg-llm-model" placeholder="doubao-seed-1-6-250615">
+        <div class="switch-row" style="margin-top:12px">
+          <div><div class="txt">启用 LLM 语义识别</div><div class="hint">用于解析乱命名文件</div></div>
+          <label class="switch"><input type="checkbox" id="cfg-llm-enabled"><span class="slider"></span></label>
+        </div>
+        <h2 style="margin-top:22px">AI 封面生成（文生图，可选）</h2>
+        <div class="hint" style="font-size:12px;color:var(--sub);margin-bottom:8px">
+          曲库找不到封面时，由 AI 根据歌词大意与风格生成封面（含歌名标题）。生图地址/Key 留空则复用上方 LLM 配置；模型名填文生图模型，如 doubao-seedream-4-0-250828。
+        </div>
+        <label class="fld">生图地址（可留空，如 https://ark.cn-beijing.volces.com/api/v3）</label>
+        <input class="input" id="cfg-img-url" placeholder="留空复用 LLM 地址">
+        <label class="fld">生图 API Key（可留空）</label>
+        <input class="input" id="cfg-img-key" type="password" placeholder="留空复用 LLM Key">
+        <label class="fld">生图模型名</label>
+        <input class="input" id="cfg-img-model" placeholder="doubao-seedream-4-0-250828">
+        <div class="switch-row" style="margin-top:12px">
+          <div><div class="txt">开启 AI 封面补全</div><div class="hint">整理 / AI 补全 / 封面修复时兜底生成</div></div>
+          <label class="switch"><input type="checkbox" id="cfg-ai-cover"><span class="slider"></span></label>
+        </div>
+        <div class="row" style="margin-top:14px">
+          <button class="btn btn-primary" id="btn-save-llm">保存 LLM 配置</button>
+          <button class="btn btn-ghost" id="btn-test-llm">测试连接</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>AI 用量 <span class="tag" id="ai-usage-tag">今日 / 累计</span></h2>
+        <div class="hint" style="font-size:12px;color:var(--sub);margin-bottom:10px">
+          统计本应用自己发出的 AI 请求：调用次数与 token 消耗，分今日与累计，并按用途（识别文件名 / 生成歌词 / 去重决策 / 生封面 等）拆开。
+          关掉应用也记得住（按天存库）。额度、花费请以服务商后台为准。
+        </div>
+        <div id="ai-usage"><div class="hint" style="font-size:12px;color:var(--sub)">加载中…</div></div>
+        <div class="row" style="margin-top:12px">
+          <button class="btn btn-ghost" id="btn-ai-usage">刷新用量</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="subpane hidden" id="sp-source">
+      <div class="panel">
+        <h2>网络音源设置</h2>
+        <div class="hint" style="font-size:12px;color:var(--sub);margin-bottom:8px">
+          勾选参与混合搜索的音源（可多选），搜索时并发查询所有勾选源并按相关度排序。自定义 API 可添加多个（兼容落雪音乐/music-api 等聚合接口），逐个勾选启用。
+        </div>
+        <label class="fld">内置音源（多选）</label>
+        <div class="row" id="cfg-ms-sources" style="flex-wrap:wrap;gap:10px 18px">
+          <label class="srcbox"><input type="checkbox" value="netease" class="cfg-ms-src"> <span id="src-nm-netease">网忆云</span></label>
+          <label class="srcbox"><input type="checkbox" value="qq" class="cfg-ms-src"> <span id="src-nm-qq">秋秋音乐</span></label>
+          <label class="srcbox"><input type="checkbox" value="migu" class="cfg-ms-src"> <span id="src-nm-migu">米菇音乐</span></label>
+          <label class="srcbox"><input type="checkbox" value="kugou" class="cfg-ms-src"> <span id="src-nm-kugou">库狗音乐</span></label>
+          <label class="srcbox"><input type="checkbox" value="kuwo" class="cfg-ms-src"> <span id="src-nm-kuwo">库我音乐</span></label>
+        </div>
+        <label class="fld" style="margin-top:12px">平台显示名（谐音别名）</label>
+        <div class="hint" style="font-size:12px;color:var(--sub);margin-bottom:8px">
+          默认用谐音代替各平台名称，作用于本页勾选项、下载搜索的平台筛选与结果徽标。可自行改写（最长 12 字）；
+          把某项<b>清空并保存</b>则该平台回退显示其真实名称。
+        </div>
+        <div class="row" style="gap:8px">
+          <input class="input" id="cfg-al-netease" maxlength="12" placeholder="网忆云">
+          <input class="input" id="cfg-al-qq" maxlength="12" placeholder="秋秋音乐">
+          <input class="input" id="cfg-al-migu" maxlength="12" placeholder="米菇音乐">
+          <input class="input" id="cfg-al-kugou" maxlength="12" placeholder="库狗音乐">
+          <input class="input" id="cfg-al-kuwo" maxlength="12" placeholder="库我音乐">
+        </div>
+        <div class="hint" style="font-size:12px;color:var(--sub);margin-top:6px">
+          <span data-alias="qq">秋秋音乐</span>已内置（与其插件同一套官方接口，无需装插件）：不配 Cookie 就能搜到并下载免费曲目，
+          VIP 曲目会标记为锁定；粘贴下方 Cookie 后 VIP 曲目自动解锁无损/320k 档位。每首实际能拿到的最高档位会直接标在搜索结果上。
+        </div>
+        <label class="fld" style="margin-top:12px">自定义音源 API（可添加多个）</label>
+        <div id="cfg-ms-apis" style="display:flex;flex-direction:column;gap:8px"></div>
+        <div class="row" style="margin-top:8px">
+          <button class="btn btn-ghost" id="btn-ms-add-api">+ 添加自定义音源</button>
+        </div>
+        <label class="fld" style="margin-top:12px">下载保存目录（留空则用首个音乐库目录下的 Downloads）</label>
+        <input class="input" id="cfg-ms-dldir" placeholder="/vol1/1000/Music/Downloads">
+        <label class="fld" style="margin-top:12px">平台 VIP Cookie（选填，用于试听/下载会员歌曲）</label>
+        <div class="hint" style="font-size:12px;color:var(--sub);margin-bottom:8px">
+          在电脑浏览器登录对应音乐网站后，按 F12 → Network（网络）→ 任意请求 → Request Headers 里复制整串 Cookie 粘贴到对应平台。配置后该平台 VIP 歌曲可正常试听与下载；Cookie 过期表现为下载拿不到链接，重新粘贴即可。留空或保持 **** 则不修改已保存值。
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <input class="input" id="cfg-ms-ck-netease" placeholder="网忆云 Cookie（如 MUSIC_U=...）">
+          <input class="input" id="cfg-ms-ck-qq" placeholder="秋秋音乐 Cookie（如 qm_keyst=...;uin=...，取链时自动识别 uin）">
+          <input class="input" id="cfg-ms-ck-kugou" placeholder="库狗音乐 Cookie">
+          <input class="input" id="cfg-ms-ck-kuwo" placeholder="库我音乐 Cookie">
+          <input class="input" id="cfg-ms-ck-migu" placeholder="米菇音乐 Cookie">
+        </div>
+        <div class="switch-row" style="margin-top:12px">
+          <div>
+            <div class="txt">下载后自动转码</div>
+            <div class="hint" style="font-size:12px;color:var(--sub)">加密格式（ncm/qmc 等）自动解密，wma/ape 等特殊格式经 ffmpeg 转为 mp3/flac 通用格式</div>
+          </div>
+          <label class="switch"><input type="checkbox" id="cfg-ms-transcode"><span class="slider"></span></label>
+        </div>
+        <div class="row" style="margin-top:14px">
+          <button class="btn btn-primary" id="btn-save-ms">保存音源设置</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="subpane hidden" id="sp-playlist">
+      <div class="panel">
+        <h2>歌单与分享</h2>
+        <div class="hint" style="font-size:12px;color:var(--sub);margin-bottom:8px">
+          「我的喜欢」与每个歌单都可以归档到与歌单同名的独立文件夹，也可以生成分享链接给朋友导入。这里设置的是全局默认值，也可以在歌单页对单个歌单单独覆盖。
+        </div>
+        <label class="fld">归档根目录（留空则归档时需在本页歌单里临时指定）</label>
+        <input class="input" id="cfg-pl-root" placeholder="/vol1/1000/Music/歌单归档">
+        <div class="hint" style="font-size:12px;color:var(--sub);margin-top:4px">
+          会在该目录下建立与歌单同名的子文件夹，例如 <code>/vol1/1000/Music/歌单归档/我的喜欢/</code>。
+        </div>
+        <label class="fld">默认归档方式</label>
+        <select id="cfg-pl-mode">
+          <option value="copy">另存（复制一份，保留原文件位置）</option>
+          <option value="move">移动（剪切走，歌单自动跟随新路径）</option>
+        </select>
+        <div class="switch-row" style="margin-top:12px">
+          <div><div class="txt">新加入的歌自动归档</div><div class="hint">开启后，标记喜欢或加入歌单时立即同步到对应同名文件夹</div></div>
+          <label class="switch"><input type="checkbox" id="cfg-pl-auto"><span class="slider"></span></label>
+        </div>
+        <label class="fld" style="margin-top:12px">分享链接前缀</label>
+        <input class="input" id="cfg-pl-base" placeholder="留空则按当前访问地址自动生成，如 http://192.168.1.10:5600/app/music-tidy">
+        <div class="hint" style="font-size:12px;color:var(--sub);margin-top:4px">
+          通过 NAS 网关访问、或生成的链接朋友打不开时，在这里填固定前缀（需包含 <code>/app/music-tidy</code>，末尾不要带斜杠）。
+        </div>
+        <div class="warnbox" style="margin-top:12px">
+          带宽提醒：朋友打开分享链接、尤其是补下你本地没有的歌曲时，音频是由<b>你这台 NAS 直接下发</b>的，会占用上行带宽与流量。
+          建议只分享给信任的人，用完后到歌单页点「关闭分享」立即失效。
+        </div>
+        <div class="row" style="margin-top:14px">
+          <button class="btn btn-primary" id="btn-save-pl">保存歌单设置</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="subpane hidden" id="sp-rules">
+      <div class="panel">
+        <h2>名称解析自定义规则</h2>
+        <div class="hint" style="font-size:12px;color:var(--sub);margin-bottom:10px">输入一个文件名样例和它的命名说明，点「AI 分析规则」自动生成解析正则，确认后保存。命中规则的文件名将优先按规则提取歌手/歌名/专辑，未命中再走内置解析；AI 分析需先在「AI 大模型」标签页配置并启用 LLM。</div>
+        <label class="fld">文件名样例</label>
+        <input class="input" id="rule-sample" placeholder="如：012.晴日 - 张三 [Y3-S03-E03-C04-C01-V00].flac">
+        <label class="fld">规则解释</label>
+        <input class="input" id="rule-desc" placeholder="如：横杠前是歌名，横杠后是歌手，方括号内是代码">
+        <div class="row" style="margin-top:12px">
+          <button class="btn btn-primary" id="btn-rule-analyze">AI 分析规则</button>
+        </div>
+        <div id="rules-list" style="margin-top:12px"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 日志 -->
+  <div id="tab-log" class="hidden">
+    <div class="panel">
+      <h2>运行日志 <span class="tag">最近 300 条</span></h2>
+      <div class="row" style="margin-bottom:10px">
+        <button class="btn btn-ghost btn-sm" id="btn-refresh-log">刷新日志</button>
+      </div>
+      <div class="logbox" id="logbox"></div>
+    </div>
+  </div>
+</main>
+</div>
+
+<div class="modal fmodal" id="player-modal">
+  <div class="fbox" id="pl-box">
+    <div class="fglass" id="pl-glass"></div>
+    <div class="fbar">
+      <span class="fb-mode">播放器</span>
+      <span class="fb-qual" id="pl-qual">—</span>
+      <span class="fb-mode" id="pl-src"></span>
+      <span class="grow"></span>
+      <button id="pl-full" title="显示器全屏（Esc 退出）">⛶</button>
+      <button id="pl-min" title="最小化为播放条">⤡</button>
+      <button id="pl-close" title="关闭">✕</button>
+    </div>
+    <div class="fbody">
+      <div class="fleft">
+        <div class="fdisc"><img id="pl-cover" alt="" referrerpolicy="no-referrer"></div>
+        <div class="fmeta">
+          <div class="t" id="pl-title">—</div>
+          <div class="a" id="pl-artist">—</div>
+          <div class="al" id="pl-album">—</div>
+        </div>
+      </div>
+      <div class="fright">
+        <div class="mlyric" id="pl-lyric"><div class="empty">加载中…</div></div>
+      </div>
+    </div>
+    <div class="ffoot">
+      <div class="ftime"><span id="pl-cur">0:00</span><input type="range" id="pl-seek" min="0" max="1000" value="0" step="1"><span id="pl-dur">0:00</span></div>
+      <div class="fctrl">
+        <div class="c-l">
+          <button class="pillbtn" id="pl-fav" title="标记到我的喜欢"><svg viewBox="0 0 24 24"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg><span id="pl-fav-t">喜欢</span></button>
+          <button class="pillbtn" id="pl-addpl" title="添加到指定歌单">+ 添加到歌单</button>
+        </div>
+        <div class="c-c">
+          <button id="pl-prev" title="上一首">⏮</button>
+          <button id="pl-play" title="播放/暂停">▶</button>
+          <button id="pl-next" title="下一首">⏭</button>
+        </div>
+        <div class="c-r">
+          <div class="fvol">
+            <button id="pl-mute" title="静音/恢复">🔊</button>
+            <input type="range" id="pl-vol" min="0" max="100" value="80" step="1" title="音量">
+            <span class="voln" id="pl-voln">80</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="share-modal">
+  <div class="mbox" style="max-width:620px">
+    <div class="mhead">
+      <div style="min-width:0;flex:1">
+        <div class="t">分享歌单</div>
+        <div class="a" id="shm-name">—</div>
+      </div>
+      <button class="x" id="shm-close" title="关闭">✕</button>
+    </div>
+    <div style="padding:6px 18px 16px;overflow-y:auto">
+      <div class="warnbox">
+        被分享人打开链接、以及下载你本地没有的歌曲时，流量都走<b>你这台 NAS 的上行带宽</b>。
+        请只分享给信任的人；不想继续分享时点「关闭分享」，链接立即失效。
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button class="btn btn-primary" id="shm-gen">生成分享链接</button>
+        <span class="hint" id="shm-stat" style="align-self:center;font-size:12px"></span>
+      </div>
+      <div id="shm-linkwrap" class="hidden">
+        <label class="fld">分享链接（发给朋友，对方无需账号）</label>
+        <div class="mono-link" id="shm-link">—</div>
+        <div class="row" style="margin-top:8px">
+          <button class="btn btn-ghost" id="shm-copy">复制链接</button>
+          <button class="btn btn-danger" id="shm-revoke">关闭此分享</button>
+        </div>
+      </div>
+      <label class="fld" style="margin-top:14px">该歌单进行中的分享</label>
+      <div id="shm-list"><div class="hint" style="font-size:12px">暂无分享</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="addpl-modal">
+  <div class="mbox" style="max-width:470px">
+    <div class="mhead">
+      <div style="min-width:0;flex:1">
+        <div class="t">添加到歌单</div>
+        <div class="a" id="apm-song">—</div>
+      </div>
+      <button class="x" id="apm-close" title="关闭">✕</button>
+    </div>
+    <div style="padding:6px 18px 16px;overflow-y:auto">
+      <div class="hint" style="font-size:12px;color:var(--sub);margin-bottom:8px">
+        勾选要加入的歌单（可多选）；勾选「我的喜欢」即为红心收藏。开启了自动归档的歌单，加入后会同步存入同名文件夹。
+      </div>
+      <div id="apm-list" style="display:flex;flex-direction:column;gap:6px;max-height:36vh;overflow-y:auto"></div>
+      <label class="fld">新建歌单并加入（可选）</label>
+      <div class="row">
+        <input class="input" id="apm-new" placeholder="新歌单名称">
+        <button class="btn btn-ghost" id="apm-create" style="flex:0 0 auto">新建</button>
+      </div>
+      <div class="row" style="margin-top:16px;justify-content:flex-end">
+        <button class="btn btn-ghost" id="apm-cancel">取消</button>
+        <button class="btn btn-primary" id="apm-ok">加入所选歌单</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="audit-modal">
+  <div class="mbox" style="max-width:820px">
+    <div class="mhead">
+      <div style="min-width:0;flex:1">
+        <div class="t">扫描体检</div>
+        <div class="a" id="aud-sum">尚未体检</div>
+      </div>
+      <button class="btn btn-ghost btn-sm" id="aud-run" style="flex:0 0 auto">重新体检</button>
+      <button class="x" id="aud-close" title="关闭">✕</button>
+    </div>
+    <div style="padding:6px 18px 16px;overflow-y:auto;max-height:72vh" id="aud-body">
+      <div class="hint" style="font-size:12px">正在枚举目录…（只走目录树，不读文件内容）</div>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="denied-modal">
+  <div class="mbox" style="max-width:820px">
+    <div class="mhead">
+      <div style="min-width:0;flex:1">
+        <div class="t">读不到的目录</div>
+        <div class="a" id="dn-sum">尚未加载</div>
+      </div>
+      <button class="btn btn-ghost btn-sm" id="dn-reprobe" style="flex:0 0 auto" title="不重新枚举，只复查这几个目录现在能不能读">复查权限</button>
+      <button class="x" id="dn-close" title="关闭">✕</button>
+    </div>
+    <div style="padding:6px 18px 16px;overflow-y:auto;max-height:72vh" id="dn-body">
+      <div class="hint" style="font-size:12px">正在核对权限…（只看目录权限位，不读文件内容）</div>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="scope-modal">
+  <div class="mbox" style="max-width:760px">
+    <div class="mhead">
+      <div style="min-width:0;flex:1">
+        <div class="t">选择扫描目录</div>
+        <div class="a" id="sc-sum">未选择：扫描全部授权目录</div>
+      </div>
+      <button class="btn btn-ghost btn-sm" id="sc-all" style="flex:0 0 auto" title="清空选择，回到全部授权目录">扫描全部授权目录</button>
+      <button class="x" id="sc-close" title="关闭">✕</button>
+    </div>
+    <div style="padding:8px 18px 4px;overflow:auto;max-height:62vh" id="sc-body">
+      <div class="hint" style="font-size:12px">正在读取授权目录…</div>
+    </div>
+    <div class="row" style="padding:10px 18px 16px;align-items:center">
+      <span class="hint" style="flex:1;min-width:0;font-size:12px;color:var(--sub)">勾选＝连它的子目录一起算。目录后的数字是这个目录（含子目录）里的音频文件数，带 ≈ 表示为赶速度没数完。</span>
+      <button class="btn btn-ghost" id="sc-cancel">取消</button>
+      <button class="btn btn-primary" id="sc-ok">确定</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="edit-modal">
+  <div class="mbox" style="max-width:520px">
+    <div class="mhead">
+      <div style="min-width:0">
+        <div class="t">编辑识别信息</div>
+        <div class="a" id="ed-path" title="">—</div>
+      </div>
+      <button class="x" id="ed-close" title="关闭">✕</button>
+    </div>
+    <div style="padding:4px 18px 14px;overflow-y:auto">
+      <label class="fld">歌手</label>
+      <input class="input" id="ed-artist" placeholder="歌手名">
+      <label class="fld">歌名</label>
+      <input class="input" id="ed-title" placeholder="歌曲名（必填，用于搜刮）">
+      <label class="fld">专辑</label>
+      <input class="input" id="ed-album" placeholder="留空则使用搜刮结果">
+      <label class="fld">风格</label>
+      <input class="input" id="ed-style" placeholder="留空则按文件名代码 / 识别结果">
+      <details class="aprompt" id="ed-aprompt-box">
+        <summary>自定义提示词（选填，优先级最高）</summary>
+        <textarea class="input" id="ed-aprompt" rows="3" style="margin-top:8px;resize:vertical"
+          placeholder="例如：这是现场版，判定匹配时忽略观众欢呼与延长的尾音；生成的歌词用粤语，主题围绕「雨夜」；只按副歌判重……"></textarea>
+        <div class="hint" style="font-size:11.5px;color:var(--sub);margin-top:4px">
+          填写后作为最高优先级要求，覆盖内置的歌词判定与 AI 生成说明（输出格式仍由程序约束）；留空则用内置规则。
+        </div>
+      </details>
+      <div class="row" style="justify-content:space-between;align-items:flex-end">
+        <label class="fld" style="margin-bottom:0">歌词</label>
+        <button class="btn btn-ghost btn-sm" id="ed-analyze" title="AI 核验歌词与歌手、歌名是否匹配；不匹配则重新刮取或 AI 生成（不修改歌手/歌名）">AI 完整分析</button>
+      </div>
+      <textarea class="input mono" id="ed-lyric" rows="8" readonly placeholder="暂无歌词" style="margin-top:6px;resize:vertical;min-height:150px"></textarea>
+      <div id="ed-msg" style="display:none;white-space:pre-wrap;font-size:12px;margin-top:8px;padding:8px 10px;border-radius:10px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.09);line-height:1.6"></div>
+      <div class="row" style="margin-top:16px;justify-content:flex-end">
+        <button class="btn btn-ghost" id="ed-cancel">取消</button>
+        <button class="btn btn-primary" id="ed-save">保存并重新搜刮</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="rule-modal">
+  <div class="mbox" style="max-width:520px">
+    <div class="mhead">
+      <div style="min-width:0">
+        <div class="t">确认解析规则</div>
+        <div class="a" id="rlm-sample" title="">—</div>
+      </div>
+      <button class="x" id="rlm-close" title="关闭">✕</button>
+    </div>
+    <div style="padding:4px 18px 14px;overflow-y:auto">
+      <div id="rlm-warn" class="hidden" style="color:#ff6961;font-size:12px;margin-bottom:8px;word-break:break-all"></div>
+      <div id="rlm-note" class="hint" style="font-size:12px;color:var(--sub);margin-bottom:8px;word-break:break-all"></div>
+      <label class="fld">解析正则（可手工修正，命名组：artist/title/album/track）</label>
+      <textarea class="input mono" id="rlm-regex" rows="3" spellcheck="false" style="resize:vertical;min-height:76px"></textarea>
+      <div id="rlm-parsed" class="hint" style="font-size:12px;color:var(--sub);margin-top:8px;word-break:break-all"></div>
+      <div class="row" style="margin-top:16px;justify-content:flex-end">
+        <button class="btn btn-ghost" id="rlm-cancel">取消</button>
+        <button class="btn btn-primary" id="rlm-save">确认保存规则</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="dl-detail-modal">
+  <div class="mbox" style="max-width:560px">
+    <div class="mhead">
+      <img id="ddm-cover" alt="" onerror="this.style.display='none'">
+      <div style="min-width:0;flex:1">
+        <div class="t" id="ddm-title">—</div>
+        <div class="a" id="ddm-artist">—</div>
+      </div>
+      <button class="x" id="ddm-close" title="关闭">✕</button>
+    </div>
+    <div style="padding:10px 18px 14px;max-height:62vh;overflow-y:auto">
+      <div id="ddm-info" style="font-size:13px;line-height:1.9"></div>
+      <div class="row" style="margin-top:10px;gap:8px">
+        <button class="btn btn-ghost btn-sm" id="ddm-preview">试听</button>
+        <button class="btn btn-ghost btn-sm" id="ddm-lyric-btn">查看歌词</button>
+      </div>
+      <div id="ddm-lyric" class="mlyric" style="margin-top:12px;max-height:220px;overflow-y:auto;display:none;padding:10px 12px;background:rgba(0,0,0,.28);border-radius:12px"></div>
+    </div>
+  </div>
+</div>
+
+<div class="dlcenter hidden" id="dlcenter">
+  <button class="dlc-fab" id="dlc-fab" title="下载中心">
+    <svg class="dlc-ico" viewBox="0 0 24 24"><path d="M12 16l-5-5h3V4h4v7h3l-5 5zm-7 2h14v2H5v-2z"/></svg>
+    <span>下载中心</span>
+    <span class="dlc-badge hidden" id="dlc-badge">0</span>
+  </button>
+  <div class="dlc-panel" id="dlc-panel">
+    <h3>下载中心 <button class="btn btn-ghost btn-sm" id="dlc-clear" style="font-size:11px;padding:2px 8px">清空记录</button></h3>
+    <div id="dlc-list"><div class="dlc-empty">暂无下载任务</div></div>
+  </div>
+</div>
+
+<div class="miniplayer" id="miniplayer">
+  <img class="mp-cover" id="mp-cover" alt="" referrerpolicy="no-referrer">
+  <div class="mp-mid">
+    <div class="mp-title" id="mp-title">未在播放</div>
+    <div class="mp-lyric" id="mp-lyric"><span id="mp-lyric-text">—</span></div>
+  </div>
+  <div class="mp-ctrl">
+    <button class="mini-fav" id="mp-fav" title="标记到我的喜欢">♥</button>
+    <button id="mp-prev" title="上一首">⏮</button>
+    <button id="mp-play" title="播放/暂停">▶</button>
+    <button id="mp-next" title="下一首">⏭</button>
+  </div>
+  <button class="mp-expand" id="mp-expand" title="放大">⤢</button>
+  <audio id="mp-audio" preload="metadata"></audio>
+</div>
+
+<div class="toast" id="toast"></div>
+<script>
+/* 网关下页面挂在 /app/music-tidy（可能无尾斜杠），相对路径 app.js 会丢失前缀导致 404、
+   所有按钮无响应。这里按当前 URL 动态计算前缀，以绝对路径加载脚本。 */
+(function () {
+  var m = (location.pathname || "").match(/^(\/app\/[^/]+)/);
+  document.write('<script src="' + (m ? m[1] : "") + '/app.js"><\/script>');
+})();
+</script>
+<script>
+/* 文本域自动增高：随内容增长（上限 60vh），粘贴长链接/歌词/正则时无需手动拉伸 */
+(function () {
+  function grow(el) {
+    if (!el || el.readOnly) { el && (el.style.height = ""); return; }
+    el.style.height = "auto";
+    var max = Math.round(window.innerHeight * 0.6);
+    el.style.height = Math.min(el.scrollHeight + 2, max) + "px";
+  }
+  function bind() {
+    Array.prototype.forEach.call(document.querySelectorAll("textarea.input"), function (el) {
+      if (el.dataset.autogrow) return;
+      el.dataset.autogrow = "1";
+      el.addEventListener("input", function () { grow(el); });
+    });
+  }
+  bind();
+  document.addEventListener("input", function (e) {
+    if (e.target && e.target.tagName === "TEXTAREA") grow(e.target);
+  });
+  setInterval(bind, 1200);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+#!/bin/bash
+### This script is called after the user installs the application.
+
+# 初始化配置目录与默认配置文件
+mkdir -p "${TRIM_PKGETC:-/tmp/music-tidy-etc}" "${TRIM_PKGVAR:-/tmp/music-tidy-var}" 2>/dev/null
+if [ ! -f "${TRIM_PKGETC}/config.json" ]; then
+    echo '{}' > "${TRIM_PKGETC}/config.json" 2>/dev/null
+fi
+exit 0

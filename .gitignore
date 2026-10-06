@@ -1,0 +1,58 @@
+# Dependencies
+node_modules/
+
+# Local build and run data
+var/
+data/
+*.log
+*.pid
+
+# Local toolchain / package cache (not part of the project)
+.tools/
+.npm-cache/
+
+# OS generated
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Executable binaries
+*.exe
+fpk-package/fn-lx-player
+fpk-package/app/fn-lx-player
+
+
+# 本地开发环境（热加载脚本产生的数据）
+.dev/
+
+# ──────────────────────────────────────────────────────────────
+# 2026-10-06 补：体积大、且都能重新生成的东西
+#
+# 为什么现在补：这个项目之前一直没有版本库（没有 .git），
+# 而顶层堆着 25 个 *.fpk（合计 152 MB，每个约 6 MB）——
+# 一旦开始提交，历史里会堆着几十个「一次性」的安装包，
+# 仓库很快就没法克隆了。这些都能重新打出来，不该进历史。
+# ──────────────────────────────────────────────────────────────
+
+# 打包产物（要留档就单独放 releases/ 并配 LFS，或干脆只留最新一个）
+*.fpk
+
+# 前端构建产物：Go 用 //go:embed all:dist 嵌进二进制，
+# 但它是 `npm run build` / `scripts/build.sh` 生成的，不是源码。
+backend/dist/
+
+# 编辑器 / 同步工具的本地状态
+.qsync-backup-*/
+.refs/
+.workbuddy-ai/
+
+# 打包中间产物
+fpk-package/app.tgz
+*.pak
+
+# 编译出来的 Go 二进制（打包时会放进 fpk-package/app/）。
+# 旧的忽略规则只写了 fn-lx-player 这个老名字，改名成 yinshu-ai 之后就漏了 ——
+# 14 MB 的东西，每改一次代码就变一次，进历史纯属浪费。
+/fpk-package/app/yinshu-ai
+/fpk-package/app/fn-lx-player
+/fpk-package/fn-lx-player

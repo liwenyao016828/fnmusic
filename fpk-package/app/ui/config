@@ -1,0 +1,13 @@
+{
+  ".url": {
+    "yinshu-ai.main": {
+      "title": "音枢 AI",
+      "icon": "images/icon_{0}.png",
+      "type": "iframe",
+      "protocol": "http",
+      "port": 8898,
+      "url": "/",
+      "allUsers": true
+    }
+  }
+}

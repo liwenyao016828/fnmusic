@@ -1,0 +1,25 @@
+appname=yinshu-ai
+# ⚠️ 显示名（display_name）2026-09-28 由「音枢 AI」改成「曲率」，但 appname / desktop_applaunchname
+#    是**技术标识**，刻意保持 yinshu-ai 不变：飞牛应用中心靠它们判断"这是同一个应用"，
+#    改了会被当成**新应用**安装（旧应用不会升级、配置与数据不继承）。要换的话必须单独确认。
+version=2.1.114
+display_name=曲率
+desc=曲率 —— 专为飞牛 NAS 打造的 AI 音乐中枢：在线播放、批量下载、曲库管理与去重整理一站式完成。支持导入第三方音源规则解析全网歌曲，深度适配 NAS 本地无损曲库与飞牛音乐刮削。
+source=thirdparty
+maintainer=积木搬运师
+maintainer_url=https://bbs.fnnas.com
+distributor=积木搬运师
+distributor_url=https://bbs.fnnas.com
+platform=x86
+os_min_version=1.0.0
+desktop_uidir=ui
+desktop_applaunchname=yinshu-ai.main
+ctl_stop=true
+service_port=8898
+# 声明依赖「飞牛音乐」（trim.music）：曲率接管它的入口 socket、往它的页面注入脚本、
+# 把在线曲目写进它的歌单 —— 没装它这些能力全都不成立，装了它才有意义。
+# 应用中心据此保证安装顺序（先有飞牛音乐，再装曲率）。
+install_dep_apps=trim.music
+# 声明为微应用：前端 JS SDK（@trimjs/web-app，目录授权选择器）需要此声明。
+# 未声明时应用页面不会按微应用环境加载，JS SDK 可能无法初始化。
+micro_app=true

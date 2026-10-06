@@ -1,0 +1,311 @@
+// Run 逐首补全（解析 + 写入一步到位）。onProgress 可为 nil。
+//
+// 需要「先预览后写」时用 `Resolve` + `Execute` 两步，见它们的注释。
+// 单首失败不会拖垮整批：结果里逐条给出原因。
+func Run(ctx context.Context, targets []Target, opts Options, onProgress func(Progress)) Summary {
+	plan := Resolve(ctx, targets, opts, nil)
+	return Execute(ctx, plan, opts, onProgress)
+}
+
+// ── 阶段一：解析（**不动文件**）──
+
+// PlanItem 计划里的一条：名字解析完、也匹配到了平台曲目，但**还没动文件**。
+type PlanItem struct {
+	Path   string `json:"path"`
+	Title  string `json:"title"`
+	Artist string `json:"artist"`
+	Album  string `json:"album"`
+
+	Matched     bool   `json:"matched"`
+	MatchedBy   string `json:"matched_by,omitempty"`
+	MatchedName string `json:"matched_name,omitempty"`
+	MatchedByAI bool   `json:"matched_by_ai,omitempty"`
+
+	NeedLyric bool `json:"need_lyric"`
+	NeedCover bool `json:"need_cover"`
+	// Note 预览阶段就能确定的问题（例如「没搜到匹配的曲目」）
+	Note string `json:"note,omitempty"`
+
+	// ── 以下不对外暴露：执行阶段靠它们取歌词/封面 ──
+	//
+	// ⚠️ 记下**匹配到的曲目标识**，而不是让执行阶段重新搜一次 ——
+	// 否则搜索结果变了、AI 挑得不一样，用户就会「批准了 A、结果写了 B」。
+	source   string
+	songmid  string
+	hash     string
+	duration int
+	coverURL string
+}
+
+// Plan 一次补全的计划
+type Plan struct {
+	Dir   string     `json:"dir"`
+	Items []PlanItem `json:"items"`
+}
+
+// Resolve 解析一批曲目：定名 → 搜索匹配 → 得到计划。**不写任何文件。**
+//
+// 为什么要分两步：补全会真正改写用户的音频文件。
+// 先让用户看一眼「文件 → 匹配到的歌 → 会写什么」，确认后才落盘 ——
+// 这比事后撤销体验好得多（**撤销是兜底，不是主防线**）。
+func Resolve(ctx context.Context, targets []Target, opts Options, onProgress func(Progress)) Plan {
+	opts = withDefaults(opts)
+	plan := Plan{Items: make([]PlanItem, 0, len(targets))}
+	if len(targets) == 0 {
+		return plan
+	}
+
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, opts.Concurrency)
+	done := 0
+
+	for _, t := range targets {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(t Target) {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			item := resolveOne(ctx, t, opts)
+
+			mu.Lock()
+			plan.Items = append(plan.Items, item)
+			done++
+			snap := Progress{Done: done, Total: len(targets), Current: displayName(t), Phase: PhaseResolve}
+			mu.Unlock()
+
+			if onProgress != nil {
+				onProgress(snap)
+			}
+		}(t)
+	}
+	wg.Wait()
+
+	sort.Slice(plan.Items, func(i, j int) bool { return plan.Items[i].Path < plan.Items[j].Path })
+	return plan
+}
+
+// resolveOne 解析一首：定名 → 搜索 → 匹配。不碰文件。
+func resolveOne(ctx context.Context, t Target, opts Options) PlanItem {
+	it := PlanItem{
+		Path:      t.Path,
+		NeedLyric: t.NeedLyric,
+		NeedCover: t.NeedCover,
+	}
+
+	title, artist := resolveName(ctx, opts, t.Path, t.Title, t.Artist)
+	if title == "" {
+		it.Note = "文件名里认不出歌名"
+		return it
+	}
+	it.Title, it.Artist = title, artist
+
+	keyword := title
+	if artist != "" {
+		keyword = title + " " + artist
+	}
+
+	// 1) 按平台顺序搜索：规则命中即停；全都没命中就把候选攒起来交给 AI 挑
+	var hit search.UnifiedSong
+	var pool []search.UnifiedSong
+	for _, p := range opts.Platforms {
+		if ctx.Err() != nil {
+			break
+		}
+		cands := search.Search(keyword, p, 1, 10)
+		if len(cands) == 0 {
+			continue
+		}
+		if s, ok := search.MatchByNameSinger(cands, title, artist); ok {
+			hit = s
+			break
+		}
+		// 规则没命中 → 攒候选（按平台顺序，前面平台的排前面）
+		pool = append(pool, cands...)
+	}
+
+	// 2) 规则全平台都没命中 → 请 AI 从候选里挑一条
+	//
+	// 这一步解决的是「搜到了但配不上」：`MatchByNameSinger` 要求曲名归一化后完全相等，
+	// 而平台标题常带后缀（`晴天 (Live)`、`晴天 (原唱 周杰伦)`、`晴天（R&B版）`）。
+	// AI 只从候选里挑（输出序号或 null），不能引入候选外的内容。
+	if hit.ID == "" && hit.Songmid == "" && opts.UseAIMatch && opts.AIClient != nil && len(pool) > 0 {
+		if s, ok := pickByAI(ctx, opts.AIClient, title, artist, t.Album, pool); ok {
+			hit = s
+			it.MatchedByAI = true
+		}
+	}
+
+	if hit.ID == "" && hit.Songmid == "" {
+		it.Note = "没有搜到匹配的曲目"
+		return it
+	}
+
+	it.Matched = true
+	it.MatchedBy = hit.Source
+	it.MatchedName = hit.Name
+	it.Album = firstNonEmpty(t.Album, hit.Album)
+	// 记下标识，执行阶段按它取歌词封面（保证「预览什么就写什么」）
+	it.source, it.songmid, it.hash = hit.Source, hit.Songmid, hit.Hash
+	it.duration, it.coverURL = hit.Duration, hit.Cover
+
+	if it.NeedCover && strings.TrimSpace(it.coverURL) == "" {
+		it.NeedCover = false
+		it.Note = "匹配到的曲目没有封面"
+	}
+	return it
+}
+
+// ── 阶段二：执行（取素材 + 写文件）──
+
+// Execute 按计划取歌词/封面并写入文件。
+func Execute(ctx context.Context, plan Plan, opts Options, onProgress func(Progress)) Summary {
+	opts = withDefaults(opts)
+	out := Summary{Total: len(plan.Items), Results: make([]ItemResult, 0, len(plan.Items))}
+	if len(plan.Items) == 0 {
+		return out
+	}
+
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, opts.Concurrency)
+	done := 0
+
+	for _, it := range plan.Items {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(it PlanItem) {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			r := writeOne(ctx, it, opts)
+
+			mu.Lock()
+			out.Results = append(out.Results, r)
+			done++
+			if r.Matched {
+				out.Matched++
+			} else {
+				out.NoMatch++
+			}
+			if r.LyricFilled {
+				out.LyricFilled++
+			}
+			if r.CoverFilled {
+				out.CoverFilled++
+			}
+			if r.GenreFilled {
+				out.GenreFilled++
+			}
+			if r.LyricRejected {
+				out.LyricRejected++
+			}
+			if !r.OK {
+				out.Failed++
+			}
+			snap := Progress{Done: done, Total: len(plan.Items), Current: displayName(Target{Path: it.Path, Title: it.Title}), Phase: PhaseWrite}
+			mu.Unlock()
+
+			if onProgress != nil {
+				onProgress(snap)
+			}
+		}(it)
+	}
+	wg.Wait()
+
+	// 落盘备份清单 —— 「撤销」要用它。没备份任何文件时不会留下空目录。
+	if opts.Backup != nil {
+		if err := opts.Backup.Commit(); err != nil {
+			// 清单写不出来不阻断任务（文件已经改了），但要让调用方知道撤销会不可用
+			out.BackupError = "备份清单写入失败，本次可能无法撤销：" + err.Error()
+		}
+		if opts.Backup.Count() > 0 {
+			out.BackupDir = opts.Backup.Dir()
+			out.BackupSize = opts.Backup.TotalSize()
+		}
+	}
+
+	sort.Slice(out.Results, func(i, j int) bool { return out.Results[i].Path < out.Results[j].Path })
+	return out
+}
+
+// writeOne 取歌词/封面并写入一个文件。
+func writeOne(ctx context.Context, it PlanItem, opts Options) ItemResult {
+	r := ItemResult{Path: it.Path, Title: it.Title, Artist: it.Artist}
+	if !it.Matched {
+		r.Error = firstNonEmpty(it.Note, "没有搜到匹配的曲目")
+		return r
+	}
+	r.Matched = true
+	r.MatchedBy = it.MatchedBy
+	r.MatchedName = it.MatchedName
+	r.MatchedByAI = it.MatchedByAI
+
+	item := tidy.Item{
+		Path:   it.Path,
+		Title:  it.Title,
+		Artist: it.Artist,
+		Album:  it.Album,
+	}
+
+	if it.NeedLyric {
+		lrc, _ := search.FetchLyric(it.source, it.songmid, it.MatchedName, it.Artist, it.duration, it.hash)
+
+		// 写入前核验：平台返回的歌词未必对得上（数据错标 / 同名前缀串味）。
+		// **写错歌词比不写更糟** —— 用户会以为是真歌词，还失去了「缺歌词」这个可行动的信号。
+		//
+		// 核验对象是**本地曲目自称的身份**（item.Title/Artist）而不是命中候选的身份：
+		// 这样既挡得住平台错标，也挡得住「AI 挑错了歌」——后者正是风险最高的那类。
+		//
+		// 默认只核验 AI 挑的匹配（数量少、风险高、成本可控）；
+		// UseAIVerifyLyric 打开则对所有曲目核验（AI 调用量翻倍，慎用）。
+		if lrc != "" && opts.AIClient != nil && (opts.UseAIVerifyLyric || it.MatchedByAI) {
+			if v, ok := opts.AIClient.VerifyLyric(ctx, item.Artist, item.Title, lrc); ok && !v.Match {
+				r.LyricRejected = true
+				r.LyricRejectReason = v.Reason
+				lrc = ""
+			}
+		}
+		item.Lyric = lrc
+	}
+
+	if it.NeedCover && strings.TrimSpace(it.coverURL) != "" {
+		// ⚠️ `tidy.TidyOne` **不会**去下载封面 —— 它明确要求调用方把字节传进来
+		// （见 pkg/tidy/tidy.go 里那句「下载交给调用方」）。只填 CoverURL 是**没用的**，
+		// 结果只会得到一条 Skipped。所以这里必须自己下。
+		// 用 security.FetchImage：带 SSRF 防护、体积上限与魔数校验（不信任 Content-Type）。
+		if data, mime := security.FetchImage(it.coverURL, coverReferer(it.source)); len(data) > 0 {
+			item.CoverBytes = data
+			item.CoverMime = mime
+		}
+	}
+
+	if opts.UseAIGenre && opts.AIClient != nil {
+		item.Genre = inferGenre(ctx, opts.AIClient, item.Title, item.Artist)
+	}
+
+	// 写入前备份 —— 「撤销上一次补全」靠它。
+	// ⚠️ 备份失败就**跳过这个文件**：不能「备份失败还继续写」，
+	// 那等于悄悄剥夺了用户的回滚能力。
+	if opts.Backup != nil {
+		if err := opts.Backup.BeforeWrite(it.Path); err != nil {
+			r.Error = "备份原文件失败，已跳过：" + err.Error()
+			return r
+		}
+	}
+
+	// 写标签（格式嗅探 / MP3·FLAC 分支 / 外挂 .lrc 都在 tidy 里）
+	res := tidy.TidyOne(item, opts.Tidy)
+
+	// 记下这次新建了哪些 sidecar（.lrc / .jpg），撤销时要把它们删掉
+	if opts.Backup != nil {
+		opts.Backup.AfterWrite(it.Path)
+	}
+	r.OK = res.OK
+	r.Error = res.Error
+	r.LyricFilled = res.LyricEmbed || res.LyricFile
+	r.CoverFilled = res.CoverEmbed || res.CoverFile
+	r.GenreFilled = item.Genre != "" && res.MetaWritten
+	return r
+}

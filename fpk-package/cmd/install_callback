@@ -1,0 +1,10 @@
+#!/bin/bash
+# 安装后把二进制与生命周期脚本补上执行位。
+# ⚠️ 只处理本应用自己的二进制名 yinshu-ai —— 不要用 fn-lx-player，
+#    否则会去动并存的旧「极光音乐」的安装目录。
+APP_DIR="${TRIM_APPDEST:-$(cd "$(dirname "$0")/.." && pwd)}"
+chmod +x "${APP_DIR}/yinshu-ai" 2>/dev/null || true
+chmod +x "${APP_DIR}/app/yinshu-ai" 2>/dev/null || true
+chmod +x "${APP_DIR}/cmd/"* 2>/dev/null || true
+find "${APP_DIR}" -name "yinshu-ai" -exec chmod +x {} + 2>/dev/null || true
+exit 0
