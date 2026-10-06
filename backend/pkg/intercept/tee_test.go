@@ -102,6 +102,92 @@ func TestTeeDiscardsIncompleteFile(t *testing.T) {
 	}
 }
 
+// TestLibraryPartNamesAreUnique 与滚动缓存那条（TestRollingPartNamesAreUnique）对称。
+//
+// 曲库路径原来共用 `<虚拟id>.part`：同一条曲目被并发取两次（两台设备 / 重试与
+// 首次重叠 / 用户狂点重播）时，两股字节交错写进同一个文件，而两边各自都
+// 「写够了 expected」—— 于是一个**坏文件被当成完整文件提升进曲库**，之后这首歌
+// 永远播到一半。这个用例钉两件事：两次取流拿到不同的暂存文件；谁的字节只在谁的
+// 文件里（共用文件时这里会看到两股字节交错）。
+func TestLibraryPartNamesAreUnique(t *testing.T) {
+	h, dir := teeHarness(t)
+	aBody := strings.Repeat("A", 4096)
+	bBody := strings.Repeat("B", 4096)
+	resp := func() *http.Response {
+		return &http.Response{
+			StatusCode: 200, ContentLength: int64(len(aBody)),
+			Body: io.NopCloser(strings.NewReader(aBody)),
+		}
+	}
+	tr := teeTrack("41", "并发取的歌", "某人")
+	req := httptest.NewRequest(http.MethodGet, "/music/api/v1/track/stream?guid="+fakeID(41), nil)
+
+	a := h.it.beginTee(fakeID(41), tr, resp(), req)
+	b := h.it.beginTee(fakeID(41), tr, resp(), req)
+	if a == nil || b == nil {
+		t.Fatal("两次都该开出暂存")
+	}
+	if a.rolling || b.rolling {
+		t.Fatal("开关开着 → 这两份暂存都该是曲库那条路的")
+	}
+	if a.part == b.part {
+		t.Fatalf("⚠️ 同一条曲目的两次并发取流共用了同一个暂存文件：%s", a.part)
+	}
+	for _, tt := range []*teeTarget{a, b} {
+		if !strings.HasSuffix(tt.part, ".part") {
+			t.Errorf("暂存名仍该以 .part 结尾（启动清扫靠它认残骸）：%s", tt.part)
+		}
+		if !strings.HasPrefix(filepath.Base(tt.part), fakeID(41)) {
+			t.Errorf("暂存名该以虚拟 id 开头（便于对着目录排查）：%s", tt.part)
+		}
+		if filepath.Dir(tt.part) != filepath.Join(dir, teeSubdir) {
+			t.Errorf("曲库那条路的暂存该落在 %s 里：%s", filepath.Join(dir, teeSubdir), tt.part)
+		}
+	}
+
+	// 两位写者各写各的：文件里只能有它自己那一份字节。
+	for _, tc := range []struct {
+		tt   *teeTarget
+		want string
+	}{{a, aBody}, {b, bBody}} {
+		if _, err := (&teeWriter{w: io.Discard, t: tc.tt}).Write([]byte(tc.want)); err != nil {
+			t.Fatalf("写暂存失败：%v", err)
+		}
+	}
+	for _, tc := range []struct {
+		name string
+		tt   *teeTarget
+		want string
+	}{{"a", a, aBody}, {"b", b, bBody}} {
+		got, err := os.ReadFile(tc.tt.part)
+		if err != nil {
+			t.Fatalf("[%s] 读暂存失败：%v", tc.name, err)
+		}
+		if string(got) != tc.want {
+			t.Fatalf("[%s] 暂存文件里必须只有它自己那位写者的字节（共用文件时会看到交错）：%q", tc.name, got)
+		}
+	}
+
+	// 两边都「写够了」，各自都能提升 —— 最终进曲库的那份必须是**某一次的完整字节**，
+	// 不能是两次的混合（混了就是那个坏文件）。
+	h.it.finishTee(a, fakeID(41), tr, int64(len(aBody)), "mp3")
+	h.it.finishTee(b, fakeID(41), tr, int64(len(bBody)), "mp3")
+	it, ok := h.it.downloaded.Get(fakeID(41))
+	if !ok {
+		t.Fatal("写完该提升进曲库")
+	}
+	body, err := os.ReadFile(it.Path)
+	if err != nil {
+		t.Fatalf("读曲库文件失败：%v", err)
+	}
+	if string(body) != aBody && string(body) != bBody {
+		t.Fatalf("提升进曲库的必须是完整的某一份字节，不能是两股交错：%q", body)
+	}
+	if left, _ := filepath.Glob(filepath.Join(dir, teeSubdir, "*.part")); len(left) != 0 {
+		t.Fatalf("提升之后不该留下暂存文件：%v", left)
+	}
+}
+
 func TestTeeSkipsWhenItShould(t *testing.T) {
 	h, dir := teeHarness(t)
 	tr := teeTrack("3", "甲", "乙")

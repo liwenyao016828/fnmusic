@@ -253,6 +253,10 @@ type Interceptor struct {
 	dlMu  sync.Mutex
 	dlSet map[string]bool
 
+	// tee 是「边听边下」被客户端打断之后的后台续传任务簿（见 tee.go 的 teePool）。
+	// 零值可用 —— 只有真的起过一次续传才会建父 ctx 与登记表。
+	tee teePool
+
 	searcher     func(keyword, platform string, page, size int) []search.UnifiedSong
 	lxSearch     func(ctx context.Context, keyword string, limit int) ([]lxnode.Song, error)
 	lyricFetch   func(t online.Track) string

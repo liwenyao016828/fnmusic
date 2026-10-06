@@ -93,19 +93,7 @@ func (i *Interceptor) proxyMedia(w http.ResponseWriter, r *http.Request, t onlin
 		})
 		return
 	}
-	req.Header.Set("User-Agent", online.DesktopUA)
-	req.Header.Set("Accept", "*/*")
-	// 部分 CDN 会按 Referer 做防盗链，带上来源站的地址。
-	if ref := mediaReferer(t.Platform); ref != "" {
-		req.Header.Set("Referer", ref)
-	}
-	// **必须**转发 Range：进度条拖动、边听边存的中断续传都靠它。
-	if rng := r.Header.Get("Range"); rng != "" {
-		req.Header.Set("Range", rng)
-	}
-	// 不要压缩：音频已经是压缩格式，再套一层 gzip 只会让 Range 偏移对不上。
-	req.Header.Set("Accept-Encoding", "identity")
-
+	applyMediaHeaders(req, t, r.Header.Get("Range"))
 	resp, err := mediaClient.Do(req)
 	if err != nil {
 		i.logf("[INTERCEPT] 拉取媒体失败 %s：%v", t.RealID(), err)
@@ -142,8 +130,37 @@ func (i *Interceptor) proxyMedia(w http.ResponseWriter, r *http.Request, t onlin
 		_, _ = io.Copy(w, resp.Body)
 		return
 	}
-	_, _ = io.Copy(&teeWriter{w: w, t: tt}, resp.Body)
-	i.finishTee(tt, fake, t, resp.ContentLength, res.Format)
+	// 读侧单独包一层：io.Copy 的错误分不清「客户端不写了」还是「上游断了」，
+	// 而这两件事在收尾时完全不同 —— 前者可以把半截交接给后台续传，后者不能
+	// （见 tee.go 的 teeInterrupt）。
+	rd := &teeReadErr{r: resp.Body}
+	_, _ = io.Copy(&teeWriter{w: w, t: tt}, rd)
+	i.finishTeeAfterStream(tt, fake, t, resp.ContentLength, res.Format, teeInterrupt{
+		readErr: rd.err,
+		// net/http 在客户端断开（切歌 / 关页面 / 手机切网）时会取消请求上下文 ——
+		// 这是「客户端走了」最直接的证据，也是唯一需要判的东西（见 teeInterrupt）。
+		clientGone: r.Context().Err() != nil,
+	})
+}
+
+// applyMediaHeaders 给取媒体（第三方 CDN）的请求装上这一套头。
+//
+// 两个调用方必须完全一致，所以只有这一份：播放那条流（proxyMedia，Range 原样
+// 转发）与后台续传（tee.go 的 resumeInto，Range 是要补的那一段）。少一个头就
+// 会被 CDN 的防盗链挡在外面，而那种失败看起来像「源站偶尔抽风」。
+func applyMediaHeaders(req *http.Request, t online.Track, rng string) {
+	req.Header.Set("User-Agent", online.DesktopUA)
+	req.Header.Set("Accept", "*/*")
+	// 部分 CDN 会按 Referer 做防盗链，带上来源站的地址。
+	if ref := mediaReferer(t.Platform); ref != "" {
+		req.Header.Set("Referer", ref)
+	}
+	// **必须**带 Range：进度条拖动、边听边存的中断续传都靠它。
+	if rng = strings.TrimSpace(rng); rng != "" {
+		req.Header.Set("Range", rng)
+	}
+	// 不要压缩：音频已经是压缩格式，再套一层 gzip 只会让 Range 偏移对不上。
+	req.Header.Set("Accept-Encoding", "identity")
 }
 
 // mediaReferer 返回各平台 CDN 期望的 Referer。

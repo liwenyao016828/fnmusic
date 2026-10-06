@@ -88,6 +88,8 @@ func main() {
 	//   - socket 被陌生进程占着 → 拒绝接管并说明原因。
 	// 前一次接管崩在半路时，这里会先按 journal 把官方还原，再重新接管。
 	var tk *takeover.Manager
+	// ic 提到 if 外面：优雅关闭时要调它的 CloseTee（收掉在途的后台续传）。
+	var ic *intercept.Interceptor
 	// tkErr 非 nil 表示「接管开了但没接上」，交给状态接口如实报告。
 	var tkErr error
 	if takeover.Enabled() {
@@ -99,7 +101,7 @@ func main() {
 		// 官方音乐本身照常 —— 这是它必须守住的失效模式。
 		//
 		// Upstream 指向「让路后的官方 socket」：拦截层要读官方原始响应才能合并。
-		ic := intercept.New(intercept.Config{
+		ic = intercept.New(intercept.Config{
 			DataDir:  filepath.Join(*dataDir, "online"),
 			Upstream: takeover.UnixClient(opts.Upstream),
 			Logf:     log.Printf,
@@ -260,6 +262,14 @@ func main() {
 	log.Println("[SHUTDOWN] Stopping Aurora Music...")
 
 	server.StopScheduler()
+
+	// 收掉「边听边下」在途的后台续传：取消 + 等它们把半截删掉（最多几秒）。
+	// 不调也能退（进程会带走 goroutine），但会留下一堆 `.part`，要等下次启动
+	// 清扫而且只在超过 1 小时之后才会被清 —— 见 pkg/intercept/tee.go 的 CloseTee。
+	// 放在还 socket 之前：它是纯本地动作，不依赖官方 daemon 还在不在。
+	if ic != nil {
+		ic.CloseTee()
+	}
 
 	// 先还 socket，再关 HTTP。
 	//
