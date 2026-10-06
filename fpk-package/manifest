@@ -2,7 +2,7 @@ appname=yinshu-ai
 # ⚠️ 显示名（display_name）2026-09-28 由「音枢 AI」改成「曲率」，但 appname / desktop_applaunchname
 #    是**技术标识**，刻意保持 yinshu-ai 不变：飞牛应用中心靠它们判断"这是同一个应用"，
 #    改了会被当成**新应用**安装（旧应用不会升级、配置与数据不继承）。要换的话必须单独确认。
-version=2.1.116
+version=2.1.117
 display_name=曲率
 desc=曲率 —— 专为飞牛 NAS 打造的 AI 音乐中枢：在线播放、批量下载、曲库管理与去重整理一站式完成。支持导入第三方音源规则解析全网歌曲，深度适配 NAS 本地无损曲库与飞牛音乐刮削。
 source=thirdparty

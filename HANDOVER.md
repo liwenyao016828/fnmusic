@@ -22,7 +22,7 @@
 | **后端依赖** | **已引入第三方依赖**（`modernc.org/sqlite v1.36.1`，纯 Go）。旧版「零依赖」规则已作废，见 §2 规则二 |
 | **前端依赖** | vue / vite / tailwindcss / axios / lucide-vue-next / crypto-js / buffer / qrcode |
 | **打包** | `bash scripts/build.sh`，**不需要 fnpack** |
-| **当前版本** | `2.1.116`（代码与 manifest 已同步，见 §7） |
+| **当前版本** | `2.1.117`（代码与 manifest 已同步，见 §7） |
 | **名称** | 显示名 **曲率**（2026-09-28 由「音枢 AI」更名）；技术标识 **`yinshu-ai`**（`appname` / 启动项 / 包文件名 / API 身份串）**刻意不改** |
 | **改名红线** | 显示名随便改（`display_name`、界面、文档）；**`appname` 是技术标识，动之前必须单独跟用户确认** —— 它决定飞牛应用中心认不认"同一个应用"，改了就是新装一个，旧配置和数据不继承 |
 | **版本规则** | ⚠️ **只要改过代码就必须升版本号**（用户 2026-09-28 定），四处同步：`backend/pkg/api/server.go` 的 `CurrentVersion`、`fpk-package/manifest` 的 `version`、`RELEASE_NOTES.md` 顶部、本表。**不许用同一个版本号重打包** |

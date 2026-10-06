@@ -245,6 +245,17 @@ type Interceptor struct {
 	vMu    sync.Mutex
 	vCache map[string]vEntry
 
+	// albumMu/albumCache 缓存「合成好的在线专辑」（见 valbum.go 的 albumFor）。
+	// 与 vCache 分开是有意的：vCache 的键是虚拟**歌单** guid，而专辑 guid 是
+	// `<曲目虚拟 id>:album` —— 混进 vCache 就等于让歌单那几条路由把专辑 guid
+	// 当成虚拟歌单（写操作会被当成「只读歌单」透传，语义就串了）。
+	albumMu    sync.Mutex
+	albumCache map[string]albumEntry
+
+	// albumLogMu/albumLogged 让专辑那几条诊断日志**每类只打一条**（见 albumNoteOnce）。
+	albumLogMu  sync.Mutex
+	albumLogged map[string]bool
+
 	// platformsStatic 是构造时定下的平台列表（Config.Platforms 为 nil 时用它）。
 	platformsStatic []string
 
@@ -341,6 +352,8 @@ func New(cfg Config) *Interceptor {
 		onlineCache:     make(map[string]onlineCacheEntry, 32),
 		lyricCache:      make(map[string]lyricEntry, 64),
 		vCache:          make(map[string]vEntry, 8),
+		albumCache:      make(map[string]albumEntry, 8),
+		albumLogged:     map[string]bool{},
 		stats:           make(map[string]int, 32),
 	}
 	i.platformsStatic = platforms
@@ -449,6 +462,12 @@ func (i *Interceptor) buildRoutes() []route {
 		{get, apiPrefix + "/track/lyrics", i.handleLyricText},
 		{get, apiPrefix + "/detail/lyrics", i.handleLyricText},
 		{get, apiPrefix + "/search/track", i.handleSearch},
+		// 在线专辑（见 valbum.go）：搜索注入卡片、详情与曲目列表本地应答。
+		// 挂 `all` 而不是 `get`：非 GET/HEAD 的方法**认领后原样透传**，只多一条
+		// 一次性诊断（真机上能看出客户端到底用了什么方法）。
+		{all, apiPrefix + "/search/album", i.handleAlbumSearch},
+		{all, apiPrefix + "/track/album-detail/list", i.handleAlbumTrackList},
+		{all, apiPrefix + "/album", i.handleAlbumDetail},
 		// 搜索联想：官方库的联想词 + 在线源的前几条歌名（见 suggest.go）。
 		// 前缀挂载 —— 官方也用 `/search/suggest/<keyword>` 这种带子路径的写法
 		// （`route.matches` 允许「正好等于」与「前缀 + /」两种形态）。

@@ -144,13 +144,23 @@ func (t Track) RealID() string { return RealID(t.Platform, t.PlatformID) }
 // FakeID 返回本条曲目的虚拟 id。
 func (t Track) FakeID() string { return FakeID(t.RealID()) }
 
+// UnknownAlbum / UnknownArtist 是描述符补齐时写进去的**占位名**（见 Normalized）。
+//
+// 导出它们是为了让调用方分得清「这个名字是真的」还是「兜底占位」：专辑聚合要按
+// 专辑名归并（见 pkg/intercept/valbum.go），把「未知专辑」也当成一个专辑名去聚合
+// 就成了一锅粥 —— 而它到底是不是占位，只有这里知道。
+const (
+	UnknownAlbum  = "未知专辑"
+	UnknownArtist = "未知艺术家"
+)
+
 // Artist 返回艺术家拼接串。
 //
 // 官方 VO 的 `artist` 是单串（多艺术家用 `/` 连接），而 `artists` 是数组。
 // 两者必须同时提供：前端有的地方读 `artist`，有的地方遍历 `artists`。
 func (t Track) Artist() string {
 	if len(t.Artists) == 0 {
-		return "未知艺术家"
+		return UnknownArtist
 	}
 	return strings.Join(t.Artists, "/")
 }
@@ -162,7 +172,7 @@ func (t Track) Artist() string {
 // 兜底「未知专辑」）。
 func (t Track) AlbumName() string {
 	if strings.TrimSpace(t.Album) == "" {
-		return "未知专辑"
+		return UnknownAlbum
 	}
 	return t.Album
 }
@@ -180,12 +190,12 @@ func (t Track) Normalized() Track {
 		}
 	}
 	if len(cleaned) == 0 {
-		cleaned = []string{"未知艺术家"}
+		cleaned = []string{UnknownArtist}
 	}
 	out.Artists = cleaned
 
 	if strings.TrimSpace(out.Album) == "" {
-		out.Album = "未知专辑"
+		out.Album = UnknownAlbum
 	}
 	if out.Duration < 0 {
 		out.Duration = 0
