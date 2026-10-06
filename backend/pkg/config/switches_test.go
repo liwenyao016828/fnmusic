@@ -44,12 +44,6 @@ func TestSwitchesSurviveRestart(t *testing.T) {
 		t.Fatal("⚠️ lyric_auto_download 被显式关掉了，重启后又变回「开」")
 	}
 	if g.CoverEmbedOn() {
-		if !g.LXServerOn() {
-			t.Fatal("lx_server_enabled 该活过重启（显式开的那个方向）")
-		}
-		if g.LXServerPort != 18925 {
-			t.Fatalf("lx_server_port 该活过重启，得到 %d", g.LXServerPort)
-		}
 		t.Fatal("⚠️ cover_embed 被显式关掉了，重启后又变回「开」")
 	}
 
@@ -77,12 +71,6 @@ func TestSwitchesSurviveRestart(t *testing.T) {
 		t.Fatal("显式关掉的那两个该活过重启")
 	}
 	if !g4.LyricAutoDownloadOn() || !g4.CoverEmbedOn() {
-		if g4.LXServerOn() {
-			t.Fatal("显式关掉的 lx_server_enabled 该活过重启")
-		}
-		if g4.LXServerPort != 0 {
-			t.Fatal("lx_server_port=0 该保持 0（0 = 用缺省端口）")
-		}
 		t.Fatal("显式打开的那两个该活过重启")
 	}
 }
@@ -97,9 +85,6 @@ func TestSwitchDefaultsDistinguishUnsetFromExplicit(t *testing.T) {
 		t.Fatal("缺省关的两个：nil 该是关")
 	}
 	if !fresh.LyricAutoDownloadOn() || !fresh.CoverEmbedOn() {
-		if fresh.LXServerOn() {
-			t.Fatal("⚠️ lx_server_enabled 缺省必须是关 —— 打开它会让第三方脚本跑在服务端，破掉「后端不执行第三方 JS」")
-		}
 		t.Fatal("缺省开的两个：nil 该是开（老配置里没这两个键，nil 当关会让老用户静默掉档次）")
 	}
 	on, off := true, false
@@ -109,5 +94,65 @@ func TestSwitchDefaultsDistinguishUnsetFromExplicit(t *testing.T) {
 	}
 	if explicit.LyricAutoDownloadOn() || explicit.CoverEmbedOn() {
 		t.Fatal("显式关的两个该是关")
+	}
+}
+
+// 服务端洛雪宿主的两个键：**独立**验，不塞进别的用例里。
+//
+// 为什么单独写：上一版我图省事往已有用例里插断言，锚在 `if …{` 这种条件行之后，
+// 断言被塞进花括号内部 —— 条件为假时永远不执行，测试照样绿。
+// **变异校验把它抓出来了**（把缺省改成「开」，用例竟然还是过）。假绿比没有测试更糟。
+func TestLXServerKeysAreOffByDefaultAndSurviveRestart(t *testing.T) {
+	// ① 缺省必须是关：打开它 = 第三方音源脚本跑在服务端，
+	//    破掉「后端不执行第三方 JS」这条边界，必须用户显式打开。
+	var fresh AppConfig
+	if fresh.LXServerOn() {
+		t.Fatal("⚠️ lx_server_enabled 缺省必须是关")
+	}
+
+	dir := t.TempDir()
+	cm, err := NewConfigManager(dir, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	on := true
+	c := cm.Get()
+	c.LXServerEnabled = &on
+	c.LXServerPort = 18925
+	if err := cm.Update(c); err != nil {
+		t.Fatal(err)
+	}
+
+	// ② 显式打开 + 端口都要活过重启。
+	cm2, err := NewConfigManager(dir, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := cm2.Get()
+	if !g.LXServerOn() {
+		t.Fatal("lx_server_enabled 该活过重启（显式开的那个方向）")
+	}
+	if g.LXServerPort != 18925 {
+		t.Fatalf("lx_server_port 该活过重启，得到 %d", g.LXServerPort)
+	}
+
+	// ③ 显式关掉也要活过重启。
+	off := false
+	c3 := cm2.Get()
+	c3.LXServerEnabled = &off
+	c3.LXServerPort = 0
+	if err := cm2.Update(c3); err != nil {
+		t.Fatal(err)
+	}
+	cm3, err := NewConfigManager(dir, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g3 := cm3.Get()
+	if g3.LXServerOn() {
+		t.Fatal("显式关掉的 lx_server_enabled 该活过重启")
+	}
+	if g3.LXServerPort != 18925 {
+		t.Fatal("端口传 0 该表示「不改动」，应保持 18925")
 	}
 }
