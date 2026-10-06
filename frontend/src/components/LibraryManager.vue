@@ -1,11 +1,11 @@
 <template>
   <PageShell
     title="曲库管家"
-    desc="推送订阅、批量下载与补全整理 —— 曲库的日常维护都在这里（AI 大模型的设置已挪到「账号连接」）"
+    desc="推送订阅、批量下载、补全整理与榜单管理 —— 曲库的日常维护都在这里（AI 大模型的设置已挪到「账号连接」）"
   >
     <template #title-extra>
       <span class="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 font-mono text-[10px] text-emerald-600">
-        推送 · 下载 · 整理
+        推送 · 下载 · 整理 · 榜单
       </span>
     </template>
 
@@ -1019,6 +1019,18 @@
         </div>
       </template>
 
+      <!-- ══ 榜单管理（v2.1.119 从「发现音乐」搬进来）══ -->
+      <!--
+        组件内部零改动：勾选/开关/榜单列表缓存都是它自己的（配置状态在
+        services/chartInject.js 模块级单例里，跨页面共享 —— 「排行榜单」卡片上的
+        「已注入」徽标与这里的勾选仍是同一份事实）。
+        ▶ 预览按钮：原来 emit 给发现页的兄弟组件，现在隔了一层（发现页在别的顶层视图），
+          改走导航总线（navigateTo('search', { chartPreview })）—— 见 setup 里的说明。
+      -->
+      <template v-else-if="activeTab === 'charts'">
+        <ChartManager @preview="onChartPreview" />
+      </template>
+
       <!-- 全局提示：成功给一句结论；失败给一句原因 + 「查看日志」入口 -->
       <InlineNotice :text="message" tone="ok" />
       <InlineNotice :text="error" />
@@ -1173,10 +1185,11 @@ import {
   sidebarStatusItems, completePercent as _completePercent, aiMatchedCount as _aiMatchedCount,
   completeDoneText, completeTitleText as _completeTitleText,
 } from '../services/libraryView'
-import { FolderOpen, Trash2, Wand2, Send, Download, ListMusic, Loader2, AlertTriangle, Check, Image as ImageIcon } from 'lucide-vue-next'
+import { FolderOpen, Trash2, Wand2, Send, Download, ListMusic, Loader2, AlertTriangle, Check, Image as ImageIcon, Trophy } from 'lucide-vue-next'
 import PageShell from './PageShell.vue'
 import DownloadQueueView from './DownloadQueueView.vue'
 import PlaylistDownload from './PlaylistDownload.vue'
+import ChartManager from './ChartManager.vue'
 import SelectField from './SelectField.vue'
 import InlineNotice from './InlineNotice.vue'
 import { downloadManager } from '../services/downloadManager'
@@ -1229,6 +1242,17 @@ function goTab(id) {
   applyTab(id)
 }
 
+/**
+ * 榜单管理页点某行的 ▶「看一眼」：跳到发现页的「排行榜单」并打开那张榜单的详情。
+ *
+ * 搬进管家之前这件事是兄弟组件间的一次 emit；现在发现页在另一个顶层视图里，
+ * 直接 import 会成环（SearchView → LibraryManager → SearchView），
+ * 所以走导航总线：App.vue 负责切视图并把负载转给 SearchView（见 App.vue 的 onNavigate）。
+ */
+function onChartPreview(item) {
+  navigateTo('search', { chartPreview: item })
+}
+
 function applyTab(id) {
   // 落到「下载」时顺带决定看哪个子视图：从歌单入口来的看歌单，其余看队列
   if (id === 'playlist') downloadSub.value = 'playlist'
@@ -1243,6 +1267,10 @@ const tabs = computed(() => [
   // 补全整理：一页走完「看缺什么 → 勾字段 → 预览 → 确认 → 回读结果」，
   // 体检/索引/查重的结果都在同页下方，不再单独占一个标签。
   { id: 'complete', name: '补全整理', icon: Wand2, count: gapsPendingCount.value || '' },
+  // 榜单管理（v2.1.119 从「发现音乐 → ⚙️ 榜单管理」搬进来）：
+  // 「哪些榜单出现在飞牛音乐里」是曲库的日常维护 —— 与推送/下载/补全同属一页说得通。
+  // 组件内部零改动（勾选/开关/缓存都是它自己的），这里只管挂载与跳转。
+  { id: 'charts', name: '榜单管理', icon: Trophy },
 ])
 
 /**
@@ -1922,6 +1950,9 @@ const metrics = computed(() => {
   //   · 体检卡片：文件真实扫描（总数 / 缺歌词 / 缺封面 / 两者都缺）
   // 上面再摆四张大卡就是第三份重复，而且三处口径不同、数字还会打架。
   if (activeTab.value === 'complete') return []
+
+  // 榜单管理：组件自带「已选 N / 总数」徽标，页面级指标行同样会构成第三份口径。
+  if (activeTab.value === 'charts') return []
 
   // 其余侧栏项（推送已在上面处理）没有可量化指标
   return []

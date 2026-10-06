@@ -15,7 +15,7 @@ const listeners = new Set()
 
 /**
  * 订阅导航请求。
- * @param {(view: string) => void} fn
+ * @param {(view: string, payload?: any) => void} fn
  * @returns {() => void} 取消订阅
  */
 export function onNavigate(fn) {
@@ -24,12 +24,18 @@ export function onNavigate(fn) {
   return () => listeners.delete(fn)
 }
 
-/** 请求跳转到某个顶层视图（如 'logs' / 'sources' / 'accounts'） */
-export function navigateTo(view) {
+/**
+ * 请求跳转到某个顶层视图（如 'logs' / 'sources' / 'accounts'）。
+ *
+ * `payload` 可选：少数跳转要带数据过去（v2.1.119 榜单管理搬进曲库管家后，
+ * 它的「▶ 看一眼这张榜单」要从管家跳回发现页并打开那张榜单 —— 榜单对象
+ * 就是跟着这一步带过去的）。不传时订阅者收到 undefined，老订阅者不受影响。
+ */
+export function navigateTo(view, payload) {
   if (!view) return
   for (const fn of listeners) {
     try {
-      fn(view)
+      fn(view, payload)
     } catch (_) {
       // 单个订阅者出错不应影响其他订阅者
     }

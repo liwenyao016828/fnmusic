@@ -11,7 +11,9 @@
 
 /** 侧栏项：合并前的旧 id 会留在浏览器偏好和其他组件的跳转参数里，必须映射 */
 export const LEGACY_TABS = { tidy: 'complete', playlist: 'download', ai: 'push' }
-export const TAB_IDS = new Set(['push', 'download', 'complete'])
+// charts（榜单管理）是 v2.1.119 从「发现音乐 → ⚙️ 榜单管理」搬进来的第四个侧栏项；
+// 它没有旧 id（搬进来之前不在这张侧栏里），所以不出现在 LEGACY_TABS。
+export const TAB_IDS = new Set(['push', 'download', 'complete', 'charts'])
 
 /**
  * 把外部传来的侧栏项 id 归一化。

@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   LEGACY_TABS,
+  TAB_IDS,
   normalizeLibraryTab,
   lastScanText,
   gapsAtText,
@@ -20,10 +21,23 @@ test('normalizeLibraryTab：旧 id 落到新位置，认不出来的落到推送
   assert.equal(normalizeLibraryTab('tidy'), 'complete')
   assert.equal(normalizeLibraryTab('playlist'), 'download')
   assert.equal(normalizeLibraryTab('ai'), 'push')
-  for (const id of ['push', 'download', 'complete']) assert.equal(normalizeLibraryTab(id), id)
+  for (const id of ['push', 'download', 'complete', 'charts']) assert.equal(normalizeLibraryTab(id), id)
   // 空 / 垃圾 / 已删除的页：都不能落空（模板里没有 v-else 兜底，落空就只剩标题栏）
   for (const bad of ['', null, undefined, 'nope', 'setting']) assert.equal(normalizeLibraryTab(bad), 'push')
   assert.deepEqual(Object.keys(LEGACY_TABS).sort(), ['ai', 'playlist', 'tidy'])
+})
+
+test('TAB_IDS：榜单管理（charts）是曲库管家的第四个侧栏项（v2.1.119 搬入）', () => {
+  // charts 必须是合法侧栏项 —— 否则从「排行榜单」指路按钮跳过来会被 normalize
+  // 悄悄落回「推送」，用户看到的就是「点了没反应」。
+  assert.ok(TAB_IDS.has('charts'), 'charts 应在 TAB_IDS 里')
+  assert.deepEqual([...TAB_IDS].sort(), ['charts', 'complete', 'download', 'push'])
+  // 它是 v2.1.119 新增的，没有旧身份：LEGACY_TABS 里**不许**出现 charts ——
+  // 出现意味着有人给新页编了个「旧 id」，会掩盖真正的跳转 bug。
+  assert.ok(!('charts' in LEGACY_TABS))
+  // 搬进来之后，旧偏好里可能还留着 discover_tab='manage'（发现页旧胶囊的键）。
+  // 那个键已不归管家管 —— charts 走的是 library_tab，两个键不许再串。
+  assert.equal(normalizeLibraryTab('manage'), 'push', 'manage 不是管家的侧栏项，别把发现页的旧 tab 键混进来')
 })
 
 test('lastScanText：scanned_at 是「秒」，不是毫秒', () => {

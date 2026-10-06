@@ -297,7 +297,19 @@ const currentView = ref('search')
 
 // 组件里的「查看日志」等入口通过导航总线请求切视图 —— 免去给每个组件加 emit + props
 // （见 services/navBus.js 的说明）。currentView 的归属不变，这里只是多接一个触发源。
-const offNavigate = onNavigate((view) => { currentView.value = view })
+//
+// payload 走两条路由（v2.1.119 榜单管理搬进曲库管家后出现的两类跳转）：
+//   · { chartPreview } —— 管家 → 发现：交给 SearchView 自己打开那张榜单；
+//   · { chartManager } —— 发现 → 管家：这里切到曲库管家并把管家落到「榜单管理」侧栏项。
+//     用自增 nonce 而不是只设 libraryTab：管家对已挂载实例的记忆在它内部，
+//     光改 prop 不一定触发它的 watch（与 openQueuePage 同一套做法）。
+const offNavigate = onNavigate((view, payload) => {
+  currentView.value = view
+  if (payload?.chartManager) {
+    libraryTab.value = 'charts'
+    libraryNavNonce.value++
+  }
+})
 
 // 滑动切页的视图顺序（computed 是惰性的，即使 navItems 声明在后面也不会踩 TDZ）
 const swipeOrderList = computed(() => navItems.map((item) => item.id))

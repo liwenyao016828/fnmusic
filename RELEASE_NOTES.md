@@ -1,3 +1,43 @@
+## 曲率 (yinshu-ai) v2.1.119
+
+**榜单管理搬进曲库管家；底部播放条默认隐藏 + 搜索框滑出动画；README 对照真实代码重写（纯前端 + 文档版，后端零改动）**
+
+- **「榜单管理」搬进「曲库管家」**（`frontend/src/components/ChartManager.vue` 内部逻辑零改动，只换挂载位置）：
+  - 曲库管家侧栏从三项变四项：推送 / 下载 / 补全整理 / **榜单管理**（`charts`）。
+    复用的是管家**现有的**侧栏结构与切换逻辑（`activeTab` + `library_tab` 偏好 +
+    `normalizeLibraryTab` 归一化），没有另起一套 —— `services/libraryView.js` 的
+    `TAB_IDS` 加了 `charts`（无旧 id，`LEGACY_TABS` 不动）。
+  - 发现页的「⚙️ 榜单管理」胶囊、挂载点、`switchDiscoverTab('manage')` 全部撤除；
+    `discover_tab` 合法值只剩 `'charts' | 'playlists'`。指路按钮改为跳管家
+    （`navigateTo('search', { chartManager: true })`），不留死链、不留死键。
+  - 「▶ 看一眼这张榜单」原来是兄弟组件间的一次 emit；隔了顶层视图后直接 import 会成环
+    （SearchView → LibraryManager → SearchView），改走导航总线：
+    `services/navBus.js` 的 `navigateTo(view, payload)` 增加可选负载参数（老调用方不传，行为不变），
+    管家发 `{ chartPreview: item }`、App.vue 转发给 SearchView 打开榜单详情。
+  - 页面级指标行在 charts 子页**不渲染**（组件自带「已选 N / 总数」徽标，再摆一排大卡是第三份口径）。
+- **底部播放条默认隐藏 + 搜索框滑出**（`frontend/src/components/PlayerBar.vue` + `style.css`）：
+  - 默认只剩右下角一颗搜索图标（两种形态同一位置）；点图标 → 搜索框从图标位置
+    **滑动放大**出来（`transform-origin: 100% 100%` + scale/translateY/opacity，
+    240ms，只碰 transform/opacity 走合成器通道，不触发重排）；
+  - 状态机在 `services/playerBarSearch.js`（纯函数 + 10 条单测）：
+    收回触发源五类（点别处 / 提交 / 开始播放 / Esc / 8 秒超时），豁免两条件
+    （**聚焦绝不收**是硬规则压过一切；有词未提交只豁免「闲置类」触发 ——
+    提交/播放/Esc 是明确意图信号，有词也收。第一版实现把「有词」写成了全局豁免，
+    测试当场抓出「提交时收不掉」的 bug，已修）；
+  - `prefers-reduced-motion: reduce` 双保险：CSS `@media` 块 + JS `matchMedia` 探测加
+    `.ys-barsearch--now` 类，都把时长清零直接显隐；
+  - 可访问性：搜索图标是真 `<button>`（键盘可达、带 aria-label）、输入框 aria-label、
+    Esc 在框内（input keydown）与框外（document capture 级 keydown）都有逃生口；
+  - 播放控制一个没丢：播放/暂停/进度/上下首/模式/音量/歌词/全屏/收起全保留，
+    搜索框只是叠加层（z-50 高于播放条），收回即回到原状。
+- **README.md 全面重写**（对照实际代码，不是在旧文上改两句）：功能清单按前端真实页面与
+  `catalog.go` 真实分组重排；架构一段话（Go 后端 / Vue3 前端 / musicdl sidecar / 服务端洛雪宿主 /
+  官方页面接管层）；fpk 手动安装；配置键逐个对照 `config.go` 的 `AppConfig` 与真实环境变量；
+  **服务端洛雪宿主明确写出「执行第三方 JS」且缺省关**；安全（端口 / `none/lan/token` 鉴权分层）；
+  开发与验收命令；版本与变更记录指引。数字全部现场重数：接口 **131**（core 96 / internal 35，
+  16 分组）、Go **33** 包、前端用例 **287** 条（20 文件）、组件 **30** 个、musicdl 注册源 **56**。
+- 后端 Go 代码**零改动**（版本常量除外）；`go build ./...` 与 `go test ./...`（32 包）仍全绿。
+
 ## 曲率 (yinshu-ai) v2.1.118
 
 **每日推荐多了第三层：大模型推荐（`daily_llm_enabled`，默认关，要显式打开）**

@@ -9,8 +9,10 @@
       · 封面 38×38 `rounded-md`（不是圆形）、歌曲信息块最宽 234px
 
     三个形态，高度一致（手机 64 / 桌面 72）：
-      空态 = 安静占位（不重复发现页的搜索）｜ 播放态 = 控制 + 封面信息进度 + 功能 ｜ 折叠态 = 细条
-    ⚠️ 响应式靠分级隐藏，不用 transform: scale()。
+      默认 = 右下角一颗搜索图标（v2.1.119 起播放条默认隐藏）｜
+      搜索态 = 搜索框从图标位置滑出（覆盖/代替播放条）｜
+      播放态 = 控制 + 封面信息进度 + 功能 ｜ 折叠态 = 细条
+    ⚠️ 响应式靠分级隐藏，不用 transform: scale()（滑出动画的 scale 是搜索框的入场动效，与布局无关）。
   -->
   <!--
     浮动播放栏（2026-09-28 按用户要求改）：整条**不再占一行布局**，改成浮在内容之上。
@@ -32,12 +34,25 @@
       </button>
     </div>
 
-    <!-- ── 空态：搜索卡片（**搜索的家就在这里** —— 用户 2026-09-28 明确：
-         「保留底部播放栏搜索，去掉发现音乐页面的搜索」）—— 高度与播放态一致 ── -->
-    <div v-else-if="!currentSong" class="px-3 pb-2 sm:pb-3">
+    <!--
+      ── 搜索框（两种形态共用；v2.1.119 起整条播放栏默认隐藏，这里是滑出的那一框）──
+      · hidden 态：底部右下角只有一颗搜索图标（固定位置，两种形态都在同一个位置）；
+      · 点图标 → 本框从图标位置滑动放大出来（transform-origin 右下角，scale + 位移，
+        见 style.css 的 .ys-barsearch；reduced-motion 下直接显隐）；
+      · 聚焦绝不收、有词不算闲置；点别处 / 超时 8s / 提交 / 开始播放 / Esc → 滑回图标位置。
+      状态机在 services/playerBarSearch.js（纯函数，有单测），这里只翻译 DOM 事件。
+      ⚠️ 本框 z-50 高于播放态胶囊：播放条可见时展开搜索，框叠在条上方 —— 两者都完整可见。
+    -->
+    <div
+      v-if="searchOpen"
+      class="pointer-events-auto fixed inset-x-0 bottom-0 z-50 px-3 pb-2 sm:pb-3"
+      @focusout="onSearchFocusOut"
+    >
       <form
+        ref="searchBoxRef"
         @submit.prevent="submitSearch"
-        class="ys-glass ys-player-glass ys-player pointer-events-auto mx-auto flex h-[64px] items-center gap-3 px-4 sm:h-[72px]"
+        class="ys-glass ys-player-glass ys-player ys-barsearch mx-auto flex h-[64px] items-center gap-3 px-4 sm:h-[72px]"
+        :class="reducedMotion ? 'ys-barsearch--now' : ''"
       >
         <span class="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-white/10 text-emerald-400/70">
           <Disc3 class="h-4 w-4" />
@@ -48,10 +63,13 @@
             v-model="searchQuery"
             type="search"
             placeholder="搜索歌曲、歌手、专辑…"
-            title="搜索歌曲、歌手、专辑"
+            title="搜索歌曲、歌手、专辑（Esc 收起）"
+            aria-label="搜索歌曲、歌手、专辑"
+            @focus="onSearchFocus"
+            @keydown.esc.prevent="collapseSearch({ escape: true })"
             class="w-full bg-transparent text-[13px] font-semibold text-white/90 placeholder:text-white/45 focus:outline-none"
           />
-          <small class="block truncate text-[11px] text-white/35">也可以直接粘贴歌单链接</small>
+          <small class="block truncate text-[11px] text-white/35">也可以直接粘贴歌单链接 · Enter 搜索</small>
         </span>
         <button
           type="submit"
@@ -64,8 +82,26 @@
       </form>
     </div>
 
-    <!-- ── 播放态 ── -->
-    <div v-else class="px-3 pb-2 sm:pb-3">
+    <!--
+      ── 搜索图标（hidden 态唯一可见物；两种形态同一位置 —— 右下角）──
+      键盘可达：真正的 button；aria-expanded 恒为 false 是因为展开后本按钮卸载、
+      搜索框内的输入框接住焦点（那个框自带 aria-label 与 Esc 说明）。
+    -->
+    <button
+      v-else
+      ref="searchIconRef"
+      type="button"
+      @click="openSearch"
+      title="搜索"
+      aria-label="搜索歌曲、歌手、专辑"
+      aria-expanded="false"
+      class="ys-glass ys-player-glass ys-barsearch-icon pointer-events-auto fixed bottom-2 right-3 z-50 grid h-11 w-11 place-items-center rounded-full text-white/85 transition-colors hover:text-white sm:bottom-3"
+    >
+      <Search class="h-4 w-4" />
+    </button>
+
+    <!-- ── 播放态（常驻控制；搜索不再是它的一部分）── -->
+    <div v-if="!collapsed && currentSong && !searchOpen" class="px-3 pb-2 sm:pb-3">
       <div class="ys-glass ys-player-glass ys-player pointer-events-auto relative mx-auto flex h-[64px] items-center gap-2 overflow-hidden px-3 sm:h-[72px] sm:px-4">
 
         <!-- 底色层：封面放大 + 模糊 + 压暗（对应它的 `background: CV`） -->
@@ -115,25 +151,9 @@
           </button>
         </div>
 
-        <!-- 中：搜索输入（点了右侧放大镜就换过来） -->
-        <div v-if="searchMode" class="relative flex min-w-0 flex-1 items-center gap-2">
-          <input
-            ref="searchInputRef"
-            v-model="searchQuery"
-            type="search"
-            placeholder="搜索歌曲、歌手、专辑…"
-            @keyup.enter="submitSearch"
-            class="min-w-0 flex-1 rounded-full bg-white/10 px-3 py-2 text-[13px] text-white/90 placeholder:text-white/45 focus:outline-none"
-          />
-          <button
-            @click="cancelSearch"
-            title="取消搜索"
-            class="grid h-8 w-8 shrink-0 place-items-center rounded-full text-white/60 transition-colors hover:bg-white/10 hover:text-white"
-          ><X class="h-4 w-4" /></button>
-        </div>
-
-        <!-- 中：封面 + 歌曲信息 + 进度（弹性区） -->
-        <div v-else class="relative flex min-w-0 flex-1 items-center gap-2.5">
+        <!-- 中：封面 + 歌曲信息 + 进度（弹性区）。
+             搜索（v2.1.119）改由右下角图标滑出的独立搜索框承担 —— 这里不再内嵌输入框。 -->
+        <div class="relative flex min-w-0 flex-1 items-center gap-2.5">
           <button
             @click="$emit('toggle-fullscreen')"
             class="grid h-[38px] w-[38px] shrink-0 place-items-center overflow-hidden rounded-md bg-white/10 text-white/50 transition-transform hover:scale-[1.03]"
@@ -175,7 +195,7 @@
         <!-- 右：功能按钮（搜索 / 歌词 / 音量 / 播放页 / 收缩） -->
         <div class="relative flex shrink-0 items-center gap-0.5 sm:gap-1.5">
           <button
-            @click="searchMode = true"
+            @click="openSearch"
             title="搜索"
             class="grid h-9 w-9 place-items-center rounded-full text-white/55 transition-colors hover:bg-white/10 hover:text-white"
           ><Search class="h-4 w-4" /></button>
@@ -217,12 +237,20 @@
 </template>
 
 <script setup>
-import { ref, computed, nextTick, watch } from 'vue'
+import { ref, computed, nextTick, onMounted, onUnmounted, watch } from 'vue'
 import {
   Play, Pause, SkipBack, SkipForward, Shuffle, Repeat, Repeat1,
   Volume2, Volume1, VolumeX, Maximize, Music, Loader2,
-  Disc3, ChevronDown, ChevronUp, Search, X,
+  Disc3, ChevronDown, ChevronUp, Search,
 } from 'lucide-vue-next'
+import {
+  SEARCH_ANIM_MS,
+  SEARCH_OPEN_TIMEOUT_MS,
+  blurOutcome,
+  iconClickNext,
+  shouldCollapseSearch,
+  timeoutNext,
+} from '../services/playerBarSearch'
 
 const props = defineProps({
   currentSong: Object,
@@ -240,27 +268,118 @@ const emit = defineEmits([
   'toggle-view', 'volume-change', 'update:playMode', 'toggle-collapse', 'search',
 ])
 
-// ── 搜索入口（搜索的家在播放栏：用户 2026-09-28 定的）──
+// ── 搜索滑出/收回（v2.1.119 状态机：逻辑在 services/playerBarSearch.js，有单测）──
+//
+// 状态：searchOpen=false（只剩右下角搜索图标）| true（搜索框已滑出）。
+// 收回触发源五类：点别处 / 提交 / 开始播放 / Esc / 8 秒超时；
+// 豁免两条件：输入框聚焦、有词未提交（trim 后判）。判据全在 shouldCollapseSearch。
 const searchQuery = ref('')
-const searchMode = ref(false)
+const searchOpen = ref(false)
 const searchInputRef = ref(null)
+const searchBoxRef = ref(null)
+const searchIconRef = ref(null)
+let searchTimer = null
+
+/** 系统「减弱动效」：开着就跳过过渡（CSS 里同步有 @media 兜底，这里再收一层） */
+const reducedMotion = ref(false)
+let mq = null
+function onMqChange(e) { reducedMotion.value = !!e.matches }
+
+onMounted(() => {
+  if (typeof window !== 'undefined' && window.matchMedia) {
+    mq = window.matchMedia('(prefers-reduced-motion: reduce)')
+    reducedMotion.value = !!mq.matches
+    // addEventListener 是新式 API；老 Safari 只有 addListener —— 两者都挂，谁有挂谁
+    if (mq.addEventListener) mq.addEventListener('change', onMqChange)
+    else if (mq.addListener) mq.addListener(onMqChange)
+  }
+  // 点框外收回：capture 阶段监听，免得子组件 stopPropagation 把它绕过去
+  document.addEventListener('pointerdown', onDocPointerDown, true)
+  document.addEventListener('keydown', onDocKeydown, true)
+})
+onUnmounted(() => {
+  disarmSearchTimer()
+  if (mq) {
+    if (mq.removeEventListener) mq.removeEventListener('change', onMqChange)
+    else if (mq.removeListener) mq.removeListener(onMqChange)
+  }
+  document.removeEventListener('pointerdown', onDocPointerDown, true)
+  document.removeEventListener('keydown', onDocKeydown, true)
+})
+
+function armSearchTimer() {
+  disarmSearchTimer()
+  searchTimer = setTimeout(() => {
+    searchTimer = null
+    // 到点再问一次快照（竞态兜底）：这 8 秒里用户可能已经聚焦/输入 —— 那就不收
+    collapseSearch({ timeout: true })
+  }, SEARCH_OPEN_TIMEOUT_MS)
+}
+function disarmSearchTimer() {
+  if (searchTimer) { clearTimeout(searchTimer); searchTimer = null }
+}
+
+/** 统一收回入口：快照交给状态机裁决，裁决要收才真的收 */
+function collapseSearch(snapshot) {
+  if (!searchOpen.value) return
+  if (!shouldCollapseSearch({ focus: searchFocused.value, query: searchQuery.value, ...snapshot })) {
+    armSearchTimer() // 没收成 = 用户还在用，续上哨兵
+    return
+  }
+  searchOpen.value = false
+  disarmSearchTimer()
+  searchQuery.value = ''
+}
+
+/** 展开搜索框：从图标位置滑出来（动画走 CSS transform，见 .ys-barsearch） */
+function openSearch() {
+  const next = iconClickNext(searchOpen.value ? 'open' : 'hidden')
+  searchOpen.value = next.state === 'open'
+  if (searchOpen.value) {
+    armSearchTimer()
+    nextTick(() => searchInputRef.value?.focus())
+  }
+}
+
+/** 输入框聚焦：硬豁免 —— 收回哨兵立刻拆掉（聚焦期间谁都收不走） */
+const searchFocused = ref(false)
+function onSearchFocus() {
+  searchFocused.value = true
+  disarmSearchTimer()
+}
+/** 失焦：空词就收、有词留着（用户可能正要点搜索按钮） */
+function onSearchFocusOut(e) {
+  if (searchBoxRef.value?.contains(e.relatedTarget)) return // 焦点还在框内（点提交按钮）
+  searchFocused.value = false
+  if (blurOutcome(searchQuery.value) === 'collapse') collapseSearch({ outside: true })
+  else armSearchTimer()
+}
+/** 点了框外：不抢聚焦收回的活，只按「点别处」判一次 */
+function onDocPointerDown(e) {
+  if (!searchOpen.value) return
+  if (searchBoxRef.value?.contains(e.target)) return
+  if (searchIconRef.value?.contains(e.target)) return // 点图标是展开/续命，不算「别处」
+  collapseSearch({ outside: true })
+}
+/** Esc：全局逃生口（焦点不在输入框里时兜底；框内那份由 input 的 keydown 处理） */
+function onDocKeydown(e) {
+  if (!searchOpen.value || e.key !== 'Escape') return
+  if (searchBoxRef.value?.contains(e.target)) return
+  collapseSearch({ escape: true })
+}
+
+/** 开始播放 = 意图信号，收回（判据在状态机里：有词也收，因为词没在提交路径上） */
+watch(() => props.isPlaying, (playing) => {
+  if (playing) collapseSearch({ playing: true })
+})
 
 /** 提交搜索：把词交给 App.vue（它负责切到发现页并把词转给 SearchView 去执行） */
 function submitSearch() {
   const q = searchQuery.value.trim()
   if (!q) return
   emit('search', q)
-  cancelSearch()
+  collapseSearch({ submitting: true })
 }
-function cancelSearch() {
-  searchMode.value = false
-  searchQuery.value = ''
-}
-watch(searchMode, async (on) => {
-  if (!on) return
-  await nextTick()
-  searchInputRef.value?.focus()
-})
 
 const volume = ref(0.8)
 const isMuted = ref(false)

@@ -486,3 +486,36 @@ html[data-swiping='1'] .ys-player-glass {
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
 }
+
+/* ============================================================================
+   播放栏搜索框的滑出（v2.1.119）—— 底部播放栏默认隐藏后的那条通路
+   · 展开点：右下角的搜索图标（fixed bottom-right）。框从那里**滑动放大**出来：
+     transform-origin 定在图标那一角（右下），scale 0.85→1 + 少量位移 + 淡入。
+   · 只碰 transform / opacity：合成器通道，不触发 layout/paint，掉不了帧。
+   · prefers-reduced-motion: reduce → transition/animation 时长 0，直接显隐（不动画）；
+     组件里还有一层 .ys-barsearch--now（JS 探测到时加的类），双保险。
+   ============================================================================ */
+.ys-barsearch {
+  transform-origin: 100% 100%; /* 图标在右下角：缩放从那个角发生 = 「从图标位置长出来」 */
+  transition:
+    transform 240ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    opacity 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  animation: ys-barsearch-in 240ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  will-change: transform, opacity;
+}
+@keyframes ys-barsearch-in {
+  from { transform: scale(0.85) translateY(12px); opacity: 0; }
+  to   { transform: scale(1) translateY(0); opacity: 1; }
+}
+/* JS 探测到减弱动效时加的类：时长清零，动画直接跳终态（与 @media 同效，双保险） */
+.ys-barsearch--now {
+  transition-duration: 0ms;
+  animation-duration: 0ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ys-barsearch {
+    transition-duration: 0ms;
+    animation-duration: 0ms;
+  }
+}

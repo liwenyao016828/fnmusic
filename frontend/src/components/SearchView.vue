@@ -124,15 +124,11 @@
               >
                 <span>🎧</span><span>精选歌单</span>
               </button>
-              <button
-                @click="switchDiscoverTab('manage')"
-                :class="[
-                  'px-3 py-1.5 rounded-lg text-[12px] font-bold transition-all flex items-center gap-1 whitespace-nowrap',
-                  discoverTab === 'manage' ? 'bg-emerald-500 text-white shadow-sm' : 'text-gray-500 hover:text-gray-700'
-                ]"
-              >
-                <span>⚙️</span><span>榜单管理</span>
-              </button>
+              <!--
+                「⚙️ 榜单管理」原来是这里的第三个胶囊，v2.1.119 搬进了
+                「曲库管家 → 榜单管理」（与歌单监控/下载/补全整理同一个侧栏）——
+                浏览（本页）与配置（管家）分开，顶栏少一个入口。
+              -->
             </div>
 
             <!--
@@ -344,15 +340,15 @@
       <QrLoginModal :session="qr" @close="closeQr" @restart="restartQr" />
 
       <!-- 1. 发现大厅 - 排行榜单网格 (紧凑精致卡片排版) -->
-      <!-- 榜单管理（选哪些榜单进飞牛；浏览请看下面的「排行榜单」） -->
-      <ChartManager
-        v-if="currentMode === 'discover' && discoverTab === 'manage'"
-        @preview="openChartPreview"
-      />
+      <!--
+        榜单管理（选哪些榜单进飞牛）v2.1.119 搬进了「曲库管家 → 榜单管理」；
+        「排行榜单」浏览网格右上角的「+ 注入」留着：就地加一个榜单仍是最顺手的一条路。
+        指路按钮指向管家的 charts 侧栏项（走导航总线，见 setup 里对 'chart-preview' 的说明）。
+      -->
 
       <div v-if="currentMode === 'discover' && discoverTab === 'charts'" class="max-w-[1500px] mx-auto px-5 py-6 pb-28 sm:px-8 sm:py-7 sm:pb-24">
         <!--
-          控制条搬走了：勾选与开关现在住在「⚙️ 榜单管理」页。
+          控制条搬走了：勾选与开关现在住在「曲库管家 → 榜单管理」。
           这里只留一行指路 —— 这一页是**浏览**用的，用户是来看榜单的，不该被一排开关挡在最上面。
           （卡片右上角那个「+ 注入」留着：就地加一个榜单是最顺手的一条路。）
         -->
@@ -362,9 +358,9 @@
             要让这些榜单出现在<strong class="text-gray-700">飞牛音乐</strong>里，去
             <button
               type="button"
-              @click="switchDiscoverTab('manage')"
+              @click="openChartManager"
               class="font-bold text-emerald-600 underline decoration-emerald-300 underline-offset-2 hover:text-emerald-700"
-            >⚙️ 榜单管理</button>
+            >曲库管家 · 榜单管理</button>
             勾选
           </span>
           <span class="text-[11px] leading-snug text-amber-600/80">
@@ -849,7 +845,7 @@ import QRCode from 'qrcode'
 import DownloadQualityModal from './DownloadQualityModal.vue'
 import InlineNotice from './InlineNotice.vue'
 import QrLoginModal from './QrLoginModal.vue'
-import ChartManager from './ChartManager.vue'
+import { onNavigate, navigateTo } from '../services/navBus'
 import {
   chartInject,
   chartInjectKey,
@@ -1148,7 +1144,7 @@ const currentMode = ref('discover') // 'discover' | 'chartDetail' | 'playlistDet
  */
 const loadError = ref('')
 // 下列选择项都做本地记忆：重新打开应用后仍停留在上次选的站点/分类
-const discoverTab = ref(loadPref('discover_tab', 'charts'))   // 'charts' | 'playlists' | 'manage'
+const discoverTab = ref(loadPref('discover_tab', 'charts'))   // 'charts' | 'playlists'（榜单管理已搬去曲库管家）
 const selectedCategory = ref(loadPref('playlist_category', '全部'))
 const query = ref('')
 
@@ -1527,7 +1523,8 @@ async function switchDiscoverTab(tab) {
     await loadPlaylistCategories(selectedChartPlatform.value)
     loadPlaylists(selectedCategory.value, selectedChartPlatform.value)
   }
-  // tab === 'manage'：榜单管理页自己读配置、自己拉两个平台的榜单列表，这里不用管
+  // tab === 'playlists' 之外的分支：榜单管理已搬去「曲库管家 → 榜单管理」，
+  // 发现页不再有 manage 子标签；charts 由上面的 if 处理。
 }
 
 watch(() => poolIds.value.join(','), (key) => {
@@ -1649,8 +1646,12 @@ function selectPlaylistCategory(cat) {
 }
 
 /**
- * 榜单管理页点一行右侧的 ▶：切到「排行榜单」并把这张榜单的详情打开。
+ * 「曲库管家 → 榜单管理」页点一行右侧的 ▶：切回本页「排行榜单」并打开那张榜单。
  * 平台顺手一起切 —— 回到浏览页时，看到的就该是他刚点的那张榜单所属的平台。
+ *
+ * 管家不直接 import 本组件（会成环：发现页 → 管家 → 发现页），所以走导航总线：
+ * 管家调 navigateTo('search', { chartPreview: item })，App.vue 转给当前视图，
+ * 这里在 onNavigate 里接住并打开详情。负载不是榜单时（老调用方只传 view）忽略。
  */
 function openChartPreview(item) {
   if (!item?.id) return
@@ -1662,6 +1663,22 @@ function openChartPreview(item) {
   savePref('discover_tab', 'charts')
   openChartDetail({ ...item, source })
 }
+
+/**
+ * 指路按钮：从「排行榜单」跳到管家侧的榜单管理页。
+ * 同样走导航总线 —— App.vue 负责切视图并让管家落到 charts 侧栏项。
+ */
+function openChartManager() {
+  navigateTo('search', { chartManager: true })
+}
+
+const offChartNav = onNavigate((view, payload) => {
+  if (view !== 'search') return
+  if (payload?.chartPreview) openChartPreview(payload.chartPreview)
+  // payload?.chartManager（「管家 → 发现」的反向跳转）到这里已是空操作：
+  // 切视图由 App.vue 的 onNavigate 完成，本页无需额外状态。
+})
+onUnmounted(offChartNav)
 
 async function openChartDetail(chart) {
   currentMode.value = 'chartDetail'
