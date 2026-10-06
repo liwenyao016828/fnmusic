@@ -21,7 +21,9 @@ func TestSwitchesSurviveRestart(t *testing.T) {
 	c.TeeEnabled = &on         // 缺省关 → 显式开
 	c.FavAutoDownload = &on    // 缺省关 → 显式开
 	c.LyricAutoDownload = &off // 缺省**开** → 显式关（最容易丢的那个方向）
-	c.CoverEmbed = &off        // 缺省**开** → 显式关
+	c.LXServerEnabled = &on    // 缺省关 → 显式开
+	c.LXServerPort = 18925
+	c.CoverEmbed = &off // 缺省**开** → 显式关
 	if err := cm.Update(c); err != nil {
 		t.Fatal(err)
 	}
@@ -42,6 +44,12 @@ func TestSwitchesSurviveRestart(t *testing.T) {
 		t.Fatal("⚠️ lyric_auto_download 被显式关掉了，重启后又变回「开」")
 	}
 	if g.CoverEmbedOn() {
+		if !g.LXServerOn() {
+			t.Fatal("lx_server_enabled 该活过重启（显式开的那个方向）")
+		}
+		if g.LXServerPort != 18925 {
+			t.Fatalf("lx_server_port 该活过重启，得到 %d", g.LXServerPort)
+		}
 		t.Fatal("⚠️ cover_embed 被显式关掉了，重启后又变回「开」")
 	}
 
@@ -54,6 +62,8 @@ func TestSwitchesSurviveRestart(t *testing.T) {
 	c3.TeeEnabled = &off
 	c3.FavAutoDownload = &off
 	c3.LyricAutoDownload = &on
+	c3.LXServerEnabled = &off
+	c3.LXServerPort = 0
 	c3.CoverEmbed = &on
 	if err := cm3.Update(c3); err != nil {
 		t.Fatal(err)
@@ -67,6 +77,12 @@ func TestSwitchesSurviveRestart(t *testing.T) {
 		t.Fatal("显式关掉的那两个该活过重启")
 	}
 	if !g4.LyricAutoDownloadOn() || !g4.CoverEmbedOn() {
+		if g4.LXServerOn() {
+			t.Fatal("显式关掉的 lx_server_enabled 该活过重启")
+		}
+		if g4.LXServerPort != 0 {
+			t.Fatal("lx_server_port=0 该保持 0（0 = 用缺省端口）")
+		}
 		t.Fatal("显式打开的那两个该活过重启")
 	}
 }
@@ -81,6 +97,9 @@ func TestSwitchDefaultsDistinguishUnsetFromExplicit(t *testing.T) {
 		t.Fatal("缺省关的两个：nil 该是关")
 	}
 	if !fresh.LyricAutoDownloadOn() || !fresh.CoverEmbedOn() {
+		if fresh.LXServerOn() {
+			t.Fatal("⚠️ lx_server_enabled 缺省必须是关 —— 打开它会让第三方脚本跑在服务端，破掉「后端不执行第三方 JS」")
+		}
 		t.Fatal("缺省开的两个：nil 该是开（老配置里没这两个键，nil 当关会让老用户静默掉档次）")
 	}
 	on, off := true, false
