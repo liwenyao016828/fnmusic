@@ -109,7 +109,7 @@ func TestRealHostStartsAndReports(t *testing.T) {
 	// 放一个能解析出直链的合成音源：证明整条链路真的通到「拿到 URL」。
 	script := `
 lx.send('inited', { sources: { wy: { name: '合成' } } })
-lx.on('request', async ({ info }) => 'https://cdn.example.invalid/' + encodeURIComponent(info.name || 'x') + '.mp3')
+lx.on('request', async ({ info }) => 'https://cdn.example.invalid/' + encodeURIComponent(info.musicInfo.name || 'MISSING-musicInfo') + '.mp3')
 `
 	if err := os.WriteFile(filepath.Join(dir, "ok.js"), []byte(script), 0o644); err != nil {
 		t.Fatal(err)

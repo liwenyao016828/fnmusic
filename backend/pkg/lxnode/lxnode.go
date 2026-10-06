@@ -177,7 +177,17 @@ func (m *Manager) Resolve(ctx context.Context, source string, info map[string]an
 	base := m.cfg.base()
 	m.mu.Unlock()
 
-	body, _ := json.Marshal(resolveRequest{Source: source, Info: info, Quality: quality})
+	// ⚠️ info 必须**嵌一层 musicInfo**：LX 脚本的契约是
+	//   handler({ source, action, info: { musicInfo, type } })
+	// 平铺传 {name, singer} 的话，所有脚本第一个判断
+	//   if (!info?.musicInfo) reject('请求参数不完整')
+	// 直接短路 —— 真机实测过，表现为 502 且 tried 里全是「请求参数不完整」。
+	// 这里替调用方嵌好，免得每个调用点都要记得。
+	body, _ := json.Marshal(resolveRequest{
+		Source:  source,
+		Info:    map[string]any{"musicInfo": info, "type": "musicUrl"},
+		Quality: quality,
+	})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/resolve", bytes.NewReader(body))
 	if err != nil {
 		return "", err
