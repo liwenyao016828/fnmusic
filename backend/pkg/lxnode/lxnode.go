@@ -9,6 +9,43 @@
 //
 // 硬约束（对齐 sidecar 的处理）：**子进程挂了不能影响曲率** —— 所有错误都只让
 // Resolve 返回失败，调用方照常回落，绝不 panic、绝不阻塞播放链路。
+//
+// # 进程级隔离（第三方脚本的真正边界）
+//
+// sidecar 里那个 `node:vm` + require 白名单**不是安全边界**，2026-10-06 实测过：
+// 沙箱的全局兜底是「查宿主真全局」（server.mjs 的 Proxy `get` 会回落 `globalThis[k]`），
+// 于是脚本拿得到宿主的 `process`：
+//
+//	process.getBuiltinModule('node:fs').readFileSync('/etc/hostname')      → 读到内容
+//	process.getBuiltinModule('node:child_process').execSync('id -un')      → 执行成功
+//	Function('return process')()                                           → 同样拿得到
+//
+// 所以**边界只能在进程这一层**：用 Node 的权限模型（`--permission`）启动子进程，
+// 只放行「宿主脚本自身 + 音源脚本目录」的读权限，其余 fs 读、fs 写、child_process、
+// worker、原生插件一律拒绝（都是 ERR_ACCESS_DENIED）。
+//
+// 逐个启动参数为什么是这个值：
+//
+//   - `--permission` 打开权限模型。默认全拒，再加 `--allow-fs-read` 逐项放行。
+//   - `--allow-fs-read=<脚本目录>` **必须**：宿主 `fs.readdirSync(DIR)` 要列它、
+//     `fs.readFileSync(<DIR>/*.js)` 要读它。Node 的目录路径是**递归**语义（子目录里的
+//     文件也可读）—— 这是权限模型给不出更窄选项的地方，见 hostArgs 的注释。
+//   - `--allow-fs-read=<宿主脚本>` **必须**（其实冗余）：Node 文档里应用入口是
+//     自动放行的（本机 v22.20 实测确认：allow 指向别处时入口照样读得到）。这里仍然
+//     显式写出来 —— 它不多给任何权限（那个文件本来就可读），但能让「隔离了什么」
+//     在参数表里自解释，且不依赖「入口自动放行」这个版本相关行为。
+//   - **不给** `--allow-fs-write` / `--allow-child-process` / `--allow-worker` /
+//     `--allow-addons` / `--allow-wasi`：宿主一个都不用，脚本更不该用。白拿的收紧。
+//   - **故意不给** `--allow-fs-read=*` 之类：那等于没隔离。用例钉着这条（见
+//     TestHostArgsAreIsolatedByDefault）。
+//
+// 权限模型**不管网络**（本机 v22.20 连 `--allow-net` 都还没有），所以 `lx.request`
+// 那条出网路径不受影响 —— 这是刻意的：音源脚本的活就是出网，收紧它等于把功能关掉。
+//
+// 权限模型**也不管环境变量**：`process.env` 照样可读。加上本机实测 `NODE_OPTIONS`
+// 里能塞 `--allow-fs-read=/` 直接把权限模型放宽（Node 只禁了 `--permission` 本身，
+// 没禁 `--allow-*`），所以子进程的环境变量**由这里显式指定**，只留 PATH/TZ，
+// 不继承 NODE_OPTIONS、也不把宿主环境里的 token 暴露给脚本。见 childEnv。
 package lxnode
 
 import (
@@ -20,6 +57,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -35,6 +73,12 @@ const (
 )
 
 // Config 是宿主的启动参数。
+//
+// ⚠️ **故意没有「关掉隔离」的开关**。进程级隔离（见包注释）是这个子进程存在的
+// 前提条件之一，不是使用偏好：调用点在 backend/main.go 只有一处，永远想要它开着。
+// 若做成 `Config.Isolate bool`，Go 的零值就是 **false** —— 「忘了赋值」会静默退回
+// 「只有沙箱、没有边界」的旧状态，而那正是这次要修的东西。所以它硬编码在
+// hostArgs() 里，并由 TestHostArgsAreIsolatedByDefault 钉住。
 type Config struct {
 	Enabled bool
 	NodeBin string // 默认 "node"
@@ -405,6 +449,72 @@ func triedSummary(tried []Tried) string {
 	return strings.Join(parts, "；")
 }
 
+// ── 启动参数：进程级隔离 ────────────────────────────────────────────────
+
+// hostArgs 是**完整**的子进程参数表（不含 argv[0]）。
+//
+// 单独抽出来是为了让它可测 —— 隔离参数是安全不变量，用例直接钉这张表，
+// 免得以后重构把它悄悄改掉（改掉的表现是「一切照旧能用」，没有任何报错）。
+func (c Config) hostArgs() []string {
+	args := []string{"--permission"}
+
+	// 读权限逐项放行：宿主脚本自身 + 音源脚本目录。
+	//
+	// 这里**必须**转绝对路径：`--allow-fs-read` 的相对路径是相对**子进程 cwd**
+	// 解析的，而 `--dir` 原样透传给宿主（宿主也按 cwd 解析）。两者同源才对得上 ——
+	// 转换后仍然同源（子进程继承 Go 进程的 cwd），但参数表里就不再有「相对路径
+	// 到底相对于谁」的歧义。
+	//
+	// ⚠️ 空串会被跳过：`--allow-fs-read=`（空值）会让 node **直接拒绝启动**
+	// （`node: --allow-fs-read= requires an argument`），比「目录不存在」更糟 ——
+	// 后者只是放行一个永远匹配不上的路径，宿主照常起来（实测）。宁可让权限更窄，
+	// 也不能让子进程起不来。
+	for _, p := range []string{c.Script, c.Dir} {
+		if p == "" {
+			continue
+		}
+		abs, err := filepath.Abs(p)
+		if err != nil {
+			abs = p //Abs 只在拿不到 cwd 时失败；此时用原值，至少语义和以前一致
+		}
+		args = append(args, "--allow-fs-read="+abs)
+	}
+
+	// 参数顺序不能动：node 的选项必须在脚本路径**之前**，否则会被当成脚本的 argv。
+	args = append(args,
+		c.Script,
+		"--dir", c.Dir,
+		"--port", fmt.Sprint(c.port()),
+	)
+	return args
+}
+
+// childEnv 是子进程的**全部**环境变量。
+//
+// 为什么不像以前那样直接继承：两个实测过的洞，都只能在这一层堵。
+//
+//  1. `process.env` 对脚本是**可读的**（权限模型不管环境变量，本机 v22.20 实测），
+//     而脚本按设计能出网（lx.request）—— 宿主进程里的 token 直接就是可外带的数据。
+//  2. 更糟的是 **`NODE_OPTIONS` 能放宽权限模型本身**：本机实测
+//     `NODE_OPTIONS="--allow-fs-read=/"` + `--permission` 之后，原本被拒的
+//     `/etc/hostname` 又能读了。Node 只把 `--permission` 本身列为 NODE_OPTIONS 禁用项，
+//     `--allow-*` 没禁。也就是说：只要宿主进程的环境里**恰好**有 NODE_OPTIONS，
+//     这次加的隔离会**静默失效** —— 没有报错、没有日志，看起来一切正常。
+//     显式指定环境变量是最直接的堵法。
+//
+// 只留 PATH（万一 NodeBin 是个需要 PATH 查找的包装脚本）与 TZ（时间语义别变）。
+// 宿主本身只用 node: 内建，一个环境变量都不需要 —— 已用真音源脚本实测过。
+// 返回非 nil 空切片是**有意义**的：`cmd.Env == nil` 表示「继承」，我们要的是「空」。
+func childEnv() []string {
+	env := make([]string, 0, 2)
+	for _, k := range []string{"PATH", "TZ"} {
+		if v, ok := os.LookupEnv(k); ok && v != "" {
+			env = append(env, k+"="+v)
+		}
+	}
+	return env
+}
+
 // execProc 是真实的进程实现。
 type execProc struct {
 	cfg  Config
@@ -426,8 +536,9 @@ func (p *execProc) Start() error {
 	if _, err := os.Stat(p.cfg.Script); err != nil {
 		return fmt.Errorf("lx 宿主脚本不存在：%w", err)
 	}
-	args := []string{p.cfg.Script, "--dir", p.cfg.Dir, "--port", fmt.Sprint(p.cfg.port())}
-	p.cmd = exec.Command(node, args...)
+	p.cmd = exec.Command(node, p.cfg.hostArgs()...)
+	// 环境变量显式指定（不继承）—— 理由见 childEnv。
+	p.cmd.Env = childEnv()
 	p.cmd.Stdout, p.cmd.Stderr = os.Stderr, os.Stderr
 	p.done = make(chan struct{})
 	if err := p.cmd.Start(); err != nil {
