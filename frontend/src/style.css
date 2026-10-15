@@ -23,7 +23,39 @@
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-left: env(safe-area-inset-left, 0px);
   --safe-right: env(safe-area-inset-right, 0px);
+
+  /* ==========================================================================
+     设计令牌（2026-10-15 全站 UI/UX 重构 P0）
+
+     要解决的问题：同一个意思在不同页面写成不同数值 —— 卡片圆角有
+     rounded-lg / rounded-xl / rounded-2xl 三种，提示底色有 gray-900 / emerald-600 /
+     amber-500 各自硬编码，改一次外观得全文替换且必然漏掉几处。
+
+    原则：**只定义已经在组件里用上、且确实需要跨页统一的那些**。
+      · 不给「将来可能会用」的东西预先造令牌（那只会变成又一批死代码）；
+      · 令牌名描述**用途**（surface / border / text-muted）而不是颜色值，
+        换配色时不需要改调用点；
+      · 用 Tailwind 任意值语法消费：`rounded-[var(--ys-radius-card)]`。
+        这样它和现有类名混写不冲突，也不需要改 tailwind.config。
+
+     详见 docs/UI重构方案.md 第三节「三层容器」。
+     ========================================================================== */
+  --ys-radius-card: 12px;      /* 卡片 / 面板 / 抽屉内页 */
+  --ys-radius-control: 10px;   /* 按钮 / 输入框 / 分段器 */
+  --ys-surface: #ffffff;
+  --ys-surface-sunken: #f3f4f6; /* 卡片内的凹陷区（分段器底、只读块）*/
+  --ys-border: #e5e7eb;
+  --ys-accent: #059669;         /* emerald-600：全站唯一强调色 */
+  --ys-text: #111827;
+  --ys-text-muted: #6b7280;
+  --ys-fs-toast: 12px;
+  /* 瞬时提示底色：按等级区分，失败最显眼（用户只在这一处看到红色） */
+  --ys-toast-info: rgba(17, 24, 39, 0.85);
+  --ys-toast-ok: rgba(5, 150, 105, 0.93);
+  --ys-toast-warn: rgba(217, 119, 6, 0.95);
+  --ys-toast-fail: rgba(190, 18, 60, 0.94);
 }
+
 
 @layer base {
   /* 动态视口：先写 vh（老 WebView 兜底），再写 dvh（支持的浏览器覆盖） */

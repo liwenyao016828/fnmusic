@@ -1,10 +1,13 @@
-/* 导航搬家（v2.1.119 → v2.1.120）的源码约定测试。
+/* 导航搬家（v2.1.119 → v2.1.120 → 2026-10-15 重构）的源码约定测试。
  *
- * # 这两轮搬了什么
+ * # 这几轮搬了什么
  *
  *   v2.1.119：榜单管理 发现音乐 → 曲库管家（第四个侧栏项）
  *   v2.1.120：榜单管理 曲库管家 → **顶层导航**（与「发现音乐」并列）
  *             本地音乐 顶层导航 → **曲库管家**（第一个侧栏项）
+ *   2026-10-15（v2.4.0）：榜单管理 顶层导航 → **「发现」页的第二段**（页内分段）
+ *             日志 + 设置 顶层导航 → **「系统」页的两段**；音源管理补进导航
+ *             导航 7 项并成 5 项，视图清单的唯一数据源改为 services/navViews.js
  *
  * # 为什么用这种形态
  *
@@ -23,6 +26,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+import { resolveRoute, VIEW_IDS } from './navViews.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const read = (rel) => readFileSync(join(here, rel), 'utf8')
@@ -50,12 +54,25 @@ test('榜单管理：只由 App.vue 挂载，曲库管家不再 import 它', () 
   )
 })
 
-test('榜单管理：顶层导航里有 charts 项，且没有 nas 项', () => {
-  assert.match(
-    appVue,
-    /\{ id: 'charts', name: '榜单管理'/,
-    'navItems 里应有 charts 导航项',
+test('榜单管理：不再占导航位，而是「发现」页的第二段（2026-10-15 重构）', () => {
+  // 不再是顶层导航项
+  assert.ok(
+    !/\{ id: 'charts', name:/.test(appVue),
+    'navItems 里不该再有 charts 导航项 —— 它已降为「发现」页的页内分段',
   )
+  assert.ok(
+    !appVue.includes('#view-charts'),
+    '不该再有 view-charts 插槽（SwipePager 的顶层页只剩注册表里的 5 个）',
+  )
+  // 但必须仍能从顶层一键到达：深链解析到「发现」页的 charts 段
+  const r = resolveRoute('charts')
+  assert.equal(r.view, 'search')
+  assert.equal(r.segment, 'charts')
+  assert.ok(VIEW_IDS.includes(r.view), 'charts 该落在已登记的顶层页里')
+  // 发现页确实渲染了分段器，且两段组件都挂上
+  assert.ok(appVue.includes("decoratedSegments('search')"), '发现页应有页内分段器')
+  assert.ok(appVue.includes("segMounted('search', 'charts')"), '发现页应挂载榜单段组件')
+
   assert.ok(
     !/id: 'nas'/.test(appVue),
     "navItems 里不该再有 nas 项（本地音乐已搬进曲库管家）",
@@ -64,10 +81,9 @@ test('榜单管理：顶层导航里有 charts 项，且没有 nas 项', () => {
     !appVue.includes('#view-nas'),
     '不该再有 view-nas 插槽 —— 那个顶层视图已经不存在了',
   )
-  assert.ok(
-    appVue.includes('#view-charts'),
-    '应有 view-charts 插槽（SwipePager 按插槽名渲染视图）',
-  )
+  // 视图清单收敛到注册表：模板槽位由 navViews.js 决定，不再手写 navItems
+  assert.ok(appVue.includes('const navItems = VIEWS.map'), 'navItems 应由注册表生成（单一数据源）')
+  assert.ok(appVue.includes('#view-search'), '应有 view-search 插槽（SwipePager 按插槽名渲染视图）')
 })
 
 test('本地音乐：搬进曲库管家，挂载点与侧栏项都在', () => {
@@ -118,14 +134,14 @@ test('侧栏项集合：有 nas、没有 charts', () => {
   )
 })
 
-test('榜单管理：指路按钮切顶层视图，不再借 payload 让管家落侧栏项', () => {
+test('榜单管理：指路按钮走导航总线，落到「发现」页的榜单段', () => {
   assert.ok(
     searchViewVue.includes('openChartManager'),
     '发现页应有 openChartManager（指路入口）',
   )
   assert.ok(
     searchViewVue.includes("navigateTo('charts')"),
-    "openChartManager 应直接切到 charts 顶层视图",
+    "openChartManager 应请求 charts（2026-10-15 后由 resolveRoute 解析成「发现页 + 榜单段」）",
   )
   assert.ok(
     !searchViewVue.includes('chartManager: true'),
@@ -156,8 +172,12 @@ test('榜单管理：「看一眼」回到发现页仍走导航总线，负载�
     /export function navigateTo\(view, payload\)/,
     'navigateTo 应带可选 payload 参数',
   )
-  assert.ok(appVue.includes('onNavigate((view, payload)'), 'App.vue 的订阅应接住 payload 参数')
-  assert.ok(appVue.includes('currentView.value = view'), 'App.vue 应按请求切视图')
+  assert.ok(appVue.includes('onNavigate('), 'App.vue 的订阅应接住 payload 参数')
+  assert.ok(
+    appVue.includes('onNavigate((view, payload) => goView(view, payload))'),
+    'App.vue 应把总线请求交给 goView（唯一入口，统一过 resolveRoute）',
+  )
+  assert.ok(appVue.includes('currentView.value = r.view'), 'App.vue 应按解析结果切视图')
 })
 
 test('榜单管理：升为顶层视图后穿上 PageShell（不再自绘页头）', () => {

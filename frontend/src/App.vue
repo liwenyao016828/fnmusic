@@ -130,10 +130,18 @@
       </nav>
 
       <div class="ml-auto flex items-center gap-1.5 sm:gap-2.5 shrink-0">
+        <!--
+          当前音源状态胶囊（2026-10-15 重构明确其身份）。
+          以前它同时干两件事：显示「当前音源是谁」+ 作为音源管理的**唯一入口**
+          —— 而音源管理明明是个整页却不在导航里。现在音源进了导航（第二项），
+          胶囊退回本职：一条状态摘要（圆点=有没有配好），顺手可点进音源页，
+          不再是「想改音源只能摸这个胶囊」。
+        -->
         <button
-          @click="currentView = 'sources'"
+          @click="navigateTo('sources')"
           class="px-2 sm:px-3 py-2 sm:py-1.5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-medium flex min-w-0 items-center gap-1 sm:gap-1.5 hover:bg-emerald-100 transition-all max-w-[76px] sm:max-w-[170px] lg:max-w-none whitespace-nowrap shrink"
-          :title="`音源管理 · 当前音源：${activeSourceMeta?.name || '未设置'}`"
+          :title="`当前音源：${activeSourceMeta?.name || '未设置'} —— 点开管理音源`"
+          :aria-label="`当前音源：${activeSourceMeta?.name || '未设置'}，打开音源管理`"
         >
           <span class="w-1.5 h-1.5 rounded-full shrink-0" :class="activeSourceMeta ? 'bg-emerald-500' : 'bg-amber-400'"></span>
           <!-- 窄屏只放假两字（长名会把胶囊顶出屏幕，用户 2026-09-28 反馈）；宽屏给全名。两种都不许溢出。 -->
@@ -177,31 +185,52 @@
     <!-- Main Content -->
     <!-- 主内容区：左右滑动切页（跟手位移 / 到头阻尼 / 速度判定，见 components/SwipePager.vue） -->
     <SwipePager :order="swipeOrderList" :current="currentView" @update:current="v => currentView = v">
-      <template #view-search>
-        <SearchView
-          :active-source="activeSourceMeta"
-          :active-source-ids="activeSourceIds"
-          :play-mode="playMode"
-          :current-song="currentSong"
-          :is-playing="isPlaying"
-          @update:play-mode="val => playMode = val"
-          @play="playSong"
-          @play-all="playAllSongs"
-          @navigate="view => currentView = view"
-          @prev="playPrev"
-          @next="playNext"
-          @toggle-play="togglePlay"
-          :bar-query="barSearchQuery"
-          :bar-search-nonce="barSearchNonce"
-        />
-      </template>
       <!--
-        榜单管理（v2.1.120 从「曲库管家」搬上来）：它自己的「▶ 看一眼」通过 emit 上来，
-        这里走导航总线把负载带给发现页 —— 与本页的 onNavigate 是同一个机制，
-        不新增第二套跳转协议。
+        发现（含榜单）—— 2026-10-15 重构把「榜单管理」从顶层页降为**页内第二段**。
+        理由：它和「发现」都是浏览内容，平级排在导航里只会让导航越来越长（用户反馈过「挤」）；
+        而整页替换又会丢掉另一段的滚动位置与已加载数据（切回来要重新等）。
+        所以两段都常驻、v-show 切换 —— 与 SwipePager 对页面的策略一致。
       -->
-      <template #view-charts>
-        <ChartManager @preview="item => navigateTo('search', { chartPreview: item })" />
+      <template #view-search>
+        <div class="flex h-full min-h-0 flex-col">
+          <div class="shrink-0 border-b border-[var(--ys-border)] bg-white/95 px-3 py-2 backdrop-blur">
+            <SegmentedControl
+              :segments="decoratedSegments('search')"
+              :model-value="segmentOf('search')"
+              @update:model-value="v => setSegment('search', v)"
+            />
+          </div>
+          <div class="grid min-h-0 flex-1 grid-cols-1">
+            <SearchView
+              v-if="segMounted('search', 'discover')"
+              v-show="segmentOf('search') === 'discover'"
+              :active-source="activeSourceMeta"
+              :active-source-ids="activeSourceIds"
+              :play-mode="playMode"
+              :current-song="currentSong"
+              :is-playing="isPlaying"
+              @update:play-mode="val => playMode = val"
+              @play="playSong"
+              @play-all="playAllSongs"
+              @navigate="view => goView(view)"
+              @prev="playPrev"
+              @next="playNext"
+              @toggle-play="togglePlay"
+              :bar-query="barSearchQuery"
+              :bar-search-nonce="barSearchNonce"
+            />
+            <!--
+              它自己的「▶ 看一眼」通过 emit 上来，走导航总线把负载带给发现页 ——
+              navigateTo('search', {chartPreview}) 会被 onNavigate 解析成「发现页 + discover 段」，
+              负载仍由 SearchView 自己订阅总线消费，不新增第二套跳转协议。
+            -->
+            <ChartManager
+              v-if="segMounted('search', 'charts')"
+              v-show="segmentOf('search') === 'charts'"
+              @preview="item => navigateTo('search', { chartPreview: item })"
+            />
+          </div>
+        </div>
       </template>
       <template #view-sources>
         <SourceManager
@@ -219,20 +248,37 @@
         />
       </template>
       <template #view-accounts><AccountManager /></template>
-      <template #view-logs><LogViewer /></template>
-      <template #view-settings><AppSettings /></template>
+      <!--
+        系统（日志 + 设置）—— 两者都是「工具/配置」页：出问题时来看，改完就走。
+        并成一段之后导航短了一项，且这两件事本来就常一起来（日志里看到失败 → 去设置改参数）。
+      -->
+      <template #view-system>
+        <div class="flex h-full min-h-0 flex-col">
+          <div class="shrink-0 border-b border-[var(--ys-border)] bg-white/95 px-3 py-2 backdrop-blur">
+            <SegmentedControl
+              :segments="decoratedSegments('system')"
+              :model-value="segmentOf('system')"
+              @update:model-value="v => setSegment('system', v)"
+            />
+          </div>
+          <div class="grid min-h-0 flex-1 grid-cols-1">
+            <LogViewer v-if="segMounted('system', 'logs')" v-show="segmentOf('system') === 'logs'" />
+            <AppSettings v-if="segMounted('system', 'settings')" v-show="segmentOf('system') === 'settings'" />
+          </div>
+        </div>
+      </template>
     </SwipePager>
 
     <!-- 帧率探针：只有地址带 ?fps=1 时出现（真机上用来判断"卡不卡"，正式界面看不到） -->
     <FpsMeter v-if="showFpsMeter" />
 
-    <!-- 全局轻提示（替代 alert）：失败时可点击直达「日志」看详情 -->
-    <button
-      v-if="appToast"
-      class="fixed bottom-24 left-1/2 z-40 max-w-[90vw] -translate-x-1/2 rounded-xl bg-gray-900/85 px-4 py-2.5 text-[12px] leading-relaxed text-white shadow-lg"
-      :class="appToast.goLogs ? 'cursor-pointer hover:bg-gray-900' : 'cursor-default'"
-      @click="onToastClick"
-    >{{ appToast.text }}</button>
+    <!--
+      全局瞬时提示（替代 alert / 各页自造的提示条）：唯一渲染点是 FeedbackHost，
+      通道在 services/feedback.js —— 任何组件都能直接 `fail('…', {scope})`，
+      失败时点一下就跳到「日志」段看详情。以前这里只有 App.vue 自己能用（单槽位 appToast），
+      于是各页只好自己再造一套提示，措辞还各不相同。
+    -->
+    <FeedbackHost />
 
     <!-- Bottom Player Bar -->
     <PlayerBar
@@ -251,7 +297,7 @@
       @seek="onSeek"
       @toggle-lyrics="() => { showImmersive = true }"
       @toggle-fullscreen="() => { showImmersive = true }"
-      @toggle-view="v => currentView = v"
+      @toggle-view="v => goView(v)"
       @volume-change="onVolumeChange"
       @toggle-collapse="playerBarCollapsed = !playerBarCollapsed"
       @search="searchFromPlayerBar"
@@ -289,10 +335,14 @@ import SwipePager from './components/SwipePager.vue'
 import AppSettings from './components/AppSettings.vue'
 import FpsMeter from './components/FpsMeter.vue'
 import LogViewer from './components/LogViewer.vue'
+import FeedbackHost from './components/FeedbackHost.vue'
+import SegmentedControl from './components/SegmentedControl.vue'
 import { downloadManager } from './services/downloadManager'
 import { bridgeWorker } from './services/bridgeWorker'
 import { loadPref, savePref, loadBool, initUiPrefs } from './services/prefs'
 import { onNavigate, navigateTo } from './services/navBus'
+import { VIEWS, segmentsOf, defaultSegment, resolveRoute } from './services/navViews'
+import { fail as feedbackFail, warn as feedbackWarn } from './services/feedback'
 import { invalidate } from './services/viewCache'
 import { logError } from './services/appLog'
 import { Compass, Trophy, Cpu, Disc, Library, UserRound, ScrollText, Settings, LayoutList, AlignJustify, LayoutGrid } from 'lucide-vue-next'
@@ -302,17 +352,25 @@ const showFpsMeter = typeof location !== 'undefined' && location.search.includes
 
 const currentView = ref('search')
 
+// 切视图的**唯一入口**：所有跳转（导航按钮、组件 emit、播放条按钮、导航总线）
+// 都从这里过一遍 resolveRoute()，谁也别自己拼 id。
+// 「榜单管理」并进发现、「日志」「设置」并进系统之后，`navigateTo('logs')` 这类老调用
+// 必须落到 `{view:'system', segment:'logs'}`，否则十几个入口会静默失效。
+// 认不出的 id 回落到发现页并记一条 warn —— 宁可多跳一次首页，也不要「点了没反应」。
+function goView(view, payload) {
+  const r = resolveRoute(view)
+  if (r.unknown) feedbackWarn(`未知的页面入口「${view}」，已回到发现页`, { scope: '导航' })
+  currentView.value = r.view
+  if (r.segment) setSegment(r.view, r.segment)
+  return payload
+}
+
 // 组件里的「查看日志」等入口通过导航总线请求切视图 —— 免去给每个组件加 emit + props
 // （见 services/navBus.js 的说明）。currentView 的归属不变，这里只是多接一个触发源。
 //
-// payload 只剩一条路由：
-//   · { chartPreview } —— 榜单管理 → 发现：这里切视图，负载交给 SearchView 自己消费
-//     （它订阅同一个总线，见 SearchView 的 onChartNav）。
-// 「发现 → 榜单管理」不再走 payload：两边现在都是顶层视图，指路按钮直接
-// `navigateTo('charts')`，不需要再借 payload 让管家落某个侧栏项。
-const offNavigate = onNavigate((view, payload) => {
-  currentView.value = view
-})
+// payload 仍只有一条路由：{ chartPreview } —— 负载交给 SearchView 自己消费
+// （它订阅同一个总线，见 SearchView 的 onChartNav），这里只负责切视图与段位。
+const offNavigate = onNavigate((view, payload) => goView(view, payload))
 
 // 滑动切页的视图顺序（computed 是惰性的，即使 navItems 声明在后面也不会踩 TDZ）
 const swipeOrderList = computed(() => navItems.map((item) => item.id))
@@ -329,25 +387,14 @@ onUnmounted(offNavigate)
 onUnmounted(() => { if (navResizeObserver) { navResizeObserver.disconnect(); navResizeObserver = null } })
 
 /**
- * 全局轻提示（替代 alert）。
+ * 全局轻提示（替代 alert）已搬到 `services/feedback.js` + `components/FeedbackHost.vue`。
  *
- * 约定：界面上只给一句结论，完整信息进日志（见 services/appLog.js）。
- * `goLogs` 为 true 时点一下直达「日志」页 —— 比让用户自己找入口友好得多。
+ * 老实现是 App.vue 私有的单槽位 `appToast`：只有 App.vue 自己调得到，于是 14 个页面
+ * 各自造了一套提示（页脚说明、InlineNotice、alert），同一件事三种说法。
+ * 现在任何组件 `fail('…', { scope: '下载设置' })` 即可：界面一句结论、细节进日志，
+ * 旧 `showAppToast(text, true)` 的「点一下看日志」行为保留（level='fail' 默认开）。
  */
-const appToast = ref(null) // { text, goLogs }
-let appToastTimer = null
 
-function showAppToast(text, goLogs = false) {
-  appToast.value = { text, goLogs }
-  if (appToastTimer) clearTimeout(appToastTimer)
-  appToastTimer = setTimeout(() => { appToast.value = null }, 3600)
-}
-
-function onToastClick() {
-  if (!appToast.value?.goLogs) return
-  currentView.value = 'logs'
-  appToast.value = null
-}
 const showImmersive = ref(false)
 
 // 免责声明与条款弹窗状态
@@ -378,25 +425,53 @@ function openDisclaimer(force = false) {
 }
 
 // 主导航（顶栏分段切换器）。
-// 顺序参考 fnmusic-flow 的工作台布局：先内容、后管理、最后账号。
-// 「音源管理」不在此列 —— 它是配置项，放在顶栏右侧的当前音源按钮里。
-// 「本地音乐」v2.1.120 搬进「曲库管家」当子页（它和「推送/下载/补全整理」是同一件事的
-// 不同侧面：都在动那本曲库）；「榜单管理」同一轮**搬上来** —— 它管的是「哪些榜单能在
-// 飞牛音乐里听」，与「发现音乐 → 排行榜单」是一体两面，贴在内容旁边比埋在管家里合理。
+//
+// ⚠️ 2026-10-15 重构：**视图清单与顺序的唯一数据源已搬到 services/navViews.js**。
+// 以前这里手写一份、模板里的 `#view-xxx` 槽位再写一份、组件里的 navigateTo 又写一份，
+// 三份对不上就长出孤儿页 —— 「音源管理」就是个整页，却不在导航里，只能靠顶栏胶囊进
+// （那个胶囊还同时在显示「当前音源是谁」，一个控件干两件事，谁都不好用）。
+//
+// 现在导航 7 项并成 5 项：榜单管理并进「发现」、日志与设置并进「系统」（页内分段，见
+// 下面的 seg-* 状态）。顺序 = 导航从左到右 = 手指左右滑动的顺序（swipeOrderList 读它）。
+// 图标按 id 在这里登记 —— navViews.js 是纯数据，不 import 组件。
+const NAV_ICONS = { search: Compass, library: Library, sources: Cpu, accounts: UserRound, system: Settings }
+/** 页内分段的图标（顶层页有自己的图标，段位单独一套） */
+const SEGMENT_ICONS = { discover: Compass, charts: Trophy, logs: ScrollText, settings: Settings }
+
 // 每个导航项两个名字：`name` 是完整名，`short` 是顶栏「精简档」用的短名
 // （用户 2026-09-28 要求的三档密度见 navDensity）。
-const navItems = [
-  { id: 'search', name: '发现音乐', short: '发现', icon: Compass },
-  { id: 'charts', name: '榜单管理', short: '榜单', icon: Trophy },
-  { id: 'library', name: '曲库管家', short: '管家', icon: Library },
-  { id: 'accounts', name: '账号连接', short: '账号', icon: UserRound },
-  // 日志：后端运行日志 + 任务执行记录。它是排查用的工具页，不是日常主功能，
-  // 但仍要一眼能找到（原先只能 SSH 上 NAS 看 backend.log）
-  { id: 'logs', name: '日志', short: '日志', icon: ScrollText },
-  // 设置：下载音质 / 文件命名 / 存储目录 / 导出日志。同样是配置页而不是内容页，
-  // 排在内容页之后 —— 改完即刻生效，不需要频繁进出
-  { id: 'settings', name: '设置', short: '设置', icon: Settings },
-]
+const navItems = VIEWS.map((v) => ({ ...v, icon: NAV_ICONS[v.id] }))
+
+/** 段位清单（带图标），给 SegmentedControl 用 */
+function decoratedSegments(view) {
+  return segmentsOf(view).map((s) => ({ ...s, icon: SEGMENT_ICONS[s.id] }))
+}
+
+// ── 页内分段状态：viewId → segmentId ──
+// 与 SwipePager 对「页面」的策略一致：**访问过就留着**，段位之间来回切不重建组件、
+// 不重新请求（`mountedSegs` 记住挂过哪些段；v-show 控制显示）。
+const segState = ref({})
+const mountedSegs = ref({})
+
+function segmentOf(view) {
+  return segState.value[view] || defaultSegment(view)
+}
+
+/** 切段（模板里分段器 @update:model-value 调它） */
+function setSegment(view, seg) {
+  const r = resolveRoute(view, seg)
+  if (r.view !== view) return
+  segState.value = { ...segState.value, [view]: r.segment }
+  if (r.segment) mountedSegs.value = { ...mountedSegs.value, [`${view}:${r.segment}`]: true }
+}
+
+/** 这一段是否已经挂载过（懒挂载：没访问过的段不挂载，省掉它启动时的请求） */
+function segMounted(view, seg) {
+  return !!mountedSegs.value[`${view}:${seg}`]
+}
+
+// 启动时把默认段标为已挂载（否则当前段是空白）
+for (const v of VIEWS) setSegment(v.id, defaultSegment(v.id))
 
 // ── 顶栏导航的显示密度：三档（用户 2026-09-28 要求）──
 // 大 `full` = 图标 + 完整名称；中 `short` = 图标 + 精简名称（发现/本地/管家/账号/日志）；
@@ -751,7 +826,8 @@ async function playSong(songOrPayload) {
       const srcName = activeSourceMeta.value?.name || '当前音源'
       // 播放失败：界面上只给一句结论 + 该怎么做；完整原因（音源名、平台、歌曲 id）进日志。
       // 原来这里是一个带「可能原因 1/2」的长 alert，既打断操作又把技术细节推给用户。
-      showAppToast(`《${song.name}》解析失败 —— 换一个音源试试，详情见「日志」`, true)
+      // 现在走统一反馈通道：失败提示可点一下直达「日志」段（作用域写在下面那条日志里）。
+      feedbackFail(`《${song.name}》解析失败 —— 换一个音源试试，详情见「日志」`)
       logError(
         '播放取链',
         `${srcName} 未能解析《${song.name}》`,

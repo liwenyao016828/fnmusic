@@ -16,13 +16,13 @@
 |---|---|
 | **这是什么** | 飞牛 NAS（fnOS）上的音乐播放器 + 曲库管家，`Go` 后端 + `Vue 3` 前端，打包成 fnOS 原生 `.fpk` |
 | **主要用途** | **供其他 AI / 外部程序调用**（帮用户下载歌曲、看歌单），其次才是人机交互 |
-| **代码规模** | 后端 **36 个包 / 273 个 `.go` / 86,474 行**（不含测试 50,918；测试 35,556）/ 后端测试函数 **1,210 个**（联网用例默认 skip，要 `LIVE_NET_TEST=1`）；前端 **338 个测试**（2026-10-15 实测，复测跑 `bash scripts/audit-numbers.sh`） |
+| **代码规模** | 后端 **36 个包 / 273 个 `.go` / 86,474 行**（不含测试 50,918；测试 35,556）/ 后端测试函数 **1,210 个**（联网用例默认 skip，要 `LIVE_NET_TEST=1`）；前端 **32 个 `.vue` / 24,739 行 / 356 个测试**（2026-10-15 实测，复测跑 `bash scripts/audit-numbers.sh`） |
 | **文档怎么读** | 本文件只有 **§0–§10**（活文档：架构 / 坑 / 业务规则 / 接口）。**历史变更条目在 [`docs/变更记录/`](docs/变更记录/INDEX.md)** —— `INDEX.md` 是 82 个回合的目录，正文按日期段分文件（2026-09-26 从 §11 拆出：那一节积到 4,595 行 / 310KB，占全文三分之二）。别处写的「§11 ㊼ 块十」= 那里同名回合的小节 |
 | **应用标识** | 显示名 **曲率**，`appname` **`yinshu-ai`**，端口 **8898**（旧应用 `fn-lx-player` / 8899 可并存） |
 | **后端依赖** | **已引入第三方依赖**（`modernc.org/sqlite v1.36.1`，纯 Go）。旧版「零依赖」规则已作废，见 §2 规则二 |
 | **前端依赖** | vue / vite / tailwindcss / axios / lucide-vue-next / crypto-js / buffer / qrcode |
 | **打包** | `bash scripts/build.sh`，**不需要 fnpack** |
-| **当前版本** | `2.3.0`（代码与 manifest 已同步，见 §7） |
+| **当前版本** | `2.4.0`（代码与 manifest 已同步，见 §7） |
 | **名称** | 显示名 **曲率**（2026-09-28 由「音枢 AI」更名）；技术标识 **`yinshu-ai`**（`appname` / 启动项 / 包文件名 / API 身份串）**刻意不改** |
 | **改名红线** | 显示名随便改（`display_name`、界面、文档）；**`appname` 是技术标识，动之前必须单独跟用户确认** —— 它决定飞牛应用中心认不认"同一个应用"，改了就是新装一个，旧配置和数据不继承 |
 | **版本规则** | ⚠️ **只要改过代码就必须升版本号**（用户 2026-09-28 定），四处同步：`backend/pkg/api/server.go` 的 `CurrentVersion`、`fpk-package/manifest` 的 `version`、`RELEASE_NOTES.md` 顶部、本表。**不许用同一个版本号重打包** |
@@ -637,6 +637,35 @@ body: { download_missing: true }          // ← 关键
 
 > ⚠️ **例外**：`LibraryManager` 已改为**左侧栏分组导航**（见下），不再用页内分段切换器；
 > 但「下载」页内部确实是两个子视图切换（队列 / 歌单下载），见 §4.14。
+
+#### 3.3.2 导航壳与反馈通道（2026-10-15 重构 P0，**加页 / 改导航前先读这一节**）
+
+**视图清单只有一处数据源**：`frontend/src/services/navViews.js` 的 `VIEWS`。
+导航项、左右滑动顺序、页内分段、深链解析全部读它；`App.vue` 只按 id 映射图标
+（`NAV_ICONS` / `SEGMENT_ICONS`）。
+
+- **加一个顶层页** = `VIEWS` 加一项 + `App.vue` 的 `NAV_ICONS` 加图标 + 加一个
+  `<template #view-<id>>` 槽位。漏任何一处测试就会红（`navViews.test.mjs` 扫源码比对；
+  2026-10-15 之前正是这样漏出了「音源管理是个整页、却不在导航里」的孤儿页）。
+- **深链一律过 `resolveRoute()`**：`navigateTo('logs')` → `{view:'system', segment:'logs'}`。
+  App.vue 里切视图**只有一个入口** `goView()`，组件不要自己拼 `currentView`。
+- **分段**（`components/SegmentedControl.vue`）用于「二级、但不该占导航位」的页：
+  发现（发现 / 榜单）、系统（日志 / 设置）。两段都常驻（`v-show`）、首段懒挂载，
+  来回切不重建组件、不重发请求。
+
+**反馈只有一条通道**：`services/feedback.js`（队列 / 去重 / 超时 / 写日志）+
+`components/FeedbackHost.vue`（App.vue 挂一次）。任何组件 `import { ok, fail } from '../services/feedback'`；
+`fail()` 默认带「点一下看日志」。常驻说明走 `PageShell` 的 `desc`（收进标题 tooltip），
+状态走状态条 —— **不要再造第四种提示**（历史上页脚文案 / 各页 InlineNotice / appToast / alert 四套并存，
+同一件事三种说法，用户的原话是「提示太多了，看起来很挤」）。
+
+**容器三层**（层次不清是「挤」的主因）：
+1. 页面层 → `PageShell`（唯一滚动容器 + `max-w-[1500px]` + 标准内边距）
+2. 区块层 → 卡片 `rounded-[var(--ys-radius-card)] border border-[var(--ys-border)] bg-white`（一页最多 4~5 个）
+3. 条目层 → 行 `border-b` + 右侧动作区（**主按钮只留一个**）
+
+设计令牌在 `style.css` 的 `:root`（`--ys-*`）：**只加已经在用的**，不预造空令牌
+（空令牌 = 又一批死代码）。完整方案与分期见 `docs/UI重构方案.md`。
 
 **状态横幅 + 主按钮必须同一行**（`PushManager` 的飞牛状态条就是这条）：
 

@@ -98,7 +98,12 @@ const MEASURE = `(() => {
   for (const el of document.querySelectorAll('body *')) {
     const r = el.getBoundingClientRect();
     if (r.width < 2 || r.height < 2) continue;
-    if (r.left < -1) continue;                       // 离屏兄弟页，跳过
+    if (r.left < -1) continue;                       // 离屏兄弟页（当前页左边的），跳过
+    // ⚠️ 2026-10-15 加：**右边的**离屏兄弟页也要跳过。SwipePager 把 5 个顶部视图整条排一行，
+    // 当前页右边的那些 left≈390/780 —— 只要访问顺序不是从左到右单调（例如「账号连接」之后再回到
+    // 「音源管理」），它们就已经挂载了，旧判据只排 left<0，于是整页容器被报成「溢出 6 处」。
+    // 真正的溢出是「起点在视口内、终点越出右边界」。
+    if (r.left >= vw - 1) continue;
     if (clippedByScroll(el)) continue;               // 可横滑祖先里的元素，跳过
     if (r.right > vw + 1) {
       bad.push({ t: el.tagName, c: String(el.className || '').slice(0, 46),
@@ -183,9 +188,11 @@ const main = async () => {
     });
   };
 
-  // 顶层导航（点完回到顶）
+  // 顶层导航（点完回到顶）。
+  // 2026-10-15 P0 后只有 5 项：发现音乐 / 曲库管家 / 音源管理 / 账号连接 / 系统
+  // —— 「榜单」成了发现页的页内分段，「日志 / 设置」成了系统页的两段。
   await step('发现音乐', '01-discover', '发现音乐');
-  await step('榜单管理', '02-charts', '榜单管理');
+  await step('发现 · 榜单', '02-charts', '榜单');
   await step('曲库管家', '03-library', '曲库管家');
   // 曲库管家的侧栏子页
   await step('曲库管家 · 本地音乐', '04-nas', '本地音乐');
@@ -194,8 +201,11 @@ const main = async () => {
   await step('曲库管家 · 补全整理', '07-complete', '补全整理');
   await step('曲库管家 · 自动下载记录', '08-autodl', '自动下载记录');
   await step('账号连接', '09-accounts', '账号连接');
-  await step('日志', '10-logs', '日志');
-  await step('设置', '11-settings', '设置');   // 2026-10-15 新增页（音质/命名/存储目录/关于）
+  // 2026-10-15 起「音源管理」进了导航（此前是整页却只在顶栏胶囊里能进）
+  await step('音源管理', '10-sources', '音源管理');
+  // 系统页：点导航后默认落在第一段「日志」，再点「设置」量第二段
+  await step('系统 · 日志', '11-system-logs', '系统');
+  await step('系统 · 设置', '12-system-settings', '设置');
 
   console.log(JSON.stringify(report));
   try { chrome.kill(); } catch {}
