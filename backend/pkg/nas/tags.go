@@ -14,6 +14,7 @@ import (
 	"fn-lx-player/pkg/search"
 	"fn-lx-player/pkg/security"
 	"fn-lx-player/pkg/tags"
+	"fn-lx-player/pkg/useragent"
 )
 
 // tagHTTPClient 抓取封面用；已配合 security.NewSafeTransport 做 SSRF 防护
@@ -252,7 +253,7 @@ func fetchTagCover(rawURL string) ([]byte, string, error) {
 	if err != nil {
 		return nil, "", fmt.Errorf("构造封面请求失败：%v", err)
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+	req.Header.Set("User-Agent", useragent.Desktop)
 	req.Header.Set("Referer", "https://music.163.com/")
 
 	resp, err := tagHTTPClient.Do(req)

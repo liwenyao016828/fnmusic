@@ -76,6 +76,11 @@ func (i *Interceptor) lxCandidates(ctx context.Context, keyword string) []search
 		if id == "" || name == "" || src == "" {
 			continue
 		}
+		// 记住这条记录 + 给这个源注册解析器（见 lxresolve.go）。
+		// 两件事都**只在真正接受这条候选时**做：没进池的候选不需要能解析。
+		i.rememberLxItem(src, id, s.Raw)
+		i.ensureLxResolver(src)
+
 		out = append(out, search.UnifiedSong{
 			ID:      id,
 			Songmid: id,

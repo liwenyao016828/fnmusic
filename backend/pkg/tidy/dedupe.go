@@ -4,6 +4,7 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
+	"fn-lx-player/pkg/namefmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -117,14 +118,11 @@ func FindDuplicates(paths []string, opts DedupeOptions) ([]DupGroup, []string) {
 			Size:   fi.Size(),
 			Format: strings.TrimPrefix(strings.ToLower(filepath.Ext(p)), "."),
 		}
-		// 从文件名解析歌手/歌名，用于 name 通道
+		// 从文件名解析歌手/歌名，用于 name 通道。
+		// 方向按用户配的命名格式走（pkg/namefmt）—— 这里写死「歌手在前」的话，
+		// 换格式之后去重会把「歌名」当成歌手参与匹配，同一首歌的两份反而对不上。
 		base := strings.TrimSuffix(filepath.Base(p), filepath.Ext(p))
-		if parts := strings.SplitN(base, " - ", 2); len(parts) == 2 {
-			it.Artist = strings.TrimSpace(parts[0])
-			it.Title = strings.TrimSpace(parts[1])
-		} else {
-			it.Title = base
-		}
+		it.Artist, it.Title = namefmt.Parse(base)
 		items = append(items, it)
 	}
 

@@ -95,3 +95,22 @@ export function decideFailover(ctx) {
   }
   return { retry: false, switchSource: false }
 }
+
+/**
+ * 「无损文件是坏流」时的降档目标档位（2026-10-15 项目审计补上的一环）。
+ *
+ * 背景：入库前有逐帧 CRC 校验（后端 pkg/flacok），下回来的 FLAC 只要有一帧
+ * CRC 对不上就整首拒收，并回机器可读的 `error_code = "flac_corrupt"`。
+ * 这种文件**换档才有救** —— 同一首歌的 320K 是另一条编码链路，通常完好；
+ * 一直重试同一个无损直链只会把坏流再下一遍（直链是坏的，不是网络抖动）。
+ *
+ * @param {{quality?:string, _qualityDowngraded?:boolean}} task 下载任务
+ * @returns {string} 目标档位；空串表示不用降 —— 已经是有损档（降无可降），
+ *                   或者这首已经降过一次（不许来回降，降完再坏就老实失败）
+ */
+export function corruptFlacDowngradeTarget(task) {
+  if (!task || task._qualityDowngraded) return ''
+  const q = String(task.quality || 'highest')
+  if (/^(128|192|320)/.test(q)) return '' // 已经是有损档
+  return '320k'
+}

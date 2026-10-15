@@ -17,6 +17,8 @@ import (
 	"io"
 	"net/http"
 	"strings"
+
+	"fn-lx-player/pkg/useragent"
 )
 
 // PlaylistCategory 一个歌单分类。
@@ -116,7 +118,7 @@ func (cm *ChartManager) fetchQQPlaylistCategories() ([]PlaylistCategory, error) 
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+	req.Header.Set("User-Agent", useragent.Desktop)
 	req.Header.Set("Referer", "https://y.qq.com/")
 
 	resp, err := cm.client.Do(req)

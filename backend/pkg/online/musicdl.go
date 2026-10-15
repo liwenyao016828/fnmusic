@@ -42,7 +42,13 @@ const (
 	// 比单条解析长得多：sidecar 内部会对每个源并发跑（单源预算 25s），
 	// 而搜索是「用户点一下在等」的操作，给到 40s 是为了让最慢的那个源也能
 	// 把结果交出来 —— 超过这个数说明 sidecar 本身出问题了。
-	musicdlSearchTimeout = 40 * time.Second
+	// ⚠️ 2026-10-08：40 → 135s。必须**大于** sidecar 的单源预算（现为 120s），
+	// 否则整次搜索会先于最慢那个源被掐掉（差一点点最亏）。
+	//
+	// 为什么敢给这么长：这条路只服务**下载**（用户口径：收藏下载不必最快），
+	// 而试听那条腿被 intercept 的 onlineSearchWait(3s) / onlineSearchBudget(8s)
+	// 独立掐着，不受这里影响。
+	musicdlSearchTimeout = 135 * time.Second
 	// musicdlResolveTimeout 是批量解析的预算（每条还要回搜一次）。
 	musicdlResolveTimeout = 60 * time.Second
 	// musicdlHealthTimeout 要短：健康检查是给「现在能不能用」下结论的，

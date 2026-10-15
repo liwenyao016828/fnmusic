@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 	"fn-lx-player/pkg/config"
 	"fn-lx-player/pkg/intercept"
 	"fn-lx-player/pkg/lxnode"
+	"fn-lx-player/pkg/namefmt"
 	"fn-lx-player/pkg/online"
 	"fn-lx-player/pkg/sources"
 	"fn-lx-player/pkg/takeover"
@@ -56,6 +58,13 @@ func main() {
 
 	sourcesMgr := sources.NewManager(cfgMgr, nil, "")
 
+	// 2.1 曲库文件命名格式（`歌曲名 - 歌手名` / `歌手名 - 歌曲名`）
+	//
+	// 这是个**进程级约定**：下载写入（downloader/tee）与扫描读取（nas/tidy）都按它走，
+	// 所以开机设一次、每次保存配置再设一次（pkg/namefmt 用 atomic 存，随时可切）。
+	namefmt.Set(cfgMgr.Get().FilenameFormat)
+	cfgMgr.OnUpdate(func(c config.AppConfig) { namefmt.Set(c.FilenameFormat) })
+
 	// 2.5 在线解析池 + musicdl sidecar（可选，默认关）
 	//
 	// 解析池在这里**显式**建好并交给拦截层，而不是让拦截层自己建：sidecar 的解析器
@@ -87,6 +96,29 @@ func main() {
 	//   - 已经有别的扩展在代理（例如 fnmusic-ext）→ 自动让路，不抢位置；
 	//   - socket 被陌生进程占着 → 拒绝接管并说明原因。
 	// 前一次接管崩在半路时，这里会先按 journal 把官方还原，再重新接管。
+	// 「自动下载记录」：飞牛音乐页面里收藏 / 加歌单 / 点「下载到曲率」触发的那批下载
+	// 的流水（见 pkg/online/autolog.go）。
+	//
+	// 在这里建、而不是在拦截层里建：它**不管接管开没开都要存在** —— 接管关着时
+	// 一条记录都不会产生，但接口仍要能回一个空列表，而不是 500。
+	// （「没有记录」与「功能没起来」是两件事，不该长得一样。）
+	autoLog, autoLogErr := online.NewAutoLog(filepath.Join(*dataDir, "online"))
+	if autoLogErr != nil {
+		log.Printf("[INIT] 自动下载记录打不开（本次不记流水）：%v", autoLogErr)
+		autoLog = nil
+	}
+	// 包一层而不是直接传 Append：Append 会返回写盘错误，而记录是「收藏」的
+	// 附加产物 —— 写不进去不该让下载看起来失败，但也不能悄无声息（下次真查
+	// 「记录怎么少了一条」时，这行日志就是唯一的线索）。
+	var autoLogAppend func(online.AutoLogEntry)
+	if autoLog != nil {
+		autoLogAppend = func(e online.AutoLogEntry) {
+			if err := autoLog.Append(e); err != nil {
+				log.Printf("[INTERCEPT] 自动下载记录写盘失败：%v", err)
+			}
+		}
+	}
+
 	var tk *takeover.Manager
 	// ic 提到 if 外面：优雅关闭时要调它的 CloseTee（收掉在途的后台续传）。
 	var ic *intercept.Interceptor
@@ -121,6 +153,25 @@ func main() {
 			// 页面注入的一键退路（见 pkg/intercept/pageshell.go）：关掉之后
 			// 官方页面由接管层反向代理逐字节原样透传，与没做注入时完全一致。
 			UIInjectEnabled: func() bool { return cfgMgr.Get().InjectUIEnabled() },
+			// 试听的音质偏好（见 pkg/intercept/playback_quality.go）。现取：
+			// 在飞牛页面里点了切换，**下一首歌**就按新档位取，不用重启应用。
+			PlaybackQuality: func() string { return cfgMgr.Get().PlaybackQuality },
+			// 「自动下载记录」的落点与「飞牛页面触发的下载」的音质偏好（见
+			// pkg/intercept/autodownload.go）。两者都是现取：用户在界面上改了
+			// 「音质下载」，下一次收藏就按新档位取。
+			AutoDownloadLog: autoLogAppend,
+			// 取的是「开关套上去之后」的档位，不是原始的 auto_download_quality ——
+			// 「下载音质」开关（下载音质：跟随 / 无损 / 320k）是**盖住**它的，
+			// 套不套这一步必须只有一个地方做（见 config.QualityOverride）。
+			AutoDownloadQuality: func() string {
+				c := cfgMgr.Get()
+				return config.QualityOverride(c.AutoDownloadQuality, c.DownloadQualitySetting())
+			},
+			// 写回配置（同源通道的切换按钮用它）。只写这一个键 ——
+			// ConfigManager.Update 是选择性合并，空字段不会被碰，所以不会顺手动到别的设置。
+			SetPlaybackQuality: func(q string) error {
+				return cfgMgr.Update(config.AppConfig{PlaybackQuality: q})
+			},
 			// 注入脚本的「开发覆盖」：文件存在时优先发它（见 qulvbridge.go）。
 			// 注入界面只能在官方页面里看效果，而这个文件平时是编译进二进制的
 			// —— 改一行要重打包 + 重装应用（约两分钟）。留这个口子，改完刷新
@@ -135,6 +186,8 @@ func main() {
 			// 「边听边下」与它的暂存落点（见 pkg/intercept/tee.go）。
 			TeeEnabled:  func() bool { return cfgMgr.Get().TeeOn() },
 			DownloadDir: func() string { return cfgMgr.Get().DownloadDir },
+			// 缓存/暂存目录（空 = 用默认位置）。现取：改了下一首歌就生效。
+			CacheDir: func() string { return cfgMgr.Get().CacheDirPath() },
 			// 「每日推荐的大模型层」的用户同意开关（见 pkg/intercept/vdaily_llm.go）。
 			//
 			// 现取：用户打开就该立刻生效。**这里只有这一个字段** ——
@@ -158,7 +211,10 @@ func main() {
 			// lxnode.ErrNotRunning，拦截层把它当「源没开」**静默跳过** ——
 			// 所以「缺省关」这条不需要在两处各判一次（两处判空迟早会不一致）。
 			LxSearch: lxn.SearchAll,
-			Pool:     pool,
+			// 取链那一半（2026-10-08 补）：池里 `lx:<src>` 的解析器调它。
+			// 在这之前只注了 SearchAll —— 洛雪候选能进池、却取不到直链。
+			LxResolve: lxn.Resolve,
+			Pool:      pool,
 			// 参与「官方页面搜索合并」的平台 = 内置默认（网易 + QQ）
 			// ∪ 当前启用的外挂平台。
 			//
@@ -203,6 +259,9 @@ func main() {
 	if ic != nil {
 		ic.SetRecommendLLM(server.RecommendCandidates)
 	}
+	// 自动下载记录表交给接口层**读**（写入方是拦截层，见 pkg/api/autodownload.go）。
+	// 无论接管开没开都要交：接管关着时它只是一张空表，接口照常回空列表。
+	server.SetAutoLog(autoLog)
 	// 状态与客户端都传**函数**：客户端会在配置变化时重建，构造时抓一份
 	// 就等于永远指向旧的那个（见 pkg/api/musicdl.go 的说明）。
 	server.SetMusicDL(mdl.Status, mdl.Client)
@@ -217,15 +276,52 @@ func main() {
 	// 这个跑的是用户自己的洛雪音源脚本。同样是「挂了不影响曲率」：Resolve 只返回错误。
 	{
 		c := cfgMgr.Get()
+		// 先把用户脚本正文落盘 —— 宿主是 Node 子进程，只会读 `<Dir>/*.js`，
+		// 而脚本正文存在配置里（前端要拿它去浏览器执行）。
+		// ⚠️ 少了这一步，宿主起来也是**零脚本**（2026-10-08 实测确认过），
+		// 洛雪那条路静默不可用 —— 见 pkg/lxnode/sync.go 顶部。
+		scripts := map[string]string{}
+		active := map[string]bool{}
+		for _, id := range c.ActiveSourceIDs {
+			active[id] = true
+		}
+		for _, cs := range c.CustomSources {
+			// 只落**启用中**的那些：池里该出现的是用户勾选过的源。
+			// active 为空（老配置没这个字段）时全落 —— 与「没设置过 = 全用」同口径。
+			if len(active) > 0 && !active[cs.ID] {
+				continue
+			}
+			if strings.TrimSpace(cs.Script) == "" {
+				continue
+			}
+			scripts[cs.Name] = cs.Script
+		}
+		lxDir := filepath.Join(*dataDir, "lx_sources")
+		if err := lxnode.SyncScripts(lxDir, scripts); err != nil {
+			// 落盘失败**不让应用起不来**：洛雪那条路用不了而已，
+			// 其余功能（含 musicdl 那条腿）照常。
+			log.Printf("[INIT] 洛雪脚本落盘失败（服务端洛雪将不可用）：%v", err)
+		} else {
+			log.Printf("[INIT] 服务端洛雪脚本已同步 %d 个 → %s", len(scripts), lxDir)
+		}
 		lxn.Apply(lxnode.Config{
 			Enabled: c.LXServerOn(),
 			NodeBin: "node",
 			// 复用 sidecarSourceDir 的定位逻辑（生产在可执行文件旁、开发在仓库根），
 			// 它给的是 sidecar/musicdl_service，取其父目录再进 lx_host。
 			Script: filepath.Join(filepath.Dir(sidecarSourceDir()), "lx_host", "server.mjs"),
-			Dir:    filepath.Join(*dataDir, "lx_sources"),
+			Dir:    lxDir,
 			Port:   c.LXServerPort,
 		})
+		// 宿主起来没有、为什么没起来 —— **必须记一笔**。
+		// 这个能力的失败以前是静默的（只写进 lxnode 的 stderr），于是
+		// 「洛雪源一次都没参与过下载」查不到根因。现在启动后立刻问一次状态。
+		if st := lxn.Status(); st["state"] != lxnode.StateReady {
+			log.Printf("[INIT] 服务端洛雪宿主未就绪：state=%v err=%v（脚本目录 %s）",
+				st["state"], st["error"], lxDir)
+		} else {
+			log.Printf("[INIT] 服务端洛雪宿主就绪：%v", st["base"])
+		}
 	}
 	defer lxn.Stop()
 	server.SetTakeover(tk)

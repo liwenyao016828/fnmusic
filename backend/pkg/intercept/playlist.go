@@ -328,7 +328,7 @@ func (i *Interceptor) handlePlaylistAddTrack(w http.ResponseWriter, r *http.Requ
 	// `autoDownload` 自己查开关、查是否已下载、查是否已有同曲在下（关着时立刻返回），
 	// 这里不用再判一次 —— 两处判空迟早会不一致。
 	for _, it := range items {
-		i.autoDownload(it.GUID, it.Track)
+		i.autoDownload(it.GUID, it.Track, TriggerPlaylist)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"code": 0, "msg": "", "data": nil})

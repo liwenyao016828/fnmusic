@@ -36,7 +36,7 @@ func (i *Interceptor) handleFavoriteCreate(w http.ResponseWriter, r *http.Reques
 	// 用户点红心是即时反馈的操作，不能等一首无损几十兆下完。
 	// `autoDownload` 自己会查开关、查是否已下载、查是否已有同曲在下 —— 关着时它
 	// 立刻返回，这里不用再判一次（两处判空迟早会不一致）。
-	i.autoDownload(fake, track)
+	i.autoDownload(fake, track, TriggerFavorite)
 
 	writeJSON(w, http.StatusOK, map[string]any{"code": 0, "msg": "", "data": nil})
 	return true

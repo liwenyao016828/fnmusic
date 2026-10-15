@@ -8,7 +8,7 @@
     会把这页的主任务「扫码登录」挤出首屏（用户 2026-09-24 选定：扫码卡之后 + 默认折叠）。
     折叠条上必须自带状态徽标与一句摘要 —— 收起不等于看不出没没配好。
   -->
-  <div class="mt-5 overflow-hidden rounded-[15px] border border-gray-200 bg-white">
+  <div class="mt-5 overflow-hidden rounded-xl border border-gray-200 bg-white">
     <button
       class="flex w-full items-center gap-2.5 px-4 py-3.5 text-left transition-colors hover:bg-gray-50"
       @click="toggleOpen"
@@ -28,7 +28,7 @@
     </button>
 
     <div v-if="open" class="space-y-3 border-t border-gray-100 p-4">
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+      <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <label class="text-[11px] text-gray-500 md:col-span-2">
           Base URL
           <input v-model="aiForm.base_url" class="mt-1 w-full px-2.5 py-1.5 rounded-lg border border-gray-200 text-xs font-mono"
@@ -127,11 +127,6 @@
           <span class="text-xs font-semibold text-gray-700">命名解析规则</span>
           <span class="text-[10px] text-gray-400">优先于内置规则</span>
         </div>
-        <p class="text-[11px] leading-relaxed text-gray-400">
-          内置规则只覆盖常见命名（歌手 - 歌名）。遇到你特有的命名习惯，给一个样例 + 一句解释，
-          让 AI 出一条正则；确认无误后保存，之后整库按它解析、不再调用 AI。
-        </p>
-
         <div class="flex flex-wrap items-center gap-2">
           <input
             v-model="ruleForm.sample"
@@ -143,11 +138,27 @@
             class="min-w-[150px] flex-1 rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs"
             placeholder="一句话解释（可选）"
           />
-          <button
+        </div>
+
+        <div class="grid grid-cols-2 gap-2">
+          <ActionCard
+            :title="ruleBusy ? '生成中…' : 'AI 生成规则'"
+            hint="样例 + 一句解释 → 一条正则；确认无误再保存"
+            :icon="Sparkles"
             :disabled="ruleBusy"
-            class="rounded-lg bg-emerald-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-600 disabled:opacity-50"
             @click="genNameRule"
-          >{{ ruleBusy ? '生成中…' : 'AI 生成规则' }}</button>
+          />
+          <!-- 保存之后的行为与代价：整库按这条规则解析、不再调用 AI。
+               用户点「保存规则」之前要知道这件事（它决定「值不值得花一次 AI」）。 -->
+          <p class="text-[11px] leading-snug text-gray-400 sm:col-span-2 lg:col-span-3">
+            保存后整库按这条规则解析，<b class="text-gray-600">不再调用 AI</b>。
+          </p>
+          <!-- 空态卡：这句说明没有可点的动作，所以不用 ActionCard（它会渲染成一个按钮，
+               点了没反应反而是个坑），只借同一套卡片排版跟动作卡并排 -->
+          <div v-if="!nameRules.length" class="rounded-xl border border-dashed border-gray-200 px-3 py-2.5">
+            <b class="block text-[12.5px] font-bold text-gray-600">还没有自定义规则</b>
+            <span class="mt-0.5 block text-[11px] leading-snug text-gray-400">常见命名会由内置规则处理</span>
+          </div>
         </div>
 
         <!-- 生成结果：正则可编辑，校验通过才让保存 -->
@@ -199,7 +210,6 @@
             </div>
           </div>
         </div>
-        <p v-else class="text-[11px] text-gray-400">还没有自定义规则 —— 常见命名会由内置规则处理。</p>
       </div>
 
       <!-- 这个面板自己的一句话反馈（原来靠宿主页的 flash 槽） -->
@@ -213,6 +223,7 @@ import { ref, computed, onMounted } from 'vue'
 import { Sparkles, ChevronDown } from 'lucide-vue-next'
 import { AIAPI, TidyAPI } from '../api/client'
 import InlineNotice from './InlineNotice.vue'
+import ActionCard from './ActionCard.vue'
 import { fail, apiError } from '../services/userMsg'
 import { logError } from '../services/appLog'
 import { loadBool, savePref } from '../services/prefs'

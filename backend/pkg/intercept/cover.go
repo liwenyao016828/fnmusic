@@ -50,13 +50,25 @@ func (i *Interceptor) handleCover(w http.ResponseWriter, r *http.Request) bool {
 	}
 
 	data, ctype := i.coverBytes(r.Context(), track, fake)
-	if len(data) == 0 {
+	// placeholder 为 true 表示这次没取到真图，发的是兜底图。
+	placeholder := len(data) == 0
+	if placeholder {
 		data, ctype = placeholderPNG, "image/png"
 	}
 	w.Header().Set("Content-Type", ctype)
 	w.Header().Set("Content-Length", itoa(len(data)))
-	// 封面不变，让客户端放心长缓存；虚拟 id 是确定性哈希，重启后仍是同一个 URL。
-	w.Header().Set("Cache-Control", "public, max-age=604800")
+	if placeholder {
+		// 兜底图**绝不能**被缓存。
+		//
+		// 封面 URL 是「平台 + 平台内 id」的确定性哈希，重启后还是同一个 URL，
+		// 所以这里一旦给了长缓存，一次瞬时失败（取链抖动、风控窗口、网络超时）
+		// 就会把破图钉在客户端七天，而且 URL 不变 → 永远等不到自愈。
+		// no-store 让下一次请求重新来取，取到了就立刻换成真图。
+		w.Header().Set("Cache-Control", "no-store")
+	} else {
+		// 真图不变，让客户端放心长缓存。
+		w.Header().Set("Cache-Control", "public, max-age=604800")
+	}
 	w.WriteHeader(http.StatusOK)
 	if r.Method == http.MethodHead {
 		return true

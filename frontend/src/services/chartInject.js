@@ -19,6 +19,9 @@ import { createWriteQueue } from './writeQueue'
 const ids = ref([])         // 已勾选的榜单，元素形如 `wy_3778678`
 const enabled = ref(true)   // 榜单注入总开关（关掉**不丢**勾选）
 const uiInject = ref(true)  // 页面注入（飞牛自带音乐页里曲率补的入口）
+// 「音质下载」：飞牛页面里收藏 / 加歌单 / 点「下载到曲率」时取什么音质。
+// 与「试听音质」（注入面板里那个切换）分开：一个管**存**、一个管**听**。
+const autoDownloadQuality = ref('highest')
 const busy = ref(false)     // 有写请求在飞（按钮禁用 + 转圈）
 const error = ref('')
 const savedAt = ref(0)      // 最近一次写成功的时刻（ms）
@@ -70,6 +73,7 @@ export async function loadConfig(force = false) {
       ids.value = normalizeIds(cfg.ids)
       enabled.value = cfg.enabled
       uiInject.value = cfg.uiInject
+      autoDownloadQuality.value = cfg.autoDownloadQuality || 'highest'
       error.value = ''
     } catch (e) {
       error.value = '读取配置失败：' + describe(e)
@@ -84,11 +88,12 @@ export async function loadConfig(force = false) {
 
 /** 真正发请求的动作（队列只管「什么时候写、写什么」，不关心怎么发） */
 const writes = createWriteQueue({
-  send: async ({ ids: wIds, enabled: wEnabled, ui: wUI }) => {
-    // 三个键分开 patch：后端是选择性合并，没出现的键一律不动
+  send: async ({ ids: wIds, enabled: wEnabled, ui: wUI, adq: wAdq }) => {
+    // 四个键分开 patch：后端是选择性合并，没出现的键一律不动
     if (wIds !== undefined) await ChartInjectAPI.saveIds(wIds)
     if (wEnabled !== undefined) await ChartInjectAPI.saveEnabled(wEnabled)
     if (wUI !== undefined) await ChartInjectAPI.saveUIInject(wUI)
+    if (wAdq !== undefined) await ChartInjectAPI.saveAutoDownloadQuality(wAdq)
     writeEpoch++
     savedAt.value = Date.now()
     error.value = ''
@@ -128,12 +133,19 @@ export function setUIInject(on) {
   return writes.ui(on)
 }
 
+/** 音质下载：飞牛页面触发的下载取什么音质（见 pkg/intercept/autodownload.go）。 */
+export function setAutoDownloadQuality(q) {
+  autoDownloadQuality.value = q || 'highest'
+  return writes.adq(autoDownloadQuality.value)
+}
+
 export const chartInject = {
-  ids, enabled, uiInject, busy, error, savedAt, loading,
+  ids, enabled, uiInject, autoDownloadQuality, busy, error, savedAt, loading,
   load: loadConfig,
   isInjected,
   replaceIds,
   toggleItem,
   setEnabled,
   setUIInject,
+  setAutoDownloadQuality,
 }

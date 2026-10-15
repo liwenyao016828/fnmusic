@@ -26,8 +26,7 @@
             <span :class="['text-[10px] px-1.5 py-0.5 rounded-full border font-mono', badge.cls]">{{ badge.text }}</span>
           </div>
           <p class="mt-1 text-[11px] leading-relaxed text-gray-500">
-            musicdl 覆盖 {{ total }} 个音源（酷狗、酷我、咪咕、B站、Apple Music、Spotify…）。
-            打开后首次要建 Python 环境并联网装依赖（约 1-2 分钟），期间曲率照常可用。
+            覆盖 {{ total }} 个音源；首次开启要装依赖，1-2 分钟。
           </p>
         </div>
         <button
@@ -63,29 +62,59 @@
             placeholder="过滤源名 / 短码…"
             class="flex-1 min-w-[10rem] rounded-lg border border-gray-200 px-3 py-1.5 text-xs outline-none focus:border-emerald-300" />
           <span class="text-[11px] text-gray-500 font-mono">已启用 {{ selected.length }} / {{ total }}</span>
-          <button @click="selectOnlyUsable" :disabled="busy || !probed.length"
-            class="px-3 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-xs text-emerald-700 disabled:opacity-50"
-            title="只留下检测到能出结果的源（先点「检测当前启用的」或「检测全部」）">
-            仅留可用
-          </button>
-          <button @click="selectAll" :disabled="busy" class="px-3 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-xs text-gray-600 disabled:opacity-50">全部启用</button>
-          <button @click="selectNone" :disabled="busy" class="px-3 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-xs text-gray-600 disabled:opacity-50">全部停用</button>
-          <button @click="probeSelected" :disabled="probing || !selected.length"
-            class="px-3 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-xs text-gray-600 flex items-center gap-1.5 disabled:opacity-50">
-            <Gauge :class="['w-3.5 h-3.5 text-emerald-500', probing ? 'animate-spin' : '']" />
-            {{ probing ? `检测中 ${probeDone}/${probeTotal}` : '检测已启用' }}
-          </button>
-          <button @click="probeAll" :disabled="probing"
-            class="px-3 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-xs text-gray-600 disabled:opacity-50"
-            title="把 56 个源都试一遍 —— 会跑很久（每个源单源预算十几秒），建议只在你真想筛一遍时用">
-            检测全部
-          </button>
+        </div>
+        <div class="mt-2 grid grid-cols-2 gap-2 lg:grid-cols-3">
+          <!-- 原生 title 会被 ActionCard 的 title prop 吃掉（那个 prop 是卡片主标题），
+               所以 tooltip 只能挂在外面这层容器上 -->
+          <div :title="'只留下检测到能出结果的源（先点「检测当前启用的」或「检测全部」）'">
+            <ActionCard
+              title="仅留可用"
+              hint="没测过的源会被一起丢掉"
+              :icon="ListChecks"
+              :disabled="busy || !probed.length"
+              @click="selectOnlyUsable"
+            />
+          </div>
+          <ActionCard
+            title="全部启用"
+            hint="注册的 {{ total }} 个源全打开"
+            :icon="CheckCheck"
+            :disabled="busy"
+            @click="selectAll"
+          />
+          <ActionCard
+            title="全部停用"
+            hint="回到只留 mg 一个源"
+            :icon="CircleOff"
+            :disabled="busy"
+            @click="selectNone"
+          />
+          <ActionCard
+            :title="probing ? `检测中 ${probeDone}/${probeTotal}` : '检测已启用'"
+            hint="只测当前启用的这几个"
+            :icon="Gauge"
+            :disabled="probing || !selected.length"
+            @click="probeSelected"
+          />
+          <div title="把 56 个源都试一遍 —— 会跑很久（每个源单源预算十几秒），建议只在你真想筛一遍时用">
+            <ActionCard
+              title="检测全部"
+              hint="56 个源逐个真搜一次，很慢"
+              :icon="Gauge"
+              icon-class="text-amber-500"
+              :disabled="probing"
+              @click="probeAll"
+            />
+          </div>
+          <!-- 说明卡：这里没有可点的动作，所以不用 ActionCard（它会渲染成一个按钮，
+               点了没反应反而是个坑），只借同一套卡片排版跟动作卡并排 -->
+          <div class="rounded-xl border border-dashed border-gray-200 px-3 py-2.5">
+            <b class="block text-[12.5px] font-bold text-gray-600">试运行</b>
+            <span class="mt-0.5 block text-[11px] leading-snug text-gray-400">未启用的源可先试；不写配置、不进搜索</span>
+          </div>
         </div>
         <p class="mt-2 text-[11px] text-gray-400">
-          ⚠️ 启用一个**用不了**的源是有代价的：每次搜索都要为它等满单源预算。先检测再启用。
-        </p>
-        <p class="mt-1 text-[11px] text-gray-400">
-          拿不准的源可以先点「试运行」：临时拉起它跑一次检测，**不写配置、不进搜索**，5 分钟不保存自动回收。
+          ⚠️ 启用一个<b>用不了</b>的源，每次搜索都要等它超时 —— 先检测再启用。
         </p>
       </div>
 
@@ -171,7 +200,7 @@
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { Gauge } from 'lucide-vue-next'
+import { Gauge, ListChecks, CheckCheck, CircleOff } from 'lucide-vue-next'
 import { ConfigAPI, MusicDLAPI } from '../api/client'
 import { describeError } from '../services/userMsg'
 import { logInfo, logWarn } from '../services/appLog'
@@ -180,6 +209,7 @@ import {
   previewStatusText, secondsUntil, shouldProbePreview,
 } from '../services/musicdlPreview'
 import InlineNotice from './InlineNotice.vue'
+import ActionCard from './ActionCard.vue'
 
 const emit = defineEmits(['changed'])
 

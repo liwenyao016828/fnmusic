@@ -14,6 +14,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"fn-lx-player/pkg/useragent"
 )
 
 // 封面体积上限。封面正常几十 KB～几百 KB，12MB 足够，同时防住「超大文件打爆内存」。
@@ -50,7 +52,7 @@ func FetchImageWithLimit(rawURL, referer string, maxBytes int64) ([]byte, string
 	if err != nil {
 		return nil, ""
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+	req.Header.Set("User-Agent", useragent.Desktop)
 	if referer != "" {
 		req.Header.Set("Referer", referer)
 	}

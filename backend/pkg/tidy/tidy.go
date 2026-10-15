@@ -9,6 +9,7 @@ package tidy
 
 import (
 	"fmt"
+	"fn-lx-player/pkg/namefmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -313,8 +314,9 @@ func hasSidecarLyric(filePath string) bool {
 		filepath.Join(dir, base+".LRC"),
 		filepath.Join(dir, base+".txt"),
 	}
-	if parts := strings.Split(base, " - "); len(parts) == 2 {
-		title := strings.TrimSpace(parts[1])
+	// 与 pkg/nas 的歌词候选同一套反解规则（见 pkg/namefmt）：命名格式可配，
+	// 不能写死「歌手在前」，否则换了格式就找不到同名歌词文件。
+	if _, title := namefmt.Parse(base); title != "" && title != base {
 		if title != "" {
 			candidates = append(candidates,
 				filepath.Join(dir, title+".lrc"),

@@ -13,6 +13,9 @@ import {
   completePercent,
   aiMatchedCount,
   completeDoneText,
+  COMPLETE_STEPS,
+  completeStep,
+  completeHint,
 } from './libraryView.js'
 
 const NOW = 1758888000000 // 2025-09-26T12:00:00Z 附近，测试里当「现在」
@@ -21,23 +24,43 @@ test('normalizeLibraryTab：旧 id 落到新位置，认不出来的落到推送
   assert.equal(normalizeLibraryTab('tidy'), 'complete')
   assert.equal(normalizeLibraryTab('playlist'), 'download')
   assert.equal(normalizeLibraryTab('ai'), 'push')
-  for (const id of ['push', 'download', 'complete', 'charts']) assert.equal(normalizeLibraryTab(id), id)
-  // 空 / 垃圾 / 已删除的页：都不能落空（模板里没有 v-else 兜底，落空就只剩标题栏）
-  for (const bad of ['', null, undefined, 'nope', 'setting']) assert.equal(normalizeLibraryTab(bad), 'push')
+  for (const id of ['nas', 'push', 'download', 'complete', 'autodl']) assert.equal(normalizeLibraryTab(id), id)
+  // 空 / 垃圾 / 已删除的页：都不能落空（模板里没有 v-else 兜底，落空就只剩标题栏）。
+  // 'charts' 是**被搬走**的侧栏项（v2.1.120 升为顶层导航），老偏好里留着它必须落到默认项。
+  for (const bad of ['', null, undefined, 'nope', 'setting', 'charts']) assert.equal(normalizeLibraryTab(bad), 'push')
   assert.deepEqual(Object.keys(LEGACY_TABS).sort(), ['ai', 'playlist', 'tidy'])
 })
 
-test('TAB_IDS：榜单管理（charts）是曲库管家的第四个侧栏项（v2.1.119 搬入）', () => {
-  // charts 必须是合法侧栏项 —— 否则从「排行榜单」指路按钮跳过来会被 normalize
-  // 悄悄落回「推送」，用户看到的就是「点了没反应」。
-  assert.ok(TAB_IDS.has('charts'), 'charts 应在 TAB_IDS 里')
-  assert.deepEqual([...TAB_IDS].sort(), ['charts', 'complete', 'download', 'push'])
-  // 它是 v2.1.119 新增的，没有旧身份：LEGACY_TABS 里**不许**出现 charts ——
+test('TAB_IDS：本地音乐（nas）与自动下载记录（autodl）是侧栏项，榜单管理已搬出去', () => {
+  // nas 必须是合法侧栏项 —— 否则点侧栏「本地音乐」会被 normalize 悄悄落回「推送」，
+  // 用户看到的就是「点了没反应」。
+  assert.ok(TAB_IDS.has('nas'), 'nas 应在 TAB_IDS 里')
+  assert.ok(TAB_IDS.has('autodl'), 'autodl 应在 TAB_IDS 里')
+  assert.deepEqual([...TAB_IDS].sort(), ['autodl', 'complete', 'download', 'nas', 'push'])
+  // 它是 v2.1.120 从顶层导航搬进来的，没有旧身份：LEGACY_TABS 里**不许**出现 nas ——
   // 出现意味着有人给新页编了个「旧 id」，会掩盖真正的跳转 bug。
-  assert.ok(!('charts' in LEGACY_TABS))
-  // 搬进来之后，旧偏好里可能还留着 discover_tab='manage'（发现页旧胶囊的键）。
-  // 那个键已不归管家管 —— charts 走的是 library_tab，两个键不许再串。
+  assert.ok(!('nas' in LEGACY_TABS))
+  // charts 同一轮搬**出去**了（升为顶层导航），不再属于这本侧栏。
+  assert.ok(!TAB_IDS.has('charts'), 'charts 不该再在 TAB_IDS 里')
+  // 旧偏好里可能还留着 discover_tab='manage'（发现页旧胶囊的键）。
+  // 那个键从来不归管家管 —— 两个键不许再串。
   assert.equal(normalizeLibraryTab('manage'), 'push', 'manage 不是管家的侧栏项，别把发现页的旧 tab 键混进来')
+})
+
+// 自动下载（飞牛页面里收藏/加歌单/点下载触发的那批）只报**失败**：
+// 成功的那些是流水，摆在侧栏当常态数字只会让人习惯性忽略这一行 ——
+// 而这一行的用处恰恰是「有失败时让人注意到」。
+test('sidebarStatusItems：自动下载只在有失败时出现，且指向 autodl 侧栏项', () => {
+  const none = sidebarStatusItems({ autoDownload: { failed: 0 } })
+  assert.equal(none.filter(s => s.id === 'autodl-failed').length, 0, '没有失败就不该出现')
+
+  const some = sidebarStatusItems({ autoDownload: { failed: 2 } })
+  const item = some.find(s => s.id === 'autodl-failed')
+  assert.ok(item, '有失败时必须出现')
+  assert.equal(item.count, 2)
+  assert.equal(item.tone, 'error')
+  // tab 决定点它跳到哪儿 —— 指错了用户会落到一个没有这条记录的页面上。
+  assert.equal(item.tab, 'autodl')
 })
 
 test('lastScanText：scanned_at 是「秒」，不是毫秒', () => {
@@ -171,4 +194,25 @@ test('completeDoneText：停止单独说，跑完报六个字段，没搜到才�
   const partial = completeDoneText({ cancelled: false, summary: { lyric_filled: 1 } })
   assert.ok(!/undefined|NaN/.test(partial), partial)
   assert.equal(partial, '补全完成：歌词 1 · 封面 0 · 年份 0 · 曲序 0 · 光盘 0 · 风格 0')
+})
+
+// ── 补全整理的三步流程 ──
+// 用户反馈的原话：「我点击了扫描缺失，也正常出现了缺失的歌曲数量。但是，下一步怎么做呢？」
+// 这三步必须和界面上的按钮一一对上，且只由 gaps / plan 两个已有状态推出。
+test('三步流程：没扫过缺口停在第 1 步，扫过停在第 2 步，出了预览计划停在第 3 步', () => {
+  assert.equal(completeStep(null, null), 1)
+  // 缺口是持久化恢复的（刷新页面后还在），所以刷新后仍应停在第 2 步
+  assert.equal(completeStep({ total: 10 }, null), 2)
+  // 预览出来了就一定要跳到第 3 步 —— 否则界面会一边让用户「勾字段」一边已经能写入了
+  assert.equal(completeStep({ total: 10 }, { plan_id: 'p1', matched: 3 }), 3)
+  // 没有缺口统计也能直接预览（后端自己会扫），此时仍算第 3 步
+  assert.equal(completeStep(null, { plan_id: 'p1', matched: 0 }), 3)
+})
+
+test('三步流程：每一步都要有一句「下一步点哪」，且不能指错按钮', () => {
+  assert.match(completeHint(null, null), /扫描缺失/)
+  assert.match(completeHint({ total: 10 }, null), /预览要写的内容/)
+  assert.match(completeHint({ total: 10 }, { plan_id: 'p1' }), /确认写入/)
+  // 第 1 步那句不能提前叫人点「预览」—— 字段还没勾，点了也白点
+  assert.ok(!/预览/.test(completeHint(null, null)))
 })

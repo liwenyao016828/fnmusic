@@ -34,7 +34,7 @@ import (
 )
 
 // CurrentVersion 应用版本号。发布新版本时与 fpk-package/manifest 的 version 同步修改。
-const CurrentVersion = "2.1.119"
+const CurrentVersion = "2.3.0"
 
 // CurrentAppName 对外暴露的应用标识，必须与 fpk-package/manifest 的 appname 一致。
 //
@@ -87,6 +87,12 @@ type Server struct {
 
 	// 网页端下载队列的持久化（原来只存浏览器 localStorage，换设备就没了）
 	downloadQueue *downloadqueue.Store
+
+	// 自动下载记录（飞牛页面触发的收藏 / 加歌单 / 点下载那批），见 pkg/online/autolog.go。
+	//
+	// 写入方是**拦截层**（只有它知道这些下载），这里只读与清 —— 见
+	// pkg/api/autodownload.go 顶部那段。nil = 记录功能降级（接口会明说）。
+	autoLog *online.AutoLog
 
 	// 音乐入口接管（可选能力，默认关闭）。nil = 本进程未开启。
 	takeoverMgr *takeover.Manager
@@ -369,6 +375,13 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	switch r.Method {
 	case http.MethodGet:
+		// ?format=zip 走打包导出（日志 + 环境信息 + 脱敏配置），见 logs_export.go。
+		// 放在同一个路由上而不是新开 /api/logs/export：中文注释里那句「一次点击就能
+		// 带走全部现场」不需要第二条接口，也省掉 catalog 的登记与一致性测试的面。
+		if strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("format")), "zip") {
+			s.handleLogsExport(w, r)
+			return
+		}
 		limit := 200
 		if v := strings.TrimSpace(r.URL.Query().Get("limit")); v != "" {
 			if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 2000 {
@@ -458,6 +471,22 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 				patch.FnosToken = s.cfgMgr.Get().FnosToken
 			}
 		}
+		// 目录类设置（下载目录 / 缓存目录）要成对校验：请求体是**局部 patch**，
+		// 只带其中一个时，另一个必须用当前生效值补齐才判得准 —— 否则
+		// 「只改下载目录，正好撞上已有的缓存目录」会被放过去。
+		eff := s.cfgMgr.Get()
+		if patch.DownloadDir != "" {
+			eff.DownloadDir = patch.DownloadDir
+		}
+		if patch.CacheDir != nil {
+			eff.CacheDir = patch.CacheDir
+		}
+		if msg := eff.ValidateDirs(); msg != "" {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"code": 400, "message": msg})
+			return
+		}
+
 		if err := s.cfgMgr.Update(patch); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return

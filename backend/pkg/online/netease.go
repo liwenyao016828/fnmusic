@@ -29,7 +29,13 @@ func (NetEaseResolver) Platform() string { return "wy" }
 
 const (
 	neteaseURLAPI = "https://music.163.com/api/song/enhance/player/url"
-	neteaseRef    = "https://music.163.com/"
+	// neteaseURLAPIV1 是带 `level` 参数的**新版**接口，按档位取链只能走它。
+	//
+	// ⚠️ `encodeType` 必填（实测 2026-10-07）：不带它时接口返回 HTTP 200 +
+	// 一个**重复了两遍**的 `{"msg":"参数错误","code":400}`（content-length 66），
+	// 看起来像被限流，其实只是少了个参数。取值无所谓（flac / mp3 都行）。
+	neteaseURLAPIV1 = "https://music.163.com/api/song/enhance/player/url/v1"
+	neteaseRef      = "https://music.163.com/"
 	// neteaseMaxBatch 是一次批量请求最多问多少条。接口本身能收更多，但这个
 	// 数量已经覆盖一整页搜索结果，再大只会拉长单次超时窗口。
 	neteaseMaxBatch = 50
@@ -185,4 +191,109 @@ func isDigits(s string) bool {
 		}
 	}
 	return true
+}
+
+// ---------------------------------------------------------------------------
+// 按档位解析（TierResolver）
+// ---------------------------------------------------------------------------
+
+// neteaseTierLevel 把我们的档位翻成 v1 接口的 level 参数。
+func neteaseTierLevel(tier string) string {
+	switch strings.ToLower(strings.TrimSpace(tier)) {
+	case TierLossless:
+		return "lossless"
+	case Tier320k:
+		return "exhigh"
+	case Tier192k:
+		return "higher"
+	case Tier128k:
+		return "standard"
+	}
+	return ""
+}
+
+// neteaseTierOf 把接口**回读**出来的 level / br / type 翻回我们的档位。
+//
+// ⚠️ 这是「请求无损却拿到有损」唯一的可靠判据。实测（2026-10-07，免登录）：
+//
+//	level=lossless → 回 level=exhigh, br=320000, type=mp3（**静默降级，不报错**）
+//	level=hires    → 同上
+//
+// 也就是说：**不能拿请求的档位当结果**。不回读就会把 320k mp3 当无损报给用户。
+func neteaseTierOf(level string, br int, typ string) string {
+	switch strings.ToLower(strings.TrimSpace(level)) {
+	case "lossless", "hires":
+		// 阶梯里不为 hires 单开一格：对用户来说「是不是无损」才是那个决策点。
+		return TierLossless
+	case "exhigh":
+		return Tier320k
+	case "higher":
+		return Tier192k
+	case "standard":
+		return Tier128k
+	}
+	// level 认不出时按码率/容器兜 —— 接口版本变化时不至于把档位显示成空。
+	if br > 0 {
+		switch {
+		case br >= 500_000:
+			return TierLossless
+		case br >= 256_000:
+			return Tier320k
+		case br >= 160_000:
+			return Tier192k
+		case br >= 112_000:
+			return Tier128k
+		}
+	}
+	if strings.EqualFold(strings.TrimSpace(typ), "flac") {
+		return TierLossless
+	}
+	return ""
+}
+
+// ResolveAtTier 实现 TierResolver：按指定档位取一条直链。
+//
+// 档位认不出、或 id 不是纯数字时**退回默认解析**（`Resolve`）—— 不装作能按档位要，
+// 因为 v1 接口对非法参数的反应是一个重复两遍的 400，看起来像故障。
+func (r NetEaseResolver) ResolveAtTier(ctx context.Context, platformID, tier string) (*Resolved, error) {
+	level := neteaseTierLevel(tier)
+	id := strings.TrimSpace(platformID)
+	if level == "" || !isDigits(id) {
+		return r.Resolve(ctx, platformID)
+	}
+
+	endpoint := fmt.Sprintf("%s?ids=[%s]&level=%s&encodeType=flac", neteaseURLAPIV1, id, level)
+	req, err := newRequest(ctx, http.MethodGet, endpoint, neteaseRef)
+	if err != nil {
+		return nil, err
+	}
+	body, err := doJSON(sharedClient, req, 1<<20)
+	if err != nil {
+		return nil, err
+	}
+	var parsed neteaseURLResponse
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil, fmt.Errorf("解析网易响应失败: %w", err)
+	}
+	if len(parsed.Data) == 0 {
+		return nil, ErrTierUnavailable
+	}
+
+	item := parsed.Data[0]
+	if item.URL == "" {
+		// 曲目级不可播 与 「这一档没有」必须分开 —— 前者不该降档重试。
+		// 实测 data[0].code：200 = 有 URL / 404 = 不可听 / -110 = 需购买。
+		if item.Code == 404 || item.Code == -110 {
+			return nil, ErrNotPlayable
+		}
+		return nil, ErrTierUnavailable
+	}
+	return &Resolved{
+		URL:     item.URL,
+		Format:  neteaseFormat(item.Type, item.Encode, item.URL),
+		Size:    item.Size,
+		Bitrate: item.Br,
+		Expires: time.Now().Add(neteaseTTL(item.Expi)),
+		Tier:    neteaseTierOf(item.Level, item.Br, item.Type),
+	}, nil
 }

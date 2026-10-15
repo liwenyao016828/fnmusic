@@ -105,6 +105,75 @@ func (i *Interceptor) handleQulvInfo(w http.ResponseWriter, r *http.Request) boo
 	writeEnvelope(w, map[string]any{
 		"version":  strings.TrimSpace(i.cfg.Revision),
 		"qulv_url": i.qulvURL(r),
+		// 试听的音质：当前偏好、可选项、以及默认阶梯。面板打开时就要能显示
+		// 「现在是哪一档」，所以跟着这份「后端才知道的事」一起发下去。
+		"playback_quality": i.playbackQuality(),
+		"quality_options":  playbackQualityOptions,
+		"quality_ladder":   online.PlaybackLadder,
+		"quality_editable": i.cfg.SetPlaybackQuality != nil,
+	})
+	return true
+}
+
+// handleQulvNow 告诉注入脚本「这首歌这次实际用了哪条源、哪一档」。
+//
+// # 为什么必须问后端
+//
+// 档位是**解析时回读**出来的 —— 平台会静默降级（网易要 lossless 给 exhigh，
+// 不报错、不给 null，只把 level 改写回来），源也可能被下载源池换过。
+// 官方页面上没有任何接口能拿到这两件事，页面自己猜出来的结果就是骗人。
+//
+// 一次播放会打很多次取流请求，但这里读的是**结论**（最后一次取音的源与档位），
+// 所以重复问不会拿到互相矛盾的值 —— 最多是「刚好换源了」那一瞬的旧值。
+func (i *Interceptor) handleQulvNow(w http.ResponseWriter, r *http.Request) bool {
+	fake := strings.TrimSpace(r.URL.Query().Get("guid"))
+	data := map[string]any{
+		"quality":          i.playbackQuality(),
+		"quality_options":  playbackQualityOptions,
+		"quality_ladder":   online.PlaybackLadder,
+		"quality_editable": i.cfg.SetPlaybackQuality != nil,
+	}
+	if now, ok := i.nowPlayingOf(fake); ok {
+		data["platform"] = now.Platform
+		data["tier"] = now.Quality
+		data["at"] = now.At
+	}
+	writeEnvelope(w, data)
+	return true
+}
+
+// handleQulvQuality 写「试听音质偏好」（注入页面上的切换按钮）。
+//
+// 只认白名单里的档位：`SetPlaybackQuality` 是写**配置**的入口，放任任意字符串
+// 进来会让配置里存下一个解析层认不出的值 —— 那种脏值只会在下次取音时表现为
+// 「莫名其妙按 auto 走了」，查起来很远。
+func (i *Interceptor) handleQulvQuality(w http.ResponseWriter, r *http.Request) bool {
+	_, body := readBody(r)
+	want := strings.ToLower(strings.TrimSpace(asString(body["quality"])))
+	if !validPlaybackQuality(want) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"code": 400, "msg": "不认识的音质档位", "data": nil,
+		})
+		return true
+	}
+	if i.cfg.SetPlaybackQuality == nil {
+		// 明确回一句「改不了」，不假装成功 —— 假成功比不能改更难查。
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+			"code": 503, "msg": "当前不可改", "data": nil,
+		})
+		return true
+	}
+	if err := i.cfg.SetPlaybackQuality(want); err != nil {
+		i.logf("[INTERCEPT] 保存试听音质失败：%v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{
+			"code": 500, "msg": "保存失败", "data": nil,
+		})
+		return true
+	}
+	i.logf("[INTERCEPT] 试听音质已切到 %s", want)
+	writeEnvelope(w, map[string]any{
+		"quality":         want,
+		"quality_options": playbackQualityOptions,
 	})
 	return true
 }
@@ -190,6 +259,11 @@ func (i *Interceptor) handleQulvDownloadOnline(w http.ResponseWriter, r *http.Re
 			msg = "该平台没有可用的直链解析器"
 		}
 		i.logf("[QULV] 下载解析失败 %s（%s/%s）：%v", guid, track.Platform, track.PlatformID, err)
+		i.recordAutoDownload(online.AutoLogEntry{
+			Trigger: TriggerPageClick, GUID: guid,
+			Title: track.Title, Artist: track.Artist(),
+			OK: false, Error: msg,
+		})
 		writeJSON(w, http.StatusBadGateway, map[string]any{"code": 502, "message": msg})
 		return true
 	}
@@ -211,11 +285,40 @@ func (i *Interceptor) handleQulvDownloadOnline(w http.ResponseWriter, r *http.Re
 	out, status, err := i.postLocalAPI(ctx, "/api/download/song", payload)
 	if err != nil {
 		i.logf("[QULV] 调用本机下载接口失败：%v", err)
+		i.recordAutoDownload(online.AutoLogEntry{
+			Trigger: TriggerPageClick, GUID: guid,
+			Title: track.Title, Artist: track.Artist(),
+			Source: used.Platform, Quality: used.Quality,
+			OK: false, Error: "调用曲率下载接口失败：" + err.Error(),
+		})
 		writeJSON(w, http.StatusBadGateway, map[string]any{
 			"code": 502, "message": "调用曲率下载接口失败：" + err.Error(),
 		})
 		return true
 	}
+
+	// 记一条自动下载记录，与收藏 / 加歌单那条路共用同一张表（见 pkg/online/autolog.go）。
+	// 用户点了「下载到曲率」，结果必须能在界面上查到 —— 只写日志的话，失败时
+	// 用户看不到任何痕迹，只能去翻后端日志，而那正是用户报的问题。
+	rec := online.AutoLogEntry{
+		Trigger: TriggerPageClick, GUID: guid,
+		Title: track.Title, Artist: track.Artist(),
+		Source: used.Platform, Quality: used.Quality,
+	}
+	var dlResp struct {
+		Data struct {
+			Path string `json:"path"`
+			Size int64  `json:"size"`
+		} `json:"data"`
+	}
+	if json.Unmarshal(out, &dlResp) == nil && dlResp.Data.Path != "" {
+		rec.OK = true
+		rec.Path = dlResp.Data.Path
+		rec.Size = dlResp.Data.Size
+	} else {
+		rec.Error = "下载接口未返回文件路径"
+	}
+	i.recordAutoDownload(rec)
 
 	i.logf("[QULV] 落盘在线曲目 %q — %s（%s/%s）", track.Title, track.Artist(), track.Platform, track.PlatformID)
 	// 如实回传「实际从哪儿、什么音质下来的」——界面要拿它显示，不能只报原平台。

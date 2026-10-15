@@ -28,7 +28,7 @@
   <!-- 3. 筛选标签 & 操作栏 -->
   <div class="px-5 py-2 border-b border-gray-100 flex flex-wrap items-center justify-between gap-2 bg-white shrink-0">
     <!-- 标签切换 -->
-    <div class="flex items-center gap-1 bg-gray-100 p-0.5 rounded-lg text-xs overflow-x-auto">
+    <div class="flex flex-wrap items-center gap-1 bg-gray-100 p-0.5 rounded-lg text-xs">
       <button
         v-for="tab in filterTabs" :key="tab.id"
         @click="currentFilter = tab.id"
@@ -46,6 +46,15 @@
 
     <!-- 批量控制操作 -->
     <div class="flex items-center gap-1.5">
+      <!-- 全选：只圈当前筛选里**已结束**的那些 -->
+      <label
+        v-if="terminalTasks.length > 1"
+        class="flex items-center gap-1 text-[11px] text-gray-500 cursor-pointer select-none mr-1"
+        title="勾选当前列表里所有已结束的记录"
+      >
+        <input type="checkbox" class="align-middle accent-emerald-500" :checked="allSelected" @change="toggleSelectAll" />
+        <span>全选</span>
+      </label>
       <!-- 全部暂停 -->
       <button
         v-if="downloadManager.activeCount.value > 0"
@@ -105,14 +114,27 @@
         <span>停止全部</span>
       </button>
 
-      <!-- 清空已完成 -->
+      <!--
+        多选与清除记录（用户 2026-10-07 指令：「任务状态的几个页面中增加多选或者
+        一键清除记录按钮」）。
+        ⚠️ 勾选框只出现在**已结束**的行上（已完成/失败/已停止）：给正在下载的行
+        也放一个，会让「清除选中」看起来像「取消下载」—— 两个动作的后果差得远。
+      -->
       <button
-        v-if="downloadManager.completedCount.value > 0"
-        @click="downloadManager.clearCompleted()"
-        class="px-2 py-1 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 text-[11px] transition-colors cursor-pointer"
-        title="清除所有已完成的记录"
+        v-if="selectedIds.length"
+        @click="clearSelected"
+        class="px-2 py-1 rounded-md bg-rose-50 text-rose-600 hover:bg-rose-100 text-[11px] font-medium transition-colors cursor-pointer"
+        title="移除勾选的记录"
       >
-        清空完成
+        清除选中（{{ selectedIds.length }}）
+      </button>
+      <button
+        v-if="terminalCount > 0"
+        @click="clearAllRecords"
+        class="px-2 py-1 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 text-[11px] transition-colors cursor-pointer"
+        title="清除已完成 / 失败 / 已停止的记录（正在下载与排队中的不受影响）"
+      >
+        一键清除记录
       </button>
 
       <!--
@@ -146,7 +168,7 @@
         {{ currentFilter === 'all' ? '暂无下载任务' : `暂无${currentFilterName}任务` }}
       </p>
       <p class="text-[11px] text-gray-400 max-w-xs">
-        在「发现音乐」中点击单曲或榜单的下载按钮，歌曲将自动加入后台下载队列并保存在 NAS
+        在「发现音乐」里点下载，任务会进这个队列并存到 NAS
       </p>
     </div>
 
@@ -156,6 +178,15 @@
       :key="task.id"
       class="bg-white rounded-xl border border-gray-100 p-3 shadow-2xs hover:border-gray-200 transition-all flex items-center gap-3 group"
     >
+      <!-- 勾选框：只在已结束的行上出现（见工具栏那段注释） -->
+      <input
+        v-if="isTerminal(task.status)"
+        type="checkbox"
+        class="align-middle accent-emerald-500 shrink-0"
+        :checked="selected.has(task.id)"
+        @change="toggleSelect(task.id)"
+      />
+
       <!-- 封面 -->
       <div class="w-10 h-10 rounded-lg overflow-hidden bg-gray-100 shrink-0 relative flex items-center justify-center shadow-2xs">
         <img
@@ -383,7 +414,7 @@
     class="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs"
     @click.self="showSettings = false"
   >
-    <div class="w-full max-w-[560px] overflow-hidden rounded-2xl bg-white shadow-2xl">
+    <div class="max-h-[85vh] w-full max-w-[560px] overflow-y-auto rounded-2xl bg-white shadow-2xl">
       <div class="flex items-center justify-between border-b border-gray-100 px-5 py-3.5">
         <h3 class="text-sm font-bold text-gray-800 flex items-center gap-1.5">
           <Settings2 class="w-4 h-4 text-emerald-500" />
@@ -395,7 +426,7 @@
       </div>
 
       <div class="max-h-[70vh] space-y-4 overflow-y-auto px-5 py-4">
-        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div class="grid grid-cols-2 gap-3 sm:gap-4">
           <SelectField
             v-model="qualityModel"
             label="默认音质"
@@ -529,6 +560,53 @@ const settingsSummary = computed(() => {
 function onTaskQualityPick(task, quality) {
   if (!quality) return
   downloadManager.setTaskQuality(task.id, quality)
+}
+
+// ── 多选与清除记录 ──
+//
+// 「已结束」= 记录可以清掉的那些。它同时决定三件事：勾选框出现在哪些行上、
+// 「全选」圈哪些、「一键清除记录」清哪些 —— 一处定义，三处共用。
+function isTerminal(status) {
+  return status === 'success' || status === 'failed' || status === 'stopped'
+}
+
+/** 勾选的 id。用 Set 而不是数组：勾/取消是 O(1)，且天然去重。 */
+const selected = ref(new Set())
+const selectedIds = computed(() => Array.from(selected.value))
+const terminalTasks = computed(() => filteredTasks.value.filter(t => isTerminal(t.status)))
+const allSelected = computed(() =>
+  terminalTasks.value.length > 0 && terminalTasks.value.every(t => selected.value.has(t.id)))
+/** 全部任务里已结束的条数（决定「一键清除记录」显不显示 —— 没有可清的就不摆按钮） */
+const terminalCount = computed(() => downloadManager.tasks.value.filter(t => isTerminal(t.status)).length)
+
+function toggleSelect(id) {
+  const next = new Set(selected.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  selected.value = next
+}
+
+function toggleSelectAll() {
+  selected.value = allSelected.value
+    ? new Set()
+    : new Set(terminalTasks.value.map(t => t.id))
+}
+
+function clearSelected() {
+  downloadManager.removeTasks(selectedIds.value)
+  selected.value = new Set()
+}
+
+/**
+ * 一键清除记录。问一句 `confirm`：清记录不可撤销，而它与「清除选中」挨着放，
+ * 误点一下就全没了 —— 确认是**界面**的责任（service 只管做）。
+ */
+function clearAllRecords() {
+  const n = terminalCount.value
+  if (!n) return
+  if (!confirm(`确定清除 ${n} 条已结束的记录？（正在下载与排队中的不受影响）`)) return
+  downloadManager.clearRecords()
+  selected.value = new Set()
 }
 
 const currentFilter = ref('all') // 'all' | 'downloading' | 'paused' | 'completed' | 'failed'

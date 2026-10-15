@@ -21,19 +21,47 @@
 import { computed, onMounted, ref } from 'vue'
 import { Loader2, Check, Play, Music2, RotateCw } from 'lucide-vue-next'
 import { ChartsAPI } from '../api/client'
+import PageShell from './PageShell.vue'
+import SelectField from './SelectField.vue'
 import {
   chartInject, chartInjectKey, replaceIds, toggleItem, setEnabled, setUIInject, loadConfig,
+  setAutoDownloadQuality,
 } from '../services/chartInject'
 
 const emit = defineEmits(['preview'])
 
 // 与后端拦截层 `vChartPlatforms` 同一份名单
 const PLATFORMS = [
-  { id: 'wy', name: '网易云音乐', dot: 'bg-red-400', hint: '网易云官方榜单（云音乐 App 里同样的那几个）' },
-  { id: 'tx', name: 'QQ 音乐', dot: 'bg-emerald-400', hint: 'QQ 音乐官方榜单（巅峰榜等）' },
+  { id: 'wy', name: '网易云音乐', dot: 'bg-red-400', hint: '网易云官方榜单' },
+  { id: 'tx', name: 'QQ 音乐', dot: 'bg-emerald-400', hint: 'QQ 音乐官方榜单' },
 ]
 
-const { ids, enabled, uiInject, busy, error, savedAt } = chartInject
+const { ids, enabled, uiInject, autoDownloadQuality, busy, error, savedAt } = chartInject
+
+// 「音质下载」（用户 2026-10-07 指令）：「专门针对在飞牛音乐页面中，收藏或者下载时，
+// 下载的音质」。它管的是**存** —— 收藏 / 加歌单 / 点「下载到曲率」触发的那批下载
+// 取什么音质；与注入面板里的「试听音质」是两件事（一个决定下下来的文件多大，
+// 一个决定现在听的那条流多好），所以是两个设置项，不合并。
+const AUTO_DOWNLOAD_QUALITY_OPTIONS = [
+  { value: 'highest', label: '最高音质（能无损就无损）' },
+  { value: 'flac', label: 'FLAC 无损' },
+  { value: '320k', label: '320K' },
+  { value: '128k', label: '128K' },
+]
+
+// 选中档位的后果要说清：固定档位是「优先取那一档、没有就兜底」，
+// 不是「拿不到就不下」—— 后者会让「收藏一首歌」变成「下载失败」。
+const autoDownloadQualityHint = computed(() => {
+  switch (autoDownloadQuality.value) {
+    case 'flac':
+      return '只要无损，源池没有就兜底'
+    case '320k':
+      return '有 320K 版就优先取它'
+    case '128k':
+      return '省空间，有 128K 版就优先取它'
+  }
+  return '源池里找最高音质（可跨平台换源）'
+})
 
 const groups = ref(PLATFORMS.map(p => ({ ...p, loading: false, error: '', items: [] })))
 const loadingConfig = ref(false)
@@ -149,36 +177,30 @@ function hideCover(e) {
 </script>
 
 <template>
-  <div class="mx-auto max-w-[1500px] px-5 py-6 pb-28 sm:px-8 sm:py-7 sm:pb-24">
-    <!-- 页头 -->
-    <div class="mb-4 flex flex-wrap items-start gap-x-4 gap-y-2">
-      <div class="min-w-0">
-        <h2 class="text-[15px] font-bold text-gray-900">榜单管理</h2>
-        <p class="mt-1 max-w-[900px] text-[12px] leading-relaxed text-gray-500">
-          勾选想要的榜单，它们会以<strong class="text-gray-700">在线歌单</strong>的形式出现在
-          <strong class="text-gray-700">飞牛音乐</strong>的歌单列表里。
-          <span class="text-amber-600/90">
-            歌单里只保留能播放的曲目，所以会比平台榜单短 —— 榜单越热门、付费曲目越多，能播的越少。
-          </span>
-        </p>
-      </div>
-      <div class="ml-auto flex shrink-0 items-center gap-2">
-        <span v-if="busy" class="flex items-center gap-1 text-[11px] font-bold text-emerald-600">
-          <Loader2 class="h-3.5 w-3.5 animate-spin" />保存中…
-        </span>
-        <span v-else-if="savedText" class="text-[11px] text-gray-400">已生效 {{ savedText }}</span>
-        <button
-          type="button"
-          @click="refreshAll"
-          class="flex items-center gap-1 rounded-lg border border-gray-200 bg-white px-2.5 py-1 text-[11px] font-bold text-gray-500 transition-colors hover:border-emerald-200 hover:text-emerald-600"
-        >
-          <RotateCw class="h-3.5 w-3.5" />刷新榜单
-        </button>
-      </div>
-    </div>
+  <!--
+    这一页 v2.1.120 从「曲库管家 → 榜单管理」**搬回顶层导航**（与「发现音乐」并列）。
+    它自己那层容器换成 PageShell，标题/简介/动作按全站规范来 —— 别再套一层自绘页头。
+  -->
+  <PageShell
+    title="榜单管理"
+    desc="勾选的榜单会以在线歌单出现在飞牛音乐里（只保留能播的曲目，所以比平台榜单短）"
+  >
+    <template #actions>
+      <span v-if="busy" class="flex items-center gap-1 text-[11px] font-bold text-emerald-600">
+        <Loader2 class="h-3.5 w-3.5 animate-spin" />保存中…
+      </span>
+      <span v-else-if="savedText" class="text-[11px] text-gray-400">已生效 {{ savedText }}</span>
+      <button
+        type="button"
+        @click="refreshAll"
+        class="flex items-center gap-1 rounded-lg border border-gray-200 bg-white px-2.5 py-1 text-[11px] font-bold text-gray-500 transition-colors hover:border-emerald-200 hover:text-emerald-600"
+      >
+        <RotateCw class="h-3.5 w-3.5" />刷新榜单
+      </button>
+    </template>
 
     <!-- 卡片 1：总控制 -->
-    <div class="rounded-xl border border-gray-100 bg-white p-4">
+    <div class="rounded-xl border border-gray-200 bg-white p-4">
       <div class="flex flex-wrap items-center gap-x-4 gap-y-3">
         <!--
           总开关：关掉只是「先不注入」，勾选**不丢** —— 所以它与「全部取消」是两个动作。
@@ -206,7 +228,7 @@ function hideCover(e) {
           <span>榜单注入</span>
         </label>
         <span class="text-[11px] leading-snug text-gray-400">
-          {{ enabled ? '已打开：勾中的榜单会在飞牛音乐里出现（只读，在飞牛里加曲/删曲不会生效）' : '已关闭：飞牛音乐里不会出现任何榜单歌单，勾选已保留' }}
+          {{ enabled ? '勾中的榜单会出现在飞牛音乐里（只读）' : '已关闭，勾选保留' }}
         </span>
 
         <span
@@ -273,8 +295,26 @@ function hideCover(e) {
           <span>页面注入</span>
         </label>
         <span class="min-w-0 flex-1 text-[11px] leading-snug text-gray-400">
-          飞牛自带音乐页里曲率补的入口（如「下载到曲率」）。
-          {{ uiInject ? '关掉后官方页面逐字节原样' : '当前已关闭，官方页面原样' }} —— 改完刷新飞牛页面才看得到。
+          飞牛页里曲率补的入口。改完要刷新飞牛页面。
+        </span>
+      </div>
+
+      <!--
+        音质下载：飞牛页面里收藏 / 加歌单 / 点「下载到曲率」时取什么音质。
+        改完**立刻生效**（与上面的勾选同一个口径：少一个保存按钮，就少一次
+        「我改了怎么没生效」）。
+      -->
+      <div class="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-gray-100 pt-3">
+        <span class="text-[12.5px] font-bold text-gray-600">音质下载</span>
+        <SelectField
+          class="w-[210px]"
+          :model-value="autoDownloadQuality"
+          :options="AUTO_DOWNLOAD_QUALITY_OPTIONS"
+          hint="飞牛页面触发的下载用什么音质"
+          @update:model-value="setAutoDownloadQuality"
+        />
+        <span class="min-w-0 flex-1 text-[11px] leading-snug text-gray-400">
+          {{ autoDownloadQualityHint }}
         </span>
       </div>
 
@@ -286,7 +326,7 @@ function hideCover(e) {
     <div
       v-for="g in groups"
       :key="g.id"
-      class="mt-4 rounded-xl border border-gray-100 bg-white p-4"
+      class="mt-4 rounded-xl border border-gray-200 bg-white p-4"
     >
       <div class="flex flex-wrap items-center gap-2">
         <span class="h-2 w-2 shrink-0 rounded-full" :class="g.dot"></span>
@@ -314,8 +354,6 @@ function hideCover(e) {
           >全清</button>
         </div>
       </div>
-      <p class="mt-1 text-[11px] text-gray-400">{{ g.hint }}</p>
-
       <p v-if="g.error" class="mt-2 text-[11px] text-red-500">
         {{ g.error }}
         <button type="button" class="ml-1 font-bold underline" @click="loadGroup(g, true)">重试</button>
@@ -324,7 +362,7 @@ function hideCover(e) {
       <div
         v-if="g.items.length"
         class="mt-3 grid gap-2.5"
-        style="grid-template-columns: repeat(auto-fill, minmax(196px, 1fr));"
+        style="grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));"
       >
         <div
           v-for="item in g.items"
@@ -373,15 +411,9 @@ function hideCover(e) {
       </div>
     </div>
 
-    <!-- 导流：听 vs 存 -->
-    <div class="mt-4 rounded-xl border border-dashed border-gray-200 bg-white/60 p-3.5">
-      <p class="text-[11.5px] leading-relaxed text-gray-500">
-        这里管的是<strong class="text-gray-700">听</strong>：榜单在线播放，不占硬盘。
-        想把榜单里的新歌<strong class="text-gray-700">存</strong>下来（下到本地曲库 / 同步进飞牛歌单），
-        那是<strong class="text-gray-700">订阅</strong> —— 去「曲库管家 → 歌单监控」订阅同一张榜单，
-        或者在「排行榜单」里点开某张榜单、用右上角的「订阅更新」。
-        两件事互不冲突：订阅不会让榜单出现在飞牛的歌单列表里，注入也不会帮你下载。
-      </p>
-    </div>
-  </div>
+    <!-- 导流：听 vs 存（2026-10-14 从虚线盒压成一行灰字：一句话不该占一个盒子） -->
+    <p class="mt-3 text-[11px] leading-relaxed text-gray-400">
+      这里管<strong class="text-gray-600">听</strong>（不占硬盘）；要把新歌<strong class="text-gray-600">存</strong>下来，去「曲库管家 → 推送」订阅同一张榜单。
+    </p>
+  </PageShell>
 </template>

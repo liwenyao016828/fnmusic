@@ -23,7 +23,7 @@
         class="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4 backdrop-blur-xs"
         @click.self="close"
       >
-        <div class="w-full max-w-[440px] overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-2xl">
+        <div class="max-h-[85vh] w-full max-w-[440px] overflow-y-auto rounded-2xl border border-gray-100 bg-white shadow-2xl">
 
           <!-- 头部 -->
           <div class="flex items-start justify-between gap-3 border-b border-gray-100 px-5 py-4">

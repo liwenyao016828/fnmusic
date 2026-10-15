@@ -998,6 +998,64 @@ func TestEventReportRecordsPlay(t *testing.T) {
 	}
 }
 
+// 真机形态：事件装在 events 数组里、guid 藏在 payload 里（2026-10-07 从 NAS 上官方
+// 页面的 bundle 读到，见 history.go 顶部那段注释）。这条用例是照**真身**写的 ——
+// 上面那条扁平体只是兼容形态，真机上压根不是那个样子。
+func TestEventReportRecordsPlayFromNestedEvents(t *testing.T) {
+	h := newHarness(t)
+	tr := online.Track{Platform: "wy", PlatformID: "1", Title: "在线歌", Artists: []string{"甲"}}
+	fake := h.it.registry.Put(tr)
+
+	// occurredAt 是**毫秒**，PlayedAt 存**秒**：用「事件发生的时间」而不是「收到的时间」。
+	w, _ := h.do(http.MethodPost, "/music/api/v1/event/report",
+		`{"events":[{"eventType":"track_play","occurredAt":1791262424000,`+
+			`"payload":{"trackGUID":"`+fake+`"}}]}`, nil)
+	if env := decode(t, w); env["code"] != float64(0) {
+		t.Fatalf("上报应成功，得到 %v", env)
+	}
+	got := h.it.store.History("shared")
+	if len(got) != 1 {
+		t.Fatalf("应记 1 条播放历史，得到 %d", len(got))
+	}
+	if want := int64(1791262424); got[0].PlayedAt != want {
+		t.Fatalf("应采信事件自带的 occurredAt（%d 秒），得到 %d", want, got[0].PlayedAt)
+	}
+}
+
+// 嵌套体里 payload 缺 guid（认不出是在线曲目）时既不误记、也不吞掉请求。
+func TestEventReportIgnoresNestedEventWithoutGUID(t *testing.T) {
+	h := newHarness(t)
+	h.setOfficial("POST /music/api/v1/event/report", http.StatusOK,
+		`{"code":0,"msg":"FORWARDED","data":null}`)
+	w, _ := h.do(http.MethodPost, "/music/api/v1/event/report",
+		`{"events":[{"eventType":"track_play","occurredAt":1791262424000,"payload":{}}]}`, nil)
+	if !strings.Contains(w.Body.String(), "FORWARDED") {
+		t.Fatalf("认不出在线曲目应转发给官方，得到 %s", w.Body.String())
+	}
+	if got := h.it.store.History("shared"); len(got) != 0 {
+		t.Fatalf("不该记历史，得到 %d 条", len(got))
+	}
+}
+
+// 嵌套体里的**非播放**事件（歌词偏移是同一通道上最常发的另一种）必须原样透传。
+func TestEventReportPassthroughForNestedNonPlayEvents(t *testing.T) {
+	h := newHarness(t)
+	tr := online.Track{Platform: "wy", PlatformID: "1", Title: "在线歌", Artists: []string{"甲"}}
+	fake := h.it.registry.Put(tr)
+	h.setOfficial("POST /music/api/v1/event/report", http.StatusOK,
+		`{"code":0,"msg":"FORWARDED","data":null}`)
+
+	w, _ := h.do(http.MethodPost, "/music/api/v1/event/report",
+		`{"events":[{"eventType":"lyric_offset_change","occurredAt":1791262424000,`+
+			`"payload":{"trackGUID":"`+fake+`","lyricGUID":"lrc","offset":250}}]}`, nil)
+	if !strings.Contains(w.Body.String(), "FORWARDED") {
+		t.Fatalf("非播放事件应转发给官方，得到 %s", w.Body.String())
+	}
+	if got := h.it.store.History("shared"); len(got) != 0 {
+		t.Fatalf("歌词偏移不该被当成播放，得到 %d 条", len(got))
+	}
+}
+
 func TestEventReportPassthroughForNonPlayEvents(t *testing.T) {
 	h := newHarness(t)
 	h.setOfficial("POST /music/api/v1/event/report", http.StatusOK,

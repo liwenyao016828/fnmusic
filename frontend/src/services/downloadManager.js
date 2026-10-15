@@ -1,11 +1,13 @@
 import { ref, computed } from 'vue'
-import { DownloadAPI, DownloadQueueAPI, NasAPI, SearchAPI } from '../api/client'
+import { ConfigAPI, DownloadAPI, DownloadQueueAPI, NasAPI, SearchAPI } from '../api/client'
+import { qualityOverride } from './qualityOverride'
 import { lxRuntime } from '../engine/lx-runtime'
 import { sourceHealth } from './sourceHealth'
 import { qualityLabel, isHighestQuality, isLosslessTier, isLossyContainer, urlLooksLossy } from '../engine/quality'
 import { logError, logWarn } from './appLog'
 import { fail, apiError } from './userMsg'
-import { decideFailover, isSourceLevelFailure, untriedSources } from './downloadFailover'
+import { decideFailover, isSourceLevelFailure, untriedSources, corruptFlacDowngradeTarget } from './downloadFailover'
+import { mergeTaskList } from './downloadMerge'
 
 // ── 跨平台回退 ──
 //
@@ -153,6 +155,9 @@ const currentDownloadDir = ref('/vol1/Music')
 
 // ── 下载设置（持久化） ──
 const defaultQuality = ref('highest')
+// 「下载音质」开关（服务端 download_quality_override）：它**盖住**上面的默认档位，
+// 不是改掉它 —— 改回「跟随」就复原。值见 services/qualityOverride.js。
+const qualityOverrideSetting = ref('')
 const maxAttempts = ref(3)
 const autoFailover = ref(true)
 const concurrency = ref(1)
@@ -178,6 +183,45 @@ let lastStartedAt = 0
 let lastFinishedAt = 0
 let queueWakeTimer = null
 let persistTimer = null
+
+// ── 「用户明确移除过」的墓碑 ──
+/**
+ * 任务被移除（取消 / 清空记录）之后，队列在 NAS 上还留着一份副本：persistTasks
+ * 有 400ms 防抖，再加上一次 PUT 的往返，而 syncTasksFromServer() 是拿服务端那份
+ * **整份替换**本地列表的。
+ *
+ * 于是竞态长这样：用户点取消 → 本地已删 → 服务端还是删之前那份 →（刷新页面 /
+ * 切回来时同步一次）→ 被取消的任务原样搬回来变成 pending → processQueue 真去
+ * 下载 → 用户看到「点了取消，它自己又跑起来，最后显示下载成功」。
+ * 「清空已完成」同理：清完再同步一次，记录全回来了。
+ *
+ * 墓碑让这些 id 在任何一次合并里都不再复活。
+ * 用 id 而不是 songKey：「取消」针对的是这一次任务，同一首歌之后重新入队是新 id
+ * （id 生成见 addSong）；按 songKey 记会把用户之后重新加的那次也一起误杀。
+ */
+const cancelledIds = new Set()
+const CANCELLED_KEY = 'fn_download_cancelled_v1'
+const CANCELLED_MAX = 200
+
+function loadCancelledIds() {
+  if (!hasStorage()) return
+  try {
+    const raw = localStorage.getItem(CANCELLED_KEY)
+    if (raw) JSON.parse(raw).forEach((id) => { if (id) cancelledIds.add(id) })
+  } catch (_) {}
+}
+
+function rememberCancelled(id) {
+  if (!id) return
+  cancelledIds.add(id)
+  // Set 保持插入顺序，`values().next()` 就是最老的那个。
+  // 只留最近 CANCELLED_MAX 个：更老的 id 早已不可能出现在服务端副本里。
+  while (cancelledIds.size > CANCELLED_MAX) cancelledIds.delete(cancelledIds.values().next().value)
+  if (!hasStorage()) return
+  try {
+    localStorage.setItem(CANCELLED_KEY, JSON.stringify([...cancelledIds]))
+  } catch (_) {}
+}
 
 // ── 计算属性 ──
 const activeCount = computed(() =>
@@ -264,15 +308,12 @@ function persistSettings() {
  * 与 miyin 启动时把 running 重置为 queued 的做法一致，这里重置为 pending。
  * 本地缓存和服务端两份数据都走这里，避免两处写法分叉。
  */
-function restoreTasks(list) {
-  if (!Array.isArray(list)) return
-  tasks.value = list.map(t => {
-    const task = { ...t, _aborted: false, _retryAfter: 0 }
-    if (task.status === 'resolving' || task.status === 'downloading') {
-      task.status = 'pending'
-      task.error = '页面刷新后重新排队'
-    }
-    return task
+function restoreTasks(list, opts = {}) {
+  tasks.value = mergeTaskList({
+    list,
+    locals: tasks.value,
+    cancelled: cancelledIds,
+    fromServer: !!opts.fromServer,
   })
   if (tasks.value.some(t => t.status === 'pending')) {
     setTimeout(() => processQueue(), 0)
@@ -280,6 +321,7 @@ function restoreTasks(list) {
 }
 
 function loadTasks() {
+  loadCancelledIds()
   if (!hasStorage()) return
   try {
     const raw = localStorage.getItem(TASKS_STORAGE_KEY)
@@ -309,7 +351,7 @@ async function syncTasksFromServer() {
       if (tasks.value.length) persistTasks()
       return
     }
-    restoreTasks(remote)
+    restoreTasks(remote, { fromServer: true })
   } catch (_) {
     // 服务端不可用就继续用本地缓存，不打扰用户
   }
@@ -341,23 +383,37 @@ function slimTasks() {
   }))
 }
 
-function persistTasks() {
+function persistTasks(immediate = false) {
+  // 用户动作（取消 / 停止 / 清空）必须**立刻**写下去：防抖窗口里服务端那份还是旧的，
+  // 一次 syncTasksFromServer 就能把刚删掉的任务搬回来（见 cancelledIds 注释）。
+  if (immediate) {
+    if (persistTimer) {
+      clearTimeout(persistTimer)
+      persistTimer = null
+    }
+    writeTasksNow()
+    return
+  }
   if (persistTimer) return
   persistTimer = setTimeout(() => {
     persistTimer = null
-    const slim = slimTasks()
-    // ① 本地缓存：首屏立即有内容，断网也能看
-    if (hasStorage()) {
-      try {
-        localStorage.setItem(TASKS_STORAGE_KEY, JSON.stringify(slim))
-      } catch (_) {}
-    }
-    // ② 落盘到 NAS：换设备/清缓存后还能看到
-    DownloadQueueAPI.save(slim).catch((e) => {
-      // 存不上不该影响下载本身，只记日志
-      logError('下载队列落盘', '保存到 NAS 失败', e?.message || String(e))
-    })
+    writeTasksNow()
   }, 400)
+}
+
+function writeTasksNow() {
+  const slim = slimTasks()
+  // ① 本地缓存：首屏立即有内容，断网也能看
+  if (hasStorage()) {
+    try {
+      localStorage.setItem(TASKS_STORAGE_KEY, JSON.stringify(slim))
+    } catch (_) {}
+  }
+  // ② 落盘到 NAS：换设备/清缓存后还能看到
+  DownloadQueueAPI.save(slim).catch((e) => {
+    // 存不上不该影响下载本身，只记日志
+    logError('下载队列落盘', '保存到 NAS 失败', e?.message || String(e))
+  })
 }
 
 // ── 工具函数 ──
@@ -422,7 +478,12 @@ function isRetryableFailure(code, message) {
 
 /** 从后端返回体推断错误码 */
 function classifyBackendResult(res) {
-  const msg = String(res?.message || res?.data?.error || '')
+  const msg = String(res?.message || res?.data?.error || res?.result?.error || '')
+  // 后端给的机器可读错误码优先于下面的正则猜测（见 SongResult.ErrorCode）。
+  // 目前只有一个：'flac_corrupt' = 无损文件逐帧 CRC 校验不过（坏流）。
+  // 注意失败时后端把 SongResult 放在 `result` 里（成功才在 `data` 里）。
+  const ec = String(res?.data?.error_code || res?.result?.error_code || '')
+  if (ec === 'flac_corrupt') return { code: 'FLAC_CORRUPT', message: msg || '下载到的无损文件是坏流' }
   const statusMatch = msg.match(/HTTP\s*错误[:：]?\s*(\d{3})/)
   if (statusMatch) {
     const code = Number(statusMatch[1])
@@ -446,7 +507,7 @@ function buildTask(song, activeSourceId, status, quality = '') {
     error: '',
     errorCode: '',
     // 未显式指定音质时用全局默认（'highest' = 自动轮询最高）
-    quality: quality || defaultQuality.value,
+    quality: quality || effectiveDefaultQuality(),
     attempts: 0,
     activeSourceId: activeSourceId || '',
     platform: song.source || 'kw',
@@ -508,7 +569,9 @@ function pauseTask(taskId) {
   if (task) {
     task.status = 'paused'
     task._aborted = true
-    persistTasks()
+    // 暂停也是用户动作，立刻落盘：防抖窗口里服务端那份还是 pending，
+    // 中间一次同步就会把暂停中的任务拉回去真下载（见 downloadMerge.js 的注释）
+    persistTasks(true)
   }
 }
 
@@ -527,11 +590,28 @@ function resumeTask(taskId, fallbackSourceId) {
   }
 }
 
+/**
+ * 从列表里丢掉一批任务：立墓碑 + 立刻落盘。
+ *
+ * 「移除」和「改状态」不同：改状态靠 400ms 防抖无所谓（下一拍会覆盖），
+ * 而移除必须马上去服务端，否则服务端旧副本会在下一次同步时把它们整批搬回来。
+ * 返回丢掉的条数。
+ */
+function dropTasks(pred) {
+  const dropped = tasks.value.filter(pred)
+  if (!dropped.length) return 0
+  const ids = new Set(dropped.map(t => t.id))
+  dropped.forEach(t => rememberCancelled(t.id))
+  tasks.value = tasks.value.filter(t => !ids.has(t.id))
+  persistTasks(true)
+  return dropped.length
+}
+
 function cancelTask(taskId) {
   const task = tasks.value.find(t => t.id === taskId)
+  // 先打停止标记再移除：移除后 executeTask 里的 isStopped(task) 仍然看得见它
   if (task) task._aborted = true
-  tasks.value = tasks.value.filter(t => t.id !== taskId)
-  persistTasks()
+  dropTasks(t => t.id === taskId)
 }
 
 function pauseAll() {
@@ -542,7 +622,7 @@ function pauseAll() {
       t._aborted = true
     }
   })
-  persistTasks()
+  persistTasks(true)
 }
 
 function resumeAll(fallbackSourceId) {
@@ -578,7 +658,7 @@ function stopAll() {
     }
   })
   isPaused.value = false
-  persistTasks()
+  persistTasks(true)
 }
 
 /**
@@ -606,7 +686,7 @@ function stopByRow(rowKey) {
     }
   })
   if (hit) {
-    persistTasks()
+    persistTasks(true)
     logWarn('下载', `订阅已停止，${hit} 首已入队的下载被停止`)
   }
   return hit
@@ -721,13 +801,40 @@ function removeTask(taskId) {
 }
 
 function clearCompleted() {
-  tasks.value = tasks.value.filter(t => t.status !== 'success')
-  persistTasks()
+  dropTasks(t => t.status === 'success')
+}
+
+/**
+ * 批量移除任务（界面上的「清除选中」）。
+ *
+ * 逐条走 removeTask（= cancelTask）：正在跑的任务会被**真的取消**，而不是只从
+ * 列表里抹掉 —— 抹掉但后台还在写文件是更糟的结果（用户以为停了，磁盘上却多出半截）。
+ */
+function removeTasks(ids) {
+  const set = new Set(ids || [])
+  if (!set.size) return 0
+  const targets = tasks.value.filter(t => set.has(t.id))
+  for (const t of targets) removeTask(t.id)
+  return targets.length
+}
+
+/**
+ * 清除「已结束」的记录：已完成 / 失败 / 已停止，**不动**在跑、排队与已暂停的。
+ *
+ * 与 clearAll 的区别：那个是「停掉一切再清」（会打断下载），这个是「只清账本」。
+ * 用户要的「一键清除记录」是后者 —— 没人希望清个记录把正在下的歌弄停。
+ * 返回实际清掉的条数（界面据此说「已清除 N 条」）。
+ */
+function clearRecords() {
+  const keep = (t) => t.status === 'pending' || t.status === 'resolving' ||
+    t.status === 'downloading' || t.status === 'paused'
+  const before = tasks.value.length
+  dropTasks(t => !keep(t))
+  return before - tasks.value.length
 }
 
 function clearAll() {
-  tasks.value = tasks.value.filter(t => t.status === 'resolving' || t.status === 'downloading')
-  persistTasks()
+  dropTasks(t => t.status !== 'resolving' && t.status !== 'downloading')
 }
 
 // ── 队列调度器（页面切换不会打断） ──
@@ -846,6 +953,28 @@ function handleTaskFailure(task, message, code) {
   logError('下载', `${songLabel(task)} 下载失败`, `${message}${code ? ` (code=${code})` : ''}`)
 }
 
+/**
+ * 坏流降档重下：把任务降到 target 档重新排队。
+ *
+ * **必须把旧直链丢掉** —— 那条链下回来的就是坏流，带着它重跑只是把同一个坏文件
+ * 再下一遍。清掉 task.song.url / streamUrl，下一趟会按新档位重新取链
+ * （executeTask 的第 1 步只在没有直链时才解析）。
+ */
+function downgradeAndRetry(task, target, message) {
+  task._qualityDowngraded = true
+  task.quality = target
+  if (task.song?.url || task.song?.streamUrl) {
+    task.song = { ...task.song, url: '', streamUrl: '' }
+  }
+  task.status = 'pending'
+  // 降档在队列里是隐形的，得写在任务上让用户看得见「为什么这首变成 320K 了」
+  task.error = `无损文件是坏流，已自动降到 ${target} 重新下载`
+  task._retryAfter = Date.now() + RETRY_DELAY_MS
+  persistTasks()
+  scheduleQueueWake(RETRY_DELAY_MS)
+  logWarn('下载', `${songLabel(task)} 无损坏流，降档 ${target} 重下`, message)
+}
+
 /** 日志里标识一首歌：歌名 + 歌手，够定位就行 */
 function songLabel(task) {
   const s = task?.song || {}
@@ -859,7 +988,7 @@ async function executeTask(task) {
   if (isStopped(task)) return
 
   const song = task.song
-  const quality = task.quality || defaultQuality.value
+  const quality = task.quality || effectiveDefaultQuality()
   const platform = task.platform || song.source || 'kw'
 
   task.status = 'resolving'
@@ -946,6 +1075,9 @@ async function executeTask(task) {
       persistTasks()
     } else {
       const cls = classifyBackendResult(res)
+      // 无损坏流：降一档重下。换源没用（换的是音源，不是编码链路），换档才治得了
+      const target = cls.code === 'FLAC_CORRUPT' ? corruptFlacDowngradeTarget(task) : ''
+      if (target) return downgradeAndRetry(task, target, cls.message)
       handleTaskFailure(task, cls.message, cls.code)
     }
   } catch (dlErr) {
@@ -1031,6 +1163,19 @@ async function checkSongsDownloaded(songs) {
 
 // ── 设置写入辅助 ──
 
+/** 本面板默认档位套上「下载音质」开关之后的真实档位 */
+function effectiveDefaultQuality() {
+  return qualityOverride(defaultQuality.value, qualityOverrideSetting.value)
+}
+
+/**
+ * 设置页改「下载音质」时调用，让队列立刻按新档位走（不用等下次刷新）。
+ * 服务端那份才是权威值，这里只是把改动推到内存状态里。
+ */
+function setQualityOverride(v) {
+  qualityOverrideSetting.value = v || ''
+}
+
 function updateSettings(patch) {
   if ('defaultQuality' in patch) defaultQuality.value = patch.defaultQuality
   if ('maxAttempts' in patch) maxAttempts.value = Math.min(8, Math.max(1, patch.maxAttempts))
@@ -1045,6 +1190,14 @@ function updateSettings(patch) {
 }
 
 loadSettings()
+// 「下载音质」开关存在服务端（跟着设备走），启动时拉一次；
+// 拉不到就当「跟随」，退化成各用各的档位，不会出错。
+ConfigAPI.get()
+  .then(res => {
+    const cfg = res?.data || res?.config
+    if (cfg) qualityOverrideSetting.value = String(cfg.download_quality_override || '')
+  })
+  .catch(() => {})
 // 先用本地缓存把首屏撑起来（同步、不闪烁），再异步跟 NAS 上的队列对齐。
 // 服务端那份才是「跟着设备走」的权威副本 —— 换浏览器/清缓存后靠它恢复。
 loadTasks()
@@ -1073,6 +1226,7 @@ export const downloadManager = {
   embedLyric,
   writeLrc,
   updateSettings,
+  setQualityOverride,
   QUALITY_OPTIONS,
   qualityLabel,
 
@@ -1104,6 +1258,8 @@ export const downloadManager = {
   removeTask,
   clearCompleted,
   clearAll,
+  removeTasks,
+  clearRecords,
 
   // 新增：音质 / 换源
   setTaskQuality,

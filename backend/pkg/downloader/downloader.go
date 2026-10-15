@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"fn-lx-player/pkg/namefmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -17,11 +18,13 @@ import (
 
 	"fn-lx-player/pkg/applog"
 	"fn-lx-player/pkg/config"
+	"fn-lx-player/pkg/flacok"
 	"fn-lx-player/pkg/fnos"
 	"fn-lx-player/pkg/nas"
 	"fn-lx-player/pkg/search"
 	"fn-lx-player/pkg/security"
 	"fn-lx-player/pkg/tags"
+	"fn-lx-player/pkg/useragent"
 )
 
 var illegalChars = regexp.MustCompile(`[\\/:*?"<>|\r\n\t]`)
@@ -143,6 +146,12 @@ type SongResult struct {
 	ActualFormat string `json:"actual_format,omitempty"`
 	Embedded     bool   `json:"embedded,omitempty"` // 是否成功内嵌歌词
 	Error        string `json:"error,omitempty"`
+	// ErrorCode 是给调用方**机器判别**用的失败分类（Error 是给人看的）。
+	//
+	// 目前只有一种："flac_corrupt" —— 下载到的 FLAC 是坏流（帧 CRC 对不上）。
+	// 它值得单列，是因为这种失败可以**自动换档重下**（降到 320k），
+	// 而不是把错误抛给用户。前端看到这个码就自动降档重试。
+	ErrorCode string `json:"error_code,omitempty"`
 }
 
 type Downloader struct {
@@ -168,9 +177,17 @@ func NewDownloader(cfgMgr *config.ConfigManager) *Downloader {
 // 注意：目标目录可能尚不存在，而 ResolveSafePath 要求路径已存在（需要解析软链接），
 // 因此这里自底向上找到「最近的已存在祖先目录」再交给它校验。
 func validateDownloadDir(dir string) error {
+	return validateNasDir(dir, "下载目录")
+}
+
+// validateNasDir 是目录类设置的共同校验：绝对路径 + 落在 NAS 存储卷内。
+//
+// label 只影响报错文案（「下载目录」/「缓存目录」）—— 用户在设置页里同时能看到
+// 两个输入框，报错不说是哪一个等于让他自己猜。
+func validateNasDir(dir, label string) error {
 	clean := filepath.Clean(strings.TrimSpace(dir))
 	if !filepath.IsAbs(clean) {
-		return fmt.Errorf("下载目录必须是绝对路径")
+		return fmt.Errorf("%s必须是绝对路径", label)
 	}
 
 	target := clean
@@ -180,13 +197,13 @@ func validateDownloadDir(dir string) error {
 		}
 		parent := filepath.Dir(target)
 		if parent == target {
-			return fmt.Errorf("无法定位下载目录的可用父目录")
+			return fmt.Errorf("无法定位%s的可用父目录", label)
 		}
 		target = parent
 	}
 
 	if _, err := nas.ResolveSafePath(target); err != nil {
-		return fmt.Errorf("下载目录必须位于 NAS 存储卷内（如 /vol1/Music）: %v", err)
+		return fmt.Errorf("%s必须位于 NAS 存储卷内（如 /vol1/Music）: %v", label, err)
 	}
 	return nil
 }
@@ -208,8 +225,11 @@ func (d *Downloader) HandleGetConfig(w http.ResponseWriter, r *http.Request) {
 	cfg := d.cfgMgr.Get()
 	dir := d.getDownloadDir()
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"code":            200,
-		"download_dir":    dir,
+		"code":         200,
+		"download_dir": dir,
+		// 空串 = 用程序推导的默认位置（暂存在下载目录下，试听缓存在数据目录下）。
+		// 界面要显示的就是这个「已设置 / 未设置」的区别。
+		"cache_dir":       cfg.CacheDirPath(),
 		"default_nas_dir": cfg.DefaultNasDir,
 	})
 }
@@ -223,6 +243,11 @@ func (d *Downloader) HandleSetConfig(w http.ResponseWriter, r *http.Request) {
 
 	var req struct {
 		DownloadDir string `json:"download_dir"`
+		// CacheDir 是**指针**，因为要区分三件事（与 AppConfig.CacheDir 同一套三态）：
+		//   没传这个键 → 不改（旧前端只传 download_dir，必须继续能用）
+		//   传了空串   → 显式回到默认位置（界面的「恢复默认」）
+		//   传了路径   → 用它
+		CacheDir *string `json:"cache_dir"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid payload", http.StatusBadRequest)
@@ -230,24 +255,57 @@ func (d *Downloader) HandleSetConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	targetDir := strings.TrimSpace(req.DownloadDir)
-	if targetDir == "" {
+	if targetDir == "" && req.CacheDir == nil {
 		http.Error(w, "download_dir required", http.StatusBadRequest)
 		return
 	}
 
-	// 目录越权防护：只允许写入 NAS 存储卷内的目录
-	if err := validateDownloadDir(targetDir); err != nil {
+	cfg := d.cfgMgr.Get()
+
+	if targetDir != "" {
+		// 目录越权防护：只允许写入 NAS 存储卷内的目录
+		if err := validateNasDir(targetDir, "下载目录"); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"code": 400, "message": err.Error()})
+			return
+		}
+		targetDir = filepath.Clean(targetDir)
+		// Try create dir if not exists
+		_ = os.MkdirAll(targetDir, 0755)
+		cfg.DownloadDir = targetDir
+	}
+
+	if req.CacheDir != nil {
+		cacheDir := strings.TrimSpace(*req.CacheDir)
+		if cacheDir != "" {
+			if err := validateNasDir(cacheDir, "缓存目录"); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{"code": 400, "message": err.Error()})
+				return
+			}
+			cacheDir = filepath.Clean(cacheDir)
+			// 缓存目录是**真要写字节**的地方，建不出来现在就报，别等第一次试听
+			// 才发现写不进去（那时用户只会看到「缓存失败」而猜不到是权限问题）。
+			if err := os.MkdirAll(cacheDir, 0755); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{
+					"code":    400,
+					"message": "缓存目录无法创建（检查权限）: " + err.Error(),
+				})
+				return
+			}
+		}
+		cfg.CacheDir = &cacheDir
+	}
+
+	// 校验要用**合并后**的这一对：界面可能只提交了其中一个，
+	// 只看请求体会把「新下载目录撞上已有缓存目录」这种漏掉。
+	if msg := cfg.ValidateDirs(); msg != "" {
 		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{"code": 400, "message": err.Error()})
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"code": 400, "message": msg})
 		return
 	}
-	targetDir = filepath.Clean(targetDir)
 
-	// Try create dir if not exists
-	_ = os.MkdirAll(targetDir, 0755)
-
-	cfg := d.cfgMgr.Get()
-	cfg.DownloadDir = targetDir
 	if err := d.cfgMgr.Update(cfg); err != nil {
 		http.Error(w, "failed to update config: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -256,7 +314,8 @@ func (d *Downloader) HandleSetConfig(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"code":         200,
 		"message":      "ok",
-		"download_dir": targetDir,
+		"download_dir": d.getDownloadDir(),
+		"cache_dir":    cfg.CacheDirPath(),
 	})
 }
 
@@ -294,6 +353,13 @@ func (d *Downloader) HandleDownloadSong(w http.ResponseWriter, r *http.Request) 
 // maxDownloadBytes 单曲下载体积上限，防止异常大流写满磁盘
 const maxDownloadBytes = 300 << 20 // 300MB
 
+// ErrCorruptFLAC 标记「下载到的 FLAC 是坏流」这类失败。
+//
+// 单独留一个哨兵错误，是因为调用方需要能认出它并**自动换档重下**
+// （降到 320k），而不是把错误原文抛给用户。配套的机器可读字段是
+// SongResult.ErrorCode = "flac_corrupt"。
+var ErrCorruptFLAC = errors.New("下载到的无损文件是坏流")
+
 // DownloadOne 下载单曲的公开入口，供其它包（如监控调度）复用。
 //
 // 与 HTTP 处理器不同，它直接返回结果，便于调用方自行记录与重试。
@@ -319,7 +385,10 @@ func (d *Downloader) downloadSingleSong(song SongPayload) (*SongResult, error) {
 
 	cleanSinger := sanitizeFilename(song.Singer)
 	cleanName := sanitizeFilename(song.Name)
-	base := fmt.Sprintf("%s - %s", cleanSinger, cleanName)
+	// 文件名方向由 pkg/namefmt 统一决定（默认「歌手 - 歌名」，可配成「歌名 - 歌手」）。
+	// 千万不要在这里自己拼分隔符：读取侧（扫描/去重/找歌词）按同一份约定反解，
+	// 两边写死两份必然有一天读反（不报错，只是歌手歌名对调）。
+	base := namefmt.Build(cleanSinger, cleanName)
 
 	// 已存在（任意受支持扩展名且体积达标）→ 直接复用，避免重复下载
 	if existing, ok := findExistingAudio(destDir, base); ok {
@@ -378,7 +447,7 @@ func (d *Downloader) downloadSingleSong(song SongPayload) (*SongResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+	req.Header.Set("User-Agent", useragent.Desktop)
 	if ref := GetStreamReferer(audioURL, song.Referer); ref != "" {
 		req.Header.Set("Referer", ref)
 	}
@@ -529,6 +598,29 @@ func (d *Downloader) downloadSingleSong(song SongPayload) (*SongResult, error) {
 	if ext == "" {
 		ext = "mp3"
 	}
+	// ── 入库前的最后校验 ──
+	//
+	// 魔数对不代表内容完好：有些音源会返回「文件头正常、正文含坏帧」的流
+	// （文件头合法、扩展名 .flac、体积也正常，但播到一半就坏）。这种文件以前
+	// 会被照常改名入库，表现是「下载成功但播不了 / 转码下载失败（errno 68157441）」。
+	//
+	// 逐帧走一遍结构，用帧头 CRC-8 与整帧 CRC-16 逐帧验签（见 pkg/flacok）。
+	// CRC 对不上就一定是坏的（误判概率 1/65536），所以直接拒绝并让上层换档重下，
+	// 不留「可能有点小问题」的中间态。
+	if ext == "flac" {
+		if verr := flacok.ValidateFile(tmpPath); verr != nil {
+			_ = os.Remove(tmpPath)
+			return &SongResult{
+				SongName:  song.Name,
+				Singer:    song.Singer,
+				Status:    "failed",
+				Quality:   song.Quality,
+				Error:     "下载到的无损文件是坏流（" + verr.Error() + "），可降到 320K 重试",
+				ErrorCode: "flac_corrupt",
+			}, fmt.Errorf("%w: %v", ErrCorruptFLAC, verr)
+		}
+	}
+
 	finalPath := allocateUniquePath(destDir, base, ext)
 	if err := os.Rename(tmpPath, finalPath); err != nil {
 		_ = os.Remove(tmpPath)
@@ -673,7 +765,7 @@ func (d *Downloader) fetchCoverBytes(coverURL string) ([]byte, string, error) {
 	if err != nil {
 		return nil, "", fmt.Errorf("构造封面请求失败：%v", err)
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+	req.Header.Set("User-Agent", useragent.Desktop)
 	req.Header.Set("Referer", "https://music.163.com/")
 
 	resp, err := d.httpClient.Do(req)
@@ -892,7 +984,7 @@ func (d *Downloader) HandleCheckDownloaded(w http.ResponseWriter, r *http.Reques
 	for _, s := range req.Songs {
 		cleanSinger := sanitizeFilename(s.Singer)
 		cleanName := sanitizeFilename(s.Name)
-		filename := fmt.Sprintf("%s - %s.mp3", cleanSinger, cleanName)
+		filename := namefmt.Build(cleanSinger, cleanName) + ".mp3"
 		fullPath := filepath.Join(destDir, filename)
 		key := fmt.Sprintf("%s - %s", s.Singer, s.Name)
 		if fi, err := os.Stat(fullPath); err == nil && fi.Size() > 300*1024 {

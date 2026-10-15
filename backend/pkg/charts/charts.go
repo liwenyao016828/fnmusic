@@ -3,10 +3,12 @@ package charts
 import (
 	"encoding/json"
 	"fmt"
+	"fn-lx-player/pkg/namefmt"
 	"html"
 	"io"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -14,6 +16,7 @@ import (
 	"time"
 
 	"fn-lx-player/pkg/applog"
+	"fn-lx-player/pkg/useragent"
 )
 
 var (
@@ -195,7 +198,7 @@ func (cm *ChartManager) fetchKuwoToplists() ([]ToplistItem, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+	req.Header.Set("User-Agent", useragent.Desktop)
 
 	resp, err := cm.client.Do(req)
 	if err != nil {
@@ -356,7 +359,7 @@ func (cm *ChartManager) fetchNeteaseToplists() ([]ToplistItem, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+	req.Header.Set("User-Agent", useragent.Desktop)
 	req.Header.Set("Referer", "https://music.163.com/")
 
 	resp, err := cm.client.Do(req)
@@ -517,7 +520,7 @@ func (cm *ChartManager) fetchAndWriteKuwoChartDetail(w http.ResponseWriter, bang
 	stage := "构造请求"
 	if err == nil {
 		stage = "请求"
-		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+		req.Header.Set("User-Agent", useragent.Desktop)
 		if resp, err := cm.client.Do(req); err == nil {
 			stage = "读取响应"
 			defer resp.Body.Close()
@@ -634,7 +637,7 @@ func (cm *ChartManager) searchKuwoSongs(keyword string) ([]ChartSongItem, error)
 	if err != nil {
 		return nil, fmt.Errorf("构造请求失败：%w", err)
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+	req.Header.Set("User-Agent", useragent.Desktop)
 
 	resp, err := cm.client.Do(req)
 	if err != nil {
@@ -810,10 +813,14 @@ func (cm *ChartManager) kugouChartPage(rankId string, page int) ([]ChartSongItem
 		songName := s.SongName
 		singer := s.SingerName
 		if singer == "" && strings.Contains(s.FileName, " - ") {
-			parts := strings.SplitN(s.FileName, " - ", 2)
-			singer = strings.TrimSpace(parts[0])
+			// 库里没写歌手时从**文件名**兜底：方向按用户配的命名格式走（pkg/namefmt），
+			// 写死「歌手在前」的话换格式之后这里的歌手/歌名会对调。
+			// 顺带把扩展名去掉 —— 改造前 songName 会带着 ".flac" 显示出来。
+			fbBase := strings.TrimSuffix(s.FileName, filepath.Ext(s.FileName))
+			fallbackArtist, fallbackTitle := namefmt.Parse(fbBase)
+			singer = fallbackArtist
 			if songName == "" {
-				songName = strings.TrimSpace(parts[1])
+				songName = fallbackTitle
 			}
 		}
 		if songName == "" {
@@ -1078,7 +1085,7 @@ func (cm *ChartManager) fetchAndWriteKuwoPlaylists(w http.ResponseWriter, page, 
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+	req.Header.Set("User-Agent", useragent.Desktop)
 
 	resp, err := cm.client.Do(req)
 	if err != nil {
@@ -1157,7 +1164,7 @@ func (cm *ChartManager) fetchAndWriteQQPlaylists(w http.ResponseWriter, category
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+	req.Header.Set("User-Agent", useragent.Desktop)
 	req.Header.Set("Referer", "https://y.qq.com/")
 
 	resp, err := cm.client.Do(req)
@@ -1230,7 +1237,7 @@ func (cm *ChartManager) fetchAndWriteNeteasePlaylists(w http.ResponseWriter, cat
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+	req.Header.Set("User-Agent", useragent.Desktop)
 	req.Header.Set("Referer", "https://music.163.com/")
 
 	resp, err := cm.client.Do(req)
@@ -1359,7 +1366,7 @@ func (cm *ChartManager) fetchAndWriteKuwoPlaylistDetail(w http.ResponseWriter, s
 	var playCount int64
 
 	if err == nil {
-		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+		req.Header.Set("User-Agent", useragent.Desktop)
 		if resp, err := cm.client.Do(req); err == nil {
 			defer resp.Body.Close()
 			if body, err := io.ReadAll(resp.Body); err == nil {
@@ -1560,10 +1567,14 @@ func (cm *ChartManager) fetchAndWriteKugouPlaylistDetail(w http.ResponseWriter, 
 		songName := s.SongName
 		singer := s.SingerName
 		if singer == "" && strings.Contains(s.FileName, " - ") {
-			parts := strings.SplitN(s.FileName, " - ", 2)
-			singer = strings.TrimSpace(parts[0])
+			// 库里没写歌手时从**文件名**兜底：方向按用户配的命名格式走（pkg/namefmt），
+			// 写死「歌手在前」的话换格式之后这里的歌手/歌名会对调。
+			// 顺带把扩展名去掉 —— 改造前 songName 会带着 ".flac" 显示出来。
+			fbBase := strings.TrimSuffix(s.FileName, filepath.Ext(s.FileName))
+			fallbackArtist, fallbackTitle := namefmt.Parse(fbBase)
+			singer = fallbackArtist
 			if songName == "" {
-				songName = strings.TrimSpace(parts[1])
+				songName = fallbackTitle
 			}
 		}
 		if songName == "" {
@@ -1614,7 +1625,7 @@ func (cm *ChartManager) fetchAndWriteNeteasePlaylistDetail(w http.ResponseWriter
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+	req.Header.Set("User-Agent", useragent.Desktop)
 	req.Header.Set("Referer", "https://music.163.com/")
 	req.Header.Set("Cookie", "os=pc; osver=Microsoft-Windows-10; appver=2.9.7;")
 

@@ -557,8 +557,38 @@ function normalizeSearchItem(script, source, item) {
   };
   // 只在**脚本真给了**的时候透传 —— 缺就是缺，不补默认值（见函数顶部）
   if (it.quality) out.quality = String(it.quality);
+  // 脚本没直接给 quality 时，从 LX 契约的 `_types` 里取。
+  //
+  // `_types` 是**脚本自己声明的**「这个源能为这首歌提供哪些档位」
+  // （形如 `{ '128k': {...}, '320k': {...}, 'flac': {...} }`，值是该档的额外参数）。
+  // 取它的**键**里最高的一档 —— 这是脚本的原话，不是我们编的档位，所以与
+  // 「缺就是缺、不补默认值」不冲突：`_types` 存在就意味着脚本明确报了档位。
+  //
+  // ⚠️ 2026-10-08 补：在这之前宿主只透传 `it.quality`，而实测的洛雪脚本
+  // （qsvip / 全豆要）**都不给这个字段**、只给 `_types` —— 于是洛雪候选在池里
+  // 恒为「无档位」→ 算最低档 → 过不了 downloadCandidates 的「严格更好」那道筛，
+  // 表现就是用户报的「我 lx 音乐怎么没有参与到下载」。
+  if (!out.quality) {
+    const q = topQualityFromTypes(it);
+    if (q) out.quality = q;
+  }
   if (Number(it.size) > 0) out.size = Math.floor(Number(it.size));
   return out;
+}
+
+// LX 契约里的档位键 → 曲率阶梯里的档位（**只认阶梯里有的**）。
+// 认不出的键忽略：编一个档位就等于伪造决策依据（见函数顶部那段注释）。
+const LX_TYPE_ORDER = ['flac24bit', 'flac', 'hires', '320k', '192k', '128k'];
+
+// topQualityFromTypes 从 `_types`（或 `types`）的键里取最高一档；没有就返回空串。
+function topQualityFromTypes(item) {
+  const t = item && (item._types || item.types);
+  if (!t || typeof t !== 'object') return '';
+  const keys = Object.keys(t).map((k) => String(k).trim().toLowerCase());
+  for (const q of LX_TYPE_ORDER) {
+    if (keys.indexOf(q) >= 0) return q;
+  }
+  return '';
 }
 
 http.createServer(async (req, res) => {

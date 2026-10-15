@@ -23,7 +23,17 @@ fpk-package/app/fn-lx-player
 
 
 # 本地开发环境（热加载脚本产生的数据）
-.dev/
+#
+# ⚠️ 2026-10-14 按 HANDOVER §8.6「六」修正：原来整目录 ignore，但**统一入口
+# wsl-run.sh 与手机适配回归工具 measure-mobile.mjs 都在里面** —— 用 git 交付时
+# 接手的人拿不到它们（§1 的第一条自检直接做不了）。改成 ignore 目录内容、
+# 显式放行几个会被文档引用的工具；数据/日志/二进制仍然全部忽略。
+.dev/*
+!.dev/wsl-run.sh
+!.dev/measure-mobile.mjs
+!.dev/catalog-audit.mjs
+!.dev/count-lines.sh
+!.dev/count-tests.sh
 
 # ──────────────────────────────────────────────────────────────
 # 2026-10-06 补：体积大、且都能重新生成的东西

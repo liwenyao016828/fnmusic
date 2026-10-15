@@ -38,6 +38,7 @@ import (
 	"time"
 
 	"fn-lx-player/pkg/security"
+	"fn-lx-player/pkg/useragent"
 )
 
 const qqPlaylistDetailURL = "https://c.y.qq.com/v8/fcg-bin/fcg_v8_playlist_cp.fcg" +
@@ -93,7 +94,7 @@ func FetchQQPlaylistDetail(client *http.Client, disstid string) (*QQPlaylist, er
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+	req.Header.Set("User-Agent", useragent.Desktop)
 	req.Header.Set("Referer", "https://y.qq.com/")
 
 	resp, err := client.Do(req)

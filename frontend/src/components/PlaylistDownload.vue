@@ -17,7 +17,7 @@
     <div class="space-y-4">
 
       <!-- ── 解析入口 ── -->
-      <div class="rounded-[15px] border border-gray-200 bg-white p-4">
+      <div class="rounded-xl border border-gray-200 bg-white p-4">
         <div class="flex flex-wrap items-center justify-between gap-3">
           <div class="min-w-0">
             <b class="text-[14px] text-gray-800">歌单下载</b>
@@ -27,7 +27,7 @@
           </div>
           <button
             @click="focusInput()"
-            class="shrink-0 rounded-lg bg-blue-500 px-4 py-2 text-[12px] font-semibold text-white transition-all hover:bg-blue-600"
+            class="shrink-0 rounded-lg bg-emerald-500 px-4 py-2 text-[12px] font-semibold text-white transition-all hover:bg-emerald-600"
           >解析歌单链接</button>
         </div>
 
@@ -52,7 +52,7 @@
 
       <!-- ── 解析结果 ── -->
       <template v-if="parsed">
-        <div class="rounded-[15px] border border-gray-200 bg-white p-4">
+        <div class="rounded-xl border border-gray-200 bg-white p-4">
           <div class="flex flex-wrap items-center gap-4">
             <div class="h-[76px] w-[76px] shrink-0 overflow-hidden rounded-xl bg-gray-100">
               <img v-if="parsed.cover" :src="parsed.cover" alt="" referrerpolicy="no-referrer" class="h-full w-full object-cover" />
@@ -98,7 +98,7 @@
         </div>
 
         <!-- 歌曲列表 -->
-        <div class="overflow-hidden rounded-[15px] border border-gray-200 bg-white">
+        <div class="overflow-hidden rounded-xl border border-gray-200 bg-white">
           <div class="flex items-center justify-between border-b border-gray-100 px-4 py-2.5">
             <span class="text-[12px] font-semibold text-gray-700">曲目列表</span>
             <label class="flex items-center gap-1.5 text-[11px] text-gray-500">
@@ -138,7 +138,7 @@
       </template>
 
       <!-- 未解析时的空态 -->
-      <div v-else-if="!parsing" class="rounded-[15px] border border-dashed border-gray-200 bg-white py-16 text-center">
+      <div v-else-if="!parsing" class="rounded-xl border border-dashed border-gray-200 bg-white py-16 text-center">
         <p class="text-[13px] font-semibold text-gray-500">还没有解析任何歌单</p>
         <p class="mt-1 text-[11px] text-gray-400">把歌单分享链接粘到上面，点「解析」开始</p>
       </div>

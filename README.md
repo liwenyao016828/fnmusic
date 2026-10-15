@@ -205,8 +205,13 @@ cd backend  && go build ./... && go test ./...   # 33 个包全绿；联网用�
 
 ## 📚 版本与变更记录
 
-- 当前版本：**2.1.119**（四处同步：`backend/pkg/api/server.go` 的 `CurrentVersion`、
+- 当前版本：**2.3.0**（四处同步：`backend/pkg/api/server.go` 的 `CurrentVersion`、
   `fpk-package/manifest` 的 `version`、`RELEASE_NOTES.md` 顶部、HANDOVER §0）。
+- **怎么决定升哪一位**（用户 2026-10-08 定的规矩：不要每轮都只加最后一位）：
+  - **大版本** `x.0.0` —— 架构级 / 破坏性变更（如 v2.0.0 的三容器 → 单容器重构）；
+  - **中版本** `2.x.0` —— **新增能力**：新功能、新页面、新链路（如 v2.2.0 的洛雪取链、
+    自动下载记录、试听音质阶梯）；
+  - **小版本** `2.2.x` —— 修 bug、UI 微调、文档。
 - 逐版变更：[`RELEASE_NOTES.md`](RELEASE_NOTES.md)（每版一段，带设计理由）；
   更早的按日期整理在 [`docs/变更记录/`](docs/变更记录/INDEX.md)。
 - 架构决策、踩坑记录与「不能做什么」：见 `HANDOVER.md`（给接手者读的活文档）。

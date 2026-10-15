@@ -111,6 +111,26 @@
     return SOURCE_LABEL[s] || s.toUpperCase();
   }
 
+  // 档位标签。键与 `pkg/online/tier.go` 的档位常量、以及 `pkg/intercept` 的
+  // playbackQualityOptions 对齐 —— 界面自己编一套标签，迟早会出现「后端认的档位
+  // 界面上没得选」这种只能靠人发现的偏差。
+  var QUALITY_LABELS = {
+    auto: '自动（能无损就无损）',
+    lossless: '无损优先',
+    flac: 'FLAC 无损',
+    flac24bit: 'FLAC 24bit',
+    '320k': '320K',
+    '192k': '192K',
+    '128k': '128K'
+  };
+
+  // qualityLabel 是**纯函数**（不碰 DOM、不改状态），所以也导给 node 里的测试用。
+  function qualityLabel(q) {
+    var s = String(q == null ? '' : q).trim().toLowerCase();
+    if (!s) return '';
+    return QUALITY_LABELS[s] || s.toUpperCase();
+  }
+
   /* ── 1. 旁听官方接口返回的曲目 ──────────────────────────────────────── */
 
   // mergeRecord 合并「同一个 guid 的另一份说法」—— 规则是**只升不降**。
@@ -373,6 +393,10 @@
   var info = null;          // /api/info 的结果（版本、曲率地址）
   var infoState = 'idle';   // idle | ok | fail
   var dlState = 'idle';     // idle | busy
+  // nowSeq 给「实际取音」那一行做竞态判据（连着切歌时先发的可能后回来）；
+  // savingQuality 防止连点两次档位胶囊发两条互相覆盖的写入。
+  var nowSeq = 0;
+  var savingQuality = false;
   var open = false;
 
   function css() {
@@ -432,6 +456,15 @@
         'background:' + T.knob + ';transition:transform .16s cubic-bezier(.22,1,.36,1)}' +
       '.sw.on{background:' + T.switchOn + '}' +
       '.sw.on::after{transform:translateX(14px)}' +
+      // 试听音质的档位胶囊：与官方皮肤同一套令牌（见文件头「不发明颜色」）。
+      '.chips{display:flex;flex-wrap:wrap;gap:6px}' +
+      '.chip{border:1px solid ' + T.borderSoft + ';background:' + T.ctrlBg + ';color:' + T.text2 + ';' +
+        'font-size:11px;font-weight:600;border-radius:999px;padding:4px 10px;cursor:pointer;transition:all .15s}' +
+      '.chip:hover:not(:disabled){background:' + T.ctrlBgHover + ';border-color:' + T.border + '}' +
+      '.chip.on{background:' + T.brand + ';border-color:' + T.brand + ';color:var(--ds-text-on-accent,#fff)}' +
+      '.chip:disabled{opacity:.45;cursor:default}' +
+      // 「实际取音」：比歌手行更亮一点 —— 它是**事实**（后端回读出来的），不是元数据。
+      '.mq{font-size:11px;color:' + T.text3 + ';margin-top:3px}' +
 
       '.ft{display:flex;align-items:center;gap:6px;margin-top:12px;padding-top:10px;' +
         'border-top:1px solid ' + T.borderSoft + ';font-size:11px;color:' + T.text4 + '}' +
@@ -524,6 +557,12 @@
     var ms = el('div', 'ms', '在飞牛音乐里播一首在线歌曲');
     meta.appendChild(mt);
     meta.appendChild(ms);
+    // 「实际取音：<源> · <档位>」那一行。**只有后端知道**这两件事 ——
+    // 档位是解析时回读出来的（平台会静默降级），源也可能被下载源池换过。
+    // 所以它是异步问 `/api/now` 填上来的；没拿到就整行隐藏，不显示猜测值。
+    var mq = el('div', 'mq', '');
+    mq.hidden = true;
+    meta.appendChild(mq);
     now.appendChild(cov);
     now.appendChild(ph);
     now.appendChild(meta);
@@ -538,6 +577,19 @@
     s1.appendChild(dl);
     p.appendChild(s1);
 
+    // ── 试听音质（v2.1.120）──
+    // 用户 2026-10-07：「在线播放用的哪个源、什么音质，能有切换的按钮吗？」
+    // 档位清单**由后端给**（`/api/info` 的 quality_options），界面不自己写死 ——
+    // 写死一份迟早和 pkg/intercept 的 playbackQualityOptions 对不上，
+    // 而那种不一致表现为「点了一个不存在的档位、什么都没发生」。
+    var s1b = el('div', 'sec');
+    s1b.appendChild(el('div', 'h4', '试听音质'));
+    var chips = el('div', 'chips');
+    s1b.appendChild(chips);
+    s1b.appendChild(el('p', 'hint',
+      '自动 = flac → 320k → 128k 逐级降；无损优先会去源池找无损版（首播多等一轮）。对下一首生效。'));
+    p.appendChild(s1b);
+
     // ── 跳转 ──
     var s2 = el('div', 'sec');
     s2.appendChild(el('div', 'h4', '跳转'));
@@ -549,7 +601,7 @@
       if (info && info.qulv_url) window.open(info.qulv_url, '_blank', 'noopener');
     });
     s2.appendChild(go);
-    s2.appendChild(el('p', 'hint', '曲率里还能批量下载、整理曲库、管理榜单。'));
+    s2.appendChild(el('p', 'hint', '批量下载 · 整理曲库 · 榜单管理'));
     p.appendChild(s2);
 
     // ── 偏好 ──
@@ -585,7 +637,10 @@
     ft.appendChild(state);
     p.appendChild(ft);
 
-    p.__q = { ver: ver, cov: cov, ph: ph, mt: mt, ms: ms, dl: dl, go: go, sw: sw, dot: dot, state: state };
+    p.__q = {
+      ver: ver, cov: cov, ph: ph, mt: mt, ms: ms, mq: mq, dl: dl, go: go, sw: sw,
+      dot: dot, state: state, chips: chips, chipBtns: {}
+    };
     return p;
   }
 
@@ -671,6 +726,7 @@
       q.cov.hidden = true;
       q.ph.hidden = false;
     }
+    loadNow(np && np.guid);
     if (dlState === 'busy') {
       q.dl.disabled = true;
       q.dl.querySelector('span').textContent = '正在下载…';
@@ -679,6 +735,102 @@
       q.dl.querySelector('span').textContent = '下载到曲率';
       q.dl.title = can ? '' : '本地曲目不用下载（已经在 NAS 上了）';
     }
+  }
+
+  // loadNow 问后端「这首歌这次实际用了哪条源、哪一档」。
+  //
+  // 用自增序号做**竞态**判据：连着切歌时先发的请求可能后回来 ——
+  // 不判就会把上一首的源与档位显示在这一首下面，看起来像「源记错了」。
+  function loadNow(guid) {
+    var q = panel && panel.__q;
+    if (!q) return;
+    if (!guid) {
+      q.mq.hidden = true;
+      q.mq.textContent = '';
+      return;
+    }
+    var seq = ++nowSeq;
+    fetch(BASE + '/api/now?guid=' + encodeURIComponent(guid), { credentials: 'same-origin' })
+      .then(function (res) { return res.json(); })
+      .then(function (body) {
+        if (seq !== nowSeq || !panel || panel.__q !== q) return; // 已经切歌 / 面板重建
+        var d = (body && (body.data || body)) || {};
+        if (!d.platform && !d.tier) { q.mq.hidden = true; return; }
+        var bits = [];
+        if (d.platform) bits.push('取音 ' + sourceLabel(d.platform));
+        if (d.tier) bits.push(qualityLabel(d.tier));
+        q.mq.textContent = bits.join(' · ');
+        q.mq.hidden = false;
+      })
+      .catch(function () {
+        if (seq === nowSeq && panel && panel.__q === q) q.mq.hidden = true;
+      });
+  }
+
+  // refreshQuality 按后端的档位清单画胶囊，并高亮当前值。
+  //
+  // 清单**只在第一次拿到时**构建：后端不会在运行中改这份清单（它是编译进去的
+  // 常量），每次刷新都重建 DOM 只会让点击时正在动画的胶囊闪一下。
+  function refreshQuality() {
+    if (!panel) return;
+    var q = panel.__q;
+    if (!q.chips) return;
+    var opts = (info && info.quality_options && info.quality_options.length) ? info.quality_options : [];
+    if (opts.length && q.chips.childNodes.length !== opts.length) {
+      q.chips.innerHTML = '';
+      q.chipBtns = {};
+      for (var i = 0; i < opts.length; i++) {
+        (function (value) {
+          var c = el('button', 'chip', qualityLabel(value));
+          c.setAttribute('data-quality', value);
+          c.addEventListener('click', function () { setQuality(value); });
+          q.chipBtns[value] = c;
+          q.chips.appendChild(c);
+        })(opts[i]);
+      }
+    }
+    var cur = (info && info.playback_quality) || 'auto';
+    // 后端没给 editable（老版本）时按「能改」处理：宁可让按钮可点，
+    // 也不要因为少一个字段把功能锁死。
+    var editable = !info || info.quality_editable !== false;
+    for (var k in q.chipBtns) {
+      if (!Object.prototype.hasOwnProperty.call(q.chipBtns, k)) continue;
+      q.chipBtns[k].className = (k === cur) ? 'chip on' : 'chip';
+      q.chipBtns[k].disabled = !editable;
+    }
+  }
+
+  // setQuality 把档位写回曲率配置。写的是**配置**，所以下一首歌就按新档位取
+  // （拦截层每次都现取，见 pkg/intercept/playback_quality.go）。
+  function setQuality(value) {
+    if (savingQuality) return;
+    savingQuality = true;
+    fetch(BASE + '/api/quality', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ quality: value })
+    })
+      .then(function (res) {
+        return res.json().catch(function () { return null; }).then(function (body) {
+          return { ok: res.ok, body: body };
+        });
+      })
+      .then(function (r) {
+        if (!r.ok) {
+          toast('音质没改成：' + ((r.body && r.body.msg) || '曲率没接受'), 'err');
+          return;
+        }
+        var d = (r.body && (r.body.data || r.body)) || {};
+        info = info || {};
+        info.playback_quality = d.quality || value;
+        refreshQuality();
+        toast('试听音质已切到「' + qualityLabel(info.playback_quality) + '」', 'ok');
+      })
+      .catch(function () {
+        toast('音质没改成：曲率没响应', 'err');
+      })
+      .then(function () { savingQuality = false; });
   }
 
   function refreshInfo() {
@@ -719,6 +871,7 @@
     refreshPref();
     refreshNow();
     refreshInfo();
+    refreshQuality();
     panel.classList.add('show');
     loadInfo();
   }
@@ -729,9 +882,16 @@
       .then(function (res) { return res.json(); })
       .then(function (body) {
         var d = (body && (body.data || body)) || {};
-        info = { version: d.version || '', qulv_url: d.qulv_url || '' };
+        info = {
+          version: d.version || '',
+          qulv_url: d.qulv_url || '',
+          playback_quality: d.playback_quality || 'auto',
+          quality_options: d.quality_options || [],
+          quality_editable: d.quality_editable !== false
+        };
         infoState = 'ok';
         refreshInfo();
+        refreshQuality();
       })
       .catch(function () {
         infoState = 'fail';
@@ -886,6 +1046,7 @@
       guidOf: guidOf,
       artistsOf: artistsOf,
       sourceLabel: sourceLabel,
+      qualityLabel: qualityLabel,
       itemText: itemText,
       looksLikeTrackMenu: looksLikeTrackMenu,
       menuItemAllowed: menuItemAllowed,

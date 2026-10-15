@@ -48,11 +48,44 @@ type AppConfig struct {
 	//    · 字段缺失（nil）= 从没设置过 → 迁移时用旧的 active_source_id 兜底、全新安装还能自动启用第一个；
 	//    · `[]`（非 nil 空）= 用户**显式把全部音源都关掉**了 → 必须尊重，不能又给他自动开一个。
 	//    加了 omitempty 之后这两种状态会被一起抹成"缺失"，用户关掉的全部音源会自己活过来。
-	ActiveSourceIDs []string       `json:"active_source_ids"`
-	Theme           string         `json:"theme"`
-	VisualizerMode  string         `json:"visualizer_mode"`
-	PreferQuality   string         `json:"prefer_quality"`
-	CustomSources   []CustomSource `json:"custom_sources"`
+	ActiveSourceIDs []string `json:"active_source_ids"`
+	Theme           string   `json:"theme"`
+	VisualizerMode  string   `json:"visualizer_mode"`
+	PreferQuality   string   `json:"prefer_quality"`
+	// PlaybackQuality 是**试听**（飞牛页面在线播放）的音质偏好，与 PreferQuality
+	// （下载）分开：两者要的东西不一样 —— 下载可以慢慢等一份无损，试听要先出声。
+	//
+	//   auto（默认）= 本平台内阶梯 flac → 320k → 128k，能上无损就上无损，最快；
+	//   lossless   = 无损优先：本平台拿不到无损时再去下载源池找同名无损版（慢一点，真无损）；
+	//   320k / 128k = 固定档位，不降级（拿不到就是拿不到）。
+	//
+	// 空串视为 auto（老配置里没有这个键）。
+	PlaybackQuality string `json:"playback_quality,omitempty"`
+	// AutoDownloadQuality 是「飞牛音乐页面里触发的下载」（收藏 / 加入歌单 /
+	// 点「下载到曲率」）要的音质档位。
+	//
+	//   highest（默认）= 能无损就无损（走下载源池原本的排序）；
+	//   flac / 320k / 128k = 点名要这一档：正好是那一档的候选排最前，
+	//   没有就按原顺序兜底（宁可下到别的档位，也不要让收藏变成下载失败），
+	//   实际档位会如实写进自动下载记录。
+	//
+	// 空串视为 highest（老配置里没有这个键）。
+	AutoDownloadQuality string `json:"auto_download_quality,omitempty"`
+	// DownloadQualityOverride 是**全局**「下载音质」开关（照参考实现的
+	// FNMUSIC_DL_QUALITY）。它不改上面那两个字段，而是**盖住**它们 ——
+	// 「跟着各自设置」和「这次我想都用某档」是两件事，混进一个字段就再也回不去了。
+	//
+	//   ""         = 跟随各入口自己的设置（默认）；
+	//   "lossless" = 一律点名无损（下不到就按各入口自己的规则兜底，不会变成下载失败）；
+	//   "mp3_320"  = 一律点名 320k。
+	//
+	// 只有这两个取值会被认；认不出就当作跟随。**没有转码能力**（NAS 上没有
+	// ffmpeg），所以「MP3 320k」是「点名这一档」而不是「转成 320k」。
+	//
+	// 指针是必须的：空串本身就是一个合法取值（= 跟随）。用 string 的话
+	// 「非空才写」的合并规则会让它永远回不到跟随 —— 与 CacheDir 同一个坑。
+	DownloadQualityOverride *string        `json:"download_quality_override,omitempty"`
+	CustomSources           []CustomSource `json:"custom_sources"`
 	// APISources 按服务地址接入的音源，见 APISource
 	APISources []APISource `json:"api_sources,omitempty"`
 	// PreferredPlatforms 主力平台（有序）。默认网易 + QQ ——
@@ -161,6 +194,34 @@ type AppConfig struct {
 	// FnosToken 手工指定的飞牛音乐令牌（故障排查用）。
 	// 非空时优先于环境变量与数据库自动读取；留空表示走自动读取。
 	FnosToken string `json:"fnos_token,omitempty"`
+
+	// ── 下载落盘相关（2026-10-15 加，来自上游 zouclang/fnos_music_ext v2.7.8）──
+
+	// FilenameFormat 是曲库文件的命名格式：`歌曲名 - 歌手名` 还是 `歌手名 - 歌曲名`。
+	//
+	// 取值见 pkg/namefmt（空 / 认不出一律当 `artist-title`，也就是**改造前的行为**）：
+	//   artist-title（默认）→ 「晴天 - 周杰伦」
+	//   title-artist        → 「周杰伦 - 晴天」
+	//
+	// ⚠️ 换格式**不会**自动重命名已经落盘的歌，只会影响之后新下载的文件；
+	// 但扫描/去重/找歌词这三条读取侧都会按同一个格式反解文件名（见 pkg/namefmt.Parse），
+	// 所以中途切换会让**老文件**的歌手/歌名在列表里读反 —— 这是这个开关唯一的坑，
+	// 界面上必须写清楚（用户可以先用「整理」把老文件批量改名）。
+	FilenameFormat string `json:"filename_format,omitempty"`
+
+	// CacheDir 是「边听边存 / 曲库暂存」的目录。
+	//
+	// 空 = 用程序推导的默认值（下载目录下的隐藏子目录），与改造前一致。
+	// 之所以允许独立于下载目录：缓存是要被淘汰的临时数据，用户常想把它放
+	// 在系统盘之外、或者干脆单独限容；而下载目录是**成品**，两者混在一起
+	// 会让「清理缓存」一不小心删掉成品。
+	//
+	// ⚠️ 与 DownloadDir **不得相同、也不得互为父子** —— 校验在 pkg/config 的
+	// ValidateDirs()，调用点在保存配置的接口和下载/接管启动处。
+	// nil = 没设置过（用默认），指向空串 = **显式**用默认（界面上「恢复默认」走这条），
+	// 指向路径 = 指定。三态的理由与 CoverEmbed 完全一样：只有两态的话，
+	// 用户一旦设过自定义目录就再也回不到默认值了。
+	CacheDir *string `json:"cache_dir,omitempty"`
 }
 
 // ActiveIDs 返回启用池（有序）。**旧配置**（只有单值 active_source_id）自动升成单元素池。
@@ -321,6 +382,82 @@ func (a AppConfig) CoverEmbedOn() bool {
 	return a.CoverEmbed == nil || *a.CoverEmbed
 }
 
+// ValidateDirs 检查「下载目录 / 缓存目录」这对路径是否合法。
+//
+// 两条规则（来自上游 zouclang/fnos_music_ext v2.8.0 的目录校验，那条 release 写得很明确）：
+//
+//	① 两者不得**相同**：缓存会被淘汰清理，与成品放同一个目录等于随时可能删掉成品；
+//	② 两者不得**互为父子**：`/vol1/Music` 与 `/vol1/Music/.cache` 这种，清理缓存时
+//	   一个 rm -rf 就能带走整个曲库，而且「下载完成 → 从缓存转正」会在同目录里
+//	   自己搬自己，rename 的语义变得不可预测。
+//
+// 只在**两个都非空**时校验：缓存留空表示「用程序推导的默认值」，那个值本身
+// 就是下载目录下的隐藏子目录（属于规则 ②）—— 默认配置不能把自己判成非法。
+// 返回空串表示通过，否则是给用户看的中文原因（接口直接回给前端）。
+func (a AppConfig) ValidateDirs() string {
+	d, c := strings.TrimSpace(a.DownloadDir), a.CacheDirPath()
+	if d == "" || c == "" {
+		return ""
+	}
+	clean := func(p string) string {
+		if abs, err := filepath.Abs(p); err == nil {
+			p = abs
+		}
+		return filepath.Clean(p)
+	}
+	dc, cc := clean(d), clean(c)
+	if dc == cc {
+		return "缓存目录不能和下载目录是同一个目录（清理缓存会连成品一起删掉）"
+	}
+	if strings.HasPrefix(cc, dc+string(filepath.Separator)) {
+		return "缓存目录不能放在下载目录里面（清理缓存会连整个曲库一起删掉）"
+	}
+	if strings.HasPrefix(dc, cc+string(filepath.Separator)) {
+		return "下载目录不能放在缓存目录里面（缓存清理会牵连整个曲库）"
+	}
+	return ""
+}
+
+// 「下载音质」开关的三个取值。
+const (
+	DownloadQualityFollow   = ""         // 跟随各入口自己的设置
+	DownloadQualityLossless = "lossless" // 一律点名无损
+	DownloadQualityMP3      = "mp3_320"  // 一律点名 320k
+)
+
+// DownloadQualitySetting 返回生效的「下载音质」开关；nil / 空白 = 跟随。
+func (a AppConfig) DownloadQualitySetting() string {
+	if a.DownloadQualityOverride == nil {
+		return DownloadQualityFollow
+	}
+	return strings.TrimSpace(*a.DownloadQualityOverride)
+}
+
+// QualityOverride 把「下载音质」开关套到某个入口自己的档位上。
+//
+// 认不出的覆盖值一律当「跟随」：宁可退化成各用各的，也不要因为一个错值
+// 把所有下载都钉死在某一档。这个映射在网页端 services/qualityOverride.js
+// 有一份镜像（那份是给下载队列用的），改这里请一起改。
+func QualityOverride(base, override string) string {
+	switch strings.TrimSpace(override) {
+	case DownloadQualityLossless:
+		// 点名无损。两个入口的取值表里都有 "flac" 这一档。
+		return "flac"
+	case DownloadQualityMP3:
+		return "320k"
+	default:
+		return strings.TrimSpace(base)
+	}
+}
+
+// CacheDirPath 返回生效的缓存目录；空串 = 用程序推导的默认值。
+func (a AppConfig) CacheDirPath() string {
+	if a.CacheDir == nil {
+		return ""
+	}
+	return strings.TrimSpace(*a.CacheDir)
+}
+
 // MusicDLOn 报告 sidecar 开没开（nil = 关）。
 func (a AppConfig) MusicDLOn() bool {
 	return a.MusicDLEnabled != nil && *a.MusicDLEnabled
@@ -461,14 +598,16 @@ func NewConfigManager(dataDir string, defaultPort int) (*ConfigManager, error) {
 	cm := &ConfigManager{
 		filePath: filepath.Join(dataDir, "config.json"),
 		config: AppConfig{
-			Port:           defaultPort,
-			DefaultNasDir:  defaultDir,
-			DownloadDir:    defaultDir,
-			ActiveSourceID: "",
-			Theme:          "fresh-mint",
-			VisualizerMode: "bars",
-			PreferQuality:  "320k",
-			CustomSources:  make([]CustomSource, 0),
+			Port:                defaultPort,
+			DefaultNasDir:       defaultDir,
+			DownloadDir:         defaultDir,
+			ActiveSourceID:      "",
+			Theme:               "fresh-mint",
+			VisualizerMode:      "bars",
+			PreferQuality:       "320k",
+			PlaybackQuality:     "auto",
+			AutoDownloadQuality: "highest",
+			CustomSources:       make([]CustomSource, 0),
 		},
 	}
 	cm.uiPrefs = NewUIPrefsManager(filepath.Dir(cm.filePath))
@@ -507,6 +646,16 @@ func (cm *ConfigManager) load() {
 		}
 		if c.PreferQuality != "" {
 			cm.config.PreferQuality = c.PreferQuality
+		}
+		if c.PlaybackQuality != "" {
+			cm.config.PlaybackQuality = c.PlaybackQuality
+		}
+		if c.AutoDownloadQuality != "" {
+			cm.config.AutoDownloadQuality = c.AutoDownloadQuality
+		}
+		if c.DownloadQualityOverride != nil {
+			v := strings.TrimSpace(*c.DownloadQualityOverride)
+			cm.config.DownloadQualityOverride = &v
 		}
 		if c.CustomSources != nil {
 			cm.config.CustomSources = c.CustomSources
@@ -566,6 +715,15 @@ func (cm *ConfigManager) load() {
 		if c.CoverEmbed != nil {
 			v := *c.CoverEmbed
 			cm.config.CoverEmbed = &v
+		}
+		// 命名格式：**空 = 不覆盖**（空表示「没设置过」，认不出的值交给 pkg/namefmt 归一）
+		if c.FilenameFormat != "" {
+			cm.config.FilenameFormat = c.FilenameFormat
+		}
+		// 缓存目录是三态（nil = 不覆盖，指向空串 = 显式回到默认），不能写成 `!= ""`
+		if c.CacheDir != nil {
+			v := *c.CacheDir
+			cm.config.CacheDir = &v
 		}
 		// musicdl sidecar（v2.1.83 新增）。
 		// ⚠️ 与上面那条同样的规矩：**load 与 Update 两处都要登记**。只写 Update
@@ -660,6 +818,16 @@ func (cm *ConfigManager) Update(c AppConfig) error {
 	if c.PreferQuality != "" {
 		cm.config.PreferQuality = c.PreferQuality
 	}
+	if c.PlaybackQuality != "" {
+		cm.config.PlaybackQuality = c.PlaybackQuality
+	}
+	if c.AutoDownloadQuality != "" {
+		cm.config.AutoDownloadQuality = c.AutoDownloadQuality
+	}
+	if c.DownloadQualityOverride != nil {
+		v := strings.TrimSpace(*c.DownloadQualityOverride)
+		cm.config.DownloadQualityOverride = &v
+	}
 	if c.CustomSources != nil {
 		cm.config.CustomSources = c.CustomSources
 	}
@@ -717,6 +885,15 @@ func (cm *ConfigManager) Update(c AppConfig) error {
 	if c.CoverEmbed != nil {
 		v := *c.CoverEmbed
 		cm.config.CoverEmbed = &v
+	}
+	// 命名格式：空 = 不改 —— 空在这里有明确语义（没设置过 → 用默认方向）
+	if c.FilenameFormat != "" {
+		cm.config.FilenameFormat = c.FilenameFormat
+	}
+	// 缓存目录是三态：nil = 不改，指向空串 = 显式回到默认（界面的「恢复默认」）
+	if c.CacheDir != nil {
+		v := *c.CacheDir
+		cm.config.CacheDir = &v
 	}
 	// musicdl sidecar（v2.1.83 新增）：nil = 不动，空切片 = 回到默认平台名单。
 	// ⚠️ 开关是 nil 三态：patch 里没这个键就不能动它（否则「保存别的设置」会把

@@ -62,6 +62,13 @@ var internalEndpoints = map[string]bool{
 
 	// 音乐入口接管：开关本身要改环境变量 + 重启应用，不是 AI 能自行完成的动作。
 	// 更重要的是 POST restore 会改变官方音乐的可用性 —— 这种能力不该由外部调用触发。
+	// 自动下载记录：读留给 AI（「我收藏的歌怎么没下下来」就该查它），
+	// 清空是界面维护动作 —— AI 不该自己去删用户的记录。
+	"DELETE /api/auto-download/records": true,
+	// 推送执行历史：读留给 AI（「这次推送为什么失败」就该查它），
+	// 清空是界面维护动作。
+	"DELETE /api/push/runs": true,
+
 	"GET /api/takeover/status":   true,
 	"POST /api/takeover/restore": true,
 
@@ -195,6 +202,8 @@ func APICatalog(baseURL string) []Endpoint {
 			Params: []Param{
 				{Name: "default_nas_dir", In: "body", Desc: "默认曲库目录"},
 				{Name: "download_dir", In: "body", Desc: "下载保存目录"},
+				{Name: "cache_dir", In: "body", Desc: "缓存/暂存目录（边听边存的暂存档与滚动试听缓存都放这里）；传空串 = 回到默认位置"},
+				{Name: "filename_format", In: "body", Desc: "曲库文件命名格式：artist-title（默认，『歌手 - 歌名』）或 title-artist（『歌名 - 歌手』）"},
 				{Name: "preferred_platforms", In: "body", Desc: "主力平台有序数组，默认 [wy,tx]；其余平台只在主力没有时兜底"},
 			},
 			Example: "curl -X POST " + baseURL + "/api/config -H 'Content-Type: application/json' -d '{\"download_dir\":\"/vol1/Music\"}'",
@@ -217,11 +226,14 @@ func APICatalog(baseURL string) []Endpoint {
 		},
 		{
 			Method: http.MethodGet, Path: "/api/logs", Summary: "读取后端运行日志", Category: catSystem,
-			Params:  []Param{{Name: "limit", In: "query", Desc: "返回条数，默认 200，最大 2000"}},
+			Params: []Param{
+				{Name: "limit", In: "query", Desc: "返回条数，默认 200，最大 2000"},
+				{Name: "format", In: "query", Desc: "传 zip 时改为**打包下载**（日志 + 环境信息 + 脱敏配置），用于反馈问题"},
+			},
 			Example: "curl '" + baseURL + "/api/logs?limit=100'",
-			Notes: "日志只保留在**内存环形缓冲**里（最多 2000 条），**重启应用即清空** —— 不落盘，" +
-				"避免日志里可能出现的路径与令牌长期留在 NAS 磁盘上。" +
-				"每条带 `source` 区分来源：`backend`（服务端自身）或 `frontend`（网页端上报）。",
+			Notes: "只存**内存**（最多 2000 条），**重启即清空**，不落盘（免得路径与令牌留在 NAS 上）。" +
+				"`source` 区分 `backend` / `frontend`。`?format=zip` 改为打包下载 " +
+				"app.log / info.txt / config.json，凭据字段已抹除，可安全外发。",
 		},
 		{
 			Method: http.MethodDelete, Path: "/api/logs", Summary: "清空后端运行日志缓冲", Category: catSystem,
@@ -544,9 +556,13 @@ func APICatalog(baseURL string) []Endpoint {
 			Example: "curl " + baseURL + "/api/download/config",
 		},
 		{
-			Method: http.MethodPost, Path: "/api/download/config", Summary: "设置下载保存目录", Category: catDownload,
-			Params:  []Param{{Name: "download_dir", In: "body", Required: true, Desc: "绝对路径，如 /vol1/Music"}},
-			Example: "curl -X POST " + baseURL + "/api/download/config -H 'Content-Type: application/json' -d '{\"download_dir\":\"/vol1/Music\"}'",
+			Method: http.MethodPost, Path: "/api/download/config", Summary: "设置下载保存目录与缓存目录", Category: catDownload,
+			Params: []Param{
+				{Name: "download_dir", In: "body", Desc: "绝对路径，如 /vol1/Music（与 cache_dir 至少给一个）"},
+				{Name: "cache_dir", In: "body", Desc: "缓存/暂存目录，绝对路径；传空串 = 回到默认位置。与 download_dir 不得相同、不得互为父子"},
+			},
+			Example: "curl -X POST " + baseURL + "/api/download/config -H 'Content-Type: application/json' -d '{\"download_dir\":\"/vol1/Music\",\"cache_dir\":\"/vol2/qulv-cache\"}'",
+			Notes:   "缓存目录与下载目录**不得相同、也不得互为父子**（清理缓存会把成品一起删掉）——校验不通过返回 400 与中文原因。",
 		},
 
 		// ── 本地曲库 ──
@@ -1147,6 +1163,29 @@ func APICatalog(baseURL string) []Endpoint {
 			},
 			Example: "curl -X POST " + baseURL + "/api/push/preview -H 'Content-Type: application/json' -d '{\"provider\":\"netease\",\"source_kind\":\"daily\"}'",
 			Notes:   "建立任务前先用它确认匹配情况，避免推送一堆匹配不上的曲目。",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/auto-download/records",
+			Summary: "查询自动下载记录（飞牛页面里收藏/加歌单/点下载触发的那批）", Category: catDownload,
+			Params: []Param{
+				{Name: "limit", In: "query", Desc: "默认 200，上限 500"},
+			},
+			Example: "curl '" + baseURL + "/api/auto-download/records?limit=50'",
+			Notes: "这些下载发生在**飞牛官方页面**上，网页端的下载队列看不到它们，所以由后端记流水（成功与失败都记）。" +
+				"`available=false` 表示记录功能本次没起来（数据目录不可写）—— 与「确实还没下过」不是一回事，别混。",
+		},
+		{
+			Method: http.MethodDelete, Path: "/api/auto-download/records",
+			Summary: "清除自动下载记录（可只清指定的几条）", Category: catDownload,
+			Example: "curl -X DELETE " + baseURL + "/api/auto-download/records -H 'Content-Type: application/json' -d '{\"ids\":[\"1791262424-1-ab12cd34\"]}'",
+			Notes:   "不带 `ids`（或空数组）= **全清**。返回 `removed` 为实际删掉的条数。",
+		},
+
+		{
+			Method: http.MethodDelete, Path: "/api/push/runs",
+			Summary: "清除推送执行历史（可只清指定的几条）", Category: catPush,
+			Example: "curl -X DELETE " + baseURL + "/api/push/runs -H 'Content-Type: application/json' -d '{\"ids\":[\"12\",\"13\"]}'",
+			Notes:   "不带 `ids`（或空数组）= **全清**。只删历史，**不动任务本身**的最近状态与下次执行时间。返回 `removed` 为实际删掉的条数。",
 		},
 		{
 			Method: http.MethodGet, Path: "/api/push/runs", Summary: "查询推送执行历史", Category: catPush,

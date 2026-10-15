@@ -204,6 +204,10 @@ var routeTable = []routeSpec{
 	{Path: "/api/push/run", Handler: func(s *Server) http.HandlerFunc { return s.HandlePushRun }},
 	{Path: "/api/push/preview", Handler: func(s *Server) http.HandlerFunc { return s.HandlePushPreview }},
 	{Path: "/api/push/runs", Handler: func(s *Server) http.HandlerFunc { return s.HandlePushRuns }},
+	// 自动下载记录（飞牛页面里收藏 / 加歌单 / 点「下载到曲率」触发的那批）。
+	// 同一条路径两个方法：GET 读、DELETE 清 —— 处理器内部按方法分派，
+	// 所以这里只登记一次（路由表不记录方法集，见本文件顶部说明）。
+	{Path: "/api/auto-download/records", Handler: func(s *Server) http.HandlerFunc { return s.handleAutoDownloadRecords }},
 
 	// 3. NAS Local Music
 	{Path: "/api/nas/folders", Handler: func(s *Server) http.HandlerFunc { return nas.ListFolders }},

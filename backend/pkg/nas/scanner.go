@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"fn-lx-player/pkg/namefmt"
 	"io"
 	"io/fs"
 	"net/http"
@@ -371,18 +372,24 @@ func isCleanMeta(s string) bool {
 
 func parseBasicMeta(filePath, filename string) (title, artist, album string) {
 	base := strings.TrimSuffix(filename, filepath.Ext(filename))
-	parts := strings.Split(base, " - ")
-	if len(parts) >= 2 {
-		artist = strings.TrimSpace(parts[0])
-		title = strings.TrimSpace(parts[1])
-	} else {
+	// 文件名反解走**用户配的命名格式**（`歌手 - 歌名` 还是 `歌名 - 歌手`），见 pkg/namefmt。
+	// 下载写入与这里的读取必须是同一份约定，否则新下的文件歌手/歌名会读反。
+	// 顺带修正一处老毛病：只按**第一个**分隔符切，「甲 - 乙 - 丙」得 artist=甲、
+	// title=乙 - 丙（改造前用 Split 会把「- 丙」直接丢掉）。
+	artist, title = namefmt.Parse(base)
+	if title == "" {
 		title = base
+	}
+	if artist == "" {
 		artist = "本地歌手"
 	}
 	album = "NAS 音乐"
 
-	// Try extracting ID3v2 if mp3
-	if strings.ToLower(filepath.Ext(filePath)) == ".mp3" {
+	// 内嵌标签优先。改造前这里**只对 .mp3** 试 ID3v2，FLAC 的元数据完全靠文件名 ——
+	// 所以换命名格式对 FLAC 曲库的影响是直接的（歌名歌手直接对调）。
+	ext := strings.ToLower(filepath.Ext(filePath))
+	switch ext {
+	case ".mp3":
 		if t, a, al, ok := readID3v2Tags(filePath); ok {
 			if isCleanMeta(t) {
 				title = t
@@ -392,6 +399,18 @@ func parseBasicMeta(filePath, filename string) (title, artist, album string) {
 			}
 			if isCleanMeta(al) {
 				album = al
+			}
+		}
+	case ".flac":
+		if meta, err := tags.Read(filePath); err == nil {
+			if isCleanMeta(meta.Title) {
+				title = meta.Title
+			}
+			if isCleanMeta(meta.Artist) {
+				artist = meta.Artist
+			}
+			if isCleanMeta(meta.Album) {
+				album = meta.Album
 			}
 		}
 	}
@@ -684,11 +703,12 @@ func checkHasLyric(filePath string) bool {
 		filepath.Join(dir, base+".LRC"),
 		filepath.Join(dir, base+".txt"),
 	}
-	parts := strings.Split(base, " - ")
-	if len(parts) == 2 {
+	// 「歌名.lrc」这个候选要按用户配的命名格式反解出歌名（见 pkg/namefmt）：
+	// 写死「歌手在前」的话，命名格式一换，这条例外的歌词文件就再也找不到了。
+	if _, title := namefmt.Parse(base); title != "" && title != base {
 		candidates = append(candidates,
-			filepath.Join(dir, strings.TrimSpace(parts[1])+".lrc"),
-			filepath.Join(dir, strings.TrimSpace(parts[1])+".LRC"),
+			filepath.Join(dir, title+".lrc"),
+			filepath.Join(dir, title+".LRC"),
 		)
 	}
 	for _, c := range candidates {
@@ -738,11 +758,12 @@ func ExtractLyric(filePath string) (string, string, error) {
 		filepath.Join(dir, base+".LRC"),
 		filepath.Join(dir, base+".txt"),
 	}
-	parts := strings.Split(base, " - ")
-	if len(parts) == 2 {
+	// 「歌名.lrc」这个候选要按用户配的命名格式反解出歌名（见 pkg/namefmt）：
+	// 写死「歌手在前」的话，命名格式一换，这条例外的歌词文件就再也找不到了。
+	if _, title := namefmt.Parse(base); title != "" && title != base {
 		candidates = append(candidates,
-			filepath.Join(dir, strings.TrimSpace(parts[1])+".lrc"),
-			filepath.Join(dir, strings.TrimSpace(parts[1])+".LRC"),
+			filepath.Join(dir, title+".lrc"),
+			filepath.Join(dir, title+".LRC"),
 		)
 	}
 

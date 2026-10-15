@@ -11,9 +11,12 @@
 
 /** 侧栏项：合并前的旧 id 会留在浏览器偏好和其他组件的跳转参数里，必须映射 */
 export const LEGACY_TABS = { tidy: 'complete', playlist: 'download', ai: 'push' }
-// charts（榜单管理）是 v2.1.119 从「发现音乐 → ⚙️ 榜单管理」搬进来的第四个侧栏项；
-// 它没有旧 id（搬进来之前不在这张侧栏里），所以不出现在 LEGACY_TABS。
-export const TAB_IDS = new Set(['push', 'download', 'complete', 'charts'])
+// nas（本地音乐）是 v2.1.120 从顶层导航搬进来的侧栏项；
+// charts（榜单管理）同一轮**搬了出去**（它现在是顶层导航里的一页），所以不在集合里 ——
+// 偏好里还留着 'charts' 的浏览器会落到默认项，不会出现「整页只剩标题栏」。
+// autodl（自动下载记录）是 v2.1.120 新增的侧栏项：飞牛页面里收藏/加歌单/点下载
+// 触发的那批下载的流水（见 pkg/online/autolog.go）。
+export const TAB_IDS = new Set(['nas', 'push', 'download', 'complete', 'autodl'])
 
 /**
  * 把外部传来的侧栏项 id 归一化。
@@ -100,6 +103,14 @@ export function sidebarStatusItems(input = {}) {
   if (pushRunning > 0) out.push({ id: 'push-running', label: '推送正在执行', count: pushRunning, tone: 'progress', tab: 'push' })
   if (pendingBaseline > 0) out.push({ id: 'baseline', label: '还没开始追新', count: pendingBaseline, tone: 'warn', tab: 'push' })
 
+  // 自动下载（飞牛页面里收藏 / 加歌单 / 点下载触发的那批）：**只报失败**。
+  // 成功的那些是流水，摆在侧栏当常态数字只会让人习惯性忽略这一行 ——
+  // 而这一行的用处恰恰是「有失败时让人注意到」。
+  const ad = input.autoDownload || {}
+  if (ad.failed > 0) {
+    out.push({ id: 'autodl-failed', label: '自动下载失败', count: ad.failed, tone: 'error', tab: 'autodl' })
+  }
+
   if (st) {
     if (st.failed > 0) out.push({ id: 'push-failed', label: '推送下载失败', count: st.failed, tone: 'error', tab: 'push' })
     if (st.pending > 0) out.push({ id: 'push-pending', label: '待推送曲目', count: st.pending, tone: 'warn', tab: 'push' })
@@ -150,4 +161,37 @@ export function completeDoneText(job) {
   const head = `补全完成：歌词 ${num(s.lyric_filled)} · 封面 ${num(s.cover_filled)} · ` +
     `年份 ${num(s.year_filled)} · 曲序 ${num(s.track_filled)} · 光盘 ${num(s.disc_filled)} · 风格 ${num(s.genre_filled)}`
   return num(s.no_match) ? `${head} · 没搜到 ${num(s.no_match)} 首` : head
+}
+
+/**
+ * 「补全整理」的三步流程（2026-10-12）。
+ *
+ * 起因是用户的一句反馈：「我点了扫描缺失，也正常出现了缺失的歌曲数量。
+ * 但是，下一步怎么做呢？」—— 页面把「看缺什么」和「补什么」画成了两排，
+ * 真正的下一步按钮埋在选项行最右边，扫完数字眼睛没有落点。
+ *
+ * 步骤**完全由已有状态推出**，不引入新的步骤状态机：
+ * 多一个能不同步的状态，就多一类「界面说第 2 步、实际能做的只有第 3 步」的事故。
+ *
+ * 注意两个输入都是**持久化恢复**的（gaps 来自缓存、completePlan 来自本页操作），
+ * 所以刷新页面后仍停在该在的那一步，跟用户看到的一致。
+ */
+export const COMPLETE_STEPS = [
+  { n: 1, name: '扫描缺失' },
+  { n: 2, name: '勾选字段' },
+  { n: 3, name: '预览并写入' },
+]
+
+/** 当前处在第几步：预览计划已出 = 3；缺口扫过 = 2；否则还在第 1 步 */
+export function completeStep(gaps, plan) {
+  if (plan) return 3
+  if (gaps) return 2
+  return 1
+}
+
+/** 每一步的「下一步该点哪」—— 这是这一页以前最缺的一句话 */
+export function completeHint(gaps, plan) {
+  if (plan) return '核对下面的清单，没问题就点「确认写入」'
+  if (gaps) return '勾好字段，点右下角「预览要写的内容」'
+  return '先点上面的「扫描缺失」看缺什么'
 }

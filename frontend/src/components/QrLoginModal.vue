@@ -11,7 +11,7 @@
       class="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4"
       @click.self="$emit('close')"
     >
-      <div class="w-full max-w-[360px] overflow-hidden rounded-2xl bg-white shadow-2xl">
+      <div class="max-h-[85vh] w-full max-w-[360px] overflow-y-auto rounded-2xl bg-white shadow-2xl">
         <div class="flex items-center justify-between border-b border-gray-100 px-4 py-3">
           <h3 class="text-sm font-semibold text-gray-800">{{ session.platformName }} · 扫码登录</h3>
           <button class="text-gray-400 hover:text-gray-600" title="关闭" @click="$emit('close')">✕</button>

@@ -298,3 +298,25 @@ test('describeSource 如实报实际来源与音质', () => {
   assert.equal(t.describeSource({ data: null }), '');
   assert.equal(t.describeSource(null), '');
 });
+
+// ③ 「试听音质」的档位标签（v2.1.120 加的切换按钮用它画胶囊）。
+//
+// 判据很浅，但必须钉住两件事：已知档位给中文名、**认不出的档位照原样大写显示**。
+// 后者是「宁可显示得丑，也别显示成错的」——后端将来加了新档位（比如 hires），
+// 界面该把它原样露出来让人看见，而不是显示成空白或塞一个错标签。
+test('qualityLabel 给已知档位中文名，认不出的照原样显示', () => {
+  const t = load();
+  assert.equal(t.qualityLabel('auto'), '自动（能无损就无损）');
+  assert.equal(t.qualityLabel('lossless'), '无损优先');
+  assert.equal(t.qualityLabel('flac'), 'FLAC 无损');
+  assert.equal(t.qualityLabel('320k'), '320K');
+  assert.equal(t.qualityLabel('128k'), '128K');
+  // 大小写与空白都要认：档位从后端来，但也可能从 URL 查询串来
+  assert.equal(t.qualityLabel(' 320K '), '320K');
+  // 认不出的照原样（大写），不要吞掉
+  assert.equal(t.qualityLabel('hires'), 'HIRES');
+  // 空值返回空串 —— 界面上那行「实际取音」靠它决定要不要隐藏
+  assert.equal(t.qualityLabel(''), '');
+  assert.equal(t.qualityLabel(null), '');
+  assert.equal(t.qualityLabel(undefined), '');
+});

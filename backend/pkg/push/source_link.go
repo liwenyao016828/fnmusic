@@ -23,6 +23,7 @@ import (
 
 	"fn-lx-player/pkg/charts"
 	"fn-lx-player/pkg/security"
+	"fn-lx-player/pkg/useragent"
 )
 
 // KindLink 来源类型：手动输入的歌单分享链接。
@@ -56,7 +57,7 @@ func getJSONBody(apiURL, referer, cookie string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+	req.Header.Set("User-Agent", useragent.Desktop)
 	if referer != "" {
 		req.Header.Set("Referer", referer)
 	}

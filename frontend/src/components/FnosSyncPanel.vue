@@ -10,7 +10,7 @@
                                      而不是照抄一个我们用不到的「续期」开关。
       · 同步收藏夹转正             → 无对应概念（那是 flow 的临时推荐目录机制）
   -->
-  <div class="rounded-[15px] border border-gray-200 bg-white">
+  <div class="rounded-xl border border-gray-200 bg-white">
     <div class="flex flex-wrap items-center justify-between gap-3 border-b border-gray-100 px-4 py-3.5">
       <div class="min-w-0">
         <b class="text-[14px] text-gray-800">飞牛音乐连接</b>
@@ -19,7 +19,7 @@
       <button
         @click="check"
         :disabled="checking"
-        class="shrink-0 rounded-lg bg-blue-500 px-3.5 py-2 text-[12px] font-semibold text-white transition-all hover:bg-blue-600 disabled:opacity-50"
+        class="shrink-0 rounded-lg bg-emerald-500 px-3.5 py-2 text-[12px] font-semibold text-white transition-all hover:bg-emerald-600 disabled:opacity-50"
       >{{ checking ? '检查中…' : '检查连接' }}</button>
     </div>
 
@@ -37,55 +37,51 @@
 
       <!-- 令牌机制说明 + 手工覆盖 -->
       <div class="rounded-xl border border-gray-200 bg-gray-50/60 px-3.5 py-3">
-        <div class="flex flex-wrap items-center justify-between gap-2">
-          <div class="min-w-0">
-            <b class="text-[12px] text-gray-700">令牌</b>
-            <span class="ml-2 rounded-full px-2 py-0.5 text-[10px] font-medium" :class="tokenBadge.class">
-              {{ tokenBadge.text }}
-            </span>
-          </div>
+        <div class="flex flex-wrap items-center gap-2">
+          <b class="text-[12px] text-gray-700">令牌</b>
+          <span class="rounded-full px-2 py-0.5 text-[10px] font-medium" :class="tokenBadge.class">
+            {{ tokenBadge.text }}
+          </span>
         </div>
-        <p class="mt-1.5 text-[11px] leading-relaxed text-gray-500">
-          正常情况下<b class="text-gray-600">不用管这里</b> —— 令牌会自动从飞牛音乐读取，飞牛刷新后我们会自动跟随。
-          只有当上方显示「未连接」且提示取不到令牌时，才需要手工填一个临时令牌排障。
-        </p>
-
-        <div class="mt-2.5 flex flex-wrap items-center gap-2">
-          <input
-            v-model="tokenInput"
-            type="password"
-            placeholder="粘贴临时 token（留空并保存 = 清除）"
-            class="min-w-[200px] flex-1 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-[12px] placeholder:text-gray-400 focus:border-emerald-400 focus:outline-none"
-          />
-          <button
+        <input
+          v-model="tokenInput"
+          type="password"
+          placeholder="粘贴临时 token（留空并保存 = 清除）"
+          class="mt-2 w-full rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-[12px] placeholder:text-gray-400 focus:border-emerald-400 focus:outline-none"
+        />
+        <div class="mt-2 grid grid-cols-2 gap-2">
+          <ActionCard
+            :title="savingToken ? '保存中…' : '验证并保存'"
+            hint="正常不用管；取不到令牌时手工填一个排障"
+            :icon="KeyRound"
+            :disabled="savingToken"
             @click="saveToken"
-            :disabled="savingToken"
-            class="shrink-0 rounded-lg bg-emerald-500 px-3.5 py-1.5 text-[12px] font-semibold text-white transition-all hover:bg-emerald-600 disabled:opacity-50"
-          >{{ savingToken ? '保存中…' : '验证并保存' }}</button>
-          <button
+          />
+          <ActionCard
             v-if="hasManualToken"
-            @click="clearToken"
+            title="清除手工令牌"
+            hint="清掉临时令牌，回到自动读取"
+            :icon="Eraser"
+            icon-class="text-gray-400"
             :disabled="savingToken"
-            class="shrink-0 rounded-lg bg-gray-100 px-3 py-1.5 text-[12px] font-medium text-gray-600 transition-colors hover:bg-gray-200 disabled:opacity-50"
-          >清除手工令牌</button>
+            @click="clearToken"
+          />
         </div>
         <p v-if="tokenMsg" class="mt-1.5 text-[11px] text-gray-600">{{ tokenMsg }}</p>
       </div>
 
       <!-- 曲库重扫 -->
-      <div class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-gray-200 bg-gray-50/60 px-3.5 py-3">
-        <div class="min-w-0">
-          <b class="text-[12px] text-gray-700">曲库重扫</b>
-          <p class="mt-1 text-[11px] leading-relaxed text-gray-500">
-            下载与整理完成后会<b class="text-gray-600">自动重扫</b>，一般不用手动点。
-            只有你从别处拷歌进音乐目录时，才需要在这里点一下。
-          </p>
+      <div class="rounded-xl border border-gray-200 bg-gray-50/60 px-3.5 py-3">
+        <b class="text-[12px] text-gray-700">曲库重扫</b>
+        <div class="mt-2 grid grid-cols-2 gap-2">
+          <ActionCard
+            :title="rescanning ? '已排队…' : '触发重扫'"
+            hint="下载整理后会自动重扫；从别处拷歌进来才要手动点"
+            :icon="RefreshCw"
+            :disabled="rescanning || !ready"
+            @click="rescan"
+          />
         </div>
-        <button
-          @click="rescan"
-          :disabled="rescanning || !ready"
-          class="shrink-0 rounded-lg bg-gray-100 px-3.5 py-2 text-[12px] font-medium text-gray-600 transition-colors hover:bg-gray-200 disabled:opacity-50"
-        >{{ rescanning ? '已排队…' : '触发重扫' }}</button>
       </div>
       <p v-if="rescanMsg" class="text-[11px] text-gray-500">{{ rescanMsg }}</p>
     </div>
@@ -94,9 +90,11 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
+import { KeyRound, Eraser, RefreshCw } from 'lucide-vue-next'
 import { FnosAPI } from '../api/client'
 import { fail, apiError } from '../services/userMsg'
 import { logError } from '../services/appLog'
+import ActionCard from './ActionCard.vue'
 
 const status = ref(null)
 const checking = ref(false)

@@ -8,7 +8,7 @@
         <div class="min-w-0">
           <h1 class="text-[26px] font-bold tracking-tight text-gray-800">发现音乐</h1>
           <p class="mt-1.5 text-[13px] leading-relaxed text-gray-500">
-            搜索全网曲库，或浏览当前音源声明支持的官方榜单与精选歌单
+            搜索全网曲库，或浏览官方榜单与精选歌单
           </p>
         </div>
 
@@ -36,7 +36,7 @@
     </div>
 
     <!-- ── 内容展示主区域 ── -->
-    <div class="flex-1 overflow-y-auto">
+    <div ref="scrollEl" class="flex-1 overflow-y-auto">
 
       <!--
         0. 未导入 LX 音源时的提示条（**不遮挡内容**）
@@ -125,9 +125,9 @@
                 <span>🎧</span><span>精选歌单</span>
               </button>
               <!--
-                「⚙️ 榜单管理」原来是这里的第三个胶囊，v2.1.119 搬进了
-                「曲库管家 → 榜单管理」（与歌单监控/下载/补全整理同一个侧栏）——
-                浏览（本页）与配置（管家）分开，顶栏少一个入口。
+                「⚙️ 榜单管理」原来是这里的第三个胶囊，v2.1.119 先搬进曲库管家，
+                v2.1.120 又独立成顶层导航里的一页（与「发现音乐」并列）——
+                浏览（本页）与配置（那一页）分开，本页的顶栏不必再挤一个入口。
               -->
             </div>
 
@@ -238,7 +238,7 @@
         <div class="grid grid-cols-2 gap-3 md:gap-4">
           <div
             v-for="p in recommendPlatforms" :key="p.id"
-            class="overflow-hidden rounded-[15px] border border-gray-200 bg-white"
+            class="overflow-hidden rounded-xl border border-gray-200 bg-white"
             :class="p.topBorder"
           >
             <!-- 卡片头 -->
@@ -341,14 +341,14 @@
 
       <!-- 1. 发现大厅 - 排行榜单网格 (紧凑精致卡片排版) -->
       <!--
-        榜单管理（选哪些榜单进飞牛）v2.1.119 搬进了「曲库管家 → 榜单管理」；
+        榜单管理（选哪些榜单进飞牛）现在是顶层导航里的一页（v2.1.120）；
         「排行榜单」浏览网格右上角的「+ 注入」留着：就地加一个榜单仍是最顺手的一条路。
-        指路按钮指向管家的 charts 侧栏项（走导航总线，见 setup 里对 'chart-preview' 的说明）。
+        指路按钮直接切到那个顶层视图（走导航总线，见 setup 里的 openChartManager）。
       -->
 
       <div v-if="currentMode === 'discover' && discoverTab === 'charts'" class="max-w-[1500px] mx-auto px-5 py-6 pb-28 sm:px-8 sm:py-7 sm:pb-24">
         <!--
-          控制条搬走了：勾选与开关现在住在「曲库管家 → 榜单管理」。
+          控制条搬走了：勾选与开关现在住在顶层导航的「榜单管理」页。
           这里只留一行指路 —— 这一页是**浏览**用的，用户是来看榜单的，不该被一排开关挡在最上面。
           （卡片右上角那个「+ 注入」留着：就地加一个榜单是最顺手的一条路。）
         -->
@@ -360,7 +360,7 @@
               type="button"
               @click="openChartManager"
               class="font-bold text-emerald-600 underline decoration-emerald-300 underline-offset-2 hover:text-emerald-700"
-            >曲库管家 · 榜单管理</button>
+            >榜单管理</button>
             勾选
           </span>
           <span class="text-[11px] leading-snug text-amber-600/80">
@@ -371,7 +371,7 @@
           <Loader2 class="w-8 h-8 animate-spin text-emerald-500 mb-2" />
           <p class="text-xs">正在载入权威榜单...</p>
         </div>
-        <div v-else class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+        <div v-else class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
           <div
             v-for="chart in toplists" :key="chart.id"
             @click="openChartDetail(chart)"
@@ -675,6 +675,15 @@
             </div>
           </div>
         </div>
+
+        <!-- 触底自动加载的状态行：平时不说话，加载中/没有更多才露一句 -->
+        <div
+          v-if="currentMode === 'search' && !isSearching && activeSongList.length"
+          class="py-3 text-center text-[11px] text-gray-400"
+        >
+          <span v-if="isLoadingMore">正在加载更多…</span>
+          <span v-else-if="!hasMore && activeSongList.length >= SEARCH_PAGE_SIZE">没有更多了</span>
+        </div>
       </div>
     </div>
 
@@ -705,7 +714,7 @@
   -->
   <Teleport to="body">
     <div v-if="showSubDialog" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs">
-      <div class="bg-white rounded-2xl max-w-md w-full p-5 shadow-2xl border border-gray-100">
+      <div class="bg-white rounded-2xl max-w-md w-full p-5 shadow-2xl border border-gray-100 max-h-[85vh] overflow-y-auto">
         <div class="flex items-center justify-between mb-3">
           <h3 class="text-sm font-bold text-gray-800">订阅更新</h3>
           <button @click="showSubDialog = false" class="text-gray-400 hover:text-gray-600">
@@ -765,7 +774,7 @@
 
   <!-- ── 一键监控弹窗 ── -->
   <Teleport to="body">
-    <div v-if="showMonitorDialog" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs">      <div class="bg-white rounded-2xl max-w-md w-full p-5 shadow-2xl border border-gray-100">
+    <div v-if="showMonitorDialog" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs">      <div class="bg-white rounded-2xl max-w-md w-full p-5 shadow-2xl border border-gray-100 max-h-[85vh] overflow-y-auto">
         <div class="flex items-center justify-between mb-3">
           <h3 class="text-sm font-bold text-gray-800">建立定时监控</h3>
           <button @click="showMonitorDialog = false" class="text-gray-400 hover:text-gray-600">
@@ -817,7 +826,7 @@
         <div class="mt-4 flex justify-end gap-2">
           <button @click="showMonitorDialog = false" class="px-3 py-1.5 rounded-lg text-xs text-gray-500 hover:bg-gray-50">取消</button>
           <button @click="createMonitorFromList" :disabled="creatingMonitor"
-            class="px-4 py-1.5 rounded-lg bg-blue-500 hover:bg-blue-600 text-white text-xs font-semibold disabled:opacity-50">
+            class="px-4 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-semibold disabled:opacity-50">
             {{ creatingMonitor ? '创建中...' : '创建并监控' }}
           </button>
         </div>
@@ -856,6 +865,7 @@ import {
   loadConfig as loadInjectConfig,
 } from '../services/chartInject'
 import { fail, apiError, describeError } from '../services/userMsg'
+import { createSearchPager, SEARCH_PAGE_SIZE } from '../services/searchPaging'
 import { logError, logWarn } from '../services/appLog'
 import {
   QR_POLL_MS,
@@ -1144,7 +1154,7 @@ const currentMode = ref('discover') // 'discover' | 'chartDetail' | 'playlistDet
  */
 const loadError = ref('')
 // 下列选择项都做本地记忆：重新打开应用后仍停留在上次选的站点/分类
-const discoverTab = ref(loadPref('discover_tab', 'charts'))   // 'charts' | 'playlists'（榜单管理已搬去曲库管家）
+const discoverTab = ref(loadPref('discover_tab', 'charts'))   // 'charts' | 'playlists'（榜单管理是顶层导航里的一页）
 const selectedCategory = ref(loadPref('playlist_category', '全部'))
 const query = ref('')
 
@@ -1232,6 +1242,19 @@ const isLoadingCharts = ref(false)
 const isLoadingPlaylists = ref(false)
 const isLoadingDetail = ref(false)
 const isSearching = ref(false)
+
+// ── 搜索结果触底自动加载更多 ──
+//
+// 分页规则全在 services/searchPaging.js（有测试钉住）：每次**露出 30 条**，
+// 后端一页合并回来多少都行（全部平台时是各平台并跑再排序，会多于 30），
+// 多的先收在缓冲里慢慢露。停手条件四条：空页 / 不满一页 / 失败 /
+// 整页都是重复行（防某个平台不认 page 一直返回同一批）。
+const pager = createSearchPager()
+// 有一次后端请求在路上（界面只在这一态说「正在加载更多」）
+const isLoadingMore = ref(false)
+// pager 不是响应式的，hasMore 是它在模板里的投影，每次动完 pager 后同步
+const hasMore = ref(false)
+const scrollEl = ref(null) // 内容区滚动容器，触底判定挂在它身上
 
 // 热门搜索词已按用户要求移除（发现页不再放关键词快捷入口）
 // 歌单分类由后端提供（各平台能力不同，没有分类的平台返回空数组 → 前端隐藏筛选条）。
@@ -1523,7 +1546,7 @@ async function switchDiscoverTab(tab) {
     await loadPlaylistCategories(selectedChartPlatform.value)
     loadPlaylists(selectedCategory.value, selectedChartPlatform.value)
   }
-  // tab === 'playlists' 之外的分支：榜单管理已搬去「曲库管家 → 榜单管理」，
+  // tab === 'playlists' 之外的分支：榜单管理是顶层导航里的一页，
   // 发现页不再有 manage 子标签；charts 由上面的 if 处理。
 }
 
@@ -1646,10 +1669,10 @@ function selectPlaylistCategory(cat) {
 }
 
 /**
- * 「曲库管家 → 榜单管理」页点一行右侧的 ▶：切回本页「排行榜单」并打开那张榜单。
+ * 榜单管理页点一行右侧的 ▶：切回本页「排行榜单」并打开那张榜单。
  * 平台顺手一起切 —— 回到浏览页时，看到的就该是他刚点的那张榜单所属的平台。
  *
- * 管家不直接 import 本组件（会成环：发现页 → 管家 → 发现页），所以走导航总线：
+ * 那一页不直接 import 本组件（两个顶层视图互相 import 会成环），所以走导航总线：
  * 管家调 navigateTo('search', { chartPreview: item })，App.vue 转给当前视图，
  * 这里在 onNavigate 里接住并打开详情。负载不是榜单时（老调用方只传 view）忽略。
  */
@@ -1665,18 +1688,20 @@ function openChartPreview(item) {
 }
 
 /**
- * 指路按钮：从「排行榜单」跳到管家侧的榜单管理页。
- * 同样走导航总线 —— App.vue 负责切视图并让管家落到 charts 侧栏项。
+ * 指路按钮：从「排行榜单」跳到顶层导航的「榜单管理」页。
+ *
+ * v2.1.119 那会儿它借一个 chartManager 负载让**管家**落到 charts 侧栏项；
+ * v2.1.120 起榜单管理自己就是顶层视图，直接切过去即可 —— 少一层间接，也少一条
+ * 「payload 名字对不上就静默失效」的隐式约定。
  */
 function openChartManager() {
-  navigateTo('search', { chartManager: true })
+  navigateTo('charts')
 }
 
 const offChartNav = onNavigate((view, payload) => {
   if (view !== 'search') return
   if (payload?.chartPreview) openChartPreview(payload.chartPreview)
-  // payload?.chartManager（「管家 → 发现」的反向跳转）到这里已是空操作：
-  // 切视图由 App.vue 的 onNavigate 完成，本页无需额外状态。
+  // 切视图由 App.vue 的 onNavigate 完成（它是唯一持有 currentView 的地方），本页只消费负载。
 })
 onUnmounted(offChartNav)
 
@@ -1834,24 +1859,103 @@ async function handleSearch() {
   isSearching.value = true
   activeSongList.value = []
   loadError.value = ''
+  // 新搜索从第 1 页重新开始；还有没有下一页，等第一页回来才知道
+  pager.reset()
+  hasMore.value = true
   try {
-    const res = await SearchAPI.search(q, selectedPlatform.value, 1)
+    const res = await SearchAPI.search(q, selectedPlatform.value, 1, pager.pageSize)
     const bad = apiError(res, '搜索失败')
     if (bad) {
       currentMode.value = 'discover'
+      hasMore.value = false // 失败即停
       loadError.value = bad
       logError('搜索', bad, `code=${res?.code} message=${res?.message} q=${q}`)
       return
     }
-    searchResults.value = res.data?.list || []
+    // 第 1 页整批交给 pager：露出前 30 条，多的先收进缓冲
+    const rows = pager.start(res.data?.list || [])
+    searchResults.value = rows
     activeSongList.value = searchResults.value
+    hasMore.value = pager.hasMore
     checkSongsDownloaded(activeSongList.value)
+    // 第一页可能不足一屏（大屏、紧凑行），那样根本没有滚动事件可触发 —— 主动量一次
+    nextTick(() => maybeLoadMore())
   } catch (e) {
     currentMode.value = 'discover'
+    hasMore.value = false // 失败即停
     loadError.value = fail('搜索', e)
   } finally {
     isSearching.value = false
   }
+}
+
+/**
+ * 触底时再露一批 / 拉下一页。
+ *
+ * 两步走：缓冲里还有货就直接露出 30 条（**不打后端**），缓冲空了才发请求。
+ * 停手条件四条（空页 / 不满一页 / 失败 / 整页都是重复行）都在 pager 里，
+ * 任一出现 pager.hasMore 就是 false，之后再滚到底也不会打后端。
+ */
+async function loadMore() {
+  if (isLoadingMore.value || isSearching.value) return
+  // 只有搜索结果分页；榜单 / 歌单 / 详情都是整份给的，不分页
+  if (currentMode.value !== 'search') return
+  const q = query.value.trim()
+  if (!q) return
+
+  // ── 第一步：先露出缓冲里的下一批 ──
+  if (pager.buffered > 0) {
+    const rows = pager.reveal()
+    if (rows.length) {
+      searchResults.value = [...searchResults.value, ...rows]
+      activeSongList.value = searchResults.value
+      hasMore.value = pager.hasMore
+      checkSongsDownloaded(rows)
+      // 这一批可能还不满一屏，接着量
+      nextTick(() => maybeLoadMore())
+    }
+    return
+  }
+
+  // ── 第二步：缓冲空了才拉后端 ──
+  if (!pager.beginFetch()) {
+    hasMore.value = pager.hasMore
+    return
+  }
+  isLoadingMore.value = true
+  const next = pager.page + 1
+  try {
+    const res = await SearchAPI.search(q, selectedPlatform.value, next, pager.pageSize)
+    const bad = apiError(res, '加载更多结果失败')
+    if (bad) {
+      pager.finishFetch(null) // 失败即停
+      logError('搜索', bad, `code=${res?.code} message=${res?.message} q=${q} page=${next}`)
+      return
+    }
+    const rows = pager.finishFetch(res.data?.list || [])
+    if (rows.length) {
+      searchResults.value = [...searchResults.value, ...rows]
+      activeSongList.value = searchResults.value
+      checkSongsDownloaded(rows)
+      nextTick(() => maybeLoadMore())
+    }
+  } catch (e) {
+    pager.finishFetch(null) // 失败即停
+    logError('搜索', fail('加载更多结果', e), `q=${q} page=${next}`)
+  } finally {
+    hasMore.value = pager.hasMore
+    isLoadingMore.value = false
+  }
+}
+
+/**
+ * 距底 300px 以内就算到底，提前拉下一页 —— 别让人滚到最底下干等一拍。
+ * 内容不足一屏（根本滚不动）时也算到底，否则短列表会卡住不再加载。
+ */
+function maybeLoadMore() {
+  const el = scrollEl.value
+  if (!el) return
+  if (el.scrollHeight - el.scrollTop - el.clientHeight < 300) loadMore()
 }
 
 function switchPlatform(p) {
@@ -1866,6 +1970,10 @@ function resetToDiscover() {
   query.value = ''
   currentMode.value = 'discover'
   activeSongList.value = []
+  searchResults.value = []
+  // 分页状态一并复位：缓冲里的行不留下一次搜索
+  pager.reset()
+  hasMore.value = false
   currentDetailMeta.value = null
 }
 
@@ -1965,10 +2073,14 @@ onMounted(async () => {
   // 分类条的两行折叠是按容器宽度量的 —— 窗口变宽变窄后要重量一次
   catResizeHandler = () => nextTick(measureCategories)
   window.addEventListener('resize', catResizeHandler)
+
+  // 触底自动加载更多：滚动容器是内容区自己（不是 window），监听挂在它身上
+  scrollEl.value?.addEventListener('scroll', maybeLoadMore, { passive: true })
 })
 
 onUnmounted(() => {
   if (catResizeHandler) window.removeEventListener('resize', catResizeHandler)
+  scrollEl.value?.removeEventListener('scroll', maybeLoadMore)
   stopQrPolling()
 })
 

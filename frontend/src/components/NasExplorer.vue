@@ -1,15 +1,23 @@
 <template>
-  <PageShell
-    title="飞牛 NAS 本地曲库"
-    desc="深度适配 fnOS 存储卷目录，自动提取嵌入式高清 ID3 专辑封面，支持 FLAC / APE / WAV / DSD / MP3 原盘极速串流。"
-  >
-    <template #title-extra>
-      <span class="text-[10px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-200 font-mono">
-        原生存储卷支持
-      </span>
-    </template>
-
-    <template #actions>
+  <!--
+    ⚠️ 这一页不再自带 PageShell（v2.1.120）：它从顶层导航搬进了「曲库管家 → 本地音乐」，
+    外壳由曲库管家提供 —— 再套一层会出现两个标题栏、双份内边距与两个滚动容器。
+    页头那排动作按钮原样留着，只是从 PageShell 的 #actions 槽挪成了普通工具栏。
+  -->
+  <div>
+    <div class="mb-3 flex flex-wrap items-start gap-x-3 gap-y-2">
+      <div class="min-w-0">
+        <div class="flex items-center gap-2">
+          <h2 class="text-[15px] font-bold text-gray-900">本地音乐</h2>
+          <span class="text-[10px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-200 font-mono">
+            原生存储卷支持
+          </span>
+        </div>
+        <p class="mt-0.5 max-w-[720px] text-[11px] leading-snug text-gray-500">
+          飞牛 NAS 本地曲库 · FLAC / APE / WAV / DSD / MP3 串流。
+        </p>
+      </div>
+      <div class="ml-auto flex flex-wrap items-center gap-1.5">
       <button
         @click="playAllNasSongs"
         :disabled="!songs.length"
@@ -46,7 +54,8 @@
         <FileMusic v-else class="w-3.5 h-3.5" />
         <span>{{ isBatchEmbedding ? '内嵌中...' : '批量内嵌歌词' }}</span>
       </button>
-    </template>
+      </div>
+    </div>
 
     <div class="space-y-3">
 
@@ -493,7 +502,7 @@
       </div>
     </div>
     </Teleport>
-  </PageShell>
+  </div>
 </template>
 
 <script setup>
@@ -514,7 +523,6 @@ import {
   HardDrive, CornerLeftUp, ChevronRight, FileMusic, Loader2,
   Image as ImageIcon
 } from 'lucide-vue-next'
-import PageShell from './PageShell.vue'
 import InlineNotice from './InlineNotice.vue'
 import { describeError } from '../services/userMsg'
 import { logError } from '../services/appLog'

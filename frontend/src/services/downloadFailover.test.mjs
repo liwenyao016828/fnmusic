@@ -5,6 +5,7 @@ import {
   isLocalFatal,
   isSourceLevelFailure,
   untriedSources,
+  corruptFlacDowngradeTarget,
 } from './downloadFailover.js'
 
 // 守的判据（用户 2026-09-22 原话）：
@@ -110,4 +111,27 @@ test('decideFailover：未归类错误仍沿用旧判定（不因新逻辑而多
     transientRetry: false,
   })
   assert.deepEqual(got, { retry: false, switchSource: false })
+})
+
+// ── 无损坏流的降档（后端 pkg/flacok 逐帧 CRC 校验回 error_code='flac_corrupt'） ──
+// 守的判据：这种文件换档才有救（320K 是另一条编码链路），换源没用。
+
+test('corruptFlacDowngradeTarget：无损档与最高音质都降到 320k', () => {
+  for (const quality of ['flac', 'flac24bit', 'highest', '', undefined]) {
+    assert.equal(corruptFlacDowngradeTarget({ quality }), '320k', `quality=${quality}`)
+  }
+})
+
+test('corruptFlacDowngradeTarget：已经是有损档就不再降', () => {
+  for (const quality of ['320k', '128k', '192k']) {
+    assert.equal(corruptFlacDowngradeTarget({ quality }), '', `quality=${quality}`)
+  }
+})
+
+test('corruptFlacDowngradeTarget：一首只降一次，不许来回降', () => {
+  assert.equal(corruptFlacDowngradeTarget({ quality: 'flac', _qualityDowngraded: true }), '')
+})
+
+test('corruptFlacDowngradeTarget：没有任务对象就什么也不做', () => {
+  assert.equal(corruptFlacDowngradeTarget(null), '')
 })

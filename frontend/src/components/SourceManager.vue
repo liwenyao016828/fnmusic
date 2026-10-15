@@ -2,8 +2,8 @@
   <PageShell
     :title="musicdlPageOpen ? 'musicdl 音源' : '音源引擎管理'"
     :desc="musicdlPageOpen
-      ? 'musicdl 覆盖 56 个音源 —— 逐个启用/停用，并检测哪些真的能出结果'
-      : '多音源自动轮询取链 · 连续失败自动熔断降级 · 支持导入自定义第三方音源脚本'"
+      ? 'musicdl 覆盖 56 个音源，逐个启用并检测'
+      : '多音源轮询取链 · 失败熔断 · 支持导入第三方脚本'"
   >
     <template #title-extra>
       <span class="text-[10px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-200 font-mono">已导入 {{ sources.length }} 个</span>
@@ -97,20 +97,18 @@
         <button @click="importNotice = ''" class="shrink-0 text-emerald-600 hover:text-emerald-800">关闭</button>
       </div>
 
-      <!-- 常驻合规与免责声明条 -->
-      <div class="p-3 bg-amber-50/80 rounded-xl border border-amber-200/80 text-amber-900 text-xs flex items-center justify-between gap-2 shadow-2xs">
-        <div class="flex items-center gap-2 min-w-0">
-          <ShieldAlert class="w-4 h-4 text-amber-600 shrink-0" />
-          <span class="text-[11px] leading-relaxed truncate">
-            <strong>技术中立免责声明：</strong>本播放器为纯本地技术容器，不内置亦不提供任何在线音源。请确保您导入的第三方脚本符合相关法律法规与上游服务协议，仅限个人技术研究使用。
-          </span>
-        </div>
-        <button
+      <!-- 常驻合规与免责声明条
+           改成卡片：原来那一整行正文在手机上被 `truncate` 截掉后半句（合规责任那句
+           恰恰在后面），标题 + 一句简介反而每句都看得见，全文点卡片进弹窗。 -->
+      <div class="grid grid-cols-2 gap-2">
+        <ActionCard
+          title="技术中立免责声明"
+          hint="纯本地技术容器，不内置在线音源；导入脚本请自负合规责任"
+          :icon="ShieldAlert"
+          icon-class="text-amber-600"
+          badge="查看完整条款"
           @click="$emit('open-disclaimer')"
-          class="shrink-0 text-emerald-700 hover:text-emerald-800 text-[11px] font-semibold underline underline-offset-2 ml-2 cursor-pointer"
-        >
-          查看完整条款
-        </button>
+        />
       </div>
 
       <!--
@@ -196,19 +194,25 @@
            注意：这块必须放在下面 sources 的 v-if/v-else 之前，
            否则会把那一对 v-if/v-else 拆开、让 v-else 挂到这里来。 -->
       <div v-if="apiSources.length" class="rounded-2xl border border-blue-200/70 bg-blue-50/40 p-4">
-        <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <div class="flex items-center gap-2">
-            <Server class="w-4 h-4 text-blue-600" />
-            <span class="text-[13px] font-semibold text-gray-700">服务型音源</span>
-            <span class="text-[11px] text-gray-400">后端直连，不需要浏览器执行脚本</span>
-          </div>
-          <button @click="openImportModal"
-            class="text-[11px] font-semibold text-blue-600 hover:underline">+ 再接入一个</button>
+        <div class="mb-3 flex items-center gap-2">
+          <Server class="w-4 h-4 text-blue-600" />
+          <span class="text-[13px] font-semibold text-gray-700">服务型音源</span>
         </div>
-        <p class="mb-3 text-[11px] leading-relaxed text-gray-500">
-          启用的服务型音源会被用于<b class="font-semibold text-gray-600">后台自动下载</b>：
-          订阅的歌单有新歌时自动取链落盘，不用开着网页。
-        </p>
+        <div class="mb-3 grid grid-cols-2 gap-2">
+          <ActionCard
+            title="再接入一个"
+            hint="后端直连，不需要浏览器执行脚本"
+            :icon="Plus"
+            icon-class="text-blue-600"
+            @click="openImportModal"
+          />
+          <!-- 说明卡：这句说明没有可点的动作，所以不用 ActionCard（它会渲染成一个按钮，
+               点了没反应反而是个坑），只借同一套卡片排版跟动作卡并排 -->
+          <div class="rounded-xl border border-dashed border-blue-200 bg-white px-3 py-2.5">
+            <b class="block text-[12.5px] font-bold text-gray-700">启用后会用于后台下载</b>
+            <span class="mt-0.5 block text-[11px] leading-snug text-gray-500">订阅的歌单有新歌时自动取链落盘，不用开着网页</span>
+          </div>
+        </div>
         <div class="space-y-2">
           <div v-for="a in apiSources" :key="a.id"
                class="flex flex-wrap items-center gap-3 rounded-xl border border-gray-200 bg-white px-3.5 py-2.5">
@@ -255,7 +259,9 @@
           · 右边只放「测速 / 删除」，测速按钮未测过显示图标、测过显示延迟数字；
           · 平台标签下面一排 10 个小长条 = 最近 10 次测速记录（左旧右新，颜色按延迟分档）。
       -->
-      <div v-else class="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+      <!-- 音源卡片整行（用户 2026-10-08：「有些就是需要一行一个，卡片内的元素需要完整，比如音源卡片等」）：
+           卡片里有 40px 图标 + 名称 + 说明 + 状态徽标，半宽会把说明挤成三行。 -->
+      <div v-else class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
         <div v-for="s in sources" :key="s.id"
           :class="[
             'bg-white rounded-xl border p-4 flex items-center gap-3 transition-all cursor-pointer hover:border-emerald-300 hover:shadow-sm',
@@ -497,20 +503,20 @@
                   已加入启用池，关掉弹窗就能直接用。
                 </p>
                 <template v-else>
-                  <ul class="mt-1.5 space-y-1">
-                    <li v-for="it in importTest.fail" :key="it.id" class="flex items-start justify-between gap-2">
-                      <span class="min-w-0">
-                        <span class="block truncate text-[11px] text-rose-700">{{ it.name }}</span>
-                        <!-- 失败原因必须写在明面上：只给个名字等于没说，用户只能去日志页翻 -->
-                        <span v-if="it.reason" class="mt-0.5 block text-[10px] leading-snug text-rose-500/90">{{ it.reason }}</span>
-                      </span>
-                      <button type="button" @click="retestImportItem(it)" :disabled="probingIds.includes(it.id)"
-                              class="shrink-0 rounded-md border border-rose-200 bg-white px-2 py-0.5 text-[11px] text-rose-600 hover:bg-rose-50 disabled:opacity-50">
-                        {{ probingIds.includes(it.id) ? '测试中…' : '再测试' }}
-                      </button>
-                    </li>
-                  </ul>
-                  <p class="mt-1 text-[11px] text-amber-700">上游可能只是抖了一下 —— 点「再测试」重试，通了会自动启用。</p>
+                  <div class="mt-1.5 grid grid-cols-2 gap-2">
+                    <ActionCard
+                      v-for="it in importTest.fail" :key="it.id"
+                      :title="it.name"
+                      :hint="it.reason || '上游可能只是抖了一下，点一下重试，通了会自动启用'"
+                      :icon="RotateCw"
+                      icon-class="text-rose-400"
+                      :badge="probingIds.includes(it.id) ? '测试中…' : '再测试'"
+                      :disabled="probingIds.includes(it.id)"
+                      @click="retestImportItem(it)"
+                    />
+                    <!-- 失败原因必须写在明面上：只给个名字等于没说，用户只能去日志页翻
+                         —— 在卡片里它占 hint 那一行，不能顶掉标题里的音源名 -->
+                  </div>
                 </template>
               </template>
             </div>
@@ -535,7 +541,7 @@
               />
             </div>
             <!-- 窄屏堆成一列：手机上两列各约 165px，地址/令牌这种长文本挤在这宽度里没法看全 -->
-            <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div class="grid grid-cols-2 gap-3">
               <div>
                 <label class="block text-xs font-medium text-gray-600 mb-1">令牌（可选）</label>
                 <input
@@ -676,7 +682,7 @@ import { lxRuntime } from '../engine/lx-runtime'
 import { sourceHealth } from '../services/sourceHealth'
 import {
   Plus, Trash2, X, PlayCircle, ShieldAlert, ChevronDown, Folder, FileCode,
-  Gauge, ShieldOff, Loader2, Layers, Server,
+  Gauge, ShieldOff, Loader2, Layers, Server, RotateCw,
   Headphones, Music2, ArrowLeft, Settings2
 } from 'lucide-vue-next'
 import { loadPref, savePref } from '../services/prefs'
@@ -693,6 +699,7 @@ import { isNotReadyError, explainSourceError } from '../engine/source-error'
 import { DEAD_STREAK, SWEEP_BUDGET, isDeadByHistory as isDeadByHistoryOf, sweepPlan } from '../services/probePlan'
 import PageShell from './PageShell.vue'
 import InlineNotice from './InlineNotice.vue'
+import ActionCard from './ActionCard.vue'
 import MusicDLSourcePanel from './MusicDLSourcePanel.vue'
 import { fail, apiError, describeError } from '../services/userMsg'
 import { logError, logInfo, logWarn } from '../services/appLog'

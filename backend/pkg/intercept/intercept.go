@@ -124,6 +124,35 @@ type Config struct {
 	// `handlePageShell` **根本不认领**文档请求，官方页面由接管层的反向代理
 	// 逐字节原样透传 —— 这是「注入把官方页弄坏了」时的一键退路。
 	UIInjectEnabled func() bool
+	// PlaybackQuality 返回**试听**的音质偏好（"auto" / "lossless" / "320k" / "128k"），
+	// 现取；nil 或返回空 = auto（见 pkg/online 的 PlaybackLadder）。
+	//
+	// 为什么是函数而不是一个字符串：用户在飞牛音乐页面里点了「音质」切换之后，
+	// **下一首歌**就该按新档位取 —— 拦截层是启动时构造的，拿一份拷贝就等于
+	// 「改完要重启应用」。
+	PlaybackQuality func() string
+	// AutoDownloadLog 收「自动下载记录」（见 pkg/online/autolog.go）。nil = 不记。
+	//
+	// 为什么由拦截层往外推、而不是让接口层来读：**只有拦截层知道这些下载**。
+	// 收藏 / 加歌单 / 飞牛页面里点下载都发生在官方页面上，接口层看不到；
+	// 拦截层是唯一的当事方，所以由它记、由它推。
+	AutoDownloadLog func(online.AutoLogEntry)
+	// AutoDownloadQuality 返回「飞牛页面触发的下载」要的音质档位，现取。
+	// 取值：highest（默认，能无损就无损）/ flac / 320k / 128k；空 = highest。
+	//
+	// 与 PreferQuality（网页端下载队列的默认音质）分开：那两个入口的用户意图不同 ——
+	// 网页端点下载的人看着进度条，官方页面点红心的人只想「这首歌归我」。
+	AutoDownloadQuality func() string
+	// SetPlaybackQuality 把试听音质偏好写回配置（注入页面上的切换按钮用它）。
+	//
+	// nil = 这次运行不允许改（例如单测里的最小构造）：切换按钮会明确回一句
+	// 「当前不可改」，而不是假装成功 —— 假成功比不能改更难查。
+	SetPlaybackQuality func(string) error
+	// LxResolve 让宿主解析一条洛雪直链（见 pkg/intercept/lxresolve.go）。
+	//
+	// 传的是宿主的方法值；宿主没起来时它返回 lxnode.ErrNotRunning，池里当成
+	// 「这个源现在用不了」——与 LxSearch 同一个口径，不在这里判开关。
+	LxResolve func(ctx context.Context, source string, info map[string]any, quality string) (string, error)
 	// PlatformsFunc 返回「参与在线搜索合并」的平台，**现取**；nil 时用 Platforms
 	// （或内置默认：网易 + QQ）。
 	//
@@ -175,6 +204,15 @@ type Config struct {
 	// DownloadDir 返回曲库下载目录（现取）。「边听边下」把暂存文件写在它下面的
 	// 隐藏子目录里，这样「提升」是一次 rename，不用跨设备搬字节。空 = 不做 tee。
 	DownloadDir func() string
+	// CacheDir 返回「缓存/暂存」的根目录（现取），空 = 用默认位置。
+	//
+	// 影响两个目录（见 tee.go 的 cacheRoot）：
+	//   - 曲库暂存（`<root>/.qulv-tee`）—— 默认在**下载目录**下，与成品同卷；
+	//   - 滚动试听缓存（`<root>/rolling-cache`）—— 默认在**数据目录**下。
+	//
+	// 两者默认位置不同，所以配了 cache_dir 之后是「都挪进它」，而不是二选一。
+	// 跨卷的代价只是转正退化成复制（tee.go 里已经处理），不会坏。
+	CacheDir func() string
 	// FavAutoDownload 返回「收藏 / 加入歌单时自动下载并绑定本地」的开关，nil = 一律视为关。
 	//
 	// 与其它开关同样是**函数**：用户在界面上打开就该立刻生效。默认关 ——
@@ -258,6 +296,14 @@ type Interceptor struct {
 	onlineMu    sync.Mutex
 	onlineCache map[string]onlineCacheEntry
 
+	// nowMu/nowPlay 记「某个虚拟 guid 最近一次试听实际用了哪条源、哪一档」。
+	//
+	// 只给界面看：飞牛官方页面里的曲率面板要显示「正在播放 · 网易云 · 320K」，
+	// 而这行字**只有后端知道** —— 档位是解析时回读出来的，页面上没有任何接口能拿到。
+	// 内存态、有上限、进程重启即失：它是**当前状态**不是记录（记录是下载那一套的事）。
+	nowMu   sync.Mutex
+	nowPlay map[string]nowPlaying
+
 	// suggestShapeOnce 让「官方联想的 data 不是字符串数组」这件事只记一次日志
 	// （见 suggest.go 的 noteSuggestShape）。
 	suggestShapeOnce sync.Once
@@ -305,8 +351,17 @@ type Interceptor struct {
 	// 零值可用 —— 只有真的起过一次续传才会建父 ctx 与登记表。
 	tee teePool
 
-	searcher     func(keyword, platform string, page, size int) []search.UnifiedSong
-	lxSearch     func(ctx context.Context, keyword string, limit int) ([]lxnode.Song, error)
+	searcher  func(keyword, platform string, page, size int) []search.UnifiedSong
+	lxSearch  func(ctx context.Context, keyword string, limit int) ([]lxnode.Song, error)
+	lxResolve func(ctx context.Context, source string, info map[string]any, quality string) (string, error)
+
+	// lxMu/lxItems 是「洛雪搜索结果 → 取链时要喂回去的那条记录」的暂存。
+	//
+	// 为什么必须存：LX 脚本的 `musicUrl` 要的是**搜索时那条记录**（`musicInfo`），
+	// 光给一个 id 它解析不出来 —— 与 musicdl 那条路同一个理由
+	// （见 online.QueryResolver 的说明）。见 lxresolve.go。
+	lxMu         sync.Mutex
+	lxItems      map[string]map[string]any
 	lyricFetch   func(t online.Track) string
 	nmFetch      func(ctx context.Context, id string, limit int) (string, string, []online.Track)
 	chartFetch   func(ctx context.Context, source, id string, limit int) (string, string, []online.Track, error)
@@ -379,6 +434,7 @@ func New(cfg Config) *Interceptor {
 		favAutoDownload: cfg.FavAutoDownload,
 		searcher:        searcher,
 		lxSearch:        cfg.LxSearch,
+		lxResolve:       cfg.LxResolve,
 		lyricFetch:      lyricFetcher,
 		store:           store,
 		userCache:       make(map[string]userEntry, 16),
@@ -484,6 +540,10 @@ func (i *Interceptor) buildRoutes() []route {
 		{get, qulvPrefix + "/ui.js", i.handleQulvUIJS},
 		{get, qulvPrefix + "/api/info", i.handleQulvInfo},
 		{post, qulvPrefix + "/api/download/online", i.handleQulvDownloadOnline},
+		// 试听的音质：`/api/now` 读「这首歌这次实际用的源与档位」，
+		// `/api/quality` 写「试听音质偏好」。两条都在同源白名单里，其余照旧 404。
+		{get, qulvPrefix + "/api/now", i.handleQulvNow},
+		{post, qulvPrefix + "/api/quality", i.handleQulvQuality},
 		{all, qulvPrefix, i.handleQulvNotFound},
 
 		// ── 页面外壳：注入脚本的落点。

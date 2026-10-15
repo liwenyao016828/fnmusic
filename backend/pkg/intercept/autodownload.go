@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -59,11 +60,22 @@ func (i *Interceptor) unmarkDownloading(fake string) {
 	i.dlMu.Unlock()
 }
 
+// 自动下载的触发来源。真身在 pkg/online（它们是记录表 schema 的一部分，
+// 读写两侧必须同一套字符串），这里只是本地别名，省掉每处调用点的跨包前缀。
+const (
+	TriggerFavorite  = online.TriggerFavorite  // 在飞牛音乐里点了收藏
+	TriggerPlaylist  = online.TriggerPlaylist  // 在飞牛音乐里加进了歌单
+	TriggerPageClick = online.TriggerPageClick // 在飞牛页面里点了「下载到曲率」
+)
+
 // autoDownload 后台把一首在线曲目整轨下到本地并登记。
 //
 // 失败只记日志：用户点的是「收藏」，收藏本身已经成功了 —— 下载是附加动作，
 // 它失败不该让收藏看起来失败。
-func (i *Interceptor) autoDownload(fake string, t online.Track) {
+//
+// 但**记录要记全**（成功与失败都记，见 pkg/online/autolog.go）：失败只写日志的话，
+// 用户在界面上看不到任何痕迹，只能去翻后端日志 —— 而那正是用户报的问题。
+func (i *Interceptor) autoDownload(fake string, t online.Track, trigger string) {
 	if !i.favAutoDownloadOn() {
 		return
 	}
@@ -86,17 +98,109 @@ func (i *Interceptor) autoDownload(fake string, t online.Track) {
 
 		item, err := i.downloadToLibrary(ctx, fake, t)
 		if err != nil {
-			i.logf("[INTERCEPT] 收藏自动下载失败 %s（%s）— %s：%v",
-				fake, t.Platform, t.Title, err)
+			i.logf("[INTERCEPT] %s 自动下载失败 %s（%s）— %s：%v",
+				triggerLabel(trigger), fake, t.Platform, t.Title, err)
+			i.recordAutoDownload(online.AutoLogEntry{
+				Trigger: trigger, GUID: fake,
+				Title: t.Title, Artist: t.Artist(),
+				OK: false, Error: err.Error(),
+			})
 			return
 		}
 		if err := i.downloaded.Put(item); err != nil {
 			i.logf("[INTERCEPT] 已下载但登记失败 %s（%s）：%v", fake, item.Path, err)
+			i.recordAutoDownload(online.AutoLogEntry{
+				Trigger: trigger, GUID: fake,
+				Title: t.Title, Artist: t.Artist(),
+				Source: item.Source, Quality: item.Quality, Size: item.Size, Path: item.Path,
+				OK: false, Error: "文件已落盘但登记失败：" + err.Error(),
+			})
 			return
 		}
-		i.logf("[INTERCEPT] 收藏自动下载完成并已绑定本地 %q — %s → %s",
-			t.Title, t.Artist(), item.Path)
+		i.logf("[INTERCEPT] %s 自动下载完成并已绑定本地 %q — %s → %s",
+			triggerLabel(trigger), t.Title, t.Artist(), item.Path)
+		i.recordAutoDownload(online.AutoLogEntry{
+			Trigger: trigger, GUID: fake,
+			Title: t.Title, Artist: t.Artist(),
+			Source: item.Source, Quality: item.Quality, Size: item.Size, Path: item.Path,
+			OK: true,
+		})
 	}()
+}
+
+// triggerLabel 把触发来源翻成人话（只用于日志；界面用同一个词表）。
+func triggerLabel(trigger string) string {
+	switch trigger {
+	case TriggerFavorite:
+		return "收藏"
+	case TriggerPlaylist:
+		return "加歌单"
+	case TriggerPageClick:
+		return "页面下载"
+	}
+	return "自动"
+}
+
+// recordAutoDownload 往外推一条自动下载记录。注入口没接上就静默跳过 ——
+// 记录是附加产物，不该因为它把下载路径弄失败。
+func (i *Interceptor) recordAutoDownload(e online.AutoLogEntry) {
+	if i.cfg.AutoDownloadLog == nil {
+		return
+	}
+	i.cfg.AutoDownloadLog(e)
+}
+
+// autoDownloadQuality 读「飞牛页面触发的下载」要的音质档位，归一化。
+//
+// ⚠️ 空 / 认不出一律当 `highest`（现在的行为）：这个键是后加的，老配置里没有它，
+// 把「没设置」当成「固定 128k」会让老用户新下的歌突然变糊 —— 那种退步
+// 只会在听的时候被发现。
+func (i *Interceptor) autoDownloadQuality() string {
+	if i.cfg.AutoDownloadQuality == nil {
+		return qualityHighest
+	}
+	switch strings.ToLower(strings.TrimSpace(i.cfg.AutoDownloadQuality())) {
+	case online.TierLossless:
+		return online.TierLossless
+	case online.Tier320k:
+		return online.Tier320k
+	case online.Tier192k:
+		return online.Tier192k
+	case online.Tier128k:
+		return online.Tier128k
+	}
+	return qualityHighest
+}
+
+// qualityHighest 是「能无损就无损」的哨兵值：走下载源池原本的排序（最高在前）。
+const qualityHighest = "highest"
+
+// preferExactTier 把「正好是目标档位」的候选提到前面，其余保持原顺序。
+//
+// 为什么是「提前」而不是「过滤掉」：用户点名要 128k，池里只有 320k 时，
+// 下到 320k 也比「收藏了一首歌却下不下来」好 —— 实际档位会如实写进自动下载记录
+// （含源与档位），用户看得见「要的是 128k、拿到的是 320k」。
+// 过滤掉就等于把「一个音质选择」变成了「一个失败」。
+//
+// 排序用 SliceStable：同档内部保持下载源池原来的顺序（那本身带相关性，打乱没好处）。
+func preferExactTier(cands []online.Track, want string) []online.Track {
+	if want == "" || want == qualityHighest {
+		return cands
+	}
+	wantRank := online.TierRank(want)
+	if wantRank < 0 {
+		return cands
+	}
+	out := append([]online.Track(nil), cands...)
+	sort.SliceStable(out, func(a, b int) bool {
+		ra := online.TierRank(out[a].Quality) == wantRank
+		rb := online.TierRank(out[b].Quality) == wantRank
+		if ra == rb {
+			return false
+		}
+		return ra
+	})
+	return out
 }
 
 // downloadToLibrary 走「解析 → 调本机下载接口 → 拿回落盘路径」这一条链路。
@@ -138,6 +242,11 @@ func (i *Interceptor) downloadCandidates(ctx context.Context, t online.Track) []
 // 点按钮，这边是收藏后自动触发）。
 func (i *Interceptor) downloadToLibrary(ctx context.Context, fake string, t online.Track) (online.DownloadedItem, error) {
 	cands := i.downloadCandidates(ctx, t)
+	// 「飞牛页面触发的下载」的音质偏好（榜单管理里的「音质下载」）：
+	// 点名要某一档时，把正好是那一档的候选提到最前（见 preferExactTier）。
+	if want := i.autoDownloadQuality(); want != qualityHighest {
+		cands = preferExactTier(cands, want)
+	}
 	var lastErr error
 	for idx, cand := range cands {
 		res, err := i.pool.Resolve(ctx, cand.Platform, cand.PlatformID)

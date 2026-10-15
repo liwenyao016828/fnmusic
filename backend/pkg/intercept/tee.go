@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"fn-lx-player/pkg/namefmt"
 	"io"
 	"net/http"
 	"os"
@@ -116,9 +117,27 @@ func (i *Interceptor) teeOn() bool {
 	return i.cfg.TeeEnabled != nil && i.cfg.TeeEnabled()
 }
 
-// teeDir 返回 tee 的暂存目录。
+// cacheRoot 返回「缓存 / 暂存」的根目录：配了 cache_dir 就用它，否则回落。
 //
-// 刻意放在**下载目录下面**的隐藏子目录里：与最终落点在同一个文件系统上，
+// 两个调用方的**回落点不一样**，因为它们的默认位置本来就不同：
+//   - 曲库暂存默认在**下载目录**下（与成品同卷 → 「提升」一次 rename）；
+//   - 滚动试听缓存默认在**数据目录**下（与成品无关，本来就是要淘汰的）。
+//
+// 配了 cache_dir 之后两者都挪进它 —— 这正是「缓存单独放一块盘」的用法。
+// 跨卷时「提升」会退化成复制（见下面 promote 里的 rename 失败分支），
+// 只是慢一点，不会坏。
+func (i *Interceptor) cacheRoot(fallback string) string {
+	if i.cfg.CacheDir != nil {
+		if d := strings.TrimSpace(i.cfg.CacheDir()); d != "" {
+			return d
+		}
+	}
+	return fallback
+}
+
+// teeDir 返回 tee 的暂存目录（默认 `<下载目录>/.qulv-tee`，可被 cache_dir 覆盖）。
+//
+// 默认刻意放在**下载目录下面**的隐藏子目录里：与最终落点在同一个文件系统上，
 // 「提升」就是一次 rename，不用跨设备搬几十兆字节。
 func (i *Interceptor) teeDir() string {
 	if i.cfg.DownloadDir == nil {
@@ -128,10 +147,11 @@ func (i *Interceptor) teeDir() string {
 	if dir == "" {
 		return ""
 	}
-	return filepath.Join(dir, teeSubdir)
+	return filepath.Join(i.cacheRoot(dir), teeSubdir)
 }
 
-// teeRollingDir 返回滚动试听缓存的落点（`<数据目录>/rolling-cache`）。
+// teeRollingDir 返回滚动试听缓存的落点（默认 `<数据目录>/rolling-cache`，
+// 可被 cache_dir 覆盖）。
 //
 // 数据目录拿不到（理论上不会）时返回空串 = 这条路径整体退化掉，
 // 表现只是「重播还要出网」，与以前一致。
@@ -140,7 +160,7 @@ func (i *Interceptor) teeRollingDir() string {
 	if dir == "" {
 		return ""
 	}
-	return filepath.Join(dir, teeRollingSubdir)
+	return filepath.Join(i.cacheRoot(dir), teeRollingSubdir)
 }
 
 // beginTee 为一次完整转发开一条落盘的路。返回 nil = 这次不落盘。
@@ -933,7 +953,7 @@ func (i *Interceptor) teeDestPath(t online.Track, format string) string {
 	if dir == "" {
 		return ""
 	}
-	name := sanitizeFileName(t.Artist() + " - " + t.Title)
+	name := sanitizeFileName(namefmt.Build(t.Artist(), t.Title))
 	if name == "" {
 		name = sanitizeFileName(t.Title)
 	}

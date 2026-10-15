@@ -344,6 +344,13 @@ type Song struct {
 	Pic      string `json:"pic"`
 	Quality  string `json:"quality"` // 缺省空串 = 脚本没给
 	Size     int64  `json:"size"`    // 缺省 0 = 脚本没给
+	// Raw 是脚本那条记录的**原样**（宿主只删掉它自己的 `_raw` 透传字段）。
+	//
+	// ⚠️ 2026-10-08 补：宿主一直在响应里带 `raw`，但这里没有对应字段 —— 于是它
+	// 在 Go 侧被静默丢掉。而**取链要的正是它**：LX 脚本的 `musicUrl` 读
+	// `info.musicInfo`，很多脚本还要读 `_types[档位]` 才能给出直链。
+	// 没有它就只能拿 id + 歌名去要，那些脚本一律拒绝（表现为「解析失败」）。
+	Raw map[string]any `json:"raw,omitempty"`
 }
 
 // searchRequest 是发给宿主的搜索请求体（形状与 host 的 /search 对齐）。
@@ -502,6 +509,80 @@ func (c Config) hostArgs() []string {
 //     这次加的隔离会**静默失效** —— 没有报错、没有日志，看起来一切正常。
 //     显式指定环境变量是最直接的堵法。
 //
+// nodeSearchHint 是「找不到 node」时提示里带上的已知位置（只用于报错文案）。
+const nodeSearchHint = "/vol1/@appcenter/nodejs_v*/bin/node"
+
+// resolveNodeBin 找出 node 可执行文件，返回空串 = 找不到。
+//
+// # 为什么不能只靠 exec.LookPath
+//
+// ⚠️ 2026-10-08 真机实测：**飞牛上 node 不在应用的 PATH 里**。
+// 应用进程的 PATH 是 `/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`，
+// 而 node 装在 `/vol1/@appcenter/nodejs_v24/bin/node`（fnOS 的 nodejs 应用）。
+// 原来这里只做 `exec.LookPath("node")` → 失败 → 服务端洛雪宿主**根本起不来**。
+//
+// 更糟的是它**静默**：失败只写进 lxnode 自己的 logf（stderr），界面上一点提示都没有，
+// 表现就是用户报的那句「我 lx 音乐怎么没有参与到下载」—— 而且怎么查都查不到
+// 「宿主压根没启动」这一层。
+//
+// 查找顺序（先精确后兜底）：
+//  1. 配置里给了**绝对路径**且存在 → 用它；
+//  2. 环境变量 `QULV_NODE_BIN`（运维覆盖口）；
+//  3. PATH 里能找到 → 用它（开发机 / 通用 Linux 走这条）；
+//  4. 已知安装位置：`/vol1/@appcenter/nodejs_vNN/bin/node`（**版本号大的优先**）、
+//     `/usr/local/bin/node`、`/usr/bin/node`、`/opt/node*/bin/node`。
+func resolveNodeBin(configured string) string {
+	configured = strings.TrimSpace(configured)
+	// 1. 显式绝对路径
+	if filepath.IsAbs(configured) {
+		if isExecutableFile(configured) {
+			return configured
+		}
+		// 绝对路径写错时**继续往下找**，而不是直接失败 —— 用户的意图是「用 node」，
+		// 不是「用这个特定的路径」。
+	}
+	// 2. 环境变量覆盖
+	if env := strings.TrimSpace(os.Getenv("QULV_NODE_BIN")); env != "" && isExecutableFile(env) {
+		return env
+	}
+	// 3. PATH（配置里给的名字优先，其次 "node"）
+	for _, name := range []string{configured, "node"} {
+		if name == "" || filepath.IsAbs(name) {
+			continue
+		}
+		if p, err := exec.LookPath(name); err == nil {
+			return p
+		}
+	}
+	// 4. 已知安装位置。nodejs_vNN 按**版本号降序**：v24 优先于 v22。
+	var candidates []string
+	for _, v := range []string{"v24", "v22", "v20", "v18"} {
+		candidates = append(candidates, filepath.Join("/vol1/@appcenter/nodejs_"+v, "bin", "node"))
+	}
+	candidates = append(candidates, "/usr/local/bin/node", "/usr/bin/node")
+	for _, v := range []string{"v24", "v22", "v20", "v18"} {
+		candidates = append(candidates, filepath.Join("/vol2/@appcenter/nodejs_"+v, "bin", "node"))
+	}
+	if matches, err := filepath.Glob("/opt/node*/bin/node"); err == nil {
+		candidates = append(candidates, matches...)
+	}
+	for _, c := range candidates {
+		if isExecutableFile(c) {
+			return c
+		}
+	}
+	return ""
+}
+
+// isExecutableFile 判断「这个路径是个可执行文件」。
+func isExecutableFile(p string) bool {
+	fi, err := os.Stat(p)
+	if err != nil || fi.IsDir() {
+		return false
+	}
+	return fi.Mode()&0o111 != 0
+}
+
 // 只留 PATH（万一 NodeBin 是个需要 PATH 查找的包装脚本）与 TZ（时间语义别变）。
 // 宿主本身只用 node: 内建，一个环境变量都不需要 —— 已用真音源脚本实测过。
 // 返回非 nil 空切片是**有意义**的：`cmd.Env == nil` 表示「继承」，我们要的是「空」。
@@ -523,12 +604,9 @@ type execProc struct {
 }
 
 func (p *execProc) Start() error {
-	node := p.cfg.NodeBin
+	node := resolveNodeBin(p.cfg.NodeBin)
 	if node == "" {
-		node = "node"
-	}
-	if _, err := exec.LookPath(node); err != nil {
-		return fmt.Errorf("找不到可执行文件 %q：%w", node, err)
+		return fmt.Errorf("找不到 node 可执行文件（试过 PATH 与 %s）—— 设 QULV_NODE_BIN 指一个", nodeSearchHint)
 	}
 	if p.cfg.Script == "" {
 		return errors.New("没有配置 lx 宿主脚本路径")

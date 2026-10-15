@@ -9,18 +9,14 @@
       重复了，要求去掉这里的、换到发现页（连登录后的登出/注销按钮一起）。
       这里留一句指引，免得用户以为功能没了。
     -->
-    <div class="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-[15px] border border-emerald-100 bg-emerald-50/60 px-4 py-3">
-      <div class="min-w-0">
-        <b class="block text-[13px] text-emerald-800">平台账号扫码登录已移到「发现音乐」</b>
-        <span class="mt-0.5 block text-[12px] leading-relaxed text-emerald-900/70">
-          网易云音乐、QQ 音乐的扫码登录、登出与个人推荐现在都在「发现音乐 → 双平台推荐」里，登录完直接就能听。
-        </span>
-      </div>
-      <button
-        class="shrink-0 rounded-lg bg-emerald-500 px-3.5 py-1.5 text-[12px] font-semibold text-white transition-all hover:bg-emerald-600"
-        @click="goDiscover"
-      >去扫码登录</button>
-    </div>
+    <!--
+      平台账号入口改到发现页后，这里只留一行指路（2026-10-14 用户：「提示太多，看起来很挤」——
+      原来是两张卡：绿横幅 + 蓝说明。本页的主任务是下面两个连接面板，指引压到一行灰字）。
+    -->
+    <p class="mb-3 text-[11.5px] text-gray-400">
+      网易云 / QQ 音乐的扫码登录在「发现音乐 → 双平台推荐」
+      <button class="ml-1 font-semibold text-emerald-600 underline decoration-dotted underline-offset-2 hover:text-emerald-700" @click="goDiscover">前往</button>
+    </p>
 
     <!-- ── 飞牛音乐连接（与第三方账号并列，都是"外部连接"） ── -->
     <div class="mb-4">
@@ -30,11 +26,10 @@
     <!-- AI 大模型 = 又一个外部服务凭证，从「曲库管家 → AI 设置」搬来（默认折叠，见该组件注释） -->
     <AiSettingsPanel />
 
-    <!-- ── 说明 ── -->
-    <div class="mt-5 rounded-xl border border-blue-100 bg-blue-50/60 px-4 py-3 text-[12px] leading-relaxed text-blue-900/80">
-      <b class="text-blue-700">接下来做什么</b>
-      ：飞牛音乐连上后，到「曲库管家 → 推送」就能把发现页里拉到的每日推荐或私人歌单同步到飞牛音乐。
-    </div>
+    <!--
+      （2026-10-14）删掉了原来底部的蓝色「接下来做什么」卡：连接成功后 FnosSyncPanel
+      的状态横幅自己会变绿，推送页也有自己的引导 —— 三处说同一句话只剩噪音。
+    -->
   </PageShell>
 </template>
 

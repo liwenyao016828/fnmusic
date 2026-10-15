@@ -1,11 +1,11 @@
 <template>
   <PageShell
     title="曲库管家"
-    desc="推送订阅、批量下载、补全整理与榜单管理 —— 曲库的日常维护都在这里（AI 大模型的设置已挪到「账号连接」）"
+    desc="本地音乐 · 推送 · 下载 · 补全整理"
   >
     <template #title-extra>
       <span class="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 font-mono text-[10px] text-emerald-600">
-        推送 · 下载 · 整理 · 榜单
+        本地 · 推送 · 下载 · 整理
       </span>
     </template>
 
@@ -24,7 +24,7 @@
     <div class="grid grid-cols-1 gap-5 lg:grid-cols-[220px_1fr]">
 
       <!-- 侧栏：分组导航（分组标题 + 条目 + 数量角标） -->
-      <aside class="h-max rounded-[15px] border border-gray-200 bg-white p-3 lg:sticky lg:top-6">
+      <aside class="h-max rounded-xl border border-gray-200 bg-white p-3 lg:sticky lg:top-6">
         <h4 class="mx-2.5 mb-3 mt-2 text-[11px] font-medium text-gray-400">曲库管家</h4>
         <button
           v-for="t in tabs" :key="t.id"
@@ -100,7 +100,7 @@
                 {{ pushGuideAllDone ? '一切就绪，之后每轮自动追新' : '三步即可开始' }}
               </h3>
               <p class="mt-1 text-[11px] leading-relaxed text-gray-500">
-                一条订阅 = 一个歌单来源，上面有两个开关：下载到本地曲库 / 同步到飞牛歌单，勾一个也行。
+                一条订阅 = 一个来源，两个开关各勾一个。
               </p>
             </div>
             <div class="flex shrink-0 items-center gap-2">
@@ -176,7 +176,7 @@
           class="rounded-xl border border-gray-200 bg-white px-4 py-3 text-[11px] leading-relaxed text-gray-500"
         >
           <b class="text-gray-700">「下载到本地曲库」需要让曲率 这个窗口一直开着。</b>
-          取下载地址的脚本只能在浏览器里跑，飞牛里「应用已启动」（后端进程）还不够 ——
+          取链脚本只能在浏览器里跑；
           关掉窗口后已排队的会停，下次打开继续。
           想关掉页面也能下：到「音源管理 → 按服务地址接入」配一个<b>服务型音源</b>，
           那种音源由后端直接取链，跟浏览器无关。
@@ -191,7 +191,7 @@
           class="rounded-xl border border-amber-100 bg-amber-50/70 px-4 py-3 text-[11px] leading-relaxed text-amber-900/80"
         >
           <b class="text-amber-700">飞牛音乐未连接</b>，「同步到飞牛歌单」暂时建不了。
-          到「账号连接」登录飞牛音乐即可；只勾「下载到本地曲库」不受影响。
+          到「账号连接」登录飞牛即可（只勾「下载到本地曲库」不受影响）。
         </p>
 
         <div v-if="!subscriptions.length" class="rounded-xl border border-gray-100 bg-white py-12 text-center">
@@ -202,7 +202,7 @@
         <div v-else class="space-y-2.5">
           <div
             v-for="row in subscriptions" :key="row.key"
-            class="rounded-xl border border-gray-100 bg-white p-4 shadow-2xs"
+            class="rounded-xl border border-gray-200 bg-white p-4"
           >
             <div class="flex items-start justify-between gap-3">
               <div class="min-w-0 flex-1">
@@ -305,9 +305,16 @@
 
             <!-- 设置：只展开当前行（订阅多起来时整页会被撑得很长） -->
             <div v-if="expandedKey === row.key" class="mt-3 space-y-3 rounded-lg border border-gray-100 bg-gray-50/60 p-3">
-              <div v-if="row.hasDownload" class="space-y-2">
-                <p class="text-[11px] font-semibold text-gray-600">下载到本地曲库</p>
-                <div class="grid grid-cols-2 gap-2 sm:grid-cols-4">
+              <!--
+                两个能力位**并排成卡片**（用户 2026-10-07：「可以用一行多个，每个按照
+                卡片形式展示按钮和文字标题，简介就可以」）。以前它们各自整行、第二个靠
+                border-top 分隔 —— 一屏只看得到「下载」，得往下滚才知道还有「同步」，
+                而这两个开关是这条订阅的全部意义。
+              -->
+              <div class="grid grid-cols-1 gap-3 lg:grid-cols-2">
+              <div v-if="row.hasDownload" class="space-y-2 rounded-lg border border-gray-200 bg-white p-3">
+                <p class="text-[12px] font-bold text-gray-700">下载到本地曲库</p>
+                <div class="grid grid-cols-2 gap-2">
                   <label class="block">
                     <span class="mb-1 block text-[11px] text-gray-400">目标音质</span>
                     <select v-model="editForm.quality" class="w-full rounded-lg border border-gray-200 px-2 py-1.5 text-[12px] outline-none focus:border-emerald-400">
@@ -355,9 +362,9 @@
                 </div>
               </div>
 
-              <div v-if="row.hasFnos" class="space-y-2" :class="row.hasDownload ? 'border-t border-gray-100 pt-3' : ''">
-                <p class="text-[11px] font-semibold text-gray-600">同步到飞牛歌单</p>
-                <div class="grid grid-cols-2 gap-2 sm:grid-cols-4">
+              <div v-if="row.hasFnos" class="space-y-2 rounded-lg border border-gray-200 bg-white p-3">
+                <p class="text-[12px] font-bold text-gray-700">同步到飞牛歌单</p>
+                <div class="grid grid-cols-2 gap-2">
                   <label class="block">
                     <span class="mb-1 block text-[11px] text-gray-400">目标歌单名</span>
                     <input v-model="editForm.target_title" class="w-full rounded-lg border border-gray-200 px-2 py-1.5 text-[12px] outline-none focus:border-emerald-400" placeholder="留空用订阅名" />
@@ -385,8 +392,9 @@
                   </div>
                 </div>
                 <p class="text-[11px] leading-relaxed text-gray-400">
-                  保留期只清理<b>本任务推送过</b>的曲目，你手动加进这个歌单的歌不会被删。
+                  只清理本任务推送过的曲目。
                 </p>
+              </div>
               </div>
 
               <div class="flex flex-wrap items-center gap-2 border-t border-gray-100 pt-3">
@@ -407,30 +415,59 @@
           </div>
         </div>
 
-        <!-- 飞牛同步历史：低频查看，放列表下方（原来在「推送歌单」页里独占一块） -->
+        <!--
+          飞牛同步历史：低频查看，放列表下方（原来在「推送歌单」页里独占一块）。
+          多选与一键清除（用户 2026-10-07 指令「任务状态的几个页面中增加多选或者
+          一键清除记录按钮」）—— 它也是任务状态的一页。
+        -->
         <div v-if="pushRuns.length" class="overflow-hidden rounded-xl border border-gray-200 bg-white">
-          <div class="flex items-center justify-between border-b border-gray-100 px-4 py-3">
+          <div class="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-gray-100 px-4 py-3">
             <h3 class="text-sm font-semibold text-gray-800">飞牛同步历史</h3>
             <span class="text-[11px] text-gray-400">最近 {{ pushRuns.length }} 条</span>
+            <div class="ml-auto flex flex-wrap items-center gap-1.5">
+              <label class="mr-1 flex cursor-pointer select-none items-center gap-1 text-[11px] text-gray-500">
+                <input type="checkbox" class="align-middle accent-emerald-500" :checked="allPushRunsSelected" @change="toggleAllPushRuns" />
+                <span>全选</span>
+              </label>
+              <button
+                v-if="pushRunSelected.size"
+                @click="clearPushRuns(Array.from(pushRunSelected))"
+                class="rounded-lg bg-rose-50 px-2.5 py-1 text-[11px] font-bold text-rose-600 transition-colors hover:bg-rose-100"
+              >清除选中（{{ pushRunSelected.size }}）</button>
+              <button
+                @click="clearPushRuns([])"
+                class="rounded-lg px-2.5 py-1 text-[11px] font-bold text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600"
+                title="清除全部同步历史（不动订阅任务本身）"
+              >一键清除记录</button>
+            </div>
           </div>
+          <!--
+            卡片行而不是表格（2026-10-08 实测：5 列 `<table>` 在 390px 手机视口下宽 **596px**，
+            把「结果」那列整个推出屏幕 —— 横向滚动的表在手机上没人会去滑）。
+            卡片行是**换行**而不是溢出：窄屏时时间与状态掉到第二行。
+          -->
           <div class="max-h-[260px] overflow-y-auto">
-            <table class="w-full">
-              <tbody>
-                <tr v-for="r in pushRuns" :key="r.id" class="border-b border-gray-50 last:border-0">
-                  <td class="whitespace-nowrap px-4 py-2 text-[12px] text-gray-500">{{ String(r.started_at || '').replace('T', ' ') }}</td>
-                  <td class="px-4 py-2 text-[12px] text-gray-600">{{ r.task_name }}</td>
-                  <td class="px-4 py-2">
-                    <span class="rounded-full px-2 py-0.5 text-[11px]" :class="r.status === 'success' ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'">
-                      {{ r.status === 'success' ? '成功' : '失败' }}
-                    </span>
-                  </td>
-                  <td class="px-4 py-2 text-[12px] text-gray-500">
-                    <span v-if="r.error" class="block max-w-[320px] truncate text-rose-500" :title="r.error">{{ r.error }}</span>
-                    <span v-else-if="r.result">匹配 {{ r.result.matched }}/{{ r.result.total }}，新增 {{ r.result.added }}</span>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
+            <div
+              v-for="r in pushRuns" :key="r.id"
+              class="flex items-start gap-2 border-b border-gray-50 px-3 py-2 last:border-0"
+            >
+              <input type="checkbox" class="mt-0.5 shrink-0 accent-emerald-500" :checked="pushRunSelected.has(r.id)"
+                @change="togglePushRunSelect(r.id)" />
+              <div class="min-w-0 flex-1">
+                <div class="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                  <span class="min-w-0 truncate text-[12px] font-medium text-gray-700">{{ r.task_name }}</span>
+                  <span
+                    class="shrink-0 rounded-full px-1.5 py-0.5 text-[10px]"
+                    :class="r.status === 'success' ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'"
+                  >{{ r.status === 'success' ? '成功' : '失败' }}</span>
+                  <span class="shrink-0 text-[10px] text-gray-400">{{ String(r.started_at || '').replace('T', ' ') }}</span>
+                </div>
+                <div v-if="r.error" class="mt-0.5 truncate text-[11px] text-rose-500" :title="r.error">{{ r.error }}</div>
+                <div v-else-if="r.result" class="mt-0.5 text-[11px] text-gray-400">
+                  匹配 {{ r.result.matched }}/{{ r.result.total }}，新增 {{ r.result.added }}
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </template>
@@ -457,9 +494,8 @@
                 </span>
               </div>
               <p class="mt-1 text-[11px] leading-relaxed text-gray-500">
-                在飞牛音乐里收藏（或加入歌单）一首**在线**曲目时，后台把整轨下到 NAS 曲库；
-                下完之后这首歌的取流改走本地文件 —— 收藏条目继续可用，但已经在听硬盘上那份。
-                <span class="text-amber-600">会真的占磁盘和带宽（无损一首几十兆）。</span>
+                收藏/加歌单的在线曲目会后台下到 NAS，之后听硬盘那份。
+                <span class="text-amber-600">占磁盘和带宽（无损一首几十兆）。</span>
               </p>
             </div>
             <button
@@ -487,9 +523,8 @@
                 </span>
               </div>
               <p class="mt-1 text-[11px] leading-relaxed text-gray-500">
-                播放在线曲目时，把**同一条流**顺手写进磁盘 —— 字节本来就从这儿过，
-                不多花一分带宽。整首播完就提升进曲库，之后这首歌自动听硬盘那份。
-                <span class="text-gray-400">中途切歌 / 拖动进度产生的半截文件会被丢弃，不会污染曲库。</span>
+                边听边写进磁盘，整首播完提升进曲库。
+                <span class="text-gray-400">半截文件会丢弃。</span>
               </p>
             </div>
             <button
@@ -509,15 +544,14 @@
         <div class="rounded-xl border border-gray-200 bg-white px-4 py-3 mb-3">
           <h3 class="text-sm font-semibold text-gray-800">下载时附带</h3>
           <p class="mt-1 text-[11px] leading-relaxed text-gray-500">
-            只影响**曲率触发**的下载（收藏自动下载 / 边听边下提升 / 注入菜单里的下载）。
-            <span class="text-amber-600">这两项缺省都是开</span> —— 关掉之后下下来的歌就没有歌词或封面了。
+            只影响曲率触发的下载。<span class="text-amber-600">缺省都是开</span>。
           </p>
           <div class="mt-3 space-y-3">
             <div class="flex items-start justify-between gap-3">
               <div class="min-w-0">
                 <div class="text-xs font-medium text-gray-700">歌词</div>
                 <p class="mt-0.5 text-[11px] leading-relaxed text-gray-500">
-                  内嵌进文件标签（飞牛自己会显示），并写一份同名 <code class="font-mono">.lrc</code> 给别的播放器。
+                  内嵌进标签，另写同名 <code class="font-mono">.lrc</code>。
                 </p>
               </div>
               <button
@@ -535,7 +569,7 @@
               <div class="min-w-0">
                 <div class="text-xs font-medium text-gray-700">封面内嵌</div>
                 <p class="mt-0.5 text-[11px] leading-relaxed text-gray-500">
-                  把封面抓下来写进文件标签。关掉之后这些歌在飞牛里没有封面图。
+                  写进文件标签，否则飞牛里没封面。
                 </p>
               </div>
               <button
@@ -593,11 +627,10 @@
         这一步会真正改写用户的音频文件，所以预览是主防线，「撤销」只是兜底。
       -->
       <template v-else-if="activeTab === 'complete'">
-        <div class="bg-white rounded-xl border border-gray-100 p-4 shadow-2xs space-y-3">
-          <div class="flex items-center gap-2">
+        <div class="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
+          <div class="flex items-center gap-2" title="补全的歌曲信息一律来自搜索结果，不由 AI 猜填">
             <Wand2 class="w-4 h-4 text-emerald-500" />
             <span class="text-xs font-semibold text-gray-700">补全整理</span>
-            <span class="text-[11px] text-gray-400">补全的歌曲信息一律来自搜索结果，不由 AI 猜填</span>
           </div>
 
           <!--
@@ -605,84 +638,168 @@
             以前分成两页（体检/扫描/查重在「整理去重」，补全在「AI 补全」），
             两边各自一个目录输入框 —— 最容易出的事故就是两个框填的不是同一个库。
           -->
-          <div class="flex items-center gap-2 flex-wrap">
-            <input v-model="tidyDir" class="flex-1 min-w-[200px] px-2.5 py-1.5 rounded-lg border border-gray-200 text-xs font-mono"
-              :placeholder="nasDir || '/vol1/Music'" />
-            <button @click="scanGaps" :disabled="gapsLoading"
-              class="px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-semibold disabled:opacity-50">
-              {{ gapsLoading ? '统计中…' : '扫描缺失' }}
-            </button>
-            <button @click="runIndexScan" :disabled="indexing"
-              class="px-3 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-xs text-gray-600 disabled:opacity-50">
-              {{ indexing ? '扫描中…' : '增量扫描' }}
-            </button>
-            <button @click="runAudit" :disabled="auditing"
-              class="px-3 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-xs text-gray-600 disabled:opacity-50">
-              {{ auditing ? '体检中…' : '体检' }}
-            </button>
-            <button @click="runDedupe" :disabled="deduping"
-              class="px-3 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-xs text-gray-600 disabled:opacity-50">
-              {{ deduping ? '查重中…' : '查找重复' }}
-            </button>
+          <!--
+            目录单独一行（它是这四个动作的**共同输入**），四个动作改成卡片
+            （用户 2026-10-07：「可以用一行多个，每个按照卡片形式展示按钮和文字标题，
+            简介就可以」）。以前是四个裸按钮，用户得靠名字猜「体检」和「扫描缺失」
+            差在哪 —— 而它们一个只看索引、一个会读磁盘，混起来点会白等。
+          -->
+          <input v-model="tidyDir" class="w-full px-2.5 py-1.5 rounded-lg border border-gray-200 text-xs font-mono"
+            :placeholder="nasDir || '/vol1/Music'" />
+          <div class="grid grid-cols-2 gap-2 lg:grid-cols-4">
+            <ActionCard
+              :title="gapsLoading ? '统计中…' : '扫描缺失'"
+              hint="只读索引，秒回；不会动任何文件"
+              :icon="AlertTriangle"
+              :disabled="gapsLoading"
+              @click="scanGaps"
+            />
+            <ActionCard
+              :title="indexing ? '扫描中…' : '增量扫描'"
+              hint="把新加/改过的文件读进索引，之后统计才准"
+              :icon="HardDrive"
+              icon-class="text-gray-400"
+              :disabled="indexing"
+              @click="runIndexScan"
+            />
+            <ActionCard
+              :title="auditing ? '体检中…' : '体检'"
+              hint="检查索引与磁盘是否对得上，结果在下方"
+              :icon="Check"
+              icon-class="text-gray-400"
+              :disabled="auditing"
+              @click="runAudit"
+            />
+            <ActionCard
+              :title="deduping ? '查重中…' : '查找重复'"
+              hint="按音频指纹找重复曲目，结果在下方"
+              :icon="Trash2"
+              icon-class="text-gray-400"
+              :disabled="deduping"
+              @click="runDedupe"
+            />
+          </div>
+
+          <!--
+            三步流程条（2026-10-12 用户反馈「点完扫描缺失不知道下一步做什么」）。
+            改之前：缺口数字单独占一排、勾字段又占一排（同一组 6 个字段画了两遍），
+            而真正的下一步按钮埋在选项行最右边 —— 数字看完了，眼睛没有落点。
+
+            2026-10-14 用户再看：扫描完**还是**不知道下一步 —— 因为这条只是说明文字，
+            「下一步点哪」三个字不能点，真正的预览按钮埋在几百像素之下。
+            升级成「流程 + 主行动」一体：右侧直接给出当前步的**可点按钮**
+            （第 1 步 = 扫描缺失 → 第 2 步 = 预览 → 第 3 步 = 确认写入），
+            数字看完手不用往下找。状态判断仍只由 gaps / plan 推出，不新增状态机。
+          -->
+          <div class="flex flex-wrap items-center gap-1.5 rounded-lg bg-gray-50 px-2.5 py-1.5">
+            <template v-for="(s, i) in completeSteps" :key="s.n">
+              <span
+                :class="[
+                  'rounded-full px-2 py-0.5 text-[10px] font-medium',
+                  s.n === completeStep ? 'bg-emerald-500 text-white' : 'text-gray-400',
+                ]"
+              >{{ s.n }} {{ s.name }}</span>
+              <span v-if="i < completeSteps.length - 1" class="text-[10px] text-gray-300">→</span>
+            </template>
+            <!-- 当前步的可点动作：取代原来那句纯文字 completeHint（文案仍由服务层 completeHint 提供） -->
+            <button
+              v-if="completeStep === 1"
+              :disabled="gapsLoading"
+              :title="completeHint"
+              class="ml-auto rounded-lg bg-emerald-500 px-3 py-1.5 text-xs font-semibold text-white transition-all hover:bg-emerald-600 disabled:opacity-50"
+              @click="scanGaps"
+            >{{ gapsLoading ? '统计中…' : '下一步 · 扫描缺失' }}</button>
+            <button
+              v-else-if="completeStep === 2"
+              :disabled="previewing || completing || !selectedFields.length"
+              :title="completeHint + (selectedFields.length ? '' : '（先在下面勾选要补的字段）')"
+              class="ml-auto rounded-lg bg-emerald-500 px-3 py-1.5 text-xs font-semibold text-white transition-all hover:bg-emerald-600 disabled:opacity-50"
+              @click="runComplete"
+            >{{ previewing ? '匹配中…' : '下一步 · 预览要写的内容' }}</button>
+            <!--
+              第 3 步**不给按钮**：「确认写入」就在下方预览表里（紧挨着要确认的清单），
+              这里再放一个就是同一动作出现两次 —— 以后改一个忘一个。
+              这一步换成 completeHint 原文案指路即可。
+            -->
+            <span v-else class="ml-auto text-[11px] text-gray-500">{{ completeHint }}</span>
           </div>
 
           <!--
             缺口统计只读索引（秒回），所以「还没读过标签」与「真的不缺」必须分清：
             unread 不为 0 时那些记录的缺口无从判断，先点「增量扫描」。
           -->
-          <div v-if="gaps" class="space-y-2">
-            <p class="text-[11px] text-gray-400">
-              上次统计（{{ gapsAtText }}）· 共 {{ gaps.total }} 首，其中 {{ gaps.read }} 首读过标签
-              <b class="text-amber-600">· 待补 {{ gaps.any_field }} 首</b>（至少缺一个勾选字段，点「预览」排队的就是这些）
-              <span v-if="gaps.unread" class="text-amber-600">
-                · 另有 {{ gaps.unread }} 首还没读过标签（先点「增量扫描」，这些只能算待查）
-              </span>
-              <span v-if="gaps.unsupported" class="text-gray-400">
-                · 另有 {{ gaps.unsupported }} 首格式写不了标签<template v-if="unsupportedExtsText">（{{ unsupportedExtsText }}）</template>，补全不会动它们（要补得先转成 MP3/FLAC）
-              </span>
+          <p v-if="gaps" class="text-[11px] leading-relaxed text-gray-400">
+            上次统计（{{ gapsAtText }}）· 共 {{ gaps.total }} 首，其中 {{ gaps.read }} 首读过标签
+            <b class="text-amber-600">· 待补 {{ gaps.any_field }} 首</b>（下面勾了的字段里至少缺一个）
+            <span v-if="gaps.unread" class="text-amber-600">
+              · 另有 {{ gaps.unread }} 首还没读过标签（先点「增量扫描」，这些只能算待查）
+            </span>
+            <span v-if="gaps.unsupported" class="text-gray-400">
+              · 另有 {{ gaps.unsupported }} 首格式写不了标签<template v-if="unsupportedExtsText">（{{ unsupportedExtsText }}）</template>，补全不会动它们（要补得先转成 MP3/FLAC）
+            </span>
+          </p>
+          <!--
+            （2026-10-14）删掉原来的空态提示「点扫描缺失看每个字段缺多少 —— 只读索引，
+            秒回，不动文件」：上面流程条的主按钮就叫「下一步 · 扫描缺失」，
+            操作卡的 hint 也写着「只读索引，秒回；不会动任何文件」——同一句话说三遍。
+          -->
+
+          <!--
+            字段卡 = 缺口数字 + 勾选开关，同一处。
+            以前这两件事各画一遍（上面一排只读数字、下面一排勾选），六个字段在屏幕上出现两次，
+            既占地方又让人怀疑「上面那排和下面那排是不是两回事」。现在点卡片就是勾/取消。
+          -->
+          <div class="space-y-1.5">
+            <p class="text-[11px] text-gray-500" title="卡片数字是该字段缺的曲目数；没勾的字段不会补">
+              第 2 步 · 点卡片勾选要补的字段
             </p>
-            <div class="grid grid-cols-3 gap-2 md:grid-cols-6">
-              <div v-for="f in fieldOptions" :key="f.key"
-                class="rounded-lg border border-gray-100 bg-gray-50 px-2 py-1.5 text-center">
-                <p class="text-[10px] text-gray-400">{{ f.name }}</p>
-                <p class="font-mono text-sm" :class="f.missing ? 'text-amber-600' : 'text-emerald-600'">
-                  {{ f.missing }}
-                </p>
-              </div>
+            <div class="grid grid-cols-2 gap-2 md:grid-cols-3">
+              <button
+                v-for="f in fieldOptions" :key="f.key"
+                type="button"
+                :title="f.hint"
+                class="flex items-start gap-2 rounded-lg border px-2.5 py-2 text-left transition-colors"
+                :class="selectedFields.includes(f.key)
+                  ? 'border-emerald-300 bg-emerald-50'
+                  : 'border-gray-200 hover:border-gray-300'"
+                @click="toggleField(f.key)"
+              >
+                <span
+                  class="mt-0.5 flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border"
+                  :class="selectedFields.includes(f.key) ? 'border-emerald-500 bg-emerald-500 text-white' : 'border-gray-300'"
+                >
+                  <Check v-if="selectedFields.includes(f.key)" class="h-2.5 w-2.5" />
+                </span>
+                <span class="min-w-0">
+                  <b class="text-xs text-gray-700">{{ f.name }}</b>
+                  <span
+                    v-if="gaps"
+                    class="ml-1 font-mono text-xs"
+                    :class="f.missing ? 'text-amber-600' : 'text-emerald-600'"
+                  >缺 {{ f.missing }}</span>
+                </span>
+              </button>
             </div>
           </div>
-          <p v-else class="text-[11px] text-gray-400">
-            先点「扫描缺失」，看看每个字段各缺多少 —— 只读索引，秒回，不会动任何文件。
-          </p>
 
-          <!-- 勾字段 -->
-          <div class="grid grid-cols-1 gap-2 md:grid-cols-3">
-            <label v-for="f in fieldOptions" :key="f.key"
-              class="flex cursor-pointer items-start gap-2 rounded-lg border px-2.5 py-2"
-              :class="selectedFields.includes(f.key) ? 'border-emerald-300 bg-emerald-50' : 'border-gray-200'">
-              <input type="checkbox" class="mt-0.5" :value="f.key"
-                :checked="selectedFields.includes(f.key)" @change="toggleField(f.key)" />
-              <span class="min-w-0">
-                <b class="text-xs text-gray-700">{{ f.name }}</b>
-                <span class="ml-1 font-mono text-[10px] text-gray-400">缺 {{ f.missing }}</span>
-                <em class="block text-[10px] not-italic leading-snug text-gray-400">{{ f.hint }}</em>
-              </span>
-            </label>
-          </div>
-
-          <div class="flex flex-wrap items-center gap-3">
-            <label class="flex items-center gap-1 text-[11px] text-gray-600">
+          <!--
+            选项（怎么补的细节）：默认值就是推荐值，所以视觉上压到最轻的一行，
+            不再和主按钮抢焦点。主力平台仍然常驻 —— 它决定搜索结果好坏，
+            不是「高级设置」，藏起来用户会找不到为什么年份是错的。
+          -->
+          <div class="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[11px] text-gray-500">
+            <label class="flex items-center gap-1">
               本次最多
               <input v-model.number="completeLimit" type="number" min="1" max="200"
-                class="w-16 rounded border border-gray-200 px-1.5 py-1 text-xs font-mono" />
+                class="w-14 rounded border border-gray-200 px-1.5 py-0.5 text-[11px] font-mono" />
               首
             </label>
-            <label class="flex items-center gap-1 text-[11px] text-gray-600">
-              <input type="checkbox" v-model="overwriteExisting" />
+            <label class="flex items-center gap-1">
+              <input v-model="overwriteExisting" type="checkbox" />
               覆盖已有的歌词/封面
             </label>
-            <label class="flex items-center gap-1 text-[11px] text-gray-600" :title="aiGenreHint">
-              <input type="checkbox" v-model="allowAIGenre" :disabled="!selectedFields.includes('genre')" />
+            <label class="flex items-center gap-1" :title="aiGenreHint">
+              <input v-model="allowAIGenre" type="checkbox" :disabled="!selectedFields.includes('genre')" />
               风格取不到时允许 AI 推断
             </label>
             <!--
@@ -690,7 +807,7 @@
               它同时决定补全的搜索顺序，以及「兜底命中缺字段时回哪家借元数据」。
               写回 /api/config（带完整对象，别只发局部字段 —— 那会踩到别的设置）。
             -->
-            <span class="flex items-center gap-1 text-[11px] text-gray-600">
+            <span class="flex items-center gap-1">
               主力
               <button
                 v-for="p in platformChips" :key="p.id"
@@ -702,14 +819,14 @@
                 ]"
               >{{ p.name }}</button>
             </span>
-            <button @click="runComplete" :disabled="previewing || completing || !selectedFields.length"
-              class="ml-auto rounded-lg bg-emerald-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-600 disabled:opacity-50">
-              {{ previewing ? '匹配中…' : (completing ? '写入中…' : '预览要写的内容') }}
-            </button>
           </div>
-          <p v-if="!selectedFields.length" class="text-[11px] text-amber-600">
-            至少勾一个字段 —— 一个都不勾时后端会按老口径补「歌词+封面」，那不是「什么都不做」。
-          </p>
+
+          <!--
+            （2026-10-14）原来这里还有一行「还没动过任何文件 —— 先预览…」的绿色 CTA 条。
+            主行动按钮已上移到三步流程条（扫完缺口第一眼就能看到），这里再放一个就是
+            同一动作出现两次 + 多占一行版面（用户：「提示太多，看起来很挤」）。
+            「还没动过任何文件」的安心话保留在预览表头（「即将写入（还没有动过文件）」）。
+          -->
 
           <!--
             预览表：**还没写任何文件**。
@@ -860,7 +977,7 @@
                 @click="undoComplete"
               >{{ undoBusy ? '还原中…' : '撤销上一次补全' }}</button>
               <span class="text-[11px] text-gray-400">
-                把改过的文件还原成补全前的样子（还原后要重新补一次才能再补上）
+                还原成补全前的样子
               </span>
             </div>
           </div>
@@ -893,7 +1010,7 @@
               </span>
             </div>
 
-            <div class="grid grid-cols-1 gap-2 md:grid-cols-2">
+            <div class="grid grid-cols-2 gap-2">
               <div v-for="c in completedCards" :key="c.path"
                 class="flex gap-2 rounded-lg border border-gray-100 bg-gray-50/60 p-2">
                 <img v-if="c.hasCover" :src="c.coverUrl" :alt="c.title" class="h-14 w-14 shrink-0 rounded object-cover" loading="lazy" />
@@ -929,7 +1046,7 @@
         </div>
 
         <!-- ══ 体检 · 索引 · 查重结果（动作都在上面那一排）══ -->
-        <div class="bg-white rounded-xl border border-gray-100 p-4 shadow-2xs space-y-3">
+        <div class="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
           <div class="flex flex-wrap items-center gap-2">
             <FolderOpen class="w-4 h-4 text-emerald-500" />
             <span class="text-xs font-semibold text-gray-700">体检 · 索引 · 查重</span>
@@ -1019,16 +1136,106 @@
         </div>
       </template>
 
-      <!-- ══ 榜单管理（v2.1.119 从「发现音乐」搬进来）══ -->
+      <!-- ══ 本地音乐（v2.1.120 从顶层导航搬进来）══ -->
       <!--
-        组件内部零改动：勾选/开关/榜单列表缓存都是它自己的（配置状态在
-        services/chartInject.js 模块级单例里，跨页面共享 —— 「排行榜单」卡片上的
-        「已注入」徽标与这里的勾选仍是同一份事实）。
-        ▶ 预览按钮：原来 emit 给发现页的兄弟组件，现在隔了一层（发现页在别的顶层视图），
-          改走导航总线（navigateTo('search', { chartPreview })）—— 见 setup 里的说明。
+        组件内部零改动：目录选择、扫描、标签/封面读取、播放都还是 NasExplorer 自己那套。
+        这一页只做两件事：给它一个外壳（它自己那层 PageShell 摘了），以及把它的
+        `play` 原样往上转给 App.vue —— 播放器在顶层，本页不持有音频状态。
       -->
-      <template v-else-if="activeTab === 'charts'">
-        <ChartManager @preview="onChartPreview" />
+      <template v-if="activeTab === 'nas'">
+        <NasExplorer @play="song => emit('play', song)" />
+      </template>
+
+      <!-- ══ 自动下载记录（v2.1.120）══ -->
+      <!--
+        这些下载发生在**飞牛官方页面**上（收藏 / 加歌单 / 点「下载到曲率」），
+        本前端看不见它们 —— 只有拦截层知道。所以记录由后端记、这里只读与清
+        （见 pkg/online/autolog.go）。
+      -->
+      <template v-else-if="activeTab === 'autodl'">
+        <div class="space-y-3">
+          <div class="rounded-xl border border-gray-200 bg-white p-4">
+            <div class="flex flex-wrap items-start gap-x-3 gap-y-2">
+              <div class="min-w-0">
+                <h3 class="text-[13px] font-bold text-gray-800">自动下载记录</h3>
+                <p class="mt-0.5 max-w-[720px] text-[11px] leading-snug text-gray-500">
+                  飞牛页面里<strong class="text-gray-700">收藏 / 加歌单 / 点下载</strong>触发的那批。成功与失败都记。
+                </p>
+              </div>
+              <div class="ml-auto flex flex-wrap items-center gap-1.5">
+                <button
+                  @click="loadAutoDownload"
+                  :disabled="autoDownloadLoading"
+                  class="rounded-lg border border-gray-200 bg-white px-2.5 py-1 text-[11px] font-bold text-gray-500 transition-colors hover:border-emerald-300 hover:text-emerald-600 disabled:opacity-50"
+                >{{ autoDownloadLoading ? '读取中…' : '刷新' }}</button>
+                <button
+                  @click="clearAutoDownload(selectedAutoIds)"
+                  :disabled="!autoDownloadSelected.size"
+                  class="rounded-lg border border-gray-200 px-2.5 py-1 text-[11px] font-bold text-gray-600 transition-colors hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 disabled:opacity-40"
+                >清除选中<template v-if="autoDownloadSelected.size">（{{ autoDownloadSelected.size }}）</template></button>
+                <button
+                  @click="clearAutoDownload([])"
+                  :disabled="!autoDownloadRecords.length"
+                  class="rounded-lg border border-gray-200 px-2.5 py-1 text-[11px] font-bold text-gray-600 transition-colors hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 disabled:opacity-40"
+                >一键清除</button>
+              </div>
+            </div>
+            <!-- 「没有记录」与「功能没起来」必须分开说：界面上长得一样会让人以为功能坏了 -->
+            <p v-if="autoDownloadAvailable === false" class="mt-2 text-[11px] text-amber-600">
+              记录功能本次没起来（数据目录不可写）—— 下面是空的，但不代表你没下过歌。
+            </p>
+            <p v-else-if="!autoDownloadRecords.length" class="mt-2 text-[11px] text-gray-400">
+              还没有自动下载记录。在飞牛音乐里收藏一首在线歌曲试试。
+            </p>
+          </div>
+
+          <div v-if="autoDownloadRecords.length" class="overflow-hidden rounded-xl border border-gray-200 bg-white">
+            <!--
+              手机上 `table-fixed`：列宽由容器决定，表格**永远等于屏宽**（与「本地音乐」那张表
+              同一个做法与理由，见 NasExplorer 里那段注释）。「触发」列窄屏直接不显示 ——
+              它是最不重要的一列，而挤掉它的代价是别的列全部截断。
+            -->
+            <table class="w-full table-fixed text-[11.5px] sm:table-auto">
+              <thead class="bg-gray-50 text-gray-400">
+                <tr>
+                  <th class="w-9 px-2 py-2">
+                    <input type="checkbox" class="align-middle" :checked="allAutoSelected" @change="toggleAllAuto" />
+                  </th>
+                  <th class="px-2 py-2 text-left font-medium">时间</th>
+                  <th class="px-2 py-2 text-left font-medium">歌曲</th>
+                  <th class="px-2 py-2 text-left font-medium">实际取音</th>
+                  <th class="hidden px-2 py-2 text-left font-medium sm:table-cell">触发</th>
+                  <th class="px-2 py-2 text-left font-medium">结果</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="r in autoDownloadRecords" :key="r.id" class="border-t border-gray-50 align-top">
+                  <td class="px-2 py-2">
+                    <input type="checkbox" class="align-middle" :checked="autoDownloadSelected.has(r.id)"
+                      @change="toggleAutoSelect(r.id)" />
+                  </td>
+                  <td class="whitespace-nowrap px-2 py-2 text-gray-400">{{ fmtAutoTime(r.at) }}</td>
+                  <td class="px-2 py-2">
+                    <div class="max-w-[240px] truncate font-medium text-gray-800" :title="r.title">{{ r.title || '（无标题）' }}</div>
+                    <div class="max-w-[240px] truncate text-[10.5px] text-gray-400">{{ r.artist }}</div>
+                  </td>
+                  <td class="px-2 py-2 text-gray-500">
+                    <template v-if="r.source">{{ platformName(r.source) }}</template>
+                    <template v-else>—</template>
+                    <span v-if="r.quality" class="ml-1 font-mono text-[10.5px] text-emerald-600">{{ r.quality }}</span>
+                  </td>
+                  <td class="hidden px-2 py-2 text-gray-500 sm:table-cell">{{ autoTriggerLabel(r.trigger) }}</td>
+                  <td class="px-2 py-2">
+                    <span v-if="r.ok" class="rounded-md bg-emerald-50 px-1.5 py-0.5 text-emerald-600">已下载</span>
+                    <span v-else class="rounded-md bg-rose-50 px-1.5 py-0.5 text-rose-600" :title="r.error">失败</span>
+                    <div v-if="!r.ok && r.error" class="mt-1 max-w-[300px] text-[10.5px] leading-snug text-rose-500">{{ r.error }}</div>
+                    <div v-if="r.path" class="mt-0.5 max-w-[300px] truncate font-mono text-[10.5px] text-gray-400" :title="r.path">{{ r.path }}</div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
       </template>
 
       <!-- 全局提示：成功给一句结论；失败给一句原因 + 「查看日志」入口 -->
@@ -1040,7 +1247,7 @@
     <!-- ── 新建订阅弹窗 ── -->
     <Teleport to="body">
       <div v-if="showCreate" class="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4" @click.self="showCreate = false">
-        <div class="w-full max-w-[520px] overflow-hidden rounded-2xl bg-white shadow-2xl">
+        <div class="max-h-[85vh] w-full max-w-[520px] overflow-y-auto rounded-2xl bg-white shadow-2xl">
           <div class="flex items-center justify-between border-b border-gray-100 px-5 py-3.5">
             <h3 class="text-sm font-semibold text-gray-800">新建订阅</h3>
             <button class="text-gray-400 hover:text-gray-600" @click="showCreate = false">✕</button>
@@ -1077,7 +1284,7 @@
                           class="w-full rounded-lg border border-gray-200 px-3 py-2 text-[12px] font-mono outline-none focus:border-emerald-400"
                           placeholder="https://music.163.com/playlist?id=123&#10;https://y.qq.com/n/ryqq/playlist/456"></textarea>
                 <span class="mt-1 block text-[11px] leading-relaxed text-gray-400">
-                  支持网易云 / QQ 音乐的公开歌单，<b class="font-semibold">App 复制的分享短链也能直接粘</b>。每行一个。
+                  网易云 / QQ 公开歌单，分享短链也行。每行一个。
                 </span>
               </template>
 
@@ -1102,7 +1309,7 @@
                   </option>
                 </select>
                 <span class="mt-1 block text-[11px] leading-relaxed text-gray-400">
-                  需要先在「账号连接」登录。账号来源没有可粘贴的链接，<b class="font-semibold">只能同步到飞牛歌单</b>，不能自动下载。
+                  需先在「账号连接」登录；只能同步飞牛，不能自动下载。
                 </span>
               </template>
             </div>
@@ -1126,8 +1333,8 @@
                   </button>
                   <span class="pt-1.5 text-[11px] leading-relaxed text-gray-400">
                     {{ form.sourceMode === 'account'
-                      ? '账号来源（歌单 / 每日推荐）不能自动下载，只能同步飞牛'
-                      : '每轮发现的新歌自动下载到本地（音质、单轮上限创建后可在「设置」里改）' }}
+                      ? '账号来源不能自动下载'
+                      : '每轮新歌自动下到本地（音质与上限在设置里改）' }}
                   </span>
                 </div>
                 <div class="flex items-start gap-2.5">
@@ -1171,7 +1378,7 @@
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted, onActivated } from 'vue'
 import { markLoaded, isStale } from '../services/viewCache'
-import { MonitorAPI, TidyAPI, PushAPI, SearchAPI, FnosAPI, DownloadAPI, SourcesAPI, TagsAPI, NasAPI, ConfigAPI } from '../api/client'
+import { MonitorAPI, TidyAPI, PushAPI, SearchAPI, FnosAPI, DownloadAPI, SourcesAPI, TagsAPI, NasAPI, ConfigAPI, AutoDownloadAPI } from '../api/client'
 import { loadPref, savePref, loadBool, loadCache, saveCache } from '../services/prefs'
 import {
   FIELD_DEFS, DEFAULT_FIELDS, parseFields, toggleFieldKey, platformName, planCells,
@@ -1184,12 +1391,14 @@ import {
   unsupportedExtsText as _unsupportedExtsText, gapsPendingCount as _gapsPendingCount,
   sidebarStatusItems, completePercent as _completePercent, aiMatchedCount as _aiMatchedCount,
   completeDoneText, completeTitleText as _completeTitleText,
+  COMPLETE_STEPS, completeStep as _completeStep, completeHint as _completeHint,
 } from '../services/libraryView'
-import { FolderOpen, Trash2, Wand2, Send, Download, ListMusic, Loader2, AlertTriangle, Check, Image as ImageIcon, Trophy } from 'lucide-vue-next'
+import { FolderOpen, Trash2, Wand2, Send, Download, ListMusic, Loader2, AlertTriangle, Check, Image as ImageIcon, HardDrive, CloudDownload, RotateCw } from 'lucide-vue-next'
 import PageShell from './PageShell.vue'
 import DownloadQueueView from './DownloadQueueView.vue'
 import PlaylistDownload from './PlaylistDownload.vue'
-import ChartManager from './ChartManager.vue'
+import NasExplorer from './NasExplorer.vue'
+import ActionCard from './ActionCard.vue'
 import SelectField from './SelectField.vue'
 import InlineNotice from './InlineNotice.vue'
 import { downloadManager } from '../services/downloadManager'
@@ -1215,6 +1424,10 @@ const props = defineProps({
   /** 每次外部跳转自增；侧栏项可能相同，靠它保证 watch 一定触发 */
   tabNonce: { type: Number, default: 0 },
 })
+
+// 「本地音乐」这一页原本是顶层视图，播放请求由 App.vue 直接接住；搬进来之后它成了本页的
+// 子页，播放意图得**原样往上转**一层 —— 少了这一步的表现是「点了歌不出声」，且不报错。
+const emit = defineEmits(['play'])
 
 // 外部跳转：切到指定侧栏项并记忆
 watch(
@@ -1242,17 +1455,6 @@ function goTab(id) {
   applyTab(id)
 }
 
-/**
- * 榜单管理页点某行的 ▶「看一眼」：跳到发现页的「排行榜单」并打开那张榜单的详情。
- *
- * 搬进管家之前这件事是兄弟组件间的一次 emit；现在发现页在另一个顶层视图里，
- * 直接 import 会成环（SearchView → LibraryManager → SearchView），
- * 所以走导航总线：App.vue 负责切视图并把负载转给 SearchView（见 App.vue 的 onNavigate）。
- */
-function onChartPreview(item) {
-  navigateTo('search', { chartPreview: item })
-}
-
 function applyTab(id) {
   // 落到「下载」时顺带决定看哪个子视图：从歌单入口来的看歌单，其余看队列
   if (id === 'playlist') downloadSub.value = 'playlist'
@@ -1262,15 +1464,20 @@ function applyTab(id) {
 }
 
 const tabs = computed(() => [
+  // 本地音乐（v2.1.120 从顶层导航搬进来）：曲库管家本来就该先能「看库」，再谈推送/下载/整理。
+  // 只挪挂载位置 —— NasExplorer 内部逻辑零改动（它自己那层 PageShell 摘掉了，外壳由本页提供）。
+  { id: 'nas', name: '本地音乐', icon: HardDrive },
   { id: 'push', name: '推送', icon: Send, count: pushTotalCount.value || '' },
   { id: 'download', name: '下载', icon: Download, count: downloadManager.activeCount.value || '' },
   // 补全整理：一页走完「看缺什么 → 勾字段 → 预览 → 确认 → 回读结果」，
   // 体检/索引/查重的结果都在同页下方，不再单独占一个标签。
   { id: 'complete', name: '补全整理', icon: Wand2, count: gapsPendingCount.value || '' },
-  // 榜单管理（v2.1.119 从「发现音乐 → ⚙️ 榜单管理」搬进来）：
-  // 「哪些榜单出现在飞牛音乐里」是曲库的日常维护 —— 与推送/下载/补全同属一页说得通。
-  // 组件内部零改动（勾选/开关/缓存都是它自己的），这里只管挂载与跳转。
-  { id: 'charts', name: '榜单管理', icon: Trophy },
+  // 自动下载记录（v2.1.120）：飞牛页面里收藏/加歌单/点「下载到曲率」触发的那批下载。
+  // 角标只挂**失败数** —— 成功的那些是流水，当常态数字摆在侧栏只会让人习惯性忽略它。
+  { id: 'autodl', name: '自动下载记录', icon: CloudDownload, count: autoDownloadFailed.value || '' },
+  // ⚠️ 榜单管理（charts）v2.1.120 又搬出去了 —— 它现在是顶层导航里的一页
+  // （与「发现音乐」并列），因为「哪些榜单出现在飞牛音乐里」是**听**的配置，
+  // 和「发现音乐 → 排行榜单」是同一件事的两面，放在一起才说得通。
 ])
 
 /**
@@ -1305,6 +1512,7 @@ const statusItems = computed(() =>
     pushRunning: runningIds.value.length,
     pendingBaseline: pendingBaseline.value,
     monitorStats: monitorStats.value,
+    autoDownload: { failed: autoDownloadFailed.value },
   }).map((s) => ({
     ...s,
     icon: STATUS_ICONS[s.id] || AlertTriangle,
@@ -1349,6 +1557,44 @@ async function loadFnosStatus() {
 
 /** 飞牛同步历史：低频查看，放在订阅列表下方（原「推送歌单」页里独占一块） */
 const pushRuns = ref([])
+
+// 同步历史的多选。与下载队列同一个口径：勾选只影响「清记录」，
+// **不动订阅任务本身** —— 任务的状态字段是「这个任务现在怎么样」，
+// 顺手清掉会让一个失败任务看起来像从没跑过。
+const pushRunSelected = ref(new Set())
+const allPushRunsSelected = computed(() =>
+  pushRuns.value.length > 0 && pushRuns.value.every((r) => pushRunSelected.value.has(r.id)))
+
+function togglePushRunSelect(id) {
+  const next = new Set(pushRunSelected.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  pushRunSelected.value = next
+}
+
+function toggleAllPushRuns() {
+  pushRunSelected.value = allPushRunsSelected.value
+    ? new Set()
+    : new Set(pushRuns.value.map((r) => r.id))
+}
+
+/**
+ * 清除同步历史。`ids` 为空 = 全清。
+ *
+ * 问一句 `confirm`：清记录不可撤销，而两个按钮挨着放，误点一下就全没了。
+ */
+async function clearPushRuns(ids) {
+  const n = ids.length
+  if (!confirm(n ? `确定清除选中的 ${n} 条同步历史？` : '确定清除全部同步历史？（订阅任务本身不受影响）')) return
+  try {
+    const res = await PushAPI.clearRuns(ids)
+    message.value = `已清除 ${res?.data?.removed ?? 0} 条同步历史`
+    pushRunSelected.value = new Set()
+    await loadPushRuns()
+  } catch (e) {
+    error.value = fail('清除同步历史', e)
+  }
+}
 async function loadPushRuns() {
   try {
     const res = await PushAPI.runs('', 20)
@@ -2693,6 +2939,21 @@ const fieldOptions = computed(() => FIELD_DEFS.map((f) => ({
   missing: gaps.value ? (gaps.value[f.key] ?? 0) : '—',
 })))
 
+/**
+ * 三步流程条（2026-10-12 用户反馈「点完扫描缺失，下一步做什么？」）。
+ *
+ * 只由**已有状态**推出，不引入新的步骤状态机 —— 多一个能不同步的状态就多一类事故：
+ * 没扫过缺口 = 第 1 步；扫过但还没预览 = 第 2 步；预览出来在等确认 = 第 3 步。
+ * （注意 `gaps` 是持久化恢复的，刷新页面后仍停在第 2/3 步，跟用户看到的一致。）
+ *
+ * 步骤/文案全部来自 services/libraryView.js（`COMPLETE_STEPS`/`completeStep`/`completeHint`），
+ * 由 `libraryView.test.mjs` 钉住 —— 这里只做 ref → 函数参数的桥接，**不再本地重写**：
+ * 2026-10-14 审计发现本地重写导致测试测的是一份没人用的副本（两份逻辑会漂移）。
+ */
+const completeSteps = COMPLETE_STEPS
+const completeStep = computed(() => _completeStep(gaps.value, completePlan.value))
+const completeHint = computed(() => _completeHint(gaps.value, completePlan.value))
+
 /** 侧栏角标：至少缺一个字段的条数（就是点进去会排进队的数量）；0 不显示 */
 const gapsPendingCount = computed(() => _gapsPendingCount(gaps.value))
 
@@ -3079,8 +3340,95 @@ function toggleFavAutoDownload() {
   return toggleDownloadSwitch(favAutoDownload, favAutoBusy, favAutoMsg, 'fav_auto_download')
 }
 
+// ── 自动下载记录（见 api/client.js 的 AutoDownloadAPI）──
+//
+// 首屏就拉一次：侧栏「任务状态」里那行「自动下载失败 N」要显示，
+// 而它不该等到用户点进这一页才出现（用户根本不知道有这个页）。
+const autoDownloadRecords = ref([])
+const autoDownloadFailed = ref(0)
+const autoDownloadAvailable = ref(true)
+const autoDownloadLoading = ref(false)
+/** 多选用的 id 集合。用 Set 而不是数组：勾选/取消是 O(1)，且天然去重。 */
+const autoDownloadSelected = ref(new Set())
+
+const selectedAutoIds = computed(() => Array.from(autoDownloadSelected.value))
+const allAutoSelected = computed(() =>
+  autoDownloadRecords.value.length > 0 &&
+  autoDownloadRecords.value.every((r) => autoDownloadSelected.value.has(r.id)))
+
+/** 触发来源翻人话。与 pkg/online 的 Trigger* 常量一一对应。 */
+function autoTriggerLabel(t) {
+  return { fav: '收藏', playlist: '加歌单', page: '页面点下载' }[t] || t || '自动'
+}
+
+/** 记录时间：今天的只给时分秒，更早的带上月日 —— 一屏里最常看的是「刚刚那几次」。 */
+function fmtAutoTime(sec) {
+  if (!sec) return ''
+  const d = new Date(sec * 1000)
+  const p = (n) => String(n).padStart(2, '0')
+  const hm = `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+  const today = new Date()
+  const sameDay = d.getFullYear() === today.getFullYear() && d.getMonth() === today.getMonth() && d.getDate() === today.getDate()
+  return sameDay ? hm : `${p(d.getMonth() + 1)}-${p(d.getDate())} ${hm}`
+}
+
+async function loadAutoDownload() {
+  autoDownloadLoading.value = true
+  try {
+    const res = await AutoDownloadAPI.records(200)
+    const d = res?.data || {}
+    autoDownloadRecords.value = d.list || []
+    autoDownloadFailed.value = d.failed || 0
+    autoDownloadAvailable.value = d.available !== false
+    // 选中的 id 里已经不存在的要摘掉（刚清过、或被上限挤掉了），
+    // 否则「清除选中（3）」会数到三条幽灵记录，点了也删不掉任何东西。
+    const live = new Set(autoDownloadRecords.value.map((r) => r.id))
+    autoDownloadSelected.value = new Set(selectedAutoIds.value.filter((id) => live.has(id)))
+  } catch (e) {
+    autoDownloadAvailable.value = false
+    error.value = fail('读取自动下载记录', e)
+  } finally {
+    autoDownloadLoading.value = false
+  }
+}
+
+function toggleAutoSelect(id) {
+  const next = new Set(autoDownloadSelected.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  autoDownloadSelected.value = next
+}
+
+function toggleAllAuto() {
+  autoDownloadSelected.value = allAutoSelected.value
+    ? new Set()
+    : new Set(autoDownloadRecords.value.map((r) => r.id))
+}
+
+/**
+ * 清除记录。`ids` 为空 = 全清（那一键）。
+ *
+ * 这里问一句 `confirm`：删记录不可撤销，而两个按钮挨着放，误点一下就没了。
+ * 后端不做二次确认（它只是接口），确认是**界面**的责任。
+ */
+async function clearAutoDownload(ids) {
+  const n = ids.length
+  if (!confirm(n ? `确定清除选中的 ${n} 条记录？` : '确定清除全部自动下载记录？')) return
+  try {
+    const res = await AutoDownloadAPI.clear(ids)
+    const removed = res?.data?.removed ?? 0
+    message.value = `已清除 ${removed} 条记录`
+    autoDownloadSelected.value = new Set()
+    await loadAutoDownload()
+  } catch (e) {
+    error.value = fail('清除自动下载记录', e)
+  }
+}
+
 onMounted(() => {
   loadDownloadPrefs()
+  // 侧栏那行「自动下载失败 N」要首屏就有，所以不等用户点进这一页
+  loadAutoDownload()
   tidyDir.value = loadPref('nas_dir', '')
   loadMonitors()
   loadPushTasks()
@@ -3120,5 +3468,13 @@ onUnmounted(() => {
 // 常驻页面：切回来时如果超过 TTL / 被下载完成标成过期，就重新拉一次监控列表
 onActivated(() => {
   if (isStale('library')) loadMonitors()
+  // 切回本页时刷一次记录：这一页的意义就是「刚才那次下了没」，拿旧数据等于白看。
+  if (activeTab.value === 'autodl') loadAutoDownload()
+})
+
+// 侧栏「自动下载记录」被点开时才拉全量 —— 首屏那次只为了侧栏角标，
+// 这里再拉一次是因为中间可能又收藏了几首。
+watch(activeTab, (t) => {
+  if (t === 'autodl') loadAutoDownload()
 })
 </script>

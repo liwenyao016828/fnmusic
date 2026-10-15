@@ -68,7 +68,10 @@ func (i *Interceptor) handleStream(w http.ResponseWriter, r *http.Request) bool 
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
 
-	res, err := i.pool.Resolve(ctx, track.Platform, track.PlatformID)
+	// 试听取音：按「试听音质」偏好走阶梯（见 playback_quality.go）。
+	// `used` 是**实际取音**的那条 —— 默认就是 track 自己，只有「无损优先」换源
+	// 成功时才会不同；日志与界面都必须用 `used`，不能拿 track 糊弄。
+	res, used, err := i.resolvePlayback(ctx, track)
 	if err != nil {
 		i.logf("[INTERCEPT] 在线取流失败 %s（%s/%s）：%v",
 			fake, track.Platform, track.PlatformID, err)
@@ -80,7 +83,16 @@ func (i *Interceptor) handleStream(w http.ResponseWriter, r *http.Request) bool 
 		return true
 	}
 
-	i.proxyMedia(w, r, track, fake, res)
+	// 记下「这次实际用了哪条源、哪一档」给官方页面里的曲率面板看（`_qulv/api/now`）。
+	// 只在结论**变化**时打日志：一次播放会打好几次 Range 请求（拖动、续传、预取），
+	// 每次都说话会把真机日志刷满，真正的问题反而看不见。
+	tier := playbackTierOf(res, used)
+	if i.setNowPlaying(fake, used.Platform, tier) {
+		i.logf("[INTERCEPT] 试听取音 %s：%s · %s（%s，请求档位 %s）",
+			fake, used.Platform, tier, res.Format, i.playbackQuality())
+	}
+
+	i.proxyMedia(w, r, used, fake, res)
 	return true
 }
 

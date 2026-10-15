@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -252,6 +253,54 @@ func (s *Store) Runs(taskID string, limit int) []Run {
 		}
 	}
 	return out
+}
+
+// ClearRuns 删除执行历史：ids 为空 = 全清，否则只删指定 id。
+//
+// 返回实际删掉的条数（界面据此说「已清除 N 条」—— 说「已清除」却一条没动
+// 比不提示更让人困惑）。
+//
+// ⚠️ 只删历史，**不动任务本身**：任务的状态字段（LastStatus / LastError / NextRunAt）
+// 是「这个任务现在怎么样」，不是「历史上跑过几次」。顺手把它们清掉会让一个失败
+// 任务看起来像从没跑过 —— 那正是用户最需要看见的信息。
+func (s *Store) ClearRuns(ids []string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(ids) == 0 {
+		n := len(s.runs)
+		if n == 0 {
+			return 0, nil
+		}
+		s.runs = nil
+		return n, s.persist()
+	}
+
+	drop := make(map[int64]bool, len(ids))
+	for _, raw := range ids {
+		// id 是自增整数（int64），但界面传过来可能是字符串（JSON 里的数字被当字符串
+		// 处理过），两种都认 —— 少认一种的表现是「点了清除没反应」。
+		if n, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64); err == nil {
+			drop[n] = true
+		}
+	}
+	if len(drop) == 0 {
+		return 0, nil
+	}
+	kept := make([]Run, 0, len(s.runs))
+	removed := 0
+	for _, r := range s.runs {
+		if drop[r.ID] {
+			removed++
+			continue
+		}
+		kept = append(kept, r)
+	}
+	if removed == 0 {
+		return 0, nil
+	}
+	s.runs = kept
+	return removed, s.persist()
 }
 
 // nextRun 按间隔算出下次执行时间；间隔为 0 时返回 0（不定时）。

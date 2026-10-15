@@ -5,8 +5,10 @@ package api
 // 设计说明：
 //   - 采用扫码登录，不在应用内收集用户密码；凭据（Cookie）落盘权限 0600。
 //   - 账号列表接口**不返回 Cookie**，避免凭据经接口外泄。
-//   - 当前支持网易云；QQ 音乐的扫码流程更复杂（ptqrshow + ptqrtoken 哈希 + OAuth 换取），
-//     尚未实现，见 README/HANDOVER 的待办。
+//   - 网易云与 QQ 音乐**都已实现**（QQ 走 ptqrshow + ptqrtoken 轮询 + Cookie 换取，
+//     见 pkg/account/qq.go）。⚠️ 2026-10-14 修正：此处原注释写着「QQ 尚未实现」，
+//     与代码不符已一个月（路由 /api/accounts/qq/* 五条全在）——过期注释比没注释更坑。
+//     尚未移植的只剩 flow 的**微信扫码**登录（见 HANDOVER §8.3）。
 
 import (
 	"encoding/json"

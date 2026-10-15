@@ -295,7 +295,7 @@ func TestDownloadRejectsNonAudioPayload(t *testing.T) {
 
 // TestDownloadAcceptsRealAudio 正向对照：合法音频必须正常落盘
 func TestDownloadAcceptsRealAudio(t *testing.T) {
-	flac := append([]byte("fLaC"), make([]byte, 400*1024)...)
+	flac := downloadFixtureFLAC()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "audio/flac")
@@ -363,7 +363,7 @@ func TestActualFormatReportsRealContainer(t *testing.T) {
 // TestActualFormatOnAlreadyExists 命中已有文件时也要给出真实容器
 func TestActualFormatOnAlreadyExists(t *testing.T) {
 	// 注意：findExistingAudio 要求体积 > 500KB 才算「已存在」，所以这里给 600KB
-	flac := append([]byte("fLaC"), make([]byte, 600*1024)...)
+	flac := downloadFixtureFLACSize(600 * 1024)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "audio/flac")
@@ -466,7 +466,7 @@ func TestPartialPathIsStable(t *testing.T) {
 }
 
 func TestDownloadResumesFromPartialFile(t *testing.T) {
-	full := append([]byte("fLaC"), make([]byte, 400*1024)...)
+	full := downloadFixtureFLAC()
 
 	// 服务端支持 Range：从 offset 开始返回剩余部分
 	var sawRange string
@@ -506,7 +506,7 @@ func TestDownloadResumesFromPartialFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(data, full) {
+	if !bytes.Equal(audioFrames(data), audioFrames(full)) {
 		t.Errorf("续传后文件内容不完整: got %d bytes, want %d", len(data), len(full))
 	}
 	// 成功后 .part 应被消费掉
@@ -516,7 +516,7 @@ func TestDownloadResumesFromPartialFile(t *testing.T) {
 }
 
 func TestDownloadFallsBackWhenServerIgnoresRange(t *testing.T) {
-	full := append([]byte("fLaC"), bytes.Repeat([]byte{0xAB}, 400*1024)...)
+	full := downloadFixtureFLAC()
 
 	// 服务端忽略 Range，永远返回 200 全量
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -540,7 +540,7 @@ func TestDownloadFallsBackWhenServerIgnoresRange(t *testing.T) {
 		t.Fatalf("服务端不支持 Range 时应从头重下并成功: %v", err)
 	}
 	data, _ := os.ReadFile(res.Path)
-	if !bytes.Equal(data, full) {
+	if !bytes.Equal(audioFrames(data), audioFrames(full)) {
 		t.Errorf("应从零重下得到完整文件: got %d, want %d", len(data), len(full))
 	}
 }
@@ -583,15 +583,118 @@ func TestDownloadKeepsPartialOnIncomplete(t *testing.T) {
 //
 // 夹具要点：既要有合法 FLAC 头（前 12 字节与 pkg/tags 自己的 flacFixture 同构：
 // STREAMINFO + 末尾 PADDING，写入器才认），又要撑过 300KB 的体积校验。
-func downloadFixtureFLAC() []byte {
+// 下面两个 CRC 是**逐位**实现（与 pkg/flacok 的查表实现独立），只用来给测试夹具
+// 算校验位。两边对得上，夹具才算是「外部输入」而不是自说自话。
+func fixtureCRC8(p []byte) byte {
+	crc := byte(0)
+	for _, b := range p {
+		crc ^= b
+		for i := 0; i < 8; i++ {
+			if crc&0x80 != 0 {
+				crc = (crc << 1) ^ 0x07
+			} else {
+				crc <<= 1
+			}
+		}
+	}
+	return crc
+}
+
+func fixtureCRC16(p []byte) uint16 {
+	crc := uint16(0)
+	for _, b := range p {
+		crc ^= uint16(b) << 8
+		for i := 0; i < 8; i++ {
+			if crc&0x8000 != 0 {
+				crc = (crc << 1) ^ 0x8005
+			} else {
+				crc <<= 1
+			}
+		}
+	}
+	return crc
+}
+
+// fixtureFrame 合成一个 VERBATIM 子帧的完整帧（单声道 16 位、4096 采样）。
+// 帧头 CRC-8 与整帧 CRC-16 都按规范算对，所以 pkg/flacok 的逐帧校验能过。
+//
+// 采样数据真的躺在帧里，所以调帧数就能把文件撑到多大 —— 关键是这种体积是
+// **帧**给的，不是 PADDING 给的：applyTags → pkg/tags 写标签时会重建元数据、
+// 丢弃 PADDING（pkg/tags/flac.go 的「丢弃 padding，由重建后的布局决定空间」），
+// 用 PADDING 凑体积的话，写完标签文件会缩水，体积阈值与内容比对都会失效。
+func fixtureFrame(seq byte) []byte {
+	const blockSize = 4096 // 采样数
+	hdr := []byte{
+		0xFF, 0xF8, // 同步码 + 保留位 + 定长块
+		0x79,       // 块长码 7（16 位显式）| 采样率码 9（44.1kHz）
+		0x08,       // 声道赋值 0（单声道）| 位宽码 4（16 位）| 保留位 0
+		seq,        // 帧号（裸字节，必须 < 0x80）
+		byte((blockSize - 1) >> 8), byte((blockSize - 1) & 0xFF), // 显式块长
+	}
+	hdr = append(hdr, fixtureCRC8(hdr))
+
+	frame := append(hdr, 0x02) // 子帧头：保留位 0 + VERBATIM(1) + 浪费位 0
+	samples := make([]byte, blockSize*2)
+	for i := range samples {
+		samples[i] = seq ^ byte(i) // 确定性图案
+	}
+	frame = append(frame, samples...)
+	crc := fixtureCRC16(frame)
+	return append(frame, byte(crc>>8), byte(crc))
+}
+
+// audioFrames 剥掉元数据块，返回音频帧字节。
+//
+// 用来做内容比对：applyTags 会重建元数据（丢 PADDING、加 VORBIS_COMMENT），
+// 整文件字节比对会误报，要比的是音频部分。
+func audioFrames(data []byte) []byte {
+	if len(data) < 8 || string(data[:4]) != "fLaC" {
+		return data
+	}
+	i := 4
+	for i+4 <= len(data) {
+		last := data[i]&0x80 != 0
+		n := int(data[i+1])<<16 | int(data[i+2])<<8 | int(data[i+3])
+		i += 4 + n
+		if last {
+			break
+		}
+	}
+	if i > len(data) {
+		return nil
+	}
+	return data[i:]
+}
+
+// downloadFixtureFLACSize 合成一个**结构完好**的 FLAC 文件到指定体积（约数）。
+//
+// 必须是真结构：入库前有 pkg/flacok 的逐帧 CRC 校验（见 downloadSingleSong），
+// 假的「fLaC + 一堆 0xAA」会被判成坏流拒收。元数据块与 pkg/tags 的 flacFixture
+// 同构（STREAMINFO + 末尾 PADDING，写入器才认），元数据必须排在音频帧前面。
+func downloadFixtureFLACSize(size int) []byte {
+	si := make([]byte, 34)
+	si[0], si[1] = 0x00, 0x10 // min blocksize
+	si[2], si[3] = 0x00, 0x10 // max blocksize
+	// 采样率 44100 | 声道数-1 = 0 | 位宽-1 = 15 | 总采样数这里不填（走帧不看它）
+	v := uint64(44100)<<44 | uint64(15)<<36
+	for i := 0; i < 8; i++ {
+		si[10+i] = byte(v >> (56 - 8*i))
+	}
+
 	var b bytes.Buffer
 	b.WriteString("fLaC")
 	b.Write([]byte{0x00, 0x00, 0x00, 0x22}) // STREAMINFO, last=false, len=34
-	b.Write(make([]byte, 34))
-	b.Write([]byte{0x81, 0x00, 0x00, 0x08}) // PADDING, last=true, len=8
-	b.Write(make([]byte, 8))
-	b.Write(bytes.Repeat([]byte{0xAA}, 400*1024)) // 假音频帧，只为过体积校验
+	b.Write(si)
+	b.Write([]byte{0x81, 0x00, 0x00, 0x00}) // PADDING(1), last=true, len=0
+
+	for seq := 0; b.Len() < size; seq++ {
+		b.Write(fixtureFrame(byte(seq % 0x70)))
+	}
 	return b.Bytes()
+}
+
+func downloadFixtureFLAC() []byte {
+	return downloadFixtureFLACSize(400 * 1024)
 }
 
 func TestDownloadWritesYearTrackDisc(t *testing.T) {

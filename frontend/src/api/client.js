@@ -89,17 +89,31 @@ export const ChartInjectAPI = {
       ids: Array.isArray(cfg.chart_playlists) ? cfg.chart_playlists : [],
       // 页面注入：飞牛自带音乐页里那份「下载到曲率」菜单项（以及以后的双向切换按钮）。
       uiInject: cfg.ui_inject_enabled !== false,
+      // 「音质下载」：飞牛页面里收藏 / 加歌单 / 点下载时取什么音质。
+      // 空 = 后端按 highest（能无损就无损）走，界面显示也按这个口径。
+      autoDownloadQuality: cfg.auto_download_quality || 'highest',
     }
   },
   saveIds: (ids) => api.post('/config', { chart_playlists: ids }).then(res => res.data),
   saveEnabled: (enabled) => api.post('/config', { chart_playlists_enabled: !!enabled }).then(res => res.data),
   // 关掉后飞牛自带音乐页**完全原样**：转发层根本不认领页面文档，逐字节透传
   saveUIInject: (enabled) => api.post('/config', { ui_inject_enabled: !!enabled }).then(res => res.data),
+  // 「音质下载」：飞牛页面里收藏 / 加歌单 / 点下载触发的那批下载要什么音质
+  // （见 pkg/intercept/autodownload.go 的 autoDownloadQuality）。
+  saveAutoDownloadQuality: (q) => api.post('/config', { auto_download_quality: q }).then(res => res.data),
 }
 
 export const DownloadAPI = {
   getConfig: () => api.get('/download/config').then(res => res.data),
+  // 单改下载目录（下载面板在用）。
   saveConfig: (dir) => api.post('/download/config', { download_dir: dir }).then(res => res.data),
+  // 目录成对保存（设置页在用）：download_dir 与 cache_dir 一起校验 ——
+  // 后端会拒绝「相同 / 互为父子」的组合（见 pkg/config 的 ValidateDirs）。
+  // download_dir 传空串表示不改，cache_dir 传 '' 表示回到默认位置。
+  saveDirs: ({ download_dir, cache_dir }) =>
+    api.post('/download/config',
+      download_dir === undefined ? { cache_dir } : { download_dir, cache_dir },
+    ).then(res => res.data),
   downloadSong: (song) => api.post('/download/song', song).then(res => res.data),
   downloadBatch: (songs) => api.post('/download/batch', { songs }).then(res => res.data),
   getBatchStatus: (taskId) => api.get('/download/batch/status', { params: { task_id: taskId } }).then(res => res.data),
@@ -118,8 +132,12 @@ export const DownloadQueueAPI = {
 }
 
 export const SearchAPI = {
-  search: (keyword, source = 'all', page = 1) => 
-    api.get('/search', { params: { q: keyword, source, page } }).then(res => res.data),
+  // pageSize 显式传才带上 page_size（不传 = 后端默认 20，老调用方行为不变）；
+  // 搜索页按 30 条一页用它做触底自动加载（SearchView 的 SEARCH_PAGE_SIZE）。
+  search: (keyword, source = 'all', page = 1, pageSize = 0) =>
+    api.get('/search', {
+      params: { q: keyword, source, page, ...(pageSize > 0 ? { page_size: pageSize } : {}) },
+    }).then(res => res.data),
   lyric: (source, songmid, title = '', singer = '', duration = 0, hash = '') => 
     api.get('/search/lyric', { params: { source, songmid, title, singer, duration, hash } }).then(res => res.data),
 }
@@ -226,6 +244,18 @@ export const PushAPI = {
   run: (id) => api.post('/push/run', null, { params: { id }, timeout: 300000 }).then(res => res.data),
   preview: (payload) => api.post('/push/preview', payload, { timeout: 300000 }).then(res => res.data),
   runs: (taskId = '', limit = 50) => api.get('/push/runs', { params: { task_id: taskId, limit } }).then(res => res.data),
+  // ids 为空 = 全清。只删历史，不动任务本身（见 pkg/push.Store.ClearRuns）。
+  clearRuns: (ids = []) => api.delete('/push/runs', { data: { ids } }).then(res => res.data),
+}
+
+// 自动下载记录：飞牛音乐页面里收藏 / 加歌单 / 点「下载到曲率」触发的那批下载的流水。
+//
+// 为什么不在网页端的下载队列里：那些下载发生在**官方页面**上，本前端看不见它们 ——
+// 只有后端（拦截层）知道，所以记录由后端记、这里只读与清（见 pkg/online/autolog.go）。
+export const AutoDownloadAPI = {
+  records: (limit = 200) => api.get('/auto-download/records', { params: { limit } }).then(res => res.data),
+  // ids 为空 = 全清（界面上那个「一键清除」）。
+  clear: (ids = []) => api.delete('/auto-download/records', { data: { ids } }).then(res => res.data),
 }
 
 // 窗口记忆：各页面点击状态（发现页 Tab、平台、NAS 目录、播放模式等）持久化到服务端文件
@@ -247,6 +277,17 @@ export const LogsAPI = {
    */
   report: (level, message, source = 'frontend') =>
     api.post('/logs', { source, level, message }, { timeout: 10000 }).then(res => res.data),
+  /**
+   * 一键导出运行日志（zip：日志 + 环境信息 + **脱敏后**的配置）。
+   *
+   * 走同一个 /api/logs 路由的 ?format=zip —— 见 backend/pkg/api/logs_export.go。
+   * 返回 Blob，由调用方触发浏览器下载（本页自己拼一个临时 <a>）。
+   */
+  exportZip: () => api.get('/logs', {
+    params: { format: 'zip' },
+    responseType: 'blob',
+    timeout: 60000,
+  }).then(res => res.data),
 }
 
 // AI 解析桥：外部调用者提交解析任务，网页端领取后调用音源脚本完成取链

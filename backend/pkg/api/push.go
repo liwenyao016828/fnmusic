@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -356,6 +357,11 @@ func (s *Server) HandlePushPreview(w http.ResponseWriter, r *http.Request) {
 //
 // GET /api/push/runs?task_id=xxx&limit=50
 func (s *Server) HandlePushRuns(w http.ResponseWriter, r *http.Request) {
+	// 同一路径两个方法：GET 读、DELETE 清（路由表不记录方法集，见 routes.go 顶部）。
+	if r.Method == http.MethodDelete {
+		s.clearPushRuns(w, r)
+		return
+	}
 	limit := 50
 	if v := strings.TrimSpace(r.URL.Query().Get("limit")); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 200 {
@@ -366,5 +372,28 @@ func (s *Server) HandlePushRuns(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"code": 200, "message": "ok",
 		"data": map[string]interface{}{"runs": runs, "count": len(runs)},
+	})
+}
+
+// clearPushRuns 清除推送执行历史（`DELETE /api/push/runs`）。
+//
+// body 带 `{"ids":[...]}` 时只清那几条；不带（或空数组）时**全清**。
+// 只删历史、不动任务（见 pkg/push.Store.ClearRuns 的说明）。
+func (s *Server) clearPushRuns(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		IDs []string `json:"ids"`
+	}
+	_ = json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&body)
+
+	removed, err := s.pushStore.ClearRuns(body.IDs)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
+			"code": 500, "message": "清除失败：" + err.Error(),
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"code": 200, "message": "ok",
+		"data": map[string]interface{}{"removed": removed},
 	})
 }

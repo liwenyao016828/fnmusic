@@ -77,7 +77,13 @@ func durationMatches(want, got int) bool {
 // 同一条口径）。
 func qualityRank(q string) int {
 	switch strings.ToLower(strings.TrimSpace(q)) {
-	case "无损", "flac", "ape", "wav", "dsd":
+	// ⚠️ `flac24bit` / `hires` 必须与 flac 同档（2026-10-08 补）。
+	//
+	// 这两个值原先掉进 default 算 0 —— 比 320k 还低。而**洛雪脚本报的档位就是
+	// `flac24bit`**（LX 契约里 `_types` 的键之一），于是「池里明明有无损 24bit」
+	// 反而过不了 `downloadCandidates` 的「严格更好」那道筛，被直接丢掉。
+	// 这正是用户报的「我 lx 音乐怎么没有参与到下载」的其中一环。
+	case "无损", "flac", "flac24bit", "hires", "ape", "wav", "dsd":
 		return 3
 	case "aac", "m4a":
 		return 2
@@ -238,7 +244,10 @@ func (i *Interceptor) rankedSources(ctx context.Context, title, artist string, w
 			defer wg.Done()
 			// 每个源只取前几首：跨源匹配要的是「有没有同名的高音质版本」，
 			// 不是「把这个源的结果全捞回来」。
-			results[idx] = i.searcher(keyword, p, 1, 5)
+			// 3 条（2026-10-08）：池要回答的是「有没有同名的、音质更好的那一条」。
+			// 原先要 5 条，而 musicdl 会对**每条结果**解析一次直链（单条约 16s）——
+			// 5 条就是 80s，白等。3 条够判断，也够给跨源匹配留余地。
+			results[idx] = i.searcher(keyword, p, 1, 3)
 		}(idx, p)
 	}
 	// 洛雪源与平台源**并发**问：它只是池里的另一条来源，没理由串在平台后面多等一轮

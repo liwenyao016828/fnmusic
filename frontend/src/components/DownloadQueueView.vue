@@ -31,7 +31,7 @@
 
       <!-- 队列内容（与抽屉共用同一面板） -->
       <div
-        class="flex flex-col overflow-hidden rounded-[15px] border border-gray-200 bg-white"
+        class="flex flex-col overflow-hidden rounded-xl border border-gray-200 bg-white"
         :class="embedded ? 'min-h-[420px]' : 'min-h-[460px]'"
       >
         <DownloadQueuePanel :active-source="activeSource" />

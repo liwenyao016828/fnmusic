@@ -195,7 +195,14 @@
           :bar-search-nonce="barSearchNonce"
         />
       </template>
-      <template #view-nas><NasExplorer @play="playSong" /></template>
+      <!--
+        榜单管理（v2.1.120 从「曲库管家」搬上来）：它自己的「▶ 看一眼」通过 emit 上来，
+        这里走导航总线把负载带给发现页 —— 与本页的 onNavigate 是同一个机制，
+        不新增第二套跳转协议。
+      -->
+      <template #view-charts>
+        <ChartManager @preview="item => navigateTo('search', { chartPreview: item })" />
+      </template>
       <template #view-sources>
         <SourceManager
           @source-changed="onSourceChanged"
@@ -208,10 +215,12 @@
           :active-source="activeSourceMeta"
           :tab="libraryTab"
           :tab-nonce="libraryNavNonce"
+          @play="playSong"
         />
       </template>
       <template #view-accounts><AccountManager /></template>
       <template #view-logs><LogViewer /></template>
+      <template #view-settings><AppSettings /></template>
     </SwipePager>
 
     <!-- 帧率探针：只有地址带 ?fps=1 时出现（真机上用来判断"卡不卡"，正式界面看不到） -->
@@ -266,29 +275,27 @@ import { ref, computed, nextTick, onMounted, onUnmounted, watch } from 'vue'
 import { lxRuntime } from './engine/lx-runtime'
 import { SearchAPI, SourcesAPI, NasAPI } from './api/client'
 import SearchView from './components/SearchView.vue'
-import NasExplorer from './components/NasExplorer.vue'
 import SourceManager from './components/SourceManager.vue'
-import AudioVisualizer from './components/AudioVisualizer.vue'
-import VinylTurntable from './components/VinylTurntable.vue'
-import LyricView from './components/LyricView.vue'
 import PlayerBar from './components/PlayerBar.vue'
 import ImmersivePlayer from './components/ImmersivePlayer.vue'
 import DownloadDrawer from './components/DownloadDrawer.vue'
 import DownloadDirModal from './components/DownloadDirModal.vue'
 import LibraryManager from './components/LibraryManager.vue'
+import ChartManager from './components/ChartManager.vue'
 import ApiDrawer from './components/ApiDrawer.vue'
 import DisclaimerModal from './components/DisclaimerModal.vue'
 import AccountManager from './components/AccountManager.vue'
 import SwipePager from './components/SwipePager.vue'
+import AppSettings from './components/AppSettings.vue'
 import FpsMeter from './components/FpsMeter.vue'
 import LogViewer from './components/LogViewer.vue'
 import { downloadManager } from './services/downloadManager'
 import { bridgeWorker } from './services/bridgeWorker'
 import { loadPref, savePref, loadBool, initUiPrefs } from './services/prefs'
-import { onNavigate } from './services/navBus'
+import { onNavigate, navigateTo } from './services/navBus'
 import { invalidate } from './services/viewCache'
 import { logError } from './services/appLog'
-import { Compass, HardDrive, Cpu, Disc, Library, UserRound, ScrollText, LayoutList, AlignJustify, LayoutGrid } from 'lucide-vue-next'
+import { Compass, Trophy, Cpu, Disc, Library, UserRound, ScrollText, Settings, LayoutList, AlignJustify, LayoutGrid } from 'lucide-vue-next'
 
 // ?fps=1 → 显示帧率探针（见 components/FpsMeter.vue）
 const showFpsMeter = typeof location !== 'undefined' && location.search.includes('fps=1')
@@ -298,17 +305,13 @@ const currentView = ref('search')
 // 组件里的「查看日志」等入口通过导航总线请求切视图 —— 免去给每个组件加 emit + props
 // （见 services/navBus.js 的说明）。currentView 的归属不变，这里只是多接一个触发源。
 //
-// payload 走两条路由（v2.1.119 榜单管理搬进曲库管家后出现的两类跳转）：
-//   · { chartPreview } —— 管家 → 发现：交给 SearchView 自己打开那张榜单；
-//   · { chartManager } —— 发现 → 管家：这里切到曲库管家并把管家落到「榜单管理」侧栏项。
-//     用自增 nonce 而不是只设 libraryTab：管家对已挂载实例的记忆在它内部，
-//     光改 prop 不一定触发它的 watch（与 openQueuePage 同一套做法）。
+// payload 只剩一条路由：
+//   · { chartPreview } —— 榜单管理 → 发现：这里切视图，负载交给 SearchView 自己消费
+//     （它订阅同一个总线，见 SearchView 的 onChartNav）。
+// 「发现 → 榜单管理」不再走 payload：两边现在都是顶层视图，指路按钮直接
+// `navigateTo('charts')`，不需要再借 payload 让管家落某个侧栏项。
 const offNavigate = onNavigate((view, payload) => {
   currentView.value = view
-  if (payload?.chartManager) {
-    libraryTab.value = 'charts'
-    libraryNavNonce.value++
-  }
 })
 
 // 滑动切页的视图顺序（computed 是惰性的，即使 navItems 声明在后面也不会踩 TDZ）
@@ -345,9 +348,7 @@ function onToastClick() {
   currentView.value = 'logs'
   appToast.value = null
 }
-const showRightPanel = ref(false)
 const showImmersive = ref(false)
-const stageTab = ref('turntable')
 
 // 免责声明与条款弹窗状态
 const showDisclaimerModal = ref(false)
@@ -379,17 +380,22 @@ function openDisclaimer(force = false) {
 // 主导航（顶栏分段切换器）。
 // 顺序参考 fnmusic-flow 的工作台布局：先内容、后管理、最后账号。
 // 「音源管理」不在此列 —— 它是配置项，放在顶栏右侧的当前音源按钮里。
-// 「推送同步」「下载」都不在此列 —— 已并入「曲库管家」，作为其侧栏项（见 LibraryManager）。
+// 「本地音乐」v2.1.120 搬进「曲库管家」当子页（它和「推送/下载/补全整理」是同一件事的
+// 不同侧面：都在动那本曲库）；「榜单管理」同一轮**搬上来** —— 它管的是「哪些榜单能在
+// 飞牛音乐里听」，与「发现音乐 → 排行榜单」是一体两面，贴在内容旁边比埋在管家里合理。
 // 每个导航项两个名字：`name` 是完整名，`short` 是顶栏「精简档」用的短名
 // （用户 2026-09-28 要求的三档密度见 navDensity）。
 const navItems = [
   { id: 'search', name: '发现音乐', short: '发现', icon: Compass },
-  { id: 'nas', name: '本地音乐', short: '本地', icon: HardDrive },
+  { id: 'charts', name: '榜单管理', short: '榜单', icon: Trophy },
   { id: 'library', name: '曲库管家', short: '管家', icon: Library },
   { id: 'accounts', name: '账号连接', short: '账号', icon: UserRound },
-  // 日志：后端运行日志 + 任务执行记录。放在最后 —— 它是排查用的工具页，
-  // 不是日常主功能，但仍要一眼能找到（原先只能 SSH 上 NAS 看 backend.log）
+  // 日志：后端运行日志 + 任务执行记录。它是排查用的工具页，不是日常主功能，
+  // 但仍要一眼能找到（原先只能 SSH 上 NAS 看 backend.log）
   { id: 'logs', name: '日志', short: '日志', icon: ScrollText },
+  // 设置：下载音质 / 文件命名 / 存储目录 / 导出日志。同样是配置页而不是内容页，
+  // 排在内容页之后 —— 改完即刻生效，不需要频繁进出
+  { id: 'settings', name: '设置', short: '设置', icon: Settings },
 ]
 
 // ── 顶栏导航的显示密度：三档（用户 2026-09-28 要求）──
@@ -955,11 +961,6 @@ function onEnded() {
   playNext()
 }
 function onVolumeChange(val) { if (audioRef.value) audioRef.value.volume = val }
-
-function toggleLyrics() {
-  if (!showRightPanel.value) { showRightPanel.value = true; stageTab.value = 'lyrics' }
-  else stageTab.value = stageTab.value === 'lyrics' ? 'turntable' : 'lyrics'
-}
 
 function toggleFullscreen() {
   if (!document.fullscreenElement) document.documentElement.requestFullscreen().catch(console.warn)

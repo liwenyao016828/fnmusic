@@ -86,7 +86,25 @@ REQUEST_TIMEOUT = float(os.environ.get("QULV_MUSICDL_TIMEOUT", "12"))
 # search_size 翻页，翻得慢。25 秒意味着「打开外挂音源之后，飞牛里每次搜索都要等
 # 二十多秒」。降到 12 秒：正常的源（咪咕实测 2-5 秒）够用，慢的源宁可这次不出结果。
 # Go 侧对「官方页面搜索合并」另有 8 秒总闸（见 pkg/intercept/search.go）。
-SOURCE_BUDGET = float(os.environ.get("QULV_MUSICDL_SOURCE_BUDGET", "12"))
+# ⚠️ 2026-10-08 实测把默认值从 12 提到 40：
+#
+# musicdl 的 search **会对每条结果都解析一次直链**（见下面 init cfg 的注释），
+# 于是单源实测耗时是：咪咕 3 条约 **49s**、网易 3 条约 **162s**。
+# 12s 的预算下它们**必然**超时 —— 表现是「每个源都 unavailable」，
+# 而用户看到的是「收藏后下载的音质不高」（因为取音池恒空，每次都回落
+# 曲目自己平台 = 网易免登录 = 320k mp3）。
+#
+# 提到 120s 的依据（用户 2026-10-08 明确分工）：
+#
+#   「网易和 musicdl 负责在线，musicdl 和 lx 负责下载（收藏下载不必最快速度
+#     下载到 nas，所以可以在收藏后，选 musicdl 或者 lx 哪个音质最高来后台下载）」
+#
+# 也就是**下载那条腿允许慢**。而试听那条腿一点都不受影响 —— 它有自己的闸：
+# `pkg/intercept/search.go` 的 onlineSearchWait（3s，等各平台返回）与
+# onlineSearchBudget（8s，整次在线检索），与本文件这个预算是两回事。
+# 实测：咪咕搜 3 条要 49s、网易 162s（musicdl 对每条结果都要解析一次直链），
+# 所以 12s/40s 都必然超时 —— 那是「取音池恒空、下载只有 320k mp3」的直接原因。
+SOURCE_BUDGET = float(os.environ.get("QULV_MUSICDL_SOURCE_BUDGET", "120"))
 
 os.makedirs(WORK_DIR, exist_ok=True)
 

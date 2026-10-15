@@ -475,6 +475,27 @@ def build_app_tgz(mtime: int, legacy: bool) -> bytes:
     else:
         die(f"找不到 sidecar 源码目录：{sidecar_src}")
 
+    # 服务端洛雪宿主的 Node 脚本（v2.1.115 起，goal-a5eb2a23 ⑤ 方案 b）。
+    #
+    # ⚠️ 2026-10-08 补：REF_INNER 里**早就声明**了这个文件（还特意注释「漏了它 =
+    # 真机上找不到 lx 宿主脚本，而且是静默的」），但复制代码从来没复制过它 ——
+    # 于是包里永远没有这个文件，而真机上的表现是：服务端洛雪宿主起不来
+    # （`lxnode` 找不到 server.mjs），用户装的洛雪源**一次都没参与过下载**，
+    # 下载源池因此只剩 musicdl 一条腿（而它每个源只有 12s 预算、根本跑不完）。
+    #
+    # 之所以一直没人发现，是因为下面那条结构比对当时只**打印**「缺少：…」。
+    # 断言已经加严（见自检段），这里把文件真正复制进去。
+    lx_host_src = ROOT / "sidecar" / "lx_host"
+    if lx_host_src.is_dir():
+        tb.add_dir("sidecar/lx_host")
+        for name in ("server.mjs",):
+            src = lx_host_src / name
+            if not src.is_file():
+                die(f"lx 宿主缺文件：{src}（打包会静默少一个，装到真机上才发现）")
+            tb.add_file(f"sidecar/lx_host/{name}", src)
+    else:
+        die(f"找不到 lx 宿主目录：{lx_host_src}")
+
     tar_bytes = tb.finish()
     tgz = gz_bytes(tar_bytes)
     info(f"app.tgz 生成完毕：tar {human(len(tar_bytes))} → gzip {human(len(tgz))}")
@@ -648,6 +669,20 @@ def self_check(fpk_path: Path, legacy: bool = False) -> None:
     if extra_i:
         print(f"  多出：{extra_i}", flush=True)
     print(f"成员顺序：{'与原 fpk 完全一致' if order_ok else '与原 fpk 不同（不影响安装）'}", flush=True)
+
+    # ⚠️ 「缺少声明的成员」必须是**失败**，不能只打印一行。
+    #
+    # 2026-10-08 的教训：REF_INNER 里早就声明了 `sidecar/lx_host/server.mjs`（注释还
+    # 特意写着「漏了它 = 真机上找不到 lx 宿主脚本，而且是静默的」），但**复制代码从来
+    # 没复制过它** —— 而这里只打印「缺少：[…]」，构建照样报「自检通过」。
+    # 于是服务端洛雪宿主在真机上永远起不来：用户装的洛雪源一次都没参与过下载。
+    #
+    # 声明了就该存在，不存在就是 bug —— 一张只打印不拦截的表，等于没有。
+    # （「多出」仍然只打印：多出来的文件通常无害，不值得拦住打包。）
+    if miss_o:
+        errors.extend(f"外层缺少声明的成员：{n}" for n in miss_o)
+    if miss_i:
+        errors.extend(f"app.tgz 缺少声明的成员：{n}" for n in miss_i)
 
     print_structure(fpk_bytes)
 

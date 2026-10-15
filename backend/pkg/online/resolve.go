@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"fn-lx-player/pkg/useragent"
 )
 
 // Resolved 是一条解析出来的可播放直链。
@@ -18,6 +20,12 @@ type Resolved struct {
 	Size    int64  // 字节；0 = 平台没给
 	Bitrate int    // bps；0 = 平台没给
 	Expires time.Time
+	// Tier 是**实际拿到**的档位（见 tier.go）。空 = 这个解析器不回读、也推不出来。
+	//
+	// ⚠️ 它**不一定**等于请求的档位：网易的免登录接口在要无损时会**静默降级**成
+	// exhigh（320k mp3）—— 不报错、不给 null，只把 level 改写回来。所以档位只有
+	// 回读才算数，界面也据此如实显示（「请求无损、实际 320k」不该被说成无损）。
+	Tier string
 }
 
 // ErrNotPlayable 表示平台**明确**说这条曲目不可播（收费 / 无版权 / 地区限制）。
@@ -94,7 +102,12 @@ type Pool struct {
 }
 
 type cacheEntry struct {
-	res    *Resolved // nil 表示「已确认不可播」
+	res *Resolved // nil 表示「已确认不可用」（具体原因见 err）
+	// err 记的是当时那个**稳定结论**：ErrNotPlayable（曲目不可播）或
+	// ErrTierUnavailable（这一档没有）。为什么要存错误本身而不是一个布尔：
+	// 阶梯要靠它决定「降一档继续」还是「这首歌别试了」—— 混成一个的表现是
+	// 只有 128k 的歌会直接报「播不了」，而不是降档播出来。
+	err    error
 	expire time.Time
 }
 
@@ -285,13 +298,10 @@ func (p *Pool) fromCache(key string) (res *Resolved, hit bool, miss error) {
 	if !ok || time.Now().After(e.expire) {
 		return nil, false, nil
 	}
-	if e.res == nil {
-		return nil, true, ErrNotPlayable
-	}
-	return e.res, true, nil
+	return e.res, true, e.err
 }
 
-// store 写缓存。只有「确定」的结论才进缓存：成功，或平台明确说不可播。
+// store 写缓存。只有「确定」的结论才进缓存：成功，或平台明确说不可播 / 没有这一档。
 // 其它错误（网络、超时）不缓存，让下一次能重试。
 func (p *Pool) store(key string, res *Resolved, err error) {
 	switch {
@@ -299,21 +309,108 @@ func (p *Pool) store(key string, res *Resolved, err error) {
 		p.mu.Lock()
 		p.cache[key] = cacheEntry{res: res, expire: time.Now().Add(resolveCacheTTL)}
 		p.mu.Unlock()
-	case errors.Is(err, ErrNotPlayable):
+	case errors.Is(err, ErrNotPlayable), errors.Is(err, ErrTierUnavailable):
 		p.mu.Lock()
-		p.cache[key] = cacheEntry{res: nil, expire: time.Now().Add(resolveNegTTL)}
+		p.cache[key] = cacheEntry{err: err, expire: time.Now().Add(resolveNegTTL)}
 		p.mu.Unlock()
 	}
+}
+
+// ResolveTier 按**指定档位**解析一条曲目，带缓存（缓存键含档位）。
+//
+// 平台没实现 TierResolver 时退化成普通 Resolve，并把 Resolved.Tier 按码率/容器补齐 ——
+// 这样调用方拿到的永远是「实际档位」，不必自己判平台。
+//
+// tier 为空同样退化成普通 Resolve（调用方没指定档位）。
+func (p *Pool) ResolveTier(ctx context.Context, platform, platformID, tier string) (*Resolved, error) {
+	if platformID == "" {
+		return nil, fmt.Errorf("空的平台内 id")
+	}
+	tier = strings.ToLower(strings.TrimSpace(tier))
+	key := platform + "\x00" + platformID + "\x00" + tier
+	if res, hit, miss := p.fromCache(key); hit {
+		return res, miss
+	}
+
+	p.mu.RLock()
+	r, ok := p.resolvers[platform]
+	p.mu.RUnlock()
+	if !ok {
+		return nil, ErrNoResolver
+	}
+
+	tr, canTier := r.(TierResolver)
+	if !canTier || tier == "" {
+		res, err := r.Resolve(ctx, platformID)
+		if err == nil && res != nil {
+			res.Tier = tierFromResolved(res)
+		}
+		p.store(key, res, err)
+		return res, err
+	}
+
+	res, err := tr.ResolveAtTier(ctx, platformID, tier)
+	if err == nil && res != nil {
+		// 平台回读的档位是权威值；它没回读（老实现）就用码率/容器推断兜。
+		if res.Tier == "" {
+			res.Tier = tierFromResolved(res)
+		}
+		if res.Tier == "" {
+			res.Tier = tier
+		}
+	}
+	p.store(key, res, err)
+	return res, err
+}
+
+// ResolveLadder 按 tiers 从高到低依次尝试，返回**第一个拿到**的结果。
+//
+// 三种结果必须分清 —— 这是这个函数存在的全部理由：
+//
+//   - 某一档成功 → 立刻返回。返回的 `Resolved.Tier` 是**实际**档位：平台可能
+//     静默降级（网易要 lossless 给 exhigh），那不是失败，是一次成功的解析，
+//     **不要**再降档重试（白白多打两次请求，还拿到同一份东西）。
+//   - 某一档 ErrTierUnavailable（平台明确没有这一档）→ 降下一档继续试。
+//   - 某一档 ErrNotPlayable（收费 / 无版权）或 ErrNoResolver → **立刻放弃**：
+//     这首歌本身听不了 / 这个平台我们根本不会解析，换低档也一样，继续试只是白等超时。
+//
+// tiers 为空时用 PlaybackLadder（flac → 320k → 128k）。
+func (p *Pool) ResolveLadder(ctx context.Context, platform, platformID string, tiers []string) (*Resolved, error) {
+	if len(tiers) == 0 {
+		tiers = PlaybackLadder
+	}
+	var lastErr error
+	for _, tier := range tiers {
+		res, err := p.ResolveTier(ctx, platform, platformID, tier)
+		if err == nil && res != nil {
+			return res, nil
+		}
+		if err == nil {
+			// 解析器返回了 nil 结果却没报错 —— 当成「这一档没有」而不是成功。
+			err = ErrTierUnavailable
+		}
+		lastErr = err
+		if errors.Is(err, ErrNotPlayable) || errors.Is(err, ErrNoResolver) {
+			return nil, err
+		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+	}
+	if lastErr == nil {
+		lastErr = ErrTierUnavailable
+	}
+	return nil, lastErr
 }
 
 // ── 出站 HTTP ────────────────────────────────────────────────────────────
 
 // DesktopUA 是出站请求用的 User-Agent。
 //
-// 四家平台对非浏览器 UA 的响应差别很大（有的直接拒绝，有的返回降质结果），
-// 所以固定用一个桌面 Chrome 的 UA。
-const DesktopUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-	"(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+// 规范定义在 pkg/useragent（全应用唯一一份，抓取/下载/封面各条链路共用，
+// 避免出现「握手用一个 UA、真正拉流用另一个」导致探活过、播放 403）。
+// 这里保留这个名字是因为它在多个解析器和用例里已经被引用。
+const DesktopUA = useragent.Desktop
 
 // sharedClient 是所有解析器共用的出站客户端。
 //

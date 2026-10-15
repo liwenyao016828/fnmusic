@@ -16,18 +16,18 @@
 |---|---|
 | **这是什么** | 飞牛 NAS（fnOS）上的音乐播放器 + 曲库管家，`Go` 后端 + `Vue 3` 前端，打包成 fnOS 原生 `.fpk` |
 | **主要用途** | **供其他 AI / 外部程序调用**（帮用户下载歌曲、看歌单），其次才是人机交互 |
-| **代码规模** | 后端 **32 个包 / 236 个 `.go` / 70,066 行**（不含测试 42,711；测试 27,355）/ 后端测试函数 **985 个**（联网用例默认 skip，要 `LIVE_NET_TEST=1`）；前端 **263 个测试**（2026-10-06 实测，复测跑 `bash scripts/audit-numbers.sh`） |
+| **代码规模** | 后端 **36 个包 / 273 个 `.go` / 86,474 行**（不含测试 50,918；测试 35,556）/ 后端测试函数 **1,210 个**（联网用例默认 skip，要 `LIVE_NET_TEST=1`）；前端 **338 个测试**（2026-10-15 实测，复测跑 `bash scripts/audit-numbers.sh`） |
 | **文档怎么读** | 本文件只有 **§0–§10**（活文档：架构 / 坑 / 业务规则 / 接口）。**历史变更条目在 [`docs/变更记录/`](docs/变更记录/INDEX.md)** —— `INDEX.md` 是 82 个回合的目录，正文按日期段分文件（2026-09-26 从 §11 拆出：那一节积到 4,595 行 / 310KB，占全文三分之二）。别处写的「§11 ㊼ 块十」= 那里同名回合的小节 |
 | **应用标识** | 显示名 **曲率**，`appname` **`yinshu-ai`**，端口 **8898**（旧应用 `fn-lx-player` / 8899 可并存） |
 | **后端依赖** | **已引入第三方依赖**（`modernc.org/sqlite v1.36.1`，纯 Go）。旧版「零依赖」规则已作废，见 §2 规则二 |
 | **前端依赖** | vue / vite / tailwindcss / axios / lucide-vue-next / crypto-js / buffer / qrcode |
 | **打包** | `bash scripts/build.sh`，**不需要 fnpack** |
-| **当前版本** | `2.1.119`（代码与 manifest 已同步，见 §7） |
+| **当前版本** | `2.3.0`（代码与 manifest 已同步，见 §7） |
 | **名称** | 显示名 **曲率**（2026-09-28 由「音枢 AI」更名）；技术标识 **`yinshu-ai`**（`appname` / 启动项 / 包文件名 / API 身份串）**刻意不改** |
 | **改名红线** | 显示名随便改（`display_name`、界面、文档）；**`appname` 是技术标识，动之前必须单独跟用户确认** —— 它决定飞牛应用中心认不认"同一个应用"，改了就是新装一个，旧配置和数据不继承 |
 | **版本规则** | ⚠️ **只要改过代码就必须升版本号**（用户 2026-09-28 定），四处同步：`backend/pkg/api/server.go` 的 `CurrentVersion`、`fpk-package/manifest` 的 `version`、`RELEASE_NOTES.md` 顶部、本表。**不许用同一个版本号重打包** |
 | **推荐开发环境** | **WSL2 Debian**（见 §1.0）——Windows 下也能跑，但需要额外环境变量 |
-| **接口总数** | `backend/pkg/api/catalog.go` 共 **122 个**（core 87 / internal 35，见 §6.1）。目录**面向 AI**：顶层 `guide` 先说「是干嘛的、怎么做」，接口清单只是参考 ⚠️ `/api/catalog` 是**扁平结构** —— 数组在**顶层 `endpoints`**，不是 `data.endpoints` |
+| **接口总数** | `backend/pkg/api/catalog.go` 共 **134 个**（core 97 / internal 37，见 §6.1）。目录**面向 AI**：顶层 `guide` 先说「是干嘛的、怎么做」，接口清单只是参考 ⚠️ `/api/catalog` 是**扁平结构** —— 数组在**顶层 `endpoints`**，不是 `data.endpoints` |
 | **音乐入口接管** | 可选能力（`QULV_TAKEOVER=1`），默认关闭。接管官方 Unix socket 并全透传，见 §2 规则六 / §3.6 |
 | **在线曲库** | 接管生效时可用（v2.1.70 新增；v2.1.71 修真机接管失败；v2.1.72 修 isFavorite 写死）：网易 + QQ 的在线搜索/取流/歌词/封面/收藏/歌单/历史，合并进官方界面。见 §3.7 |
 | **音源协议** | **两种互补协议**：`official`（后端内置，免脚本，搜索/榜单/歌单/歌词）+ `lx`（浏览器脚本，取直链）。见 §3.4 |
@@ -169,9 +169,25 @@ cd backend && go test ./... ; cd ../frontend && npm test
 `拒绝下载该地址: 禁止访问内网/元数据地址 <开发机IP>`；`AllowPrivateNet` 只由环境变量
 `FN_ALLOW_PRIVATE_NET` 决定，**没有任何接口能打开**；家里路由的 hairpin 也不通（实测超时）。
 
-✅ **能用的路（2026-09-30 实测成功）**：`ego_script` 里的 Node 进程**跑在飞牛本机上**
-（`os.hostname()` = `wenyaoNAS`，能直接看到 `/vol1` `/vol3`），而本会话的 `bash`/文件工具跑在
-**开发机**（看不到 NAS 文件系统）。所以：
+✅ **首选：SSH（2026-10-07 用户告知端口）** —— 比下面那条 ego 桥简单得多：
+
+```bash
+ssh -p 6828 liwenyao@192.168.1.66      # ⚠️ 端口是 6828，不是 22（22 关着）
+```
+
+开发机的 `~/.ssh/id_ed25519` 已授权，**免密**；liwenyao 在 `Administrators` 组，`sudo -n` 直接可用，
+所以能 `cp` 进投放目录、能跑 `appcenter-cli`、能读 `/var/log/apps/yinshu-ai.log`。
+
+⚠️ **别再用 22 端口下结论说「飞牛没有 SSH」** —— 这条写错过一次，白白绕了几轮。
+
+<details><summary>备选：ego_script 那条桥（依赖 Chrome，可能失效）</summary>
+
+`ego_script` 里的 Node 进程**跑在飞牛本机上**（`os.hostname()` = `wenyaoNAS`，能直接看到 `/vol1` `/vol3`），
+而本会话的 `bash`/文件工具跑在**开发机**（看不到 NAS 文件系统）。**2026-10-07 实测这条路已经坏了**：
+`ego-browser` 每次启动都要先拉一个 Chrome，Chrome 起不来就整个 CLI 退出
+（`Chrome did not expose a DevTools port within 20000ms`）—— 有 SSH 就别折腾它。
+
+所以：
 
 ```js
 // 1) 开发机先把包用 HTTP 放出来
@@ -185,8 +201,61 @@ fs.chmodSync('/vol3/1000/音乐/测试下载/yinshu-ai-X.fpk', 0o644);   // ⚠�
 
 ⚠️ **必须 `chmod 644`**：那个进程的 umask 会把文件写成 `707`，和同目录其它包（`644`）不一致。
 
-其他已知边界（别浪费时间再试）：飞牛 **没有 SSH**（22 不通）；SMB 445 开着但匿名只有 `IPC$`；
-从开发机只能到 `8898`（曲率）/ `8899`（旧版 fn-lx-player）/ `20128`（AI 网关）。
+</details>
+
+其他已知边界：SMB 445 开着（用户凭据可写「共享文件夹」→ 实为 `/vol3/1000/共享文件夹`，
+**覆盖不到 `/vol3/1000/音乐/`**，所以走 SMB 只能把包丢进共享文件夹，进不了投放目录）；
+从开发机只能到 `4398`/`4399`/`8898`/`8899`。
+
+---
+
+### 1.4.2 手机端布局实测（2026-10-08 新增，改 UI 就用它）
+
+`.dev/measure-mobile.mjs` —— 跑在 **NAS** 上、用 NAS 本机的 Chrome，按手机视口把每个页面
+跑一遍，自动量「横向溢出」与「两列网格是不是真的两列」，并截图。**改前端布局之后跑一次**，
+比人眼扫截图可靠：
+
+```bash
+scp -P 6828 .dev/measure-mobile.mjs liwenyao@192.168.1.66:/tmp/
+ssh -p 6828 liwenyao@192.168.1.66 \
+  'cd /tmp && /vol1/@appcenter/nodejs_v24/bin/node measure-mobile.mjs http://127.0.0.1:8898/ 390 844 /tmp/shots'
+```
+
+⚠️ **NAS 上 `node` 不在非交互 SSH 的 PATH 里**，要用全路径 `/vol1/@appcenter/nodejs_v24/bin/node`。
+⚠️ 脚本里两个判据的坑（都写在注释里）：手机顶部导航只有图标没文字（按 `textContent` 找会全
+`NOT_FOUND`，要用 `aria-label`）；滑动切页把其它视图排在 `left<0`，不排除会每页误报溢出。
+⚠️ **别用 `pkill -f <模式>` 收尾**：模式会匹配到自己那条 SSH 命令，把 shell 一起杀掉（表现是
+「no output / exit null」）。这个坑 HANDOVER 里记过一次，2026-10-08 又踩了一次。
+
+---
+
+### 1.4.1 升级已安装的应用（2026-10-07 实测的坑）
+
+⚠️ **`appcenter-cli install-fpk` 对已安装的应用是空操作** —— 它会打印
+`[Info]Application [yinshu-ai] is installed.` 然后**什么都不做**（磁盘上的二进制时间戳与大小都不变）。
+**停掉应用再试也一样**（我试过），README 里那句「命令行 install-fpk 在已安装时不会升级」是真的。
+`manual-install` 已是 `enable`，不是这个原因；CLI 也没有 `upgrade` 子命令。
+
+✅ **能用的路：卸载 + 重装**（应用中心 GUI 的升级内部也是这么做的）：
+
+```bash
+sudo -n appcenter-cli uninstall yinshu-ai
+sudo -n appcenter-cli install-fpk '/vol3/1000/音乐/测试下载/yinshu-ai-<版本>.fpk'
+sudo -n appcenter-cli start yinshu-ai     # 装完不会自动起
+```
+
+**数据安全性（实测结论，别再猜）**：
+
+- `uninstall_init` 会先调应用自己的 `_backup`，把 `data/` 与 `.env` 打包到
+  `/vol1/yinshu-ai-backup-<时间戳>.tar.gz`（排除 `data/sidecar`、`ai_backup`、`library_index.json`、
+  `scan_cache.json`、`data/online/covers`、`data/music`、`*.sock`）；
+- **`@appdata/yinshu-ai` 不会被卸载删掉** —— 卸载后它还在（这一点 `_backup` 的注释里写着「没有真机依据」，
+  现在有依据了：2026-10-07 卸载后目录、`data/config.json`、`data/online/downloaded.json` 都在）；
+- 保险起见重装前可以 `sudo cp -a /vol1/@appdata/yinshu-ai /vol1/yinshu-ai-appdata-backup-<版本>`。
+
+⚠️ 装完**要手动 `start`**；`start` 后等 5~10 秒再查 `curl http://127.0.0.1:8898/api/app/version`。
+
+⚠️ 查 `manifest` 版本别用 `startswith('version=')` —— 那行是对齐写法 `version               = 2.1.120`。
 
 ---
 
@@ -3177,7 +3246,8 @@ node .dev/catalog-audit.mjs http://127.0.0.1:8900               # 线上：跑�
 
 ### 6.1 `role` 分层：core / internal（取代旧的按分类折叠）
 
-`internalEndpoints`（键 = `"METHOD /path"`）决定谁被折起来；**当前 87 条 core / 33 条 internal**（2026-09-26 实测）。
+`internalEndpoints`（键 = `"METHOD /path"`）决定谁被折起来；**当前 97 条 core / 37 条 internal**
+（2026-10-15 实测，共 134 条；上一轮 2026-09-26 是 87 / 33）。
 `Endpoint.Hidden` 由 `Role` 推导（internal ⇒ hidden），所以「抽屉看到的」和
 「AI 按 role 分流的」永远是同一份判断 —— `catalog_test.go` 断言两者一致。
 
