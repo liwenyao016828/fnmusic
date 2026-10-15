@@ -346,7 +346,7 @@
         指路按钮直接切到那个顶层视图（走导航总线，见 setup 里的 openChartManager）。
       -->
 
-      <div v-if="currentMode === 'discover' && discoverTab === 'charts'" class="max-w-[1500px] mx-auto px-5 py-6 pb-28 sm:px-8 sm:py-7 sm:pb-24">
+      <div v-if="currentMode === 'discover' && discoverTab === 'charts'" class="max-w-[1500px] mx-auto px-5 py-6 pb-28 pb-dock sm:px-8 sm:py-7 sm:pb-24">
         <!--
           控制条搬走了：勾选与开关现在住在顶层导航的「榜单管理」页。
           这里只留一行指路 —— 这一页是**浏览**用的，用户是来看榜单的，不该被一排开关挡在最上面。
@@ -426,7 +426,7 @@
       </div>
 
       <!-- 2. 发现大厅 - 精选歌单网格 -->
-      <div v-else-if="currentMode === 'discover' && discoverTab === 'playlists'" class="max-w-[1500px] mx-auto px-5 py-6 pb-28 sm:px-8 sm:py-7 sm:pb-24">
+      <div v-else-if="currentMode === 'discover' && discoverTab === 'playlists'" class="max-w-[1500px] mx-auto px-5 py-6 pb-28 pb-dock sm:px-8 sm:py-7 sm:pb-24">
         <div v-if="isLoadingPlaylists" class="flex flex-col items-center justify-center py-20 text-gray-400">
           <Loader2 class="w-8 h-8 animate-spin text-emerald-500 mb-2" />
           <p class="text-xs">正在载入精选歌单...</p>
@@ -459,7 +459,7 @@
       </div>
 
       <!-- 3. 歌曲列表视图 (搜索结果 / 榜单详情 / 歌单详情 公用) -->
-      <div v-else class="max-w-[1500px] mx-auto px-5 py-6 pb-28 sm:px-8 sm:py-7 sm:pb-24 space-y-3">
+      <div v-else class="max-w-[1500px] mx-auto px-5 py-6 pb-28 pb-dock sm:px-8 sm:py-7 sm:pb-24 space-y-3">
         <!-- 头部导航与批量操作工具栏 -->
         <div class="bg-white rounded-xl border border-gray-100 p-3.5 shadow-xs">
           <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-2.5">
@@ -843,7 +843,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, nextTick, onMounted, onUnmounted, onActivated, onDeactivated } from 'vue'
+import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { markLoaded, isStale } from '../services/viewCache'
 import { SearchAPI, ChartsAPI, MonitorAPI, AccountAPI, PushAPI, ChartInjectAPI, ConfigAPI } from '../api/client'
 import { lxRuntime } from '../engine/lx-runtime'
@@ -854,7 +854,7 @@ import QRCode from 'qrcode'
 import DownloadQualityModal from './DownloadQualityModal.vue'
 import InlineNotice from './InlineNotice.vue'
 import QrLoginModal from './QrLoginModal.vue'
-import { onNavigate, navigateTo } from '../services/navBus'
+import { onNavigate, navigateTo, currentView } from '../services/navBus'
 import {
   chartInject,
   chartInjectKey,
@@ -2084,12 +2084,18 @@ onUnmounted(() => {
   stopQrPolling()
 })
 
-// ── 页面现在**常驻**（SwipePager 不再卸载），所以"离开"改用 onDeactivated ──
+// ── 页面现在**常驻**（SwipePager 不再卸载）──
+// ⚠️ 2026-10-17：原实现挂在 onActivated/onDeactivated 上 —— SwipePager 没有 KeepAlive，
+// 那两个钩子从来不会触发（死代码）。改成 watch 导航总线的共享 currentView：
 // ① 切走时停掉二维码轮询：不然它在后台每 2 秒继续打后端，结果没人看。
-onDeactivated(() => stopQrPolling())
 // ② 切回来时按 TTL 决定要不要静默刷新（stale-while-revalidate）：
 //    先显示缓存（不闪骨架屏），超过 TTL 再在后台拉一遍、原地替换。
-onActivated(() => {
+watch(currentView, (v, prev) => {
+  if (prev === 'search' && v !== 'search') {
+    stopQrPolling()
+    return
+  }
+  if (v !== 'search') return
   if (!isStale('search')) return
   loadToplists(selectedChartPlatform.value)
   loadPlaylists(selectedCategory.value, selectedChartPlatform.value)

@@ -124,8 +124,9 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, onActivated, onDeactivated } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { markLoaded, isStale } from '../services/viewCache'
+import { currentView, segmentOf } from '../services/navBus'
 import { LogsAPI, MonitorAPI, PushAPI } from '../api/client'
 import { logEntries, clearLocalLog } from '../services/appLog'
 import PageShell from './PageShell.vue'
@@ -321,16 +322,23 @@ function startTimer() {
 onMounted(() => {
   reload()
   markLoaded('logs')
-  // 运行日志每 5 秒拉一次（可关）—— 排查时能边操作边看
-  startTimer()
+  // 运行日志每 5 秒拉一次（可关）—— 排查时能边操作边看；
+  // 挂载时不在这个页（system 视图的 logs 段）就别起轮询，切过来时上面的 watch 会起。
+  if (currentView.value === 'system' && segmentOf('system') === 'logs') startTimer()
 })
 
 onUnmounted(stopTimer)
 
-// 常驻页面：切走就停轮询（否则日志页在后台每 5 秒打一次后端），切回来按 TTL 刷一次
-onDeactivated(stopTimer)
-onActivated(() => {
-  startTimer()
-  if (isStale('logs')) reload()
-})
+// 常驻页面：切走就停轮询（否则日志页在后台每 5 秒打一次后端），切回来按 TTL 刷一次。
+// ⚠️ 2026-10-17：原实现挂在 onActivated/onDeactivated 上 —— SwipePager 没有 KeepAlive，
+// 那两个钩子从来不会触发（死代码）。改成 watch 导航总线的共享 currentView：
+// 日志是 system 视图的默认段；在「设置」段停留时也把轮询停掉（看不到还每 5 秒打后端）。
+watch(
+  [currentView, () => (currentView.value === 'system' ? segmentOf('system') : '')],
+  ([v, seg]) => {
+    if (v !== 'system' || seg !== 'logs') { stopTimer(); return }
+    startTimer()
+    if (isStale('logs')) reload()
+  },
+)
 </script>

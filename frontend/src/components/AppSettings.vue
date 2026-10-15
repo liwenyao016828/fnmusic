@@ -99,6 +99,116 @@
         </div>
       </section>
 
+      <!-- 下载行为（v2.5.0 从旧「曲库管家 → 下载」标签搬来；四个开关行为原样未动） -->
+      <section class="rounded-xl border border-gray-200 bg-white p-4 sm:p-5">
+        <h2 class="text-[15px] font-semibold text-gray-800">下载行为</h2>
+        <p class="mt-1 text-[12px] text-gray-500">
+          这几个开关都<b>真的控制行为</b>（不放「点了没反应」的开关）：打开后对应的自动动作开始占磁盘和带宽。
+        </p>
+        <div class="mt-3 space-y-2">
+          <div class="flex items-start justify-between gap-3 rounded-xl border border-gray-100 bg-gray-50/60 px-3 py-2.5">
+            <div class="min-w-0">
+              <div class="flex items-center gap-2">
+                <span class="text-[13px] font-medium text-gray-800">收藏自动下载并绑定本地</span>
+                <span :class="['text-[10px] px-1.5 py-0.5 rounded-full border font-mono',
+                               favAutoDownload ? 'border-emerald-200 bg-emerald-50 text-emerald-600' : 'border-gray-200 text-gray-400']">
+                  {{ favAutoDownload ? '已开启' : '已关闭' }}
+                </span>
+              </div>
+              <p class="mt-0.5 text-[11px] leading-relaxed text-gray-500">
+                收藏/加歌单的在线曲目会后台下到 NAS，之后听硬盘那份。
+                <span class="text-amber-600">占磁盘和带宽（无损一首几十兆）。</span>
+              </p>
+            </div>
+            <button
+              role="switch"
+              :aria-checked="favAutoDownload ? 'true' : 'false'"
+              :disabled="favAutoBusy"
+              @click="toggleFavAutoDownload"
+              :class="['relative w-11 h-6 rounded-full transition-colors shrink-0 disabled:opacity-50',
+                       favAutoDownload ? 'bg-emerald-500' : 'bg-gray-200']">
+              <span :class="['absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform',
+                             favAutoDownload ? 'translate-x-5' : '']" />
+            </button>
+          </div>
+
+          <div class="flex items-start justify-between gap-3 rounded-xl border border-gray-100 bg-gray-50/60 px-3 py-2.5">
+            <div class="min-w-0">
+              <div class="flex items-center gap-2">
+                <span class="text-[13px] font-medium text-gray-800">边听边下</span>
+                <span :class="['text-[10px] px-1.5 py-0.5 rounded-full border font-mono',
+                               teeEnabled ? 'border-emerald-200 bg-emerald-50 text-emerald-600' : 'border-gray-200 text-gray-400']">
+                  {{ teeEnabled ? '已开启' : '已关闭' }}
+                </span>
+              </div>
+              <p class="mt-0.5 text-[11px] leading-relaxed text-gray-500">
+                边听边写进磁盘，整首播完提升进曲库。
+                <span class="text-gray-400">半截文件会丢弃。</span>
+              </p>
+            </div>
+            <button
+              role="switch"
+              :aria-checked="teeEnabled ? 'true' : 'false'"
+              :disabled="teeBusy"
+              @click="toggleTee"
+              :class="['relative w-11 h-6 rounded-full transition-colors shrink-0 disabled:opacity-50',
+                       teeEnabled ? 'bg-emerald-500' : 'bg-gray-200']">
+              <span :class="['absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform',
+                             teeEnabled ? 'translate-x-5' : '']" />
+            </button>
+          </div>
+
+          <div class="rounded-xl border border-gray-100 bg-gray-50/60 px-3 py-2.5">
+            <div class="flex items-center justify-between gap-3">
+              <div class="min-w-0">
+                <span class="text-[13px] font-medium text-gray-800">下载时附带</span>
+                <p class="mt-0.5 text-[11px] leading-relaxed text-gray-500">
+                  只影响曲率触发的下载。<span class="text-amber-600">缺省都是开</span>。
+                </p>
+              </div>
+            </div>
+            <div class="mt-2 space-y-2 border-t border-gray-100 pt-2">
+              <div class="flex items-start justify-between gap-3">
+                <div class="min-w-0">
+                  <div class="text-xs font-medium text-gray-700">歌词</div>
+                  <p class="mt-0.5 text-[11px] leading-relaxed text-gray-500">
+                    内嵌进标签，另写同名 <code class="font-mono">.lrc</code>。
+                  </p>
+                </div>
+                <button
+                  role="switch"
+                  :aria-checked="lyricAutoDownload ? 'true' : 'false'"
+                  :disabled="lyricBusy"
+                  @click="toggleLyric"
+                  :class="['relative w-11 h-6 rounded-full transition-colors shrink-0 disabled:opacity-50',
+                           lyricAutoDownload ? 'bg-emerald-500' : 'bg-gray-200']">
+                  <span :class="['absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform',
+                                 lyricAutoDownload ? 'translate-x-5' : '']" />
+                </button>
+              </div>
+              <div class="flex items-start justify-between gap-3">
+                <div class="min-w-0">
+                  <div class="text-xs font-medium text-gray-700">封面内嵌</div>
+                  <p class="mt-0.5 text-[11px] leading-relaxed text-gray-500">
+                    写进文件标签，否则飞牛里没封面。
+                  </p>
+                </div>
+                <button
+                  role="switch"
+                  :aria-checked="coverEmbed ? 'true' : 'false'"
+                  :disabled="coverBusy"
+                  @click="toggleCover"
+                  :class="['relative w-11 h-6 rounded-full transition-colors shrink-0 disabled:opacity-50',
+                           coverEmbed ? 'bg-emerald-500' : 'bg-gray-200']">
+                  <span :class="['absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform',
+                                 coverEmbed ? 'translate-x-5' : '']" />
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <!-- ③ 关于 / 导出日志 -->
       <section class="rounded-xl border border-gray-200 bg-white p-4 sm:p-5">
         <h2 class="text-[15px] font-semibold text-gray-800">关于</h2>
@@ -168,6 +278,50 @@ const cacheDir = ref('')
 const savingDirs = ref(false)
 const dirError = ref('')
 
+// ── 下载行为四开关（v2.5.0 从旧 LibraryManager 搬来，逻辑原样）──
+// 歌词/封面缺省「开」（后端 pkg/config LyricAutoDownloadOn 同语义：没这个键就是开），
+// 收藏自动下载/边听边下缺省「关」（占磁盘和带宽，宁可不自动生效）。
+const favAutoDownload = ref(false)
+const favAutoBusy = ref(false)
+const teeEnabled = ref(false)
+const teeBusy = ref(false)
+const lyricAutoDownload = ref(true)
+const lyricBusy = ref(false)
+const coverEmbed = ref(true)
+const coverBusy = ref(false)
+
+function asDefaultOn(v) {
+  return v === undefined || v === null ? true : !!v
+}
+
+// toggleDownloadSwitch 抽出来是因为这四个开关是同一套动作：
+// 乐观更新 → 写服务端 → 失败回滚（界面不能骗人）。整份带回其它字段（选择性合并）。
+async function toggleDownloadSwitch(onRef, busyRef, key) {
+  const next = !onRef.value
+  onRef.value = next
+  busyRef.value = true
+  try {
+    const res = await ConfigAPI.save({ ...(cfgRaw.value || {}), [key]: next })
+    const bad = apiError(res)
+    if (bad) {
+      onRef.value = !next
+      flash(fail('保存下载行为', new Error(bad)), true)
+      return
+    }
+    cfgRaw.value = res?.data || cfgRaw.value
+  } catch (e) {
+    onRef.value = !next
+    flash(fail('保存下载行为', e), true)
+  } finally {
+    busyRef.value = false
+  }
+}
+
+function toggleFavAutoDownload() { return toggleDownloadSwitch(favAutoDownload, favAutoBusy, 'fav_auto_download') }
+function toggleTee() { return toggleDownloadSwitch(teeEnabled, teeBusy, 'tee_enabled') }
+function toggleLyric() { return toggleDownloadSwitch(lyricAutoDownload, lyricBusy, 'lyric_auto_download') }
+function toggleCover() { return toggleDownloadSwitch(coverEmbed, coverBusy, 'cover_embed') }
+
 const version = ref('')
 const exporting = ref(false)
 const exportNote = ref('')
@@ -189,6 +343,11 @@ async function load() {
       downloadDir.value = cfg.download_dir || ''
       // 空串 = 默认位置，与「没配」在界面上是同一件事
       cacheDir.value = cfg.cache_dir || ''
+      // 下载行为四开关：歌词/封面缺省开，另两个缺省关
+      favAutoDownload.value = !!cfg.fav_auto_download
+      teeEnabled.value = !!cfg.tee_enabled
+      lyricAutoDownload.value = asDefaultOn(cfg.lyric_auto_download)
+      coverEmbed.value = asDefaultOn(cfg.cover_embed)
     }
   } catch (e) {
     flash(fail('读取设置', e), true)

@@ -40,8 +40,8 @@ function collectSources(dir) {
   return out
 }
 
-test('五个顶层视图，顺序 = 导航顺序 = 滑动顺序', () => {
-  assert.deepEqual(VIEW_IDS, ['search', 'library', 'sources', 'accounts', 'system'])
+test('八个顶层视图，顺序 = 导航顺序 = 滑动顺序', () => {
+  assert.deepEqual(VIEW_IDS, ['search', 'library', 'tidy', 'push', 'download', 'sources', 'accounts', 'system'])
 })
 
 test('每个视图都有全名与窄屏短名（缺一个导航上就是空白按钮）', () => {

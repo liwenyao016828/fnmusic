@@ -26,7 +26,7 @@
       40px 的横向留白等于白白吃掉一成宽度，而这一页要塞的是两列的卡片。
       （用户 2026-10-08：「适配手机端，一行可以用两个元素」）
     -->
-    <div class="mx-auto w-full max-w-[1500px] px-3 py-3 pb-28 sm:px-8 sm:py-7 sm:pb-24">
+    <div class="mx-auto w-full max-w-[1500px] px-3 py-3 pb-28 pb-dock sm:px-8 sm:py-7 sm:pb-24">
 
       <!-- 标题区 -->
       <div v-if="title || $slots.actions" class="mb-3 flex flex-wrap items-end justify-between gap-2 sm:mb-6 sm:gap-3">

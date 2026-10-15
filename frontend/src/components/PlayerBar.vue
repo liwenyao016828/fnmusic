@@ -20,7 +20,7 @@
     而飞牛那边内容是从胶囊底下穿过去的。现在整条 `pointer-events-none`（点两侧等于点到内容），
     只有中间那颗胶囊收指针事件 → 「只有中间的播放栏」。
   -->
-  <div class="pb-safe pointer-events-none fixed inset-x-0 bottom-0 z-40 select-none">
+  <div class="pb-safe ys-playerbar-root ys-dock-lift pointer-events-none fixed inset-x-0 bottom-0 z-40 select-none">
 
     <!-- ── 折叠态 ── -->
     <div v-if="collapsed && currentSong" class="px-3 pb-2">
@@ -45,7 +45,7 @@
     -->
     <div
       v-if="searchOpen"
-      class="pointer-events-auto fixed inset-x-0 bottom-0 z-50 px-3 pb-2 sm:pb-3"
+      class="pointer-events-auto ys-dock-lift fixed inset-x-0 bottom-0 z-50 px-3 pb-2 sm:pb-3"
       @focusout="onSearchFocusOut"
     >
       <form
@@ -95,7 +95,7 @@
       title="搜索"
       aria-label="搜索歌曲、歌手、专辑"
       aria-expanded="false"
-      class="ys-glass ys-player-glass ys-barsearch-icon pointer-events-auto fixed bottom-2 right-3 z-50 grid h-11 w-11 place-items-center rounded-full text-white/85 transition-colors hover:text-white sm:bottom-3"
+      class="ys-glass ys-player-glass ys-barsearch-icon ys-dock-lift [--dock-base:8px] sm:[--dock-base:12px] pointer-events-auto fixed right-3 z-50 grid h-11 w-11 place-items-center rounded-full text-white/85 transition-colors hover:text-white"
     >
       <Search class="h-4 w-4" />
     </button>

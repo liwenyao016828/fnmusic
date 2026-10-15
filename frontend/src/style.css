@@ -54,6 +54,35 @@
   --ys-toast-ok: rgba(5, 150, 105, 0.93);
   --ys-toast-warn: rgba(217, 119, 6, 0.95);
   --ys-toast-fail: rgba(190, 18, 60, 0.94);
+
+  /* 手机底部标签栏占位高度（2026-10-17 导航框架重做）：
+     桌面 0；触屏 = 56px 标签栏 + 底部安全区。
+     PlayerBar / FeedbackHost / 页面底部留白（PageShell、SearchView）都按它避让，
+     别再各自写死 bottom 值 —— 加一处、全站生效。 */
+  --dock-h: 0px;
+}
+
+/* 手机底部标签栏：只在触屏出现。判定统一用 hover:none + pointer:coarse
+   （与全站其他触屏分支一致，不用屏宽 —— 窄桌面窗口不该长出手机导航）。 */
+.mobile-dock { display: none; }
+@media (hover: none) and (pointer: coarse) {
+  :root { --dock-h: calc(56px + var(--safe-bottom)); }
+  .mobile-dock { display: block; }
+  /* 播放条根容器的 pb-safe 与 --dock-h 里的安全区重复（抬升量已含 safe-bottom），
+     触屏下归零，避免播放条与标签栏之间凭空多一条 Home 指示条高度的缝。 */
+  .ys-playerbar-root { padding-bottom: 0; }
+}
+
+/* 底部标签栏避让：把自己的 bottom 在原始值之上再抬高 --dock-h（桌面为 0，无副作用）。
+   ⚠️ 这条**不放进 @layer** —— 不层叠的规则优先级高于 Tailwind 的 bottom-* 工具类，
+   所以元素上残留的 bottom-0 / bottom-2 会被它稳稳盖住，不必逐个删。
+   --dock-base 是元素自己的原始 bottom（搜索图标移动端 8px、sm 12px），用任意属性传入。 */
+.ys-dock-lift { bottom: calc(var(--dock-base, 0px) + var(--dock-h)); }
+
+/* 页面底部留白：触屏下在原有 7rem（pb-28）之上再加 --dock-h，给底部标签栏让位。
+   只写进触屏分支 —— 桌面的 pb-28 / sm:pb-24 原样保留，不受影响。 */
+@media (hover: none) and (pointer: coarse) {
+  .pb-dock { padding-bottom: calc(7rem + var(--dock-h)); }
 }
 
 

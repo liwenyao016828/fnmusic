@@ -1,39 +1,67 @@
 /**
  * 顶层视图注册表（单一数据源）。
  *
- * 2026-10-15 重构引入。在此之前，「有哪些顶层页」这件事散在三处：
- *   1. App.vue 的 `navItems`（导航按钮）
- *   2. App.vue 模板里的 `<template #view-xxx>`（滑动分页的槽位）
- *   3. 各处组件里的 `navigateTo('logs')` / `navigateTo('charts')`（深链）
- * 三处各写一遍，于是出现了「音源管理是个整页，却不在导航里，只能靠顶栏胶囊进」
- * 这种结构性问题 —— 加页时漏登记一处就成了孤儿页。
+ * 2026-10-15 引入；2026-10-17 随「导航框架重做」扩成 8 视图 + 分组。
+ * 「有哪些顶层页」只在这里定义一次：导航（桌面侧栏 / 手机底部标签栏）、
+ * 滑动顺序、页内分段、深链解析、角标全部读它。
  *
- * 现在这些 id 只在这里定义一次；导航、滑动顺序、页内分段、深链解析全部读它。
+ * 2026-10-17 重做的动机：原「曲库管家」一页塞了 5 个标签（本地音乐/推送/下载/
+ * 补全整理/自动下载记录），一个 3480 行的巨型组件；顶层导航只有 5 项，
+ * 但真正高频的功能（下载队列、订阅）都藏在二级标签里。现在按**用户功能**拆平：
  *
- * 页内分段（segments）：把「二级但不该单独占导航位」的页并进顶层视图。
- * 例如「榜单管理」与「发现」都是浏览类内容，合并成「发现」页的两段；
- * 「日志」与「设置」都是工具页，合并成「系统」页的两段。
- * 分段只影响呈现，**深链仍可直接命中某一段**（resolveRoute('logs')）。
+ * ```
+ * listen 组：发现音乐（发现/榜单） · 本地曲库
+ * manage 组：补全整理 · 订阅更新 · 下载（队列/歌单/记录）
+ * config 组：音源管理 · 账号连接 · 系统（日志/设置）
+ * ```
+ *
+ * 页内分段（segments）：把「二级但不该单独占导航位」的页并进顶层视图，
+ * 深链仍可直接命中某一段（resolveRoute('autodl') → download/autodl）。
+ *
+ * 分组（group）只影响**呈现**（桌面侧栏的分组标题；手机底部栏取前 4 个
+ * 高频视图 + 「更多」抽屉），不影响 id 与深链。
  */
 
-/** 顶层视图。wizard 顺序 = 导航从左到右 = 手指左右滑动的顺序。 */
+/** 导航分组。桌面侧栏按此顺序分节；手机底部标签栏不用它。 */
+export const NAV_GROUPS = [
+  { id: 'listen', name: '听' },
+  { id: 'manage', name: '管' },
+  { id: 'config', name: '配置' },
+]
+
+/** 顶层视图。数组顺序 = 桌面侧栏顺序 = 手指左右滑动的顺序。 */
 export const VIEWS = [
   {
     id: 'search',
     name: '发现音乐',
     short: '发现',
+    group: 'listen',
     segments: [
       { id: 'discover', name: '发现' },
       { id: 'charts', name: '榜单' },
     ],
   },
-  { id: 'library', name: '曲库管家', short: '曲库' },
-  { id: 'sources', name: '音源管理', short: '音源' },
-  { id: 'accounts', name: '账号连接', short: '账号' },
+  { id: 'library', name: '本地曲库', short: '曲库', group: 'listen' },
+  { id: 'tidy', name: '补全整理', short: '整理', group: 'manage' },
+  { id: 'push', name: '订阅更新', short: '订阅', group: 'manage' },
+  {
+    id: 'download',
+    name: '下载',
+    short: '下载',
+    group: 'manage',
+    segments: [
+      { id: 'queue', name: '队列' },
+      { id: 'playlist', name: '歌单' },
+      { id: 'autodl', name: '自动记录' },
+    ],
+  },
+  { id: 'sources', name: '音源管理', short: '音源', group: 'config' },
+  { id: 'accounts', name: '账号连接', short: '账号', group: 'config' },
   {
     id: 'system',
     name: '系统',
     short: '系统',
+    group: 'config',
     segments: [
       { id: 'logs', name: '日志' },
       { id: 'settings', name: '设置' },
@@ -42,6 +70,13 @@ export const VIEWS = [
 ]
 
 export const VIEW_IDS = VIEWS.map((v) => v.id)
+
+/** 手机底部标签栏：前 4 个高频视图 + 「更多」抽屉（抽屉里是其余全部）。 */
+export const MOBILE_TAB_IDS = ['search', 'library', 'push', 'download']
+
+export function viewsOfGroup(groupId) {
+  return VIEWS.filter((v) => v.group === groupId)
+}
 
 /** 默认落在哪一段（没有分段时返回空串） */
 export function defaultSegment(viewId) {
@@ -65,8 +100,9 @@ export function isView(viewId) {
  * 必须保留这层映射，否则这些历史入口会静默失效：
  *   · 组件里的 `navigateTo('logs')` / `navigateTo('charts')` / `navigateTo('settings')`
  *     （十几处：报错提示里的「看日志」、榜单的「▶ 看一眼」、设置里跳日志等）
+ *   · 浏览器偏好里存的旧 id（library_tab='nas'/'complete'/'autodl'…）
  *   · 收藏/外链里手工敲过的地址
- * 改版把「榜单管理」并进发现、「日志」「设置」并进系统，这里就是那一刀。
+ * 2026-10-17 把「曲库管家」的 5 个标签拆成 4 个顶层视图，这里就是那一刀。
  */
 const ALIASES = {
   charts: { view: 'search', segment: 'charts' },
@@ -75,6 +111,12 @@ const ALIASES = {
   settings: { view: 'system', segment: 'settings' },
   // 历史写法：顶栏胶囊曾是唯一的音源入口，个别地方写成 netsources
   netsources: { view: 'sources', segment: '' },
+  // ── 原「曲库管家」侧栏项（library_tab 偏好 / statusItems 跳转 / 下载抽屉「查看队列」）──
+  nas: { view: 'library', segment: '' },
+  complete: { view: 'tidy', segment: '' },
+  queue: { view: 'download', segment: 'queue' },
+  playlist: { view: 'download', segment: 'playlist' },
+  autodl: { view: 'download', segment: 'autodl' },
 }
 
 /**

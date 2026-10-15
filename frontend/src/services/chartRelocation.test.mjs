@@ -38,6 +38,7 @@ const nasExplorerVue = read('../components/NasExplorer.vue')
 const appVue = read('../App.vue')
 const libraryViewJs = read('./libraryView.js')
 const navBusJs = read('./navBus.js')
+const navViewsJs = read('./navViews.js')
 
 test('榜单管理：只由 App.vue 挂载，曲库管家不再 import 它', () => {
   assert.ok(
@@ -86,7 +87,14 @@ test('榜单管理：不再占导航位，而是「发现」页的第二段（20
   assert.ok(appVue.includes('#view-search'), '应有 view-search 插槽（SwipePager 按插槽名渲染视图）')
 })
 
-test('本地音乐：搬进曲库管家，挂载点与侧栏项都在', () => {
+test('本地音乐：就是「本地曲库」顶层视图本身（2026-10-15 框架重做）', () => {
+  // 重做后不再有「曲库管家五合一 + nas 侧栏项」的结构：LibraryManager 被掏空成
+  // 「本地曲库」这一个顶层视图（navViews.js 登记），壳里只剩 NasExplorer。
+  assert.match(
+    navViewsJs,
+    /\{ id: 'library', name: '本地曲库'/,
+    'navViews 里应有 library 顶层视图（本地曲库）',
+  )
   assert.ok(
     libraryManagerVue.includes("import NasExplorer from './NasExplorer.vue'"),
     'LibraryManager 应 import NasExplorer',
@@ -95,15 +103,10 @@ test('本地音乐：搬进曲库管家，挂载点与侧栏项都在', () => {
     libraryManagerVue.includes('<NasExplorer'),
     'LibraryManager 模板应挂载 NasExplorer',
   )
-  assert.match(
-    libraryManagerVue,
-    /\{ id: 'nas', name: '本地音乐'/,
-    'tabs 列表里应有 nas 侧栏项',
-  )
   // 子页不能自带 PageShell：否则会出现两个标题栏、双份内边距与两个滚动容器。
   assert.ok(
     !nasExplorerVue.includes('<PageShell'),
-    'NasExplorer 不该再自带 PageShell（外壳由曲库管家提供）',
+    'NasExplorer 不该再自带 PageShell（外壳由 LibraryManager 提供）',
   )
 })
 
@@ -173,11 +176,18 @@ test('榜单管理：「看一眼」回到发现页仍走导航总线，负载�
     'navigateTo 应带可选 payload 参数',
   )
   assert.ok(appVue.includes('onNavigate('), 'App.vue 的订阅应接住 payload 参数')
+  // 2026-10-15 框架重做：切视图的**唯一入口**是 navBus.goView —— 共享 currentView 的写入、
+  // 「认不出的 id 回落发现页 + warn」都在它里面做；navigateTo 内部已调过它。App.vue 的
+  // 壳级 goView 只是薄包装（委托 navBusGoView + 补懒挂载账），订阅回调也只补 mountedSegs，
+  // 不再自己拼 resolveRoute/切视图（否则同一个 unknown id 会弹两条提示）。
   assert.ok(
-    appVue.includes('onNavigate((view, payload) => goView(view, payload))'),
-    'App.vue 应把总线请求交给 goView（唯一入口，统一过 resolveRoute）',
+    navBusJs.includes('currentView.value = route.view'),
+    'navBus.goView 应按解析结果写共享 currentView（唯一切视图入口）',
   )
-  assert.ok(appVue.includes('currentView.value = r.view'), 'App.vue 应按解析结果切视图')
+  assert.ok(
+    appVue.includes('goView as navBusGoView'),
+    'App.vue 应把壳级 goView 委托给 navBus.goView（单一数据源）',
+  )
 })
 
 test('榜单管理：升为顶层视图后穿上 PageShell（不再自绘页头）', () => {

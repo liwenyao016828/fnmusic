@@ -10,7 +10,7 @@
     aria-live 让读屏软件念出来（原来的实现没有）。
   -->
   <div
-    class="pointer-events-none fixed bottom-24 left-1/2 z-40 flex w-full max-w-[92vw] -translate-x-1/2 flex-col items-center gap-2"
+    class="pointer-events-none fixed z-40 flex w-full max-w-[92vw] left-1/2 -translate-x-1/2 flex-col items-center gap-2 ys-dock-lift [--dock-base:6rem]"
     aria-live="polite"
     aria-atomic="false"
   >

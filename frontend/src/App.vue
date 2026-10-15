@@ -1,10 +1,23 @@
 <template>
   <!--
-    ⚠️ 这里以前是 `h-screen w-screen`：移动端浏览器地址栏会把 100vh 的一部分占掉，
+    ⚠️ 根容器以前是 `h-screen w-screen`：移动端浏览器地址栏会把 100vh 的一部分占掉，
     底部播放条被顶到可视区之外（露一半或整条看不见）；`w-screen` 还会在 iOS 上横向溢出。
     改成 `.app-viewport`（style.css 里的 100dvh）—— 手机横竖屏、地址栏收起/展开都跟着走。
+
+    2026-10-17 导航框架重做（用户口径：「整体导航栏及内部功能交互逻辑还是不对，
+    做一个适配我的功能的 ui 框架」）：
+      · 桌面（sm+）＝**左侧栏**：品牌（点开开放接口抽屉）→ 分组导航（听 / 管 / 配置）
+        → 底部音源胶囊 + 播放器入口。顶栏导航条整个退役。
+      · 手机＝精简顶栏（品牌 + 音源 + 播放器）+ **底部标签栏**（4 个高频视图 + 「更多」）。
+        次要入口（整理 / 音源 / 账号 / 系统）收进「更多」**右侧抽屉**——
+        用户口径：「说『样式』指的是呈现方式，不是位置；次要入口要做右侧抽屉」。
+      · 顶层视图 8 个，注册表在 services/navViews.js（单一数据源）；SwipePager 仍是
+        内容宿主，滑动顺序 = 注册表顺序。
+      · `--dock-h`（style.css）＝手机底部标签栏总高（桌面 0）。PlayerBar / FeedbackHost /
+        各页底部留白全部叠加它避让，不再各写各的魔数。
+      · 原「导航密度三档」机制（fitNavDensity）删除：侧栏放得下全名，不再需要实测降档。
   -->
-  <div class="app-viewport flex flex-col w-full bg-[#f5f7f9] text-gray-800 overflow-hidden select-none font-sans">
+  <div class="app-viewport flex w-full bg-[#f5f7f9] text-gray-800 overflow-hidden select-none font-sans">
 
     <!-- ── Immersive Player (shown when playing) ── -->
     <ImmersivePlayer
@@ -30,140 +43,400 @@
       @clear-playlist="clearPlaylist"
     />
 
-    <!-- ── Normal View ── -->
-    <!--
-      Top Navigation Bar（桌面尺度对齐 fnmusic-flow 的 .topbar：高 68px / 内边距 30px / 间距 28px / 品牌 20px）
-
-      **桌面端完全按原样**（`sm:` 以上）：品牌（`lg` 才显示文字）+ 图标&名称、`h-[68px]`、`gap-7`、`px-8`、
-      `whitespace-nowrap`、`overflow-hidden` —— 一个字都没改。
-
-      **只有手机改：单行 + 只留图标**（用户 2026-09-26 定的口径）。
-      原因：品牌 + 5 个导航项 + 右侧 3 个入口本来有 460px+，而原实现是全宽度通用的
-      `whitespace-nowrap + overflow-hidden` 单行 ⇒ 手机上「音源 / 开放接口 / 打开播放器」三个入口
-      **直接被裁到屏幕外、点不到**。
-      ❗**别用折行解决**（第一版折了两行，用户原话否掉：「顶部菜单显示不全的话，可以不显示文字啊，不要两行」）。
-      做法：导航项手机只显示 14px 图标（`p-2.5` ⇒ 34px 一个，名称靠 `sm:inline` 才出现）、
-      音源按钮文字截到 `max-w-[56px]`、开放接口 / 打开播放器本来就只在手机显示图标。
-      导航容器挂 `min-w-0 overflow-x-auto no-scrollbar`：极端窄屏（≤360px）时它自己横向滚动，
-      **任何入口都不许被裁掉**（滚动是最后一道保险）。
-      手机上只剩图标的按钮，必须给 `:title` + `:aria-label`。
-
-      ⚠️ 顺序固定为「品牌 → 导航 → 右侧入口（`ml-auto` 顶到最右）」，别把导航排到右侧入口后面 —— 位置会错。
-
-      ⚠️ `pt-safe` 挂在 header 上、真实内边距挂在内层 div 上 —— 两者挂同一元素会互相覆盖
-      （自定义工具类排在核心工具类之后，`pt-safe` 会把 `py-2` 顶掉）。
-    -->
-    <header class="pt-safe bg-white border-b border-gray-100 z-20 shrink-0">
-      <div ref="headerRowRef" class="flex items-center gap-x-2 px-3 py-2 sm:h-[68px] sm:gap-7 sm:px-8 sm:py-0 sm:whitespace-nowrap sm:overflow-hidden">
-
+    <!-- ════════════ 桌面左侧栏（sm+ 才出现；手机用底部标签栏） ════════════ -->
+    <aside class="z-20 hidden w-[204px] shrink-0 flex-col border-r border-gray-100 bg-white sm:flex">
       <!--
         品牌 + 开放接口入口。
         2026-09-27 用户要求：原来右上角那个带文字的「开放接口」按钮挪到**软件图标本身**
         ——点图标就滑出开放接口抽屉，图标保留。
         提示只用**动态图标**（外圈旋转光环 + 图标呼吸，见 style.css 的 .brand-halo），
         不写任何提示文字；抽屉开着时动效暂停。
-        品牌文字保留；`shrink-0` 别动，否则窄屏会被导航挤扁。
       -->
-      <button
-        type="button"
-        class="brand-halo group flex shrink-0 items-center gap-2.5 rounded-[13px] cursor-pointer"
-        :class="{ 'brand-halo-open': showApiDrawer }"
-        title="开放接口 · 供 AI 与外部程序调用"
-        aria-label="开放接口"
-        @click="showApiDrawer = true"
-      >
-        <span class="relative grid h-9 w-9 shrink-0 place-items-center rounded-[11px] bg-emerald-500 text-white transition-colors group-hover:bg-emerald-600">
-          <span class="brand-core-glow" aria-hidden="true"></span>
-          <Disc class="brand-disc w-[18px] h-[18px]" />
-          <!-- 中间圆点（静止，盖住 Disc 的内圈）+ 它外层那个**呼吸的圆圈** -->
-          <span class="brand-core" aria-hidden="true"></span>
-          <span class="brand-core-ring" aria-hidden="true"></span>
-        </span>
-        <span class="hidden lg:block leading-tight text-left">
-          <b class="block text-[20px] font-extrabold tracking-[-0.5px] text-gray-800">曲率</b>
-          <small class="block text-[11px] font-medium text-gray-400">AI Music Hub</small>
-        </span>
-      </button>
-
-      <!-- 分段切换器：灰底容器 + 白色胶囊高亮当前项（flow 的 .switcher：padding 4px / radius 11px / gap 3px）
-           ⚠️ 顺序必须是「品牌 → 导航 → 右侧入口」（右侧那组靠 `ml-auto` 顶到最右），
-           **别把导航排到右侧入口后面** —— 那样胶囊会被顶到屏幕最右边，位置就错了。
-           ⚠️ 手机上**只留图标**（名称靠 `sm:inline` 才出现），理由见本节开头。 -->
-      <nav ref="navElRef" class="flex min-w-0 items-center gap-0.5 bg-gray-100 p-1 rounded-[11px] overflow-x-auto no-scrollbar sm:shrink-0">
+      <div class="flex h-[68px] shrink-0 items-center px-4">
         <button
-          v-for="item in navItems"
-          :key="item.id"
-          @click="currentView = item.id"
-          :title="item.name"
-          :aria-label="item.name"
-          :class="[
-            'p-2.5 sm:px-[18px] sm:py-2 rounded-lg text-[13px] font-bold transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0',
-            currentView === item.id
-              ? 'bg-white text-emerald-600 shadow-sm'
-              : 'text-gray-500 hover:text-gray-700'
-          ]"
+          type="button"
+          class="brand-halo group flex shrink-0 cursor-pointer items-center gap-2.5 rounded-[13px]"
+          :class="{ 'brand-halo-open': showApiDrawer }"
+          title="开放接口 · 供 AI 与外部程序调用"
+          aria-label="开放接口"
+          @click="showApiDrawer = true"
         >
-          <component :is="item.icon" class="w-3.5 h-3.5 shrink-0" />
-          <!-- 名称按**实测放不放得下**决定（见 fitNavDensity）：full=全名 / short=精简名 / icon=只留图标。
-               ⚠️ 这里不再用 `sm:` 断点判断宽窄 —— 用户 2026-09-28 反馈「上方的空了一大半就判定为最小的图标了」，
-                  断点那套在「窗口宽但容器窄」「侧栏预览」这类情况下会白扔一大片空间。 -->
-          <span v-if="navDensityEffective === 'full'">{{ item.name }}</span>
-          <span v-else-if="navDensityEffective === 'short'">{{ item.short }}</span>
-          <!-- 下载队列进行中数量角标（下载已并入曲库管家，角标挂在它上面） -->
-          <span
-            v-if="item.id === 'library' && downloadManager.activeCount.value > 0"
-            class="px-1.5 rounded-full bg-emerald-500 text-white text-[10px] font-bold animate-pulse shrink-0"
-          >
-            {{ downloadManager.activeCount.value }}
+          <span class="relative grid h-9 w-9 shrink-0 place-items-center rounded-[11px] bg-emerald-500 text-white transition-colors group-hover:bg-emerald-600">
+            <span class="brand-core-glow" aria-hidden="true"></span>
+            <Disc class="brand-disc h-[18px] w-[18px]" />
+            <!-- 中间圆点（静止，盖住 Disc 的内圈）+ 它外层那个**呼吸的圆圈** -->
+            <span class="brand-core" aria-hidden="true"></span>
+            <span class="brand-core-ring" aria-hidden="true"></span>
+          </span>
+          <span class="text-left leading-tight">
+            <b class="block text-[17px] font-extrabold tracking-[-0.5px] text-gray-800">曲率</b>
+            <small class="block text-[10px] font-medium text-gray-400">AI Music Hub</small>
           </span>
         </button>
+      </div>
 
-        <!-- 显示密度切换：「大 / 中 / 小」三档循环，用图标表达当前档位（文字说明走 title） -->
-        <button
-          @click="cycleNavDensity"
-          class="ml-0.5 hidden h-7 w-7 shrink-0 place-items-center rounded-lg text-gray-400 transition-colors hover:bg-white hover:text-emerald-600 sm:grid"
-          :title="navDensityTitle"
-          :aria-label="navDensityTitle"
-        >
-          <component :is="navDensityIcon" class="w-3.5 h-3.5" />
-        </button>
+      <!-- 分组导航：听（发现/曲库）· 管（整理/订阅/下载）· 配置（音源/账号/系统）。
+           分组只影响呈现（navViews.js 的 group 字段），id 与深链不变。 -->
+      <nav class="no-scrollbar min-h-0 flex-1 space-y-5 overflow-y-auto px-2.5 py-4" aria-label="主导航">
+        <div v-for="g in navGroups" :key="g.id">
+          <p class="mb-1.5 px-2.5 text-[10px] font-bold tracking-[0.14em] text-gray-300">{{ g.name }}</p>
+          <div class="space-y-0.5">
+            <button
+              v-for="item in g.items"
+              :key="item.id"
+              @click="goView(item.id)"
+              :title="item.name"
+              :aria-label="item.name"
+              :aria-current="currentView === item.id ? 'page' : undefined"
+              :class="[
+                'flex w-full items-center gap-2.5 rounded-[10px] px-2.5 py-2 text-[13px] font-bold transition-colors',
+                currentView === item.id
+                  ? 'bg-emerald-50 text-emerald-600'
+                  : 'text-gray-500 hover:bg-gray-50 hover:text-gray-700'
+              ]"
+            >
+              <component :is="item.icon" class="h-4 w-4 shrink-0" />
+              <span class="truncate">{{ item.name }}</span>
+              <!-- 下载进行中的数量角标（跟着任务走，队列空了自动消失） -->
+              <span
+                v-if="item.id === 'download' && downloadManager.activeCount.value > 0"
+                class="ml-auto shrink-0 animate-pulse rounded-full bg-emerald-500 px-1.5 text-[10px] font-bold text-white"
+              >{{ downloadManager.activeCount.value }}</span>
+              <!-- 订阅总数角标（静态计数，灰色不抢眼） -->
+              <span
+                v-else-if="item.id === 'push' && pushEngine.pushTotalCount.value > 0"
+                class="ml-auto shrink-0 rounded-full bg-gray-100 px-1.5 text-[10px] font-bold text-gray-400"
+              >{{ pushEngine.pushTotalCount.value }}</span>
+            </button>
+          </div>
+        </div>
       </nav>
 
-      <div class="ml-auto flex items-center gap-1.5 sm:gap-2.5 shrink-0">
-        <!--
-          当前音源状态胶囊（2026-10-15 重构明确其身份）。
-          以前它同时干两件事：显示「当前音源是谁」+ 作为音源管理的**唯一入口**
-          —— 而音源管理明明是个整页却不在导航里。现在音源进了导航（第二项），
-          胶囊退回本职：一条状态摘要（圆点=有没有配好），顺手可点进音源页，
-          不再是「想改音源只能摸这个胶囊」。
-        -->
+      <!-- 任务状态：只列「需要你处理」的项；都为 0 时给一句明确结论，而不是摆一排 0。
+           跳转走 resolveRoute 的别名表（tab: 'complete'→整理页、'download'→下载队列…）。 -->
+      <div class="shrink-0 border-t border-gray-100 px-2.5 py-3" v-if="statusItems.length">
+        <p class="mb-1.5 px-2.5 text-[10px] font-bold tracking-[0.14em] text-gray-300">任务状态</p>
+        <div class="space-y-0.5">
+          <button
+            v-for="s in statusItems" :key="s.id"
+            @click="s.go()"
+            class="flex w-full items-center gap-2 rounded-[10px] px-2.5 py-1.5 text-left text-[12px] text-gray-600 transition-colors hover:bg-gray-50"
+            :title="s.label"
+          >
+            <component :is="s.icon" class="h-3.5 w-3.5 shrink-0" :class="s.iconClass" />
+            <span class="min-w-0 flex-1 truncate">{{ s.label }}</span>
+            <span class="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-bold" :class="s.badgeClass">{{ s.count }}</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- 侧栏底部：音源状态胶囊（顺手可点进音源页）+ 播放器入口 -->
+      <div class="shrink-0 space-y-2 border-t border-gray-100 p-3">
         <button
           @click="navigateTo('sources')"
-          class="px-2 sm:px-3 py-2 sm:py-1.5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-medium flex min-w-0 items-center gap-1 sm:gap-1.5 hover:bg-emerald-100 transition-all max-w-[76px] sm:max-w-[170px] lg:max-w-none whitespace-nowrap shrink"
+          class="flex w-full min-w-0 items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-emerald-700 transition-all hover:bg-emerald-100"
           :title="`当前音源：${activeSourceMeta?.name || '未设置'} —— 点开管理音源`"
           :aria-label="`当前音源：${activeSourceMeta?.name || '未设置'}，打开音源管理`"
         >
-          <span class="w-1.5 h-1.5 rounded-full shrink-0" :class="activeSourceMeta ? 'bg-emerald-500' : 'bg-amber-400'"></span>
-          <!-- 窄屏只放假两字（长名会把胶囊顶出屏幕，用户 2026-09-28 反馈）；宽屏给全名。两种都不许溢出。 -->
-          <span class="truncate text-[11px] sm:hidden">{{ shortSourceName }}</span>
-          <span class="hidden truncate text-[11px] sm:inline sm:text-xs">{{ activeSourceMeta?.name || '音源' }}</span>
+          <span class="h-1.5 w-1.5 shrink-0 rounded-full" :class="activeSourceMeta ? 'bg-emerald-500' : 'bg-amber-400'"></span>
+          <span class="truncate text-[11px]">{{ activeSourceMeta?.name || '音源' }}</span>
         </button>
-
-        <!-- Open immersive player button -->
         <button
           v-if="currentSong"
           @click="showImmersive = true"
-          class="p-2 sm:p-1.5 rounded-lg border border-emerald-200 text-emerald-600 bg-emerald-50 hover:bg-emerald-100 transition-all shrink-0"
+          class="flex w-full items-center justify-center gap-1.5 rounded-[10px] border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-[11px] font-bold text-emerald-600 transition-all hover:bg-emerald-100"
           title="打开播放器"
         >
-          <Disc class="w-4 h-4" />
+          <Disc class="h-3.5 w-3.5" />
+          <span class="truncate">打开播放器</span>
         </button>
       </div>
+    </aside>
 
+    <!-- ════════════ 内容列（手机顶栏 + 主内容） ════════════ -->
+    <div class="flex min-w-0 flex-1 flex-col">
+
+      <!-- 手机顶栏：品牌图标（= 开放接口入口）+ 音源胶囊 + 播放器入口，单行只留图标。
+           用户 2026-09-26 口径：「顶部菜单显示不全的话，可以不显示文字啊，不要两行」。
+           ⚠️ `pt-safe` 挂在 header 上、真实内边距挂在内层 div 上 —— 两者挂同一元素会互相覆盖。 -->
+      <header class="pt-safe z-20 shrink-0 border-b border-gray-100 bg-white sm:hidden">
+        <div class="flex h-12 items-center gap-2 px-3">
+          <button
+            type="button"
+            class="brand-halo group flex shrink-0 cursor-pointer items-center rounded-[13px]"
+            :class="{ 'brand-halo-open': showApiDrawer }"
+            title="开放接口 · 供 AI 与外部程序调用"
+            aria-label="开放接口"
+            @click="showApiDrawer = true"
+          >
+            <span class="relative grid h-9 w-9 shrink-0 place-items-center rounded-[11px] bg-emerald-500 text-white transition-colors group-hover:bg-emerald-600">
+              <span class="brand-core-glow" aria-hidden="true"></span>
+              <Disc class="brand-disc h-[18px] w-[18px]" />
+              <span class="brand-core" aria-hidden="true"></span>
+              <span class="brand-core-ring" aria-hidden="true"></span>
+            </span>
+          </button>
+
+          <div class="ml-auto flex shrink-0 items-center gap-1.5">
+            <!-- 当前音源状态胶囊：窄屏只放前两字（长名会把胶囊顶出屏幕，用户 2026-09-28 反馈） -->
+            <button
+              @click="navigateTo('sources')"
+              class="flex min-w-0 max-w-[92px] items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1.5 text-emerald-700 transition-all hover:bg-emerald-100"
+              :title="`当前音源：${activeSourceMeta?.name || '未设置'} —— 点开管理音源`"
+              :aria-label="`当前音源：${activeSourceMeta?.name || '未设置'}，打开音源管理`"
+            >
+              <span class="h-1.5 w-1.5 shrink-0 rounded-full" :class="activeSourceMeta ? 'bg-emerald-500' : 'bg-amber-400'"></span>
+              <span class="truncate text-[11px]">{{ shortSourceName }}</span>
+            </button>
+            <button
+              v-if="currentSong"
+              @click="showImmersive = true"
+              class="shrink-0 rounded-lg border border-emerald-200 bg-emerald-50 p-2 text-emerald-600 transition-all hover:bg-emerald-100"
+              title="打开播放器"
+              aria-label="打开播放器"
+            >
+              <Disc class="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <!-- Main Content -->
+      <!-- 主内容区：左右滑动切页（跟手位移 / 到头阻尼 / 速度判定，见 components/SwipePager.vue） -->
+      <SwipePager :order="swipeOrderList" :current="currentView" @update:current="v => goView(v)">
+        <!--
+          发现（含榜单）—— 2026-10-15 重构把「榜单管理」从顶层页降为**页内第二段**。
+          理由：它和「发现」都是浏览内容，平级排在导航里只会让导航越来越长（用户反馈过「挤」）；
+          而整页替换又会丢掉另一段的滚动位置与已加载数据（切回来要重新等）。
+          所以两段都常驻、v-show 切换 —— 与 SwipePager 对页面的策略一致。
+        -->
+        <template #view-search>
+          <div class="flex h-full min-h-0 flex-col">
+            <div class="shrink-0 border-b border-[var(--ys-border)] bg-white/95 px-3 py-2 backdrop-blur">
+              <SegmentedControl
+                :segments="decoratedSegments('search')"
+                :model-value="segmentOf('search')"
+                @update:model-value="v => setSegment('search', v)"
+              />
+            </div>
+            <div class="grid min-h-0 flex-1 grid-cols-1">
+              <SearchView
+                v-if="segMounted('search', 'discover')"
+                v-show="segmentOf('search') === 'discover'"
+                :active-source="activeSourceMeta"
+                :active-source-ids="activeSourceIds"
+                :play-mode="playMode"
+                :current-song="currentSong"
+                :is-playing="isPlaying"
+                @update:play-mode="val => playMode = val"
+                @play="playSong"
+                @play-all="playAllSongs"
+                @navigate="view => goView(view)"
+                @prev="playPrev"
+                @next="playNext"
+                @toggle-play="togglePlay"
+                :bar-query="barSearchQuery"
+                :bar-search-nonce="barSearchNonce"
+              />
+              <!--
+                它自己的「▶ 看一眼」通过 emit 上来，走导航总线把负载带给发现页 ——
+                navigateTo('search', {chartPreview}) 会被 onNavigate 解析成「发现页 + discover 段」，
+                负载仍由 SearchView 自己订阅总线消费，不新增第二套跳转协议。
+              -->
+              <ChartManager
+                v-if="segMounted('search', 'charts')"
+                v-show="segmentOf('search') === 'charts'"
+                @preview="item => navigateTo('search', { chartPreview: item })"
+              />
+            </div>
+          </div>
+        </template>
+        <template #view-library>
+          <LibraryManager class="h-full" @play="playSong" />
+        </template>
+        <template #view-tidy>
+          <TidyView class="h-full" />
+        </template>
+        <template #view-push>
+          <PushManager class="h-full" />
+        </template>
+        <!-- 下载（队列 / 歌单 / 自动记录）：分段器由壳提供，DownloadHub 读 navBus 的当前分段 -->
+        <template #view-download>
+          <div class="flex h-full min-h-0 flex-col">
+            <div class="shrink-0 border-b border-[var(--ys-border)] bg-white/95 px-3 py-2 backdrop-blur">
+              <SegmentedControl
+                :segments="decoratedSegments('download')"
+                :model-value="segmentOf('download')"
+                @update:model-value="v => setSegment('download', v)"
+              />
+            </div>
+            <DownloadHub class="min-h-0 flex-1" :active-source="activeSourceMeta" />
+          </div>
+        </template>
+        <template #view-sources>
+          <SourceManager
+            @source-changed="onSourceChanged"
+            @pool-changed="onPoolChanged"
+            @open-disclaimer="openDisclaimer(false)"
+          />
+        </template>
+        <template #view-accounts><AccountManager /></template>
+        <!--
+          系统（日志 + 设置）—— 两者都是「工具/配置」页：出问题时来看，改完就走。
+          并成一段之后导航短了一项，且这两件事本来就常一起来（日志里看到失败 → 去设置改参数）。
+        -->
+        <template #view-system>
+          <div class="flex h-full min-h-0 flex-col">
+            <div class="shrink-0 border-b border-[var(--ys-border)] bg-white/95 px-3 py-2 backdrop-blur">
+              <SegmentedControl
+                :segments="decoratedSegments('system')"
+                :model-value="segmentOf('system')"
+                @update:model-value="v => setSegment('system', v)"
+              />
+            </div>
+            <div class="grid min-h-0 flex-1 grid-cols-1">
+              <LogViewer v-if="segMounted('system', 'logs')" v-show="segmentOf('system') === 'logs'" />
+              <AppSettings v-if="segMounted('system', 'settings')" v-show="segmentOf('system') === 'settings'" />
+            </div>
+          </div>
+        </template>
+      </SwipePager>
+    </div>
+
+    <!-- ════════════ 手机底部标签栏（.mobile-dock：只在触屏 + 窄屏出现，见 style.css） ════════════
+         4 个高频视图 + 「更多」。总高 = --dock-h（56px + 底部安全区），
+         PlayerBar / FeedbackHost / 页面底部留白都按这个变量避让。 -->
+    <nav class="mobile-dock fixed inset-x-0 bottom-0 z-30 border-t border-gray-100 bg-white/95 pb-[var(--safe-bottom)] backdrop-blur supports-[backdrop-filter]:bg-white/85" aria-label="主导航">
+      <div class="flex h-14 items-stretch">
+        <button
+          v-for="item in mobileTabs"
+          :key="item.id"
+          @click="goView(item.id)"
+          :title="item.name"
+          :aria-label="item.name"
+          :aria-current="currentView === item.id ? 'page' : undefined"
+          :class="[
+            'relative flex flex-1 flex-col items-center justify-center gap-0.5 text-[10px] font-bold transition-colors',
+            currentView === item.id ? 'text-emerald-600' : 'text-gray-400'
+          ]"
+        >
+          <component :is="item.icon" class="h-[18px] w-[18px]" />
+          <span>{{ item.short }}</span>
+          <span
+            v-if="item.id === 'download' && downloadManager.activeCount.value > 0"
+            class="absolute right-[26%] top-1.5 min-w-[15px] rounded-full bg-emerald-500 px-1 text-center text-[9px] font-bold leading-[15px] text-white"
+          >{{ downloadManager.activeCount.value }}</span>
+        </button>
+        <button
+          @click="showMoreDrawer = true"
+          title="更多"
+          aria-label="更多（整理 / 音源 / 账号 / 系统）"
+          :aria-expanded="showMoreDrawer"
+          :class="[
+            'relative flex flex-1 flex-col items-center justify-center gap-0.5 text-[10px] font-bold transition-colors',
+            showMoreDrawer ? 'text-emerald-600' : 'text-gray-400'
+          ]"
+        >
+          <MoreHorizontal class="h-[18px] w-[18px]" />
+          <span>更多</span>
+          <!-- 有「需要你处理」的事项时给个红点提示（抽屉里才是完整列表） -->
+          <span
+            v-if="statusItems.some((s) => s.tone === 'error' || s.tone === 'warn')"
+            class="absolute right-[22%] top-2 h-1.5 w-1.5 rounded-full bg-rose-500"
+          ></span>
+        </button>
       </div>
-    </header>
+    </nav>
 
-    <!-- ── 全局下载队列抽屉（快捷查看；完整页面见导航「下载队列」） ── -->
+    <!-- ════════════ 「更多」右侧抽屉（手机低频入口） ════════════
+         方向与 ApiDrawer（左）相反：这个从右滑入，跟触发它的「更多」按钮同侧。 -->
+    <Teleport to="body">
+      <Transition
+        enter-active-class="transition-opacity duration-300 ease-out"
+        enter-from-class="opacity-0"
+        enter-to-class="opacity-100"
+        leave-active-class="transition-opacity duration-200 ease-in"
+        leave-from-class="opacity-100"
+        leave-to-class="opacity-0"
+      >
+        <div
+          v-if="showMoreDrawer"
+          class="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs sm:hidden"
+          @click="showMoreDrawer = false"
+        ></div>
+      </Transition>
+      <Transition
+        enter-active-class="transition-transform duration-300 ease-out motion-reduce:duration-0"
+        enter-from-class="translate-x-full"
+        enter-to-class="translate-x-0"
+        leave-active-class="transition-transform duration-200 ease-in motion-reduce:duration-0"
+        leave-from-class="translate-x-0"
+        leave-to-class="translate-x-full"
+      >
+        <aside
+          v-if="showMoreDrawer"
+          class="fixed inset-y-0 right-0 z-50 flex w-[280px] max-w-[85vw] flex-col bg-white shadow-2xl sm:hidden"
+          aria-label="更多页面"
+        >
+          <div class="flex h-14 shrink-0 items-center justify-between border-b border-gray-100 px-4 pt-[var(--safe-top)]">
+            <b class="text-[14px] font-bold text-gray-700">更多</b>
+            <button
+              @click="showMoreDrawer = false"
+              class="grid h-8 w-8 place-items-center rounded-lg text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600"
+              title="关闭"
+              aria-label="关闭"
+            >
+              <X class="h-4 w-4" />
+            </button>
+          </div>
+          <nav class="min-h-0 flex-1 space-y-1 overflow-y-auto p-3">
+            <button
+              v-for="item in moreItems"
+              :key="item.id"
+              @click="goView(item.id)"
+              :class="[
+                'flex w-full items-center gap-3 rounded-[10px] px-3 py-3 text-[13px] font-bold transition-colors',
+                currentView === item.id ? 'bg-emerald-50 text-emerald-600' : 'text-gray-600 hover:bg-gray-50'
+              ]"
+            >
+              <component :is="item.icon" class="h-[18px] w-[18px] shrink-0" />
+              <span class="flex-1 text-left">{{ item.name }}</span>
+              <span
+                v-if="item.id === 'tidy'"
+                class="shrink-0 text-[10px] font-medium text-gray-300"
+              >歌词 · 封面 · 查重</span>
+            </button>
+
+            <!-- 任务状态（手机：抽屉里看；桌面：侧栏底部） -->
+            <template v-if="statusItems.length">
+              <p class="mt-3 mb-1 px-3 text-[10px] font-bold tracking-[0.14em] text-gray-300">任务状态</p>
+              <button
+                v-for="s in statusItems" :key="s.id"
+                @click="goView(s.tab); showMoreDrawer = false"
+                class="flex w-full items-center gap-2 rounded-[10px] px-3 py-2 text-left text-[12px] text-gray-600 transition-colors hover:bg-gray-50"
+                :title="s.label"
+              >
+                <component :is="s.icon" class="h-3.5 w-3.5 shrink-0" :class="s.iconClass" />
+                <span class="min-w-0 flex-1 truncate">{{ s.label }}</span>
+                <span class="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-bold" :class="s.badgeClass">{{ s.count }}</span>
+              </button>
+            </template>
+          </nav>
+          <div class="shrink-0 border-t border-gray-100 p-3 pb-[calc(0.75rem+var(--safe-bottom))]">
+            <button
+              @click="navigateTo('sources')"
+              class="flex w-full min-w-0 items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-2 text-emerald-700 transition-all hover:bg-emerald-100"
+              :title="`当前音源：${activeSourceMeta?.name || '未设置'} —— 点开管理音源`"
+            >
+              <span class="h-1.5 w-1.5 shrink-0 rounded-full" :class="activeSourceMeta ? 'bg-emerald-500' : 'bg-amber-400'"></span>
+              <span class="truncate text-[11px]">{{ activeSourceMeta?.name || '音源' }}</span>
+            </button>
+          </div>
+        </aside>
+      </Transition>
+    </Teleport>
+
+    <!-- ── 全局下载队列抽屉（快捷查看；完整页面见「下载」视图） ── -->
     <DownloadDrawer :active-source="activeSourceMeta" @open-full="openQueuePage" />
 
     <!--
@@ -173,7 +446,7 @@
     -->
     <DownloadDirModal />
 
-    <!-- ── 开放接口抽屉（侧边滑出，与下载抽屉同款交互） ── -->
+    <!-- ── 开放接口抽屉（从品牌图标右侧滑出） ── -->
     <ApiDrawer v-model="showApiDrawer" />
 
     <!-- ── 全局免责声明与服务条款弹窗 ── -->
@@ -182,105 +455,12 @@
       :is-force="isDisclaimerForce"
     />
 
-    <!-- Main Content -->
-    <!-- 主内容区：左右滑动切页（跟手位移 / 到头阻尼 / 速度判定，见 components/SwipePager.vue） -->
-    <SwipePager :order="swipeOrderList" :current="currentView" @update:current="v => currentView = v">
-      <!--
-        发现（含榜单）—— 2026-10-15 重构把「榜单管理」从顶层页降为**页内第二段**。
-        理由：它和「发现」都是浏览内容，平级排在导航里只会让导航越来越长（用户反馈过「挤」）；
-        而整页替换又会丢掉另一段的滚动位置与已加载数据（切回来要重新等）。
-        所以两段都常驻、v-show 切换 —— 与 SwipePager 对页面的策略一致。
-      -->
-      <template #view-search>
-        <div class="flex h-full min-h-0 flex-col">
-          <div class="shrink-0 border-b border-[var(--ys-border)] bg-white/95 px-3 py-2 backdrop-blur">
-            <SegmentedControl
-              :segments="decoratedSegments('search')"
-              :model-value="segmentOf('search')"
-              @update:model-value="v => setSegment('search', v)"
-            />
-          </div>
-          <div class="grid min-h-0 flex-1 grid-cols-1">
-            <SearchView
-              v-if="segMounted('search', 'discover')"
-              v-show="segmentOf('search') === 'discover'"
-              :active-source="activeSourceMeta"
-              :active-source-ids="activeSourceIds"
-              :play-mode="playMode"
-              :current-song="currentSong"
-              :is-playing="isPlaying"
-              @update:play-mode="val => playMode = val"
-              @play="playSong"
-              @play-all="playAllSongs"
-              @navigate="view => goView(view)"
-              @prev="playPrev"
-              @next="playNext"
-              @toggle-play="togglePlay"
-              :bar-query="barSearchQuery"
-              :bar-search-nonce="barSearchNonce"
-            />
-            <!--
-              它自己的「▶ 看一眼」通过 emit 上来，走导航总线把负载带给发现页 ——
-              navigateTo('search', {chartPreview}) 会被 onNavigate 解析成「发现页 + discover 段」，
-              负载仍由 SearchView 自己订阅总线消费，不新增第二套跳转协议。
-            -->
-            <ChartManager
-              v-if="segMounted('search', 'charts')"
-              v-show="segmentOf('search') === 'charts'"
-              @preview="item => navigateTo('search', { chartPreview: item })"
-            />
-          </div>
-        </div>
-      </template>
-      <template #view-sources>
-        <SourceManager
-          @source-changed="onSourceChanged"
-          @pool-changed="onPoolChanged"
-          @open-disclaimer="openDisclaimer(false)"
-        />
-      </template>
-      <template #view-library>
-        <LibraryManager
-          :active-source="activeSourceMeta"
-          :tab="libraryTab"
-          :tab-nonce="libraryNavNonce"
-          @play="playSong"
-        />
-      </template>
-      <template #view-accounts><AccountManager /></template>
-      <!--
-        系统（日志 + 设置）—— 两者都是「工具/配置」页：出问题时来看，改完就走。
-        并成一段之后导航短了一项，且这两件事本来就常一起来（日志里看到失败 → 去设置改参数）。
-      -->
-      <template #view-system>
-        <div class="flex h-full min-h-0 flex-col">
-          <div class="shrink-0 border-b border-[var(--ys-border)] bg-white/95 px-3 py-2 backdrop-blur">
-            <SegmentedControl
-              :segments="decoratedSegments('system')"
-              :model-value="segmentOf('system')"
-              @update:model-value="v => setSegment('system', v)"
-            />
-          </div>
-          <div class="grid min-h-0 flex-1 grid-cols-1">
-            <LogViewer v-if="segMounted('system', 'logs')" v-show="segmentOf('system') === 'logs'" />
-            <AppSettings v-if="segMounted('system', 'settings')" v-show="segmentOf('system') === 'settings'" />
-          </div>
-        </div>
-      </template>
-    </SwipePager>
-
     <!-- 帧率探针：只有地址带 ?fps=1 时出现（真机上用来判断"卡不卡"，正式界面看不到） -->
-    <FpsMeter v-if="showFpsMeter" />
+    <FpsMeter v-if="showFpsMeter" class="fixed bottom-4 right-4 z-50" />
 
-    <!--
-      全局瞬时提示（替代 alert / 各页自造的提示条）：唯一渲染点是 FeedbackHost，
-      通道在 services/feedback.js —— 任何组件都能直接 `fail('…', {scope})`，
-      失败时点一下就跳到「日志」段看详情。以前这里只有 App.vue 自己能用（单槽位 appToast），
-      于是各页只好自己再造一套提示，措辞还各不相同。
-    -->
+    <!-- 全站瞬时提示的唯一渲染点（services/feedback.js 管队列，这里只管样式与位置） -->
     <FeedbackHost />
 
-    <!-- Bottom Player Bar -->
     <PlayerBar
       :current-song="currentSong"
       :is-playing="isPlaying"
@@ -317,7 +497,7 @@
 </template>
 
 <script setup>
-import { ref, computed, nextTick, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { lxRuntime } from './engine/lx-runtime'
 import { SearchAPI, SourcesAPI, NasAPI } from './api/client'
 import SearchView from './components/SearchView.vue'
@@ -327,6 +507,9 @@ import ImmersivePlayer from './components/ImmersivePlayer.vue'
 import DownloadDrawer from './components/DownloadDrawer.vue'
 import DownloadDirModal from './components/DownloadDirModal.vue'
 import LibraryManager from './components/LibraryManager.vue'
+import TidyView from './components/TidyView.vue'
+import PushManager from './components/PushManager.vue'
+import DownloadHub from './components/DownloadHub.vue'
 import ChartManager from './components/ChartManager.vue'
 import ApiDrawer from './components/ApiDrawer.vue'
 import DisclaimerModal from './components/DisclaimerModal.vue'
@@ -339,52 +522,64 @@ import FeedbackHost from './components/FeedbackHost.vue'
 import SegmentedControl from './components/SegmentedControl.vue'
 import { downloadManager } from './services/downloadManager'
 import { bridgeWorker } from './services/bridgeWorker'
+import { pushEngine } from './services/pushEngine'
 import { loadPref, savePref, loadBool, initUiPrefs } from './services/prefs'
-import { onNavigate, navigateTo } from './services/navBus'
-import { VIEWS, segmentsOf, defaultSegment, resolveRoute } from './services/navViews'
-import { fail as feedbackFail, warn as feedbackWarn } from './services/feedback'
+import {
+  currentView, segState, segmentOf, goView as navBusGoView,
+  onNavigate, navigateTo,
+} from './services/navBus'
+import { VIEWS, NAV_GROUPS, MOBILE_TAB_IDS, viewsOfGroup, segmentsOf, defaultSegment, resolveRoute } from './services/navViews'
+import { fail as feedbackFail } from './services/feedback'
 import { invalidate } from './services/viewCache'
 import { logError } from './services/appLog'
-import { Compass, Trophy, Cpu, Disc, Library, UserRound, ScrollText, Settings, LayoutList, AlignJustify, LayoutGrid } from 'lucide-vue-next'
+import {
+  Compass, Trophy, Cpu, Disc, Library, UserRound, ScrollText, Settings,
+  Wand2, Send, Download, ListMusic, ListOrdered, CloudDownload,
+  MoreHorizontal, X, Loader2, AlertTriangle,
+} from 'lucide-vue-next'
+import { sidebarStatusItems } from './services/libraryView'
 
 // ?fps=1 → 显示帧率探针（见 components/FpsMeter.vue）
 const showFpsMeter = typeof location !== 'undefined' && location.search.includes('fps=1')
 
-const currentView = ref('search')
+// ── 当前视图与分段：共享状态住在 navBus（2026-10-17 导航框架重做）──
+// 桌面侧栏、手机底部标签栏、SwipePager、各视图的 stale 刷新 watch 读的是同一个
+// currentView/segState —— 组件调 navigateTo('download','queue') 就能切页，不必知道壳的结构。
 
-// 切视图的**唯一入口**：所有跳转（导航按钮、组件 emit、播放条按钮、导航总线）
-// 都从这里过一遍 resolveRoute()，谁也别自己拼 id。
-// 「榜单管理」并进发现、「日志」「设置」并进系统之后，`navigateTo('logs')` 这类老调用
-// 必须落到 `{view:'system', segment:'logs'}`，否则十几个入口会静默失效。
-// 认不出的 id 回落到发现页并记一条 warn —— 宁可多跳一次首页，也不要「点了没反应」。
+// 切视图的**唯一入口**：所有跳转（导航按钮、组件 emit、播放条按钮）都从这里过。
+// 共享状态的写入与「认不出的 id 回落发现页 + warn」都在 navBus.goView 里做
+// （单一数据源，别处别再拼 id）；壳只补自己的账 —— mountedSegs 懒挂载标记。
 function goView(view, payload) {
-  const r = resolveRoute(view)
-  if (r.unknown) feedbackWarn(`未知的页面入口「${view}」，已回到发现页`, { scope: '导航' })
-  currentView.value = r.view
-  if (r.segment) setSegment(r.view, r.segment)
+  const seg = typeof payload === 'string' ? payload : undefined
+  const r = navBusGoView(view, seg)
+  if (r.segment) markSegMounted(r.view, r.segment)
   return payload
 }
 
-// 组件里的「查看日志」等入口通过导航总线请求切视图 —— 免去给每个组件加 emit + props
-// （见 services/navBus.js 的说明）。currentView 的归属不变，这里只是多接一个触发源。
+// 组件里的「查看日志」等入口通过导航总线请求切视图 —— 免去给每个组件加 emit + props。
+// navigateTo 内部已经调过 navBus.goView 写了共享状态（unknown 的 warn 也在那边发），
+// 这里**只补壳自己的账**：不再重复解析跳转，否则同一个 unknown id 会弹两条提示。
 //
 // payload 仍只有一条路由：{ chartPreview } —— 负载交给 SearchView 自己消费
-// （它订阅同一个总线，见 SearchView 的 onChartNav），这里只负责切视图与段位。
-const offNavigate = onNavigate((view, payload) => goView(view, payload))
+// （它订阅同一个总线，见 SearchView 的 onChartNav）。
+const offNavigate = onNavigate((view, payload) => {
+  const seg = typeof payload === 'string' ? payload : undefined
+  const r = resolveRoute(view, seg)
+  if (!r.unknown && r.segment) markSegMounted(r.view, r.segment)
+})
 
 // 滑动切页的视图顺序（computed 是惰性的，即使 navItems 声明在后面也不会踩 TDZ）
 const swipeOrderList = computed(() => navItems.map((item) => item.id))
 
 // 写操作 → 数据失效（见 services/viewCache.js 的「事件失效」）：
-// 下载完成意味着磁盘上多了文件，「本地音乐」「曲库管家」两页的缓存就旧了。
-// 不在这里直接发请求，只标过期 —— 用户切过去时（onActivated）才刷，避免无谓的后台流量。
+// 下载完成意味着磁盘上多了文件，「本地曲库」「补全整理」两页的缓存就旧了。
+// 不在这里直接发请求，只标过期 —— 用户切过去时（各视图的 stale watch）才刷，避免无谓的后台流量。
 watch(
   () => downloadManager.completedCount.value,
   (now, before) => { if (before !== undefined && now > before) invalidate('nas', 'library') },
 )
 
 onUnmounted(offNavigate)
-onUnmounted(() => { if (navResizeObserver) { navResizeObserver.disconnect(); navResizeObserver = null } })
 
 /**
  * 全局轻提示（替代 alert）已搬到 `services/feedback.js` + `components/FeedbackHost.vue`。
@@ -404,6 +599,12 @@ const isDisclaimerForce = ref(false)
 // 开放接口抽屉
 const showApiDrawer = ref(false)
 
+// 手机「更多」右侧抽屉（次要入口：整理 / 音源 / 账号 / 系统）。
+// 用户口径：「说『样式』指的是呈现方式，不是位置；次要入口要做右侧抽屉」。
+const showMoreDrawer = ref(false)
+// 切了视图就收抽屉 —— 不管跳转来自抽屉里的按钮还是别处（navigateTo 深链）
+watch(currentView, () => { showMoreDrawer.value = false })
+
 // 播放条收起状态（用户 2026-09-28：「播放时，在右边增加一个收缩图标」）。
 // 只影响这一条栏，不打断音频播放；展开入口在细条上。
 const playerBarCollapsed = ref(false)
@@ -414,7 +615,7 @@ const barSearchQuery = ref('')
 const barSearchNonce = ref(0)
 function searchFromPlayerBar(q) {
   barSearchQuery.value = q
-  currentView.value = 'search'
+  goView('search')
   barSearchNonce.value += 1
 }
 
@@ -424,37 +625,86 @@ function openDisclaimer(force = false) {
   showDisclaimerModal.value = true
 }
 
-// 主导航（顶栏分段切换器）。
+// 主导航（桌面侧栏分组 + 手机底部标签栏 + 「更多」抽屉）。
 //
 // ⚠️ 2026-10-15 重构：**视图清单与顺序的唯一数据源已搬到 services/navViews.js**。
-// 以前这里手写一份、模板里的 `#view-xxx` 槽位再写一份、组件里的 navigateTo 又写一份，
-// 三份对不上就长出孤儿页 —— 「音源管理」就是个整页，却不在导航里，只能靠顶栏胶囊进
-// （那个胶囊还同时在显示「当前音源是谁」，一个控件干两件事，谁都不好用）。
+// 以前这里手写一份、模板里的槽位再写一份、组件里的 navigateTo 又写一份，
+// 三份对不上就长出孤儿页。
 //
-// 现在导航 7 项并成 5 项：榜单管理并进「发现」、日志与设置并进「系统」（页内分段，见
-// 下面的 seg-* 状态）。顺序 = 导航从左到右 = 手指左右滑动的顺序（swipeOrderList 读它）。
+// 2026-10-17 导航框架重做：原「曲库管家」一页塞 5 个标签（本地/推送/下载/补全/自动记录，
+// 3480 行巨型组件）被拆平 —— 高频功能（下载队列、订阅）升为顶层视图，8 视图按
+// 「听 / 管 / 配置」分组呈现。顺序 = 侧栏顺序 = 手指左右滑动的顺序（swipeOrderList 读它）。
 // 图标按 id 在这里登记 —— navViews.js 是纯数据，不 import 组件。
-const NAV_ICONS = { search: Compass, library: Library, sources: Cpu, accounts: UserRound, system: Settings }
+const NAV_ICONS = { search: Compass, library: Library, tidy: Wand2, push: Send, download: Download, sources: Cpu, accounts: UserRound, system: Settings }
 /** 页内分段的图标（顶层页有自己的图标，段位单独一套） */
-const SEGMENT_ICONS = { discover: Compass, charts: Trophy, logs: ScrollText, settings: Settings }
+const SEGMENT_ICONS = { discover: Compass, charts: Trophy, queue: ListMusic, playlist: ListOrdered, autodl: CloudDownload, logs: ScrollText, settings: Settings }
 
-// 每个导航项两个名字：`name` 是完整名，`short` 是顶栏「精简档」用的短名
-// （用户 2026-09-28 要求的三档密度见 navDensity）。
 const navItems = VIEWS.map((v) => ({ ...v, icon: NAV_ICONS[v.id] }))
+
+/** 桌面侧栏：按「听 / 管 / 配置」分组（分组只影响呈现，id 与深链不变） */
+const navGroups = NAV_GROUPS.map((g) => ({
+  ...g,
+  items: viewsOfGroup(g.id).map((v) => ({ ...v, icon: NAV_ICONS[v.id] })),
+}))
+
+/** 手机底部标签栏：4 个高频视图 + 「更多」 */
+const mobileTabs = MOBILE_TAB_IDS
+  .map((id) => navItems.find((i) => i.id === id))
+  .filter(Boolean)
+
+/** 「更多」抽屉：其余全部视图 */
+const moreItems = navItems.filter((i) => !MOBILE_TAB_IDS.includes(i.id))
 
 /** 段位清单（带图标），给 SegmentedControl 用 */
 function decoratedSegments(view) {
   return segmentsOf(view).map((s) => ({ ...s, icon: SEGMENT_ICONS[s.id] }))
 }
 
-// ── 页内分段状态：viewId → segmentId ──
-// 与 SwipePager 对「页面」的策略一致：**访问过就留着**，段位之间来回切不重建组件、
-// 不重新请求（`mountedSegs` 记住挂过哪些段；v-show 控制显示）。
-const segState = ref({})
+// ── 全局「任务状态」条（桌面侧栏底部）──
+// 原来这个列表住在 LibraryManager 的侧栏里；框架重做后它是**跨页面**的关注项，
+// 搬到壳里、由两个全局单例喂数据：downloadManager（下载队列）+ pushEngine（订阅/推送）。
+// 补全任务与自动下载失败是各自页面内的手动操作，不进这个全局列表（用户在那两页里才看得到）。
+// 顺序、文案、配色、跳转目标都由 services/libraryView.js 决定（那边有单测）；这里只翻成图标与 class。
+const STATUS_ICONS = {
+  'complete-running': Loader2, 'complete-failed': AlertTriangle,
+  'dl-active': Loader2, 'dl-failed': AlertTriangle, 'dl-paused': Loader2,
+  'push-running': Loader2, baseline: AlertTriangle,
+  'push-failed': AlertTriangle, 'push-pending': Loader2, 'push-missing': AlertTriangle,
+}
+const STATUS_ICON_CLASS = {
+  progress: 'text-emerald-500', warn: 'text-amber-500', error: 'text-rose-500', muted: 'text-gray-400',
+}
+const STATUS_BADGE_CLASS = {
+  progress: 'bg-emerald-50 text-emerald-600', warn: 'bg-amber-50 text-amber-600',
+  error: 'bg-rose-50 text-rose-600', muted: 'bg-gray-100 text-gray-500',
+}
+const statusItems = computed(() =>
+  sidebarStatusItems({
+    download: {
+      active: downloadManager.activeCount.value,
+      failed: downloadManager.failedCount.value,
+      paused: downloadManager.pausedCount.value,
+    },
+    pushRunning: pushEngine.runningIds.value.length,
+    pendingBaseline: pushEngine.pendingBaseline.value,
+    monitorStats: pushEngine.monitorStats.value,
+  }).map((s) => ({
+    ...s,
+    icon: STATUS_ICONS[s.id] || AlertTriangle,
+    iconClass: STATUS_ICON_CLASS[s.tone] || STATUS_ICON_CLASS.muted,
+    badgeClass: STATUS_BADGE_CLASS[s.tone] || STATUS_BADGE_CLASS.muted,
+    go: () => goView(s.tab),
+  })),
+)
+
+// ── 页内分段状态 ──
+// segState 本身住在 navBus（共享：DownloadHub 等子组件也读 segmentOf），
+// 壳里只加一本**懒挂载账**：与 SwipePager 对「页面」的策略一致 —— 访问过就留着，
+// 段位之间来回切不重建组件、不重新请求（mountedSegs 记住挂过哪些段；v-show 控制显示）。
 const mountedSegs = ref({})
 
-function segmentOf(view) {
-  return segState.value[view] || defaultSegment(view)
+function markSegMounted(view, segment) {
+  mountedSegs.value = { ...mountedSegs.value, [`${view}:${segment}`]: true }
 }
 
 /** 切段（模板里分段器 @update:model-value 调它） */
@@ -462,7 +712,7 @@ function setSegment(view, seg) {
   const r = resolveRoute(view, seg)
   if (r.view !== view) return
   segState.value = { ...segState.value, [view]: r.segment }
-  if (r.segment) mountedSegs.value = { ...mountedSegs.value, [`${view}:${r.segment}`]: true }
+  if (r.segment) markSegMounted(r.view, r.segment)
 }
 
 /** 这一段是否已经挂载过（懒挂载：没访问过的段不挂载，省掉它启动时的请求） */
@@ -473,61 +723,6 @@ function segMounted(view, seg) {
 // 启动时把默认段标为已挂载（否则当前段是空白）
 for (const v of VIEWS) setSegment(v.id, defaultSegment(v.id))
 
-// ── 顶栏导航的显示密度：三档（用户 2026-09-28 要求）──
-// 大 `full` = 图标 + 完整名称；中 `short` = 图标 + 精简名称（发现/本地/管家/账号/日志）；
-// 小 `icon` = 只有图标（title / aria-label 里仍带全名，信息不丢）。
-// 选择存进服务端偏好 nav_density，刷新与换端都保留；默认保持原来的桌面观感（完整名称）。
-// 手机上（<640px）**无论哪一档都只显示图标** —— 窄屏要塞下 5 个导航 + 右侧入口，
-// 多一个字的宽度就会把入口挤出去（见模板里那段注释）。
-const navDensities = ['full', 'short', 'icon']
-/** 用户选的档位 —— 它是**上限**，不是最终结果（放不下会自动降档，见 fitNavDensity） */
-const navDensity = ref(loadPref('nav_density', 'full') || 'full')
-/** 实际渲染用的档位 */
-const navDensityEffective = ref(navDensity.value)
-const navElRef = ref(null)
-const headerRowRef = ref(null)
-let navResizeObserver = null
-let navFitting = false
-
-/**
- * 按**实测宽度**决定导航显示档位：从用户选的档位开始，放不下就降一档再量，直到放下。
- *
- * 为什么不用 `sm:` 断点（原来的做法）：断点只看视口宽，不看这一行里其它东西占了多少 ——
- * 用户 2026-09-28 反馈「上方的空了一大半就判定为最小的图标了」，就是断点 + 侧栏/容器宽度
- * 对不上导致的。实测的是两个溢出信号：顶栏那一行溢出，或导航条内部溢出。
- */
-async function fitNavDensity() {
-  if (navFitting) return
-  const row = headerRowRef.value
-  const nav = navElRef.value
-  if (!row || !nav) return
-  navFitting = true
-  try {
-    const start = Math.max(0, navDensities.indexOf(navDensity.value))
-    for (let i = start; i < navDensities.length; i++) {
-      navDensityEffective.value = navDensities[i]
-      await nextTick()
-      const rowFits = row.scrollWidth <= row.clientWidth + 1
-      const navFits = nav.scrollWidth <= nav.clientWidth + 1
-      if (rowFits && navFits) return
-    }
-  } finally {
-    navFitting = false
-  }
-}
-const navDensityIcon = computed(() => ({ full: LayoutList, short: AlignJustify, icon: LayoutGrid }[navDensity.value] || LayoutList))
-const navDensityTitle = computed(() => ({
-  full: '菜单显示：图标 + 完整文字（点击切到精简）',
-  short: '菜单显示：图标 + 精简文字（点击切到仅图标）',
-  icon: '菜单显示：仅图标（点击切回完整文字）',
-}[navDensity.value] || '切换菜单显示方式'))
-function cycleNavDensity() {
-  const idx = navDensities.indexOf(navDensity.value)
-  navDensity.value = navDensities[(idx + 1) % navDensities.length]
-  savePref('nav_density', navDensity.value)
-  fitNavDensity()
-}
-
 // 音源名可能很长（用户 2026-09-28：「音源名长了后卡片会超出屏幕，可以优化为缩小后只显示前两个字」）：
 // 窄屏胶囊里只放前两个字，完整名在宽屏显示 + title 里始终能看全。
 const shortSourceName = computed(() => {
@@ -537,18 +732,14 @@ const shortSourceName = computed(() => {
 })
 
 /**
- * 从下载抽屉跳到「曲库管家 → 下载」。
+ * 从下载抽屉跳到「下载 → 队列」。
  *
- * LibraryManager 的侧栏项有自己的持久化记忆，光设 pref 对已挂载的实例无效，
- * 所以额外用一个自增 nonce 触发它的 watch。
+ * 2026-10-17 之前这里要绕道 LibraryManager 的 tab prop + nonce watch（下载是它的
+ * 二级标签）；导航框架重做后下载是顶层视图，直接深链到分段即可。
  */
-const libraryTab = ref('')
-const libraryNavNonce = ref(0)
 function openQueuePage() {
   downloadManager.close()
-  libraryTab.value = 'download'
-  libraryNavNonce.value++
-  currentView.value = 'library'
+  goView('download', 'queue')
 }
 
 const audioRef = ref(null)
@@ -607,12 +798,10 @@ onMounted(async () => {
   audioEl.value = audioRef.value
   downloadManager.loadConfig()
 
-  // 导航密度按实测宽度自适应（见 fitNavDensity）：首次挂载量一次，之后行宽变了重量
-  fitNavDensity()
-  if (headerRowRef.value && typeof ResizeObserver !== 'undefined') {
-    navResizeObserver = new ResizeObserver(() => { fitNavDensity() })
-    navResizeObserver.observe(headerRowRef.value)
-  }
+  // 推送引擎是全局单例（services/pushEngine.js）：8 秒轮询 + 自动补下载机器住在应用层，
+  // 不再挂在某个页面的生命周期上（以前绑在 LibraryManager 的 onMounted/onUnmounted，
+  // 用户不打开曲库管家就不跑 —— 这是「我没点它自己在列队」反过来的死区）。start() 幂等。
+  pushEngine.start()
 
   // 启动 AI 解析桥工作器：让外部 AI 提交的取链任务能在本页面完成
   bridgeWorker.start()
@@ -758,7 +947,7 @@ async function playSong(songOrPayload) {
     // 不是「LX 协议 vs 官方协议」的科普（那是日志/文档的事，见 HANDOVER §3.3.3）。
     const go = confirm('还没有可用的音源，无法播放。\n\n现在去「音源管理」导入一个吗？')
     if (go) {
-      currentView.value = 'sources'
+      goView('sources')
     }
     return
   }

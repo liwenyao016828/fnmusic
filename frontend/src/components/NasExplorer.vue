@@ -506,8 +506,9 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onActivated } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { markLoaded, isStale } from '../services/viewCache'
+import { currentView } from '../services/navBus'
 import { NasAPI, TagsAPI, FnosAPI } from '../api/client'
 import { loadPref, savePref, memGet, memSet } from '../services/prefs'
 import {
@@ -866,7 +867,10 @@ onMounted(async () => {
 
 // 常驻页面：切回来时如果数据超过 TTL（或下载/整理把它标成过期了）就重读当前目录。
 // 只重读目录、不重新深度扫描 —— 扫描是重活，只有用户点按钮才做。
-onActivated(() => {
+// ⚠️ 2026-10-17：原实现挂在 onActivated 上 —— SwipePager 没有 KeepAlive，那个钩子
+// 从来不会触发（死代码）。改成 watch 导航总线的共享 currentView：切回「本地曲库」就查一次。
+watch(currentView, (v) => {
+  if (v !== 'library') return
   if (!isStale('nas')) return
   loadDirectories()
   loadBrowse(currentDir.value).finally(() => markLoaded('nas'))

@@ -14,15 +14,15 @@
 
 | 项 | 内容 |
 |---|---|
-| **这是什么** | 飞牛 NAS（fnOS）上的音乐播放器 + 曲库管家，`Go` 后端 + `Vue 3` 前端，打包成 fnOS 原生 `.fpk` |
+| **这是什么** | 飞牛 NAS（fnOS）上的音乐播放器 + 曲库管理工具（下载 / 订阅追新 / 补全整理），`Go` 后端 + `Vue 3` 前端，打包成 fnOS 原生 `.fpk` |
 | **主要用途** | **供其他 AI / 外部程序调用**（帮用户下载歌曲、看歌单），其次才是人机交互 |
-| **代码规模** | 后端 **36 个包 / 273 个 `.go` / 86,474 行**（不含测试 50,918；测试 35,556）/ 后端测试函数 **1,210 个**（联网用例默认 skip，要 `LIVE_NET_TEST=1`）；前端 **32 个 `.vue` / 24,739 行 / 356 个测试**（2026-10-15 实测，复测跑 `bash scripts/audit-numbers.sh`） |
-| **文档怎么读** | 本文件只有 **§0–§10**（活文档：架构 / 坑 / 业务规则 / 接口）。**历史变更条目在 [`docs/变更记录/`](docs/变更记录/INDEX.md)** —— `INDEX.md` 是 82 个回合的目录，正文按日期段分文件（2026-09-26 从 §11 拆出：那一节积到 4,595 行 / 310KB，占全文三分之二）。别处写的「§11 ㊼ 块十」= 那里同名回合的小节 |
+| **代码规模** | 后端 **36 个包 / 273 个 `.go` / 86,474 行**（不含测试 50,918；测试 35,556）/ 后端测试函数 **1,210 个**（联网用例默认 skip，要 `LIVE_NET_TEST=1`）；前端 **35 个 `.vue` / 24,958 行 / 357 个测试**（2026-10-15 实测，复测跑 `bash scripts/audit-numbers.sh`） |
+| **文档怎么读** | 本文件只有 **§0–§10**（活文档：架构 / 坑 / 业务规则 / 接口）。**历史变更条目在 [`docs/变更记录/`](docs/变更记录/INDEX.md)** —— `INDEX.md` 是全部回合的目录（编号见其表头），正文按日期段分文件（2026-09-26 从 §11 拆出：那一节积到 4,595 行 / 310KB，占全文三分之二）。别处写的「§11 ㊼ 块十」= 那里同名回合的小节 |
 | **应用标识** | 显示名 **曲率**，`appname` **`yinshu-ai`**，端口 **8898**（旧应用 `fn-lx-player` / 8899 可并存） |
 | **后端依赖** | **已引入第三方依赖**（`modernc.org/sqlite v1.36.1`，纯 Go）。旧版「零依赖」规则已作废，见 §2 规则二 |
 | **前端依赖** | vue / vite / tailwindcss / axios / lucide-vue-next / crypto-js / buffer / qrcode |
 | **打包** | `bash scripts/build.sh`，**不需要 fnpack** |
-| **当前版本** | `2.4.0`（代码与 manifest 已同步，见 §7） |
+| **当前版本** | `2.5.0`（代码与 manifest 已同步，见 §7） |
 | **名称** | 显示名 **曲率**（2026-09-28 由「音枢 AI」更名）；技术标识 **`yinshu-ai`**（`appname` / 启动项 / 包文件名 / API 身份串）**刻意不改** |
 | **改名红线** | 显示名随便改（`display_name`、界面、文档）；**`appname` 是技术标识，动之前必须单独跟用户确认** —— 它决定飞牛应用中心认不认"同一个应用"，改了就是新装一个，旧配置和数据不继承 |
 | **版本规则** | ⚠️ **只要改过代码就必须升版本号**（用户 2026-09-28 定），四处同步：`backend/pkg/api/server.go` 的 `CurrentVersion`、`fpk-package/manifest` 的 `version`、`RELEASE_NOTES.md` 顶部、本表。**不许用同一个版本号重打包** |
@@ -523,7 +523,7 @@ body: { download_missing: true }          // ← 关键
 - **推送到飞牛歌单**：匹配入库；曲库里还没有的**可一键补下载**，落盘后下轮就能匹配
 - **推送到本地曲库**：只下载、不建歌单（给「我只要文件」的场景）
 
-两者都归在「曲库管家 → 推送」下（顶栏不再单列「推送同步」），
+两者都归在「订阅更新」页下（P1 前叫「曲库管家 → 推送」；顶栏不再单列「推送同步」），
 `catalog.go` 的分类名也统一为「推送 · 下载到曲库」/「推送 · 飞牛歌单」。
 
 > 后端**没有** `DownloadMissing` 参数 —— 因为 `Result.Missing` 本来就已经返回给前端了，
@@ -542,7 +542,7 @@ body: { download_missing: true }          // ← 关键
 
 | 目录 | 内容 |
 |---|---|
-| `components/` | **25 个** Vue 组件（播放器、下载队列、曲库管家、接口抽屉、**推送同步、账号连接、扫码登录弹窗 `QrLoginModal.vue`**…） |
+| `components/` | **34 个** Vue 组件（播放器、下载队列、本地曲库、补全整理 `TidyView`、订阅更新 `PushManager`、下载 `DownloadHub`、接口抽屉、账号连接、扫码登录弹窗 `QrLoginModal.vue`…） |
 | `engine/` | `lx-runtime.js`（音源沙箱）、`quality.js`（音质阶梯） |
 | `services/` | `downloadManager.js`（下载队列）、`sourceHealth.js`（熔断）、`bridgeWorker.js`（AI 桥）、`prefs.js`（偏好与缓存）、`libraryView.js` / `nasView.js`（**从组件里抽出来的纯逻辑**：状态项顺序与配色档、缺口/时间单位文案、补全标题与百分比、面包屑、截断提示）、`qrLogin.js`（**扫码登录的状态映射**：网易云 `code` / QQ `state` → 文案与 `done/saved`，见 §4.16） |
 | `api/client.js` | 所有后端接口的封装（含 `FnosAPI` / `AccountAPI` / `PushAPI`） |
@@ -601,7 +601,7 @@ body: { download_missing: true }          // ← 关键
 **用法**：
 
 ```vue
-<PageShell title="曲库管家" desc="定时监控歌单自动下载新增曲目…">
+<PageShell title="订阅更新" desc="订阅歌单 · 自动追新下载 · 同步到飞牛歌单">
   <template #title-extra><span>…小徽章…</span></template>
   <template #actions><nav>…分段切换器 / 主按钮…</nav></template>
   <template #metrics><div class="grid grid-cols-2 gap-3 md:grid-cols-4">…</div></template>
@@ -609,12 +609,12 @@ body: { download_missing: true }          // ← 关键
 </PageShell>
 ```
 
-**当前采用情况（18 个组件）**：
+**当前采用情况**：
 
 | 状态 | 组件 |
 |---|---|
-| ✅ 用 `PageShell` | `SearchView`(见下注)、`NasExplorer`、`LibraryManager`、`SourceManager`、`DownloadQueueView`、`AccountManager` |
-| ⬜ 不适用 | `ApiConsole`（在侧边抽屉 `ApiDrawer` 里，属面板语境不是页面）、`ImmersivePlayer`、`PlayerBar`、`DownloadQueuePanel`、`DownloadDrawer`、`LyricView`、`AudioVisualizer`、`VinylTurntable`、`DisclaimerModal` |
+| ✅ 用 `PageShell` | `LibraryManager`(本地曲库)、`TidyView`、`PushManager`、`DownloadHub`、`SourceManager`、`AccountManager`、`ChartManager`、`LogViewer`、`AppSettings` |
+| ⬜ 不适用 | `SearchView`(见下注)、`NasExplorer`(v2.1.120 摘掉，住在 LibraryManager 壳里)、`ApiConsole`（在侧边抽屉 `ApiDrawer` 里，属面板语境不是页面）、`ImmersivePlayer`、`PlayerBar`、`DownloadQueuePanel`、`DownloadQueueView`/`PlaylistDownload`(embedded 模式住在 DownloadHub 里)、`DownloadDrawer`、`DisclaimerModal` |
 
 > **`SearchView` 是唯一例外**：它是「搜索优先」布局（顶部搜索条 + 结果区），套 `PageShell`
 > 会让搜索条跟着滚走。因此**不套组件，但严格复制容器规范** —— 顶部条与结果区都改成
@@ -632,26 +632,32 @@ body: { download_missing: true }          // ← 关键
 </nav>
 ```
 
-`LibraryManager` 的左侧栏三项（推送 / 下载 / 补全整理）用的就是这一套，**不要退回原来的
-`bg-emerald-500 text-white` 实心按钮**（那是旧风格，与顶栏导航不一致）。
+`SegmentedControl.vue` 用的就是这一套（页内分段：发现/榜单、队列/歌单/自动记录、日志/设置），
+**不要退回原来的 `bg-emerald-500 text-white` 实心按钮**（那是旧风格，与壳级导航不一致）。
 
-> ⚠️ **例外**：`LibraryManager` 已改为**左侧栏分组导航**（见下），不再用页内分段切换器；
-> 但「下载」页内部确实是两个子视图切换（队列 / 歌单下载），见 §4.14。
+> ⚠️ P1 后 `LibraryManager` 只剩「本地曲库」一页，没有页内分段；左侧栏分组导航上移为
+> `App.vue` 的应用壳（见下 §3.3.2b）。
 
-#### 3.3.2 导航壳与反馈通道（2026-10-15 重构 P0，**加页 / 改导航前先读这一节**）
+#### 3.3.2 导航壳与反馈通道（2026-10-15 重构 P0 → P1，**加页 / 改导航前先读这一节**）
 
-**视图清单只有一处数据源**：`frontend/src/services/navViews.js` 的 `VIEWS`。
-导航项、左右滑动顺序、页内分段、深链解析全部读它；`App.vue` 只按 id 映射图标
-（`NAV_ICONS` / `SEGMENT_ICONS`）。
+**视图清单只有一处数据源**：`frontend/src/services/navViews.js` 的 `VIEWS`（P1 起 **8 个顶层视图**，
+按 `group` 分三组：听 = 发现音乐 / 本地曲库，管 = 补全整理 / 订阅更新 / 下载，配置 = 音源管理 / 账号连接 / 系统）。
+导航项、左右滑动顺序、页内分段、深链解析、手机底部标签清单（`MOBILE_TAB_IDS`）全部读它；
+`App.vue` 只按 id 映射图标（`NAV_ICONS` / `SEGMENT_ICONS`）。
 
-- **加一个顶层页** = `VIEWS` 加一项 + `App.vue` 的 `NAV_ICONS` 加图标 + 加一个
+- **加一个顶层页** = `VIEWS` 加一项（带 `group`）+ `App.vue` 的 `NAV_ICONS` 加图标 + 加一个
   `<template #view-<id>>` 槽位。漏任何一处测试就会红（`navViews.test.mjs` 扫源码比对；
   2026-10-15 之前正是这样漏出了「音源管理是个整页、却不在导航里」的孤儿页）。
 - **深链一律过 `resolveRoute()`**：`navigateTo('logs')` → `{view:'system', segment:'logs'}`。
-  App.vue 里切视图**只有一个入口** `goView()`，组件不要自己拼 `currentView`。
+  切视图的**唯一写入口在 `navBus.goView()`**（共享的 `currentView`/`segState` 都住 `navBus.js`），
+  App.vue 的 `goView()` 只是它的壳级包装（补 `mountedSegs` 记账），组件不要自己拼 `currentView`。
 - **分段**（`components/SegmentedControl.vue`）用于「二级、但不该占导航位」的页：
-  发现（发现 / 榜单）、系统（日志 / 设置）。两段都常驻（`v-show`）、首段懒挂载，
+  发现（发现 / 榜单）、下载（队列 / 歌单 / 自动记录）、系统（日志 / 设置）。段都常驻（`v-show`）、首段懒挂载，
   来回切不重建组件、不重发请求。
+- **两套导航壳**（P1）：桌面 = 左侧栏（品牌区 + 三组导航 + 全局「任务状态」条 + 音源胶囊/播放器入口）；
+  手机（`@media (hover:none) and (pointer:coarse)`）= 精简顶栏 + 底部 4 标签（`MOBILE_TAB_IDS`）+「更多」右侧抽屉。
+  底部避让统一走 `style.css` 的 `--dock-h`（桌面 0px、触屏 56px+safe-bottom）：浮层加 `.ys-dock-lift`、
+  页面底部留白加 `.pb-dock`，**别再手写 `bottom-0`/`pb-28` 这类裸值**。
 
 **反馈只有一条通道**：`services/feedback.js`（队列 / 去重 / 超时 / 写日志）+
 `components/FeedbackHost.vue`（App.vue 挂一次）。任何组件 `import { ok, fail } from '../services/feedback'`；
@@ -680,65 +686,65 @@ body: { download_missing: true }          // ← 关键
 （横幅因文案换行变高时**按钮跟随拉伸**）。**不要**把按钮单独放一行 `justify-end` ——
 会变成「按钮浮在提示条上方」的错列（2026-09-18 修过一次，见 §11 ⑥）。
 
-#### 3.3.2 左侧栏分组导航（对齐 flow 的 `download-shell`）
+#### 3.3.2b 应用壳导航（对齐 flow 的 `download-shell`，P1 起住在 `App.vue`）
 
-**适用场景**：页面内有**多个功能区块**、且区块本身还有分组时，用左侧栏比页内 Tab 更清晰。
+> **历史**：P0 之前这一套「左侧栏分组导航」长在 `LibraryManager.vue` 页内（当时页面叫「曲库管家」，
+> 五个 tab：本地音乐 / 推送 / 下载 / 补全整理 / 自动下载记录）。P1（v2.5.0）把曲库管家**拆成四个顶层视图**，
+> 侧栏随之上移为**应用级壳**（`App.vue` 的 `<aside>`），页内不再有二级侧栏。
+
+**适用场景**：顶层视图多于 5 个、且有天然分组时，用应用级左侧栏比顶栏胶囊更清晰。
 
 flow 实测：`.download-shell { grid-template-columns:220px 1fr; gap:20px }`，
 侧栏 `.download-nav { background:#fff; border-radius:15px; padding:12px; position:sticky; top:88px }`，
 分组标题 11px 灰、条目 `padding:10px`、选中 `bg:--blue2 + color:--blue + font-weight:700`、
 角标 `margin-left:auto; border-radius:99px; padding:1px 7px; font-size:11px`。
 
-我们的实现（`LibraryManager.vue`）：
+我们的实现（`App.vue` 壳，桌面端 `hidden sm:flex`）：
 
 ```html
-<div class="grid grid-cols-1 gap-5 lg:grid-cols-[220px_1fr]">
-  <aside class="h-max rounded-[15px] border border-gray-200 bg-white p-3 lg:sticky lg:top-6">
-    <h4 class="mx-2.5 mb-3 mt-2 text-[11px] font-medium text-gray-400">曲库管家</h4>
-    <button v-for="t in tabs" :class="[
-      'flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2.5 text-left text-[13px] transition-colors',
-      activeTab === t.id ? 'bg-emerald-50 font-bold text-emerald-600' : 'text-gray-600 hover:bg-gray-50'
-    ]">
-      <component :is="t.icon" class="w-4 h-4 shrink-0" />
-      <span class="min-w-0 flex-1 truncate">{{ t.name }}</span>
-      <span v-if="t.count" class="shrink-0 rounded-full bg-gray-100 px-1.5 py-0.5 text-[11px] text-gray-500">{{ t.count }}</span>
-    </button>
-    <h4>任务状态</h4>
-    …带角标的状态条目…
-  </aside>
-  <main class="min-w-0 space-y-3">
-    <!-- 指标行放主区内（flow 的 .metric-row 也在 .download-main 内），与内容左对齐 -->
-    <div class="grid grid-cols-2 gap-3 md:grid-cols-4">…</div>
-    …各区块内容…
-  </main>
-</div>
+<aside class="z-20 hidden w-[204px] shrink-0 flex-col border-r border-gray-100 bg-white sm:flex">
+  <!-- 品牌区（点开接口抽屉）→ 三组导航（NAV_GROUPS × viewsOfGroup）→ 任务状态条 → 底部音源胶囊/播放器入口 -->
+  <button v-for="item in g.items" @click="goView(item.id)" :class="[
+    '… rounded-lg px-2.5 py-2 text-left text-[13px] …',
+    currentView === item.id ? 'bg-emerald-50 font-bold text-emerald-600' : 'text-gray-500 hover:bg-gray-50'
+  ]">
+    <component :is="item.icon" class="h-4 w-4 shrink-0" />
+    <span class="min-w-0 flex-1 truncate">{{ item.name }}</span>
+    <span v-if="角标" class="shrink-0 rounded-full bg-gray-100 px-1.5 …">{{ n }}</span>
+  </button>
+</aside>
 ```
 
 **要点**：
-- 侧栏 `lg:sticky lg:top-6`，`lg` 以下自动退化为上下堆叠
-- **指标行要放在 `<main>` 里**，不要放 `PageShell` 的 `#metrics` slot —— 否则会横跨侧栏、与内容不对齐
-- 主区必须 `min-w-0`，否则长内容会把网格撑破
-- 侧栏条目用 `component :is="t.icon"` 渲染图标（`tabs` 是带 `icon`/`count` 的 computed）
+- 角标只挂两个：下载（`downloadManager.activeCount`，进行中任务数）与订阅更新（`pushEngine.pushTotalCount`）
+- 「任务状态」条（规则在 `services/libraryView.js` 的 `sidebarStatusItems`，有单测钉住）也住在壳里，点击 `goView(s.tab)` 直达对应视图；
+  只喂全局单例的数据（downloadManager + pushEngine），**页面内状态不进全局列表**
+- 主区必须 `min-w-0`，否则长内容会把 flex 撑破
 - 选中态用 emerald（flow 用蓝），保持品牌色
+- 手机端这套侧栏整个 `hidden`，换成底部标签栏 + 「更多」右侧抽屉（见 §3.3.2 两套导航壳）
 
 > **不建议强行对齐的部分**：flow 的「下载与曲库」把 下载/搜索/歌单/曲库/推送 **合并成一页**，
-> 我们是**拆成多页 + 顶栏导航**。这是产品结构差异，不是排版差异，别为了像 flow 而合并页面。
+> 我们是**拆成多页 + 壳级分组导航**。这是产品结构差异，不是排版差异，别为了像 flow 而合并页面。
 
-**导航结构**（2026-09-16 重排，参考 fnmusic-flow 的工作台布局）：
+**导航结构**（2026-10-15 P1 重排；P0 的「顶栏 5 胶囊」已废弃）：
 
 ```
-顶栏 68px：[品牌] [分段切换器] ……………………………………… [当前音源] [开放接口] [播放器]
-分段切换器：发现音乐 · 本地音乐 · 曲库管家 · 账号连接 · 日志
+桌面：[左侧栏 204px：品牌 / 听·管·配置三组 8 视图 / 任务状态 / 音源·播放器] [内容列：SwipePager 8 槽]
+手机：[顶栏 h-12：品牌 音源胶囊 播放器] [内容列] [底部 dock：发现 曲库 订阅 下载 更多→右侧抽屉]
 ```
 
-- **分段切换器**（灰底容器 + 白色胶囊高亮）是 flow 的导航特征，已采用
-- **「音源管理」不在切换器里** —— 它是配置项，收进右侧的「当前音源」按钮
+- **分段切换器**（灰底容器 + 白色胶囊高亮）仍是 flow 特征，但降级为**页内分段**：
+  发现（发现/榜单）、下载（队列/歌单/自动记录）、系统（日志/设置），挂在对应槽位头部
+- **「音源管理」回到导航里**（P0 的决定保留）；顶栏/侧栏的音源胶囊只是快捷入口 + 状态显示
 - 主色保持项目的 **emerald**（未改成 flow 的蓝色，以保留品牌识别度）
 
-**两个新页面**：
+**页面组件**：
 | 组件 | 对应功能 |
 |---|---|
-| ~~`PushManager.vue`~~ | **已于 v2.1.16 并入 `LibraryManager.vue` 并删除**（文件备份在 `.workbuddy-ai/tmp/removed/`）。原因见 §4.1.5 |
+| `PushManager.vue` | 订阅更新（v2.1.16 曾并入 LibraryManager；**P1 重新独立**，吃全局 `pushEngine`）。原因见 §4.1.5 |
+| `DownloadHub.vue` | 下载（队列 / 歌单下载 / 自动下载记录三段） |
+| `TidyView.vue` | 补全整理（扫描缺失 / 字段补全 / 体检 / 查重） |
+| `LibraryManager.vue` | 本地曲库（P1 后只剩 NasExplorer 外壳） |
 | `AccountManager.vue` | 账号连接：两个平台卡片（品牌色顶边）、扫码弹窗（网易需前端渲染二维码，用 `qrcode` 包）、每日推荐/歌单速览 |
 
 > ⚠️ 前端引入新依赖 `qrcode`（把网易返回的二维码内容渲染成图；QQ 本身直接返回图片）。
@@ -1597,7 +1603,7 @@ v2.1.10 解决了「后端能自己发现曲目」，但拿到的曲目**没有�
 差别只在「对新增曲目做什么」。所以界面上它们不该是两个并列功能页 ——
 用户会为同一个歌单管两份检查间隔、点两次启停。
 
-**现在**：曲库管家 → 推送是**一个列表**，一行 = 一个来源，两个能力位：
+**现在**：「订阅更新」页（P1 前叫曲库管家 → 推送）是**一个列表**，一行 = 一个来源，两个能力位：
 
 ```
 download —— 有新歌就下载到本地曲库        （底层 monitor）
@@ -3892,8 +3898,8 @@ window.addEventListener('resize', () => this.resize())   // 匿名函数，移�
 > 本文件从此只留常读的 §0–§10（约 2,711 行 / 183KB）。历史正文一字未改 —— 回合编号（㊽ …①）与「第几块」等标记都在，
 > 所以别处写的「见 §11 ㊼ 块十」指的是 `docs/变更记录/` 里同名回合的小节。
 
-- **目录**：[`docs/变更记录/INDEX.md`](docs/变更记录/INDEX.md)（82 个回合，倒序，每行带文件链接）
-- 最近的回合：[`52 六项 UI 改造（导航密度 / 抽屉方向 / 播放栏三形态 / 深色玻璃皮肤）`](docs/变更记录/2026-09-28.md)、[`51 扫码登录搬进「发现音乐」+ 开放接口入口换成左上角软件图标`](docs/变更记录/2026-09-28.md)、[`㊿ 点歌不响的三层出站根因 + 切歌语义回到列表顺序 + 不再自动弹大屏`](docs/变更记录/2026-09-27.md)、[`㊾ 交接文档按日期段拆出 + 前端巨组件可测逻辑下沉`、`㊽ 移动端一层：应用外壳` 与 `㊼ 元数据闭环 + 平台故障可观测 + 接口目录双向钉死 + 写不了的格式单列 + 鉴权按来源分三层 + 补全任务可停止 + 静默失败收口 + 两套目录遍历合并成一份](docs/变更记录/2026-09-26.md)
+- **目录**：[`docs/变更记录/INDEX.md`](docs/变更记录/INDEX.md)（全部回合倒序，每行带文件链接）
+- 最近的回合：[`116 界面骨架重构 P1：曲库管家拆解为顶层视图 + 应用壳导航（v2.5.0）`、`115 界面骨架重构 P0：导航 7 → 5（v2.4.0）`、`113 9 项「好用易用」能力（v2.3.0）`](docs/变更记录/2026-10-15.md)
 - **每轮改完仍要写**（用户定的铁规，见 `.workbuddy-ai/memory/agent/README.md`）：正文改本文件 §0–§10，变更条目追加到 `docs/变更记录/` **当月文件的顶部**，并在 `INDEX.md` 加一行。
 
 ### 11.1 为什么拆、去哪找

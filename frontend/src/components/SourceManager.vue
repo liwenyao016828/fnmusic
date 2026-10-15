@@ -676,7 +676,8 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, nextTick, onMounted, onUnmounted, onActivated, onDeactivated } from 'vue'
+import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
+import { currentView } from '../services/navBus'
 import { SourcesAPI, ProtocolAPI, NasAPI, ConfigAPI } from '../api/client'
 import { lxRuntime } from '../engine/lx-runtime'
 import { sourceHealth } from '../services/sourceHealth'
@@ -1759,11 +1760,15 @@ onMounted(() => {
   if (!Object.keys(probeHistory.value).length) setTimeout(autoProbeSweep, 800)
 })
 
-// ⚠️ 页面是**常驻**的（SwipePager 不卸载），所以两个定时器都必须在 onDeactivated 里停：
+// ⚠️ 页面是**常驻**的（SwipePager 不卸载），所以两个定时器都得在切走时停：
 //    轮询不停 = 离开音源页后还在后台每 5 分钟打一遍上游；
 //    心跳不停 = 每秒无谓地写一次响应式数据（虽然现在不再造成 DOM 变更，但没理由留着）。
-onActivated(() => { startAutoProbe(); startTick() })
-onDeactivated(() => { stopAutoProbe(); stopTick() })
+// 2026-10-17：原实现挂在 onActivated/onDeactivated 上 —— SwipePager 没有 KeepAlive，
+// 那两个钩子从来不会触发（死代码）。改成 watch 导航总线的共享 currentView（本页 = sources）。
+watch(currentView, (v) => {
+  if (v === 'sources') { startAutoProbe(); startTick(); return }
+  stopAutoProbe(); stopTick()
+})
 
 /**
  * 弹窗开着的时候，把**整页**的拖放默认行为都接管掉。
