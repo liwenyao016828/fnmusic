@@ -1,8 +1,5 @@
 <template>
-  <PageShell
-    title="本地曲库"
-    desc="浏览 NAS 上的本地音乐 · 目录 / 歌手 / 专辑视图 · 点击即播"
-  >
+  <PageShell>
     <template #title-extra>
       <span class="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 font-mono text-[10px] text-emerald-600">
         本地 · 浏览 · 播放

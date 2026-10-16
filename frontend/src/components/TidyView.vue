@@ -1,8 +1,5 @@
 <template>
-  <PageShell
-    title="补全整理"
-    desc="扫描缺失 · 按字段补全歌词/封面/年份 · 曲库体检与查重"
-  >
+  <PageShell>
     <template #title-extra>
       <span class="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 font-mono text-[10px] text-emerald-600">
         体检 · 补全 · 查重

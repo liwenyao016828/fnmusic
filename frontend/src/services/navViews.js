@@ -29,42 +29,83 @@ export const NAV_GROUPS = [
   { id: 'config', name: '配置' },
 ]
 
-/** 顶层视图。数组顺序 = 桌面侧栏顺序 = 手指左右滑动的顺序。 */
+/**
+ * 顶层视图。数组顺序 = 桌面侧栏顺序 = 手指左右滑动的顺序。
+ *
+ * `desc` = 该页的**一句简介**，2026-10-18 用户口径后它的唯一去处是
+ * **顶部一条栏里页面名的悬停提示**（「把导航里的其他页面的简介也去掉改hover」）。
+ * 各页组件里那份常驻的说明文字、以及 PageShell 的 desc 参数都已撤掉 ——
+ * 要改页面简介，只改这里，别再往页面里塞常驻文字。
+ * 分段（segments）也可以带自己的 desc，悬停时会优先用它（段比页更具体）。
+ */
 export const VIEWS = [
   {
     id: 'search',
     name: '发现音乐',
     short: '发现',
     group: 'listen',
+    desc: '搜索全网曲库，或浏览官方榜单与精选歌单',
     segments: [
-      { id: 'discover', name: '发现' },
-      { id: 'charts', name: '榜单' },
+      { id: 'discover', name: '发现', desc: '官方平台的推荐歌单：点卡片进歌单详情，右下角可以整单下载' },
+      { id: 'charts', name: '榜单', desc: '勾选要注入的榜单（它们会以在线歌单出现在飞牛音乐里），只保留能播放的曲目' },
     ],
   },
-  { id: 'library', name: '本地曲库', short: '曲库', group: 'listen' },
-  { id: 'tidy', name: '补全整理', short: '整理', group: 'manage' },
-  { id: 'push', name: '订阅更新', short: '订阅', group: 'manage' },
+  {
+    id: 'library',
+    name: '本地曲库',
+    short: '曲库',
+    group: 'listen',
+    desc: '浏览 NAS 上的本地音乐：目录 / 歌手 / 专辑视图，点击即播',
+  },
+  {
+    id: 'tidy',
+    name: '补全整理',
+    short: '整理',
+    group: 'manage',
+    desc: '扫描缺失，按字段补全歌词 / 封面 / 年份，以及曲库体检与查重',
+  },
+  {
+    id: 'push',
+    name: '订阅更新',
+    short: '订阅',
+    group: 'manage',
+    desc: '订阅歌单，自动追新下载，并同步到飞牛音乐的歌单',
+  },
   {
     id: 'download',
     name: '下载',
     short: '下载',
     group: 'manage',
+    desc: '下载队列 · 歌单下载 · 自动下载记录',
     segments: [
-      { id: 'queue', name: '队列' },
-      { id: 'playlist', name: '歌单' },
-      { id: 'autodl', name: '自动记录' },
+      { id: 'queue', name: '队列', desc: '正在进行与已完成的下载任务；取消过的任务不会自己复活' },
+      { id: 'playlist', name: '歌单', desc: '粘贴歌单链接，整单解析后批量下载' },
+      { id: 'autodl', name: '自动记录', desc: '收藏 / 播放触发的自动下载流水' },
     ],
   },
-  { id: 'sources', name: '音源管理', short: '音源', group: 'config' },
-  { id: 'accounts', name: '账号连接', short: '账号', group: 'config' },
+  {
+    id: 'sources',
+    name: '音源管理',
+    short: '音源',
+    group: 'config',
+    desc: '官方协议（免脚本，负责搜索 / 榜单 / 歌单 / 歌词）与第三方音源的导入、测速与开关',
+  },
+  {
+    id: 'accounts',
+    name: '账号连接',
+    short: '账号',
+    group: 'config',
+    desc: '飞牛音乐与 AI 大模型的连接凭据都放在这里，只保存在本机（权限 0600），不上传任何第三方',
+  },
   {
     id: 'system',
     name: '系统',
     short: '系统',
     group: 'config',
+    desc: '运行日志与各项设置',
     segments: [
-      { id: 'logs', name: '日志' },
-      { id: 'settings', name: '设置' },
+      { id: 'logs', name: '日志', desc: '界面上的报错只给一句结论，完整信息都在这里；也可以一键导出打包' },
+      { id: 'settings', name: '设置', desc: '下载音质、文件命名、存储目录与运行日志；改完即刻生效，不需要重启' },
     ],
   },
 ]

@@ -3,7 +3,7 @@
     embedded=true 时不自带页面外壳，供「曲库管家 → 下载」内嵌使用，
     避免嵌套两个滚动容器与双份内边距。
   -->
-  <component :is="embedded ? 'div' : PageShell" v-bind="shellProps">
+  <component :is="embedded ? 'div' : PageShell">
     <template v-if="!embedded" #title-extra>
       <span
         v-if="downloadManager.activeCount.value > 0"
@@ -48,19 +48,13 @@ import PageShell from './PageShell.vue'
 
 const props = defineProps({
   activeSource: Object,
-  /** true = 供「曲库管家 → 下载」内嵌，不自带页面外壳 */
+  /** true = 供「下载」页内嵌，不自带页面外壳 */
   embedded: { type: Boolean, default: false },
 })
 
-/** 自带外壳时的 PageShell 参数（内嵌模式下不会被使用） */
-const shellProps = computed(() =>
-  props.embedded
-    ? {}
-    : {
-        title: '下载队列',
-        desc: '后台持久下载，切换页面不中断 · 支持音质选择、失败自动换源、歌词内嵌',
-      },
-)
+// 2026-10-18：原来这里有一份 shellProps（title「下载队列」/ desc「后台持久下载…」），
+// 现在 PageShell 不收 title / desc 了 —— 页面名与简介的唯一出处是 services/navViews.js，
+// 由 App.vue 顶栏渲染。所以这里不再传任何参数。
 
 const metrics = computed(() => [
   { label: '全部任务', value: downloadManager.totalCount.value, color: 'text-gray-800' },

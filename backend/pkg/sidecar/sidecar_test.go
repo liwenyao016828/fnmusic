@@ -24,6 +24,11 @@ import (
 // 它必须从环境变量读端口（真实实现是 uvicorn 读 `--port` 参数，这里怎么读不重要，
 // 重要的是 manager 得把端口通过环境变量传下去 —— 顺带把这条约定也测了）。
 const fakePython = `#!/bin/sh
+# 「这个 venv 到底能不能用」的判据是**能不能 import pip**（不是 bin/python3 在不在），
+# 所以这条要放最前面：它模拟的是「已经装好依赖的正常 venv」。
+case "$*" in
+  *"-c import pip"*) exit 0 ;;
+esac
 # 只有「依赖没装好」那条路径才会走到这里。让它**快速失败**而不是挂住 ——
 # 否则「标记匹配就跳过安装」那条用例在变异下会卡死（而不是干脆地变红）。
 case "$*" in
@@ -44,6 +49,51 @@ class H(http.server.BaseHTTPRequestHandler):
 http.server.HTTPServer(("127.0.0.1", port), H).serve_forever()
 '
 `
+
+// fakeSystemPython 扮演「系统里的 python3」：给它 `-m venv <dir>` 时真的造出一个
+// **可用**的 venv（bin/python3 指回自己 + pyvenv.cfg），于是建 venv → 装依赖这条
+// 路径能在几毫秒内跑完，不用等真的 pip。
+const fakeSystemPython = `#!/bin/sh
+case "$*" in
+  *"-m venv"*)
+    d="$3"
+    mkdir -p "$d/bin"
+    printf 'home = /usr/bin\ninclude-system-site-packages = false\n' > "$d/pyvenv.cfg"
+    ln -sf "$0" "$d/bin/python3"
+    exit 0 ;;
+  *"-c import pip"*) exit 0 ;;
+  *"-m pip install"*) echo "Successfully installed fake"; exit 0 ;;
+esac
+exit 1
+`
+
+// fakeNoPipPython 是一个「看起来是 venv 里的 python、其实没有 pip」的半成品：
+// 能执行、能应答别的调用，但一问 import pip 就失败。这正是
+// `python3 -m venv` 在 ensurepip 缺失时留下的那种目录。
+const fakeNoPipPython = `#!/bin/sh
+case "$*" in
+  *"-c import pip"*) exit 1 ;;
+esac
+exit 0
+`
+
+// writeFile 写一个测试用的文件（带权限），省得每处都写三行错误处理。
+func writeFile(t *testing.T, path, content string, mode os.FileMode) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), mode); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// markVenvUsable 给假 venv 补上 pyvenv.cfg —— venvUsable 要求它存在，
+// 因为「只有 bin/python3」正是半成品的形状。
+func markVenvUsable(t *testing.T, m *Manager) {
+	t.Helper()
+	writeFile(t, filepath.Join(m.venvDir(), "pyvenv.cfg"), "home = /usr/bin\n", 0o644)
+}
 
 // setupFakeSidecar 造一个「依赖已装好」的 sidecar 环境：
 // 源码目录 + 假 venv python + 与 requirements 内容匹配的依赖标记。
@@ -74,6 +124,8 @@ func setupFakeSidecar(t *testing.T, port int, sleep string) *Manager {
 	if err := os.WriteFile(filepath.Join(pyDir, "python3"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// pyvenv.cfg：venvUsable 认它是「这是个真 venv」的形状标记
+	markVenvUsable(t, m)
 
 	// 依赖标记：内容与 requirements.txt 的哈希一致 → ensureDeps 直接返回，
 	// 不会去跑 pip（这正是「每次启动不重装」的那条路径）
@@ -218,6 +270,135 @@ func TestEnsureDepsFailsWithoutPython(t *testing.T) {
 	}
 }
 
+// ── venv 的「真能用」判据（2026-10-16 真机事故的回归）──────────────────
+//
+// 事故现场：NAS 上没装 python3-venv，`python3 -m venv` 失败但**照样留下目录**
+// （bin/python3 只是指向系统解释器的符号链接 + pyvenv.cfg）。当时的判据是
+// 「os.Stat(bin/python3) 成功即已就绪」，于是半成品被当成装好的 venv，
+// 跳过建 venv 直接 `-m pip`，报「No module named pip」，而且点多少次
+// 「重试启动」都被同一条件短路、永远修不好。
+// 下面三条把「怎么算能用」「坏了要重建」「失败要清干净」分别钉住。
+
+func TestVenvUsableRejectsHalfBuiltVenv(t *testing.T) {
+	ctx := context.Background()
+	m := New(Config{DataDir: t.TempDir()})
+
+	// 只有 bin/python3、没有 pyvenv.cfg：正是 ensurepip 缺失留下的形状
+	writeFile(t, m.venvPython(), "#!/bin/sh\nexit 0\n", 0o755)
+	if m.venvUsable(ctx) {
+		t.Fatal("只有 bin/python3 的半成品 venv 不该被判成可用")
+	}
+
+	// 补上 pyvenv.cfg，且解释器真的能 import pip → 这才算可用
+	markVenvUsable(t, m)
+	if !m.venvUsable(ctx) {
+		t.Fatal("pyvenv.cfg 在 + 能 import pip 时该判成可用")
+	}
+}
+
+func TestVenvUsableRejectsVenvWithoutPip(t *testing.T) {
+	// pyvenv.cfg 在、python3 也能跑，但 venv 里没有 pip（ensurepip 没跑成）。
+	// 这种 venv 拿去 `-m pip install` 必然报「No module named pip」。
+	m := New(Config{DataDir: t.TempDir()})
+	writeFile(t, m.venvPython(), fakeNoPipPython, 0o755)
+	markVenvUsable(t, m)
+	if m.venvUsable(context.Background()) {
+		t.Fatal("不能 import pip 的 venv 不该被判成可用")
+	}
+}
+
+func TestEnsureDepsRebuildsHalfBuiltVenv(t *testing.T) {
+	// 关键回归：标记匹配（说明上次「装完了」）但 venv 是半成品 ——
+	// 必须**重建**，而不是被标记短路掉。
+	dir, data := t.TempDir(), t.TempDir()
+	py := filepath.Join(t.TempDir(), "python3")
+	writeFile(t, py, fakeSystemPython, 0o755)
+
+	m := New(Config{Dir: dir, DataDir: data, PythonPath: py, Logf: t.Logf})
+	writeFile(t, filepath.Join(dir, "requirements.txt"), "musicdl>=2.14.0\n", 0o644)
+
+	// 半成品 venv（只有符号链接，没有 pyvenv.cfg） + 与 requirements 匹配的标记
+	writeFile(t, m.venvPython(), "#!/bin/sh\nexit 0\n", 0o755)
+	want, err := m.requirementsHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, m.markerPath(), want, 0o644)
+
+	if err := m.ensureDeps(context.Background()); err != nil {
+		t.Fatalf("半成品 venv 该被重建而不是直接失败：%v", err)
+	}
+	if !m.venvUsable(context.Background()) {
+		t.Fatal("重建之后 venv 该真的可用")
+	}
+	if got, err := os.ReadFile(m.markerPath()); err != nil || strings.TrimSpace(string(got)) != want {
+		t.Fatalf("重建后该重新写下依赖标记：%q %v", got, err)
+	}
+}
+
+func TestEnsureDepsCleansUpFailedVenv(t *testing.T) {
+	// 建 venv 失败时必须**把半成品目录清掉**，否则用户点「重试启动」时
+	// 面对的仍是那堆残留；同时报错里要带上「装 python3-venv」这句人话，
+	// 而不是只 tail 一段英文。
+	dir, data := t.TempDir(), t.TempDir()
+	py := filepath.Join(t.TempDir(), "python3")
+	writeFile(t, py, `#!/bin/sh
+echo "The virtual environment was not created successfully because ensurepip is not" >&2
+echo "available.  On Debian/Ubuntu systems, you need to install the python3-venv" >&2
+echo "package using the following command." >&2
+exit 1
+`, 0o755)
+
+	m := New(Config{Dir: dir, DataDir: data, PythonPath: py, Logf: t.Logf})
+	writeFile(t, filepath.Join(dir, "requirements.txt"), "musicdl>=2.14.0\n", 0o644)
+
+	err := m.ensureDeps(context.Background())
+	if err == nil {
+		t.Fatal("建 venv 失败时该报错")
+	}
+	if !strings.Contains(err.Error(), "python3-venv") {
+		t.Fatalf("错误信息该告诉用户装 python3-venv：%v", err)
+	}
+	if _, statErr := os.Stat(m.venvDir()); !os.IsNotExist(statErr) {
+		t.Fatalf("失败的 venv 目录该被清掉（否则重试启动永远修不好）：%v", statErr)
+	}
+}
+
+func TestEnsureDepsKeepsVenvWhenPipInstallFails(t *testing.T) {
+	// 与上一条相反：venv 本身是好的、只是 pip install 失败（出不去外网最典型）。
+	// 这时**不能**删 venv —— 换个网络重试就行，重建 venv 纯属浪费。
+	dir, data := t.TempDir(), t.TempDir()
+	py := filepath.Join(t.TempDir(), "python3")
+	writeFile(t, py, `#!/bin/sh
+case "$*" in
+  *"-m venv"*)
+    d="$3"; mkdir -p "$d/bin"
+    printf 'home = /usr/bin\n' > "$d/pyvenv.cfg"
+    ln -sf "$0" "$d/bin/python3"; exit 0 ;;
+  *"-c import pip"*) exit 0 ;;
+  *"-m pip install"*) echo "ERROR: Could not find a version that satisfies the requirement musicdl" >&2; exit 1 ;;
+esac
+exit 1
+`, 0o755)
+
+	m := New(Config{Dir: dir, DataDir: data, PythonPath: py, Logf: t.Logf})
+	writeFile(t, filepath.Join(dir, "requirements.txt"), "musicdl>=2.14.0\n", 0o644)
+
+	err := m.ensureDeps(context.Background())
+	if err == nil {
+		t.Fatal("pip install 失败时该报错")
+	}
+	if !strings.Contains(err.Error(), "装依赖失败") {
+		t.Fatalf("错误信息该区分「装依赖失败」而不是「建 venv 失败」：%v", err)
+	}
+	if _, statErr := os.Stat(m.venvDir()); statErr != nil {
+		t.Fatalf("只是装依赖失败时不该删掉可用的 venv：%v", statErr)
+	}
+	if _, statErr := os.Stat(m.markerPath()); !os.IsNotExist(statErr) {
+		t.Fatal("装依赖失败时不该写依赖标记（否则下次会被当成装好了）")
+	}
+}
+
 // ── 完整生命周期（假 venv python + 假健康服务）──────────────────────
 
 func TestStartReachesReadyAndStopsCleanly(t *testing.T) {
@@ -282,10 +463,11 @@ func TestStartFailsClearlyWhenAppPyMissing(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(m.cfg.Dir, "requirements.txt"), []byte("x\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// 让依赖检查直接过，把失败点逼到「目录里没有 app.py」
+	// 让依赖检查直接过，把失败点逼到「目录里没有 app.py」：
+	// 标记匹配 **且** venv 真的可用（有 pyvenv.cfg + 能 import pip）才会短路。
 	want, _ := m.requirementsHash()
-	_ = os.MkdirAll(filepath.Dir(m.venvPython()), 0o755)
-	_ = os.WriteFile(m.venvPython(), []byte("#!/bin/sh\n"), 0o755)
+	writeFile(t, m.venvPython(), "#!/bin/sh\nexit 0\n", 0o755)
+	markVenvUsable(t, m)
 	_ = os.WriteFile(m.markerPath(), []byte(want), 0o644)
 
 	m.Start(context.Background())

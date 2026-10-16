@@ -1,8 +1,5 @@
 <template>
-  <PageShell
-    title="下载"
-    desc="下载队列 · 歌单下载 · 自动下载记录"
-  >
+  <PageShell>
     <template #title-extra>
       <span class="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 font-mono text-[10px] text-emerald-600">
         队列 · 歌单 · 自动记录
@@ -29,10 +26,10 @@
           <div class="rounded-xl border border-gray-200 bg-white p-4">
             <div class="flex flex-wrap items-start gap-x-3 gap-y-2">
               <div class="min-w-0">
-                <h3 class="text-[13px] font-bold text-gray-800">自动下载记录</h3>
-                <p class="mt-0.5 max-w-[720px] text-[11px] leading-snug text-gray-500">
-                  飞牛页面里<strong class="text-gray-700">收藏 / 加歌单 / 点下载</strong>触发的那批。成功与失败都记。
-                </p>
+                <h3
+                  class="text-[13px] font-bold text-gray-800"
+                  title="飞牛页面里收藏 / 加歌单 / 点下载触发的那批。成功与失败都记。"
+                >自动下载记录</h3>
               </div>
               <div class="ml-auto flex flex-wrap items-center gap-1.5">
                 <button

@@ -1,8 +1,5 @@
 <template>
-  <PageShell
-    title="订阅更新"
-    desc="订阅歌单 · 自动追新下载 · 同步到飞牛歌单"
-  >
+  <PageShell>
     <template #title-extra>
       <span class="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 font-mono text-[10px] text-emerald-600">
         订阅 · 追新 · 推送
@@ -45,12 +42,12 @@
           <div class="flex flex-wrap items-start justify-between gap-3">
             <div class="min-w-0 flex-1">
               <p class="text-[10px] font-bold uppercase tracking-wide text-emerald-600">首次使用</p>
-              <h3 class="mt-1 text-[15px] font-semibold text-gray-800">
+              <h3
+                class="mt-1 text-[15px] font-semibold text-gray-800"
+                title="一条订阅 = 一个来源，两个开关各勾一个。"
+              >
                 {{ pushGuideAllDone ? '一切就绪，之后每轮自动追新' : '三步即可开始' }}
               </h3>
-              <p class="mt-1 text-[11px] leading-relaxed text-gray-500">
-                一条订阅 = 一个来源，两个开关各勾一个。
-              </p>
             </div>
             <div class="flex shrink-0 items-center gap-2">
               <span class="rounded-full border border-gray-200 bg-white px-2.5 py-1 font-mono text-[11px] font-bold text-emerald-600">

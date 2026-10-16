@@ -1,26 +1,20 @@
 <template>
   <div class="h-full flex flex-col overflow-hidden select-none bg-gray-50">
-    <!-- ── 顶部搜索与导航条 ── -->
-    <div class="px-5 sm:px-8 pt-5 sm:pt-7 pb-4 bg-white border-b border-gray-100 shrink-0">
+    <!-- ── 顶部搜索与导航条 ──
+         页面名「发现音乐」已搬到 App.vue 顶部那一条栏（2026-10-18 用户口径：「把发现了、
+         本地曲库等页面名，移到 logo 和音源管理那行去」），这里只在**搜索结果态**出现
+         「返回发现」+ 平台筛选 —— 发现态下整条不渲染，hero 直接从顶部开始。 -->
+    <div v-if="currentMode === 'search'" class="px-5 sm:px-8 pt-4 sm:pt-5 pb-3 bg-white border-b border-gray-100 shrink-0">
       <div class="max-w-[1500px] mx-auto space-y-2.5">
-
-        <!-- 页面标题（与其它功能页保持同一套标题层级） -->
-        <div class="min-w-0">
-          <h1 class="text-[26px] font-bold tracking-tight text-gray-800">发现音乐</h1>
-          <p class="mt-1.5 text-[13px] leading-relaxed text-gray-500">
-            搜索全网曲库，或浏览官方榜单与精选歌单
-          </p>
-        </div>
 
         <!-- 搜索结果态：给一个回发现页的入口 —— 原来这个「清空并返回」按钮挂在搜索框上，
              2026-09-28 搜索框搬去底部播放栏后，得在这里留一个，否则进了结果页回不去。 -->
         <button
-          v-if="currentMode === 'search'"
           @click="resetToDiscover"
           class="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-semibold text-gray-600 transition-all hover:border-emerald-300 hover:text-emerald-600"
         >← 返回发现</button>
 
-        <div v-if="currentMode === 'search'" class="flex items-center gap-1.5 overflow-x-auto pb-0.5">
+        <div class="flex items-center gap-1.5 overflow-x-auto pb-0.5">
           <button
             v-for="p in platformsWithMusicDL" :key="p.id"
             @click="switchPlatform(p.id)"
@@ -78,7 +72,8 @@
 
           <!--
             左：欢迎卡。
-            2026-10-18 用户口径起它同时收纳：问候语 +「双平台推荐」两张卡片 + 歌单分类筛选。
+            2026-10-18 起收纳：问候语 +「双平台推荐」两张卡片（歌单分类筛选已挪到**下面一行
+            的独立卡片**——用户口径：「那些标签用一个新的卡片，移出下午好的卡片」）。
             原先长在这里的「平台选择（wy/tx）」搬去了「音源管理 → 官方协议」
             （状态见 services/officialPlatform.js）；「排行榜单 / 精选歌单」两个切换胶囊整个去掉 ——
             榜单有自己的顶层导航段，不必在发现页再放第二个入口。
@@ -123,19 +118,14 @@
                 class="overflow-hidden rounded-xl border border-gray-200 bg-white"
                 :class="p.topBorder"
               >
-                <!-- 卡片头：平台说明收进 title，不再常驻一行小字 -->
+                <!-- 卡片头：平台名与说明全部收进 title，只留品牌标 + 连接状态
+                     （用户 2026-10-18：「把图标从 q 改为 qq，w 改为网易，或者你改为他们的
+                     官方图标。去掉 qq 音乐和网易云文字。」） -->
                 <div
-                  class="flex items-center justify-between gap-2 border-b border-gray-100 px-3 py-3 sm:gap-3 sm:px-4 sm:py-3.5"
-                  :title="p.desc"
+                  class="flex items-center justify-between gap-2 border-b border-gray-100 px-3 py-2.5 sm:gap-3 sm:px-4 sm:py-3"
+                  :title="platformCardTitle(p)"
                 >
-                  <div class="flex min-w-0 items-center gap-2 sm:gap-2.5">
-                    <div class="grid h-8 w-8 shrink-0 place-items-center rounded-[9px] text-[14px] font-extrabold sm:h-9 sm:w-9 sm:rounded-[10px] sm:text-[17px]" :class="p.markClass">
-                      {{ p.mark }}
-                    </div>
-                    <div class="min-w-0">
-                      <b class="block truncate text-[13px] text-gray-800 sm:text-sm">{{ p.name }}</b>
-                    </div>
-                  </div>
+                  <BrandMark :platform="p.id" class="h-7 w-7 sm:h-8 sm:w-8" />
                   <span
                     class="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium sm:px-2.5 sm:py-1 sm:text-[11px]"
                     :class="p.connected ? 'bg-emerald-50 text-emerald-600' : 'bg-gray-100 text-gray-500'"
@@ -156,7 +146,7 @@
                         @error="(e) => (e.target.style.display = 'none')"
                       />
                       <div v-else class="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-gray-100 text-[12px] font-bold text-gray-400 sm:h-9 sm:w-9 sm:text-[13px]">
-                        {{ (p.nickname || p.mark).slice(0, 1) }}
+                        {{ (p.nickname || p.name).slice(0, 1) }}
                       </div>
                       <div class="min-w-0 flex-1">
                         <b class="block truncate text-[12px] text-gray-800 sm:text-[13px]">{{ p.nickname || '已登录' }}</b>
@@ -219,45 +209,6 @@
             <div v-if="platformError" class="mt-3">
               <InlineNotice :text="platformError" />
             </div>
-
-            <!--
-              歌单分类快捷筛选。
-              显示条件是「该平台**有**分类」而不是「平台是网易云」——
-              各平台能力不同：网易云固定表、QQ 动态拉、酷狗/酷我没有（后端返回空数组）。
-
-              只露**一行**，其余用「+N」收起：分类动辄几十个（QQ 有 65 个），全铺出来会把
-              下面的歌单网格挤到很下面。同时按**使用次数**排序，折叠后露出的基本就是常用的那几个；
-              当前选中的那个会强制排到第一位，保证「正在筛什么」始终可见。
-            -->
-            <div
-              v-if="sortedCategories.length > 0"
-              class="mt-3.5 flex items-start gap-1.5"
-            >
-              <div
-                ref="catBoxRef"
-                class="relative flex min-w-0 flex-1 flex-wrap items-center gap-1 overflow-hidden"
-                :style="catExpanded ? {} : { maxHeight: catBoxMaxH }"
-              >
-                <button
-                  v-for="cat in sortedCategories" :key="cat.id"
-                  @click="selectPlaylistCategory(cat.id)"
-                  :class="[
-                    'px-2.5 py-1 rounded-full text-[11px] whitespace-nowrap transition-all',
-                    selectedCategory === cat.id
-                      ? 'bg-emerald-500 text-white font-semibold'
-                      : 'bg-white/70 text-gray-500 ring-1 ring-gray-200/60 hover:bg-gray-100'
-                  ]"
-                >{{ cat.name }}</button>
-              </div>
-
-              <!-- 折叠开关：折叠时显示「+N」，展开后变「收起」 -->
-              <button
-                v-if="hiddenCatCount > 0 || catExpanded"
-                @click="catExpanded = !catExpanded"
-                class="shrink-0 rounded-full bg-gray-100 px-2.5 py-1 text-[11px] font-medium text-gray-600 transition-colors hover:bg-gray-200"
-                :title="catExpanded ? '收起分类' : `还有 ${hiddenCatCount} 个分类`"
-              >{{ catExpanded ? '收起' : `+${hiddenCatCount}` }}</button>
-            </div>
           </div>
 
           <!-- 右：正在播放（深色卡，同 flow 的 .now） -->
@@ -297,6 +248,52 @@
                 >›</button>
               </div>
             </div>
+          </div>
+        </div>
+      </div>
+
+      <!--
+        歌单分类快捷筛选（**独立卡片，在问候卡下面一行**）。
+        2026-10-18 用户口径：「下面的标签，全部，国语这些用一个新的卡片，移出下午好的卡片，
+        放在下一行」——原来它挤在渐变问候卡内部右下角，把卡片塞得很满。
+
+        显示条件是「该平台**有**分类」而不是「平台是网易云」——
+        各平台能力不同：网易云固定表、QQ 动态拉、酷狗/酷我没有（后端返回空数组）。
+
+        只露**一行**，其余用「+N」收起：分类动辄几十个（QQ 有 65 个），全铺出来会把
+        下面的歌单网格挤到很下面。同时按**使用次数**排序，折叠后露出的基本就是常用的那几个；
+        当前选中的那个会强制排到第一位，保证「正在筛什么」始终可见。
+      -->
+      <div
+        v-if="currentMode === 'discover' && !isChartsSegment && sortedCategories.length > 0"
+        class="max-w-[1500px] mx-auto px-5 pt-3.5 sm:px-8"
+      >
+        <div class="rounded-[18px] border border-gray-200 bg-white px-4 py-3 sm:px-5 sm:py-3.5">
+          <div class="flex items-start gap-1.5">
+            <div
+              ref="catBoxRef"
+              class="relative flex min-w-0 flex-1 flex-wrap items-center gap-1 overflow-hidden"
+              :style="catExpanded ? {} : { maxHeight: catBoxMaxH }"
+            >
+              <button
+                v-for="cat in sortedCategories" :key="cat.id"
+                @click="selectPlaylistCategory(cat.id)"
+                :class="[
+                  'px-2.5 py-1 rounded-full text-[11px] whitespace-nowrap transition-all',
+                  selectedCategory === cat.id
+                    ? 'bg-emerald-500 text-white font-semibold'
+                    : 'bg-gray-50 text-gray-500 ring-1 ring-gray-200/60 hover:bg-gray-100'
+                ]"
+              >{{ cat.name }}</button>
+            </div>
+
+            <!-- 折叠开关：折叠时显示「+N」，展开后变「收起」 -->
+            <button
+              v-if="hiddenCatCount > 0 || catExpanded"
+              @click="catExpanded = !catExpanded"
+              class="shrink-0 rounded-full bg-gray-100 px-2.5 py-1 text-[11px] font-medium text-gray-600 transition-colors hover:bg-gray-200"
+              :title="catExpanded ? '收起分类' : `还有 ${hiddenCatCount} 个分类`"
+            >{{ catExpanded ? '收起' : `+${hiddenCatCount}` }}</button>
           </div>
         </div>
       </div>
@@ -885,6 +882,7 @@ import DownloadQualityModal from './DownloadQualityModal.vue'
 import InlineNotice from './InlineNotice.vue'
 import QrLoginModal from './QrLoginModal.vue'
 import SelectField from './SelectField.vue'
+import BrandMark from './BrandMark.vue'
 import { onNavigate, currentView } from '../services/navBus'
 import {
   chartInject,
@@ -978,17 +976,30 @@ const recommendLoading = ref('')            // 形如 "netease:daily"，用于�
 
 const PLATFORM_META = {
   netease: {
-    id: 'netease', name: '网易云音乐', desc: '独立推荐空间', mark: 'N',
-    markClass: 'bg-rose-50 text-rose-600', topBorder: 'border-t-[3px] border-t-rose-400',
+    // mark / markClass 已删（2026-10-18）：卡片头改用 components/BrandMark.vue 的品牌标，
+    // 平台名也不再常驻显示 —— 都进 title（见 platformCardTitle）。
+    id: 'netease', name: '网易云音乐', desc: '独立推荐空间',
+    topBorder: 'border-t-[3px] border-t-rose-400',
     source: 'wy', appName: '网易云音乐',
     loginHint: '扫码登录后可读每日推荐与私人歌单（含创建与收藏）',
   },
   qq: {
-    id: 'qq', name: 'QQ 音乐', desc: '独立推荐空间', mark: 'Q',
-    markClass: 'bg-emerald-50 text-emerald-600', topBorder: 'border-t-[3px] border-t-emerald-400',
+    id: 'qq', name: 'QQ 音乐', desc: '独立推荐空间',
+    topBorder: 'border-t-[3px] border-t-emerald-400',
     source: 'tx', appName: 'QQ音乐',
     loginHint: '扫码登录后可读每日推荐与自建 / 收藏歌单',
   },
+}
+
+/**
+ * 平台卡片头的悬停提示。
+ * 卡片头现在只有「品牌标 + 连接状态」（用户 2026-10-18：「去掉 qq 音乐和网易云文字」），
+ * 所以平台名与登录说明必须在这儿补齐——信息不丢，版面省一行。
+ */
+function platformCardTitle(p) {
+  if (!p) return ''
+  if (p.connected) return `${p.name} · 已连接${p.nickname ? ' ' + p.nickname : ''}`
+  return `${p.name} · ${p.loginHint}`
 }
 
 const recommendPlatforms = computed(() =>

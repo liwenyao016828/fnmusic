@@ -186,6 +186,41 @@ func (m *Manager) requirementsHash() (string, error) {
 	return hex.EncodeToString(sum[:8]), nil
 }
 
+// venvUsable 判断 venv 是不是**真的能用**。
+//
+// 为什么不能只看 `bin/python3` 在不在：`python3 -m venv <dir>` 在
+// ensurepip 缺失（Debian 系没装 python3-venv 包）时**会失败但照样留下目录** ——
+// bin/python3 只是指向系统解释器的符号链接，Stat 一定成功、执行也没问题。
+// 只看 Stat 就会把这种半成品当成「已就绪」，于是跳过建 venv 直接 `-m pip`，
+// 报一个「No module named pip」，而且用户点多少次「重试启动」都修不好
+// （每次都被同一个 Stat 短路）。所以判据必须是「这个解释器里真的能 import pip」。
+func (m *Manager) venvUsable(ctx context.Context) bool {
+	if _, err := os.Stat(filepath.Join(m.venvDir(), "pyvenv.cfg")); err != nil {
+		return false
+	}
+	if _, err := os.Stat(m.venvPython()); err != nil {
+		return false
+	}
+	_, err := runCmd(ctx, "", m.venvPython(), "-c", "import pip")
+	return err == nil
+}
+
+// venvHint 把「本机缺 python3-venv」这个最常见的原因翻成人话。
+//
+// python3 -m venv 的原始报错是一大段英文（「ensurepip is not available…
+// apt install python3.11-venv」），只 tail 出来用户根本不知道要干什么。
+func venvHint(out string) string {
+	low := strings.ToLower(out)
+	switch {
+	case strings.Contains(low, "ensurepip") || strings.Contains(low, "python3-venv") || strings.Contains(low, "python3.11-venv"):
+		return "（这台机器没装 python3-venv：SSH 上去执行 `sudo apt install python3-venv`，" +
+			"或在「音源管理 → musicdl」里把 Python 路径指到自带的解释器）"
+	case strings.Contains(low, "no module named pip") || strings.Contains(low, "no module named ensurepip"):
+		return "（这个 Python 没带 pip：装上 python3-venv / python3-pip 后重试）"
+	}
+	return ""
+}
+
 // ensureDeps 保证 venv 与依赖就绪（阻塞，必须在后台 goroutine 里调）。
 func (m *Manager) ensureDeps(ctx context.Context) error {
 	want, err := m.requirementsHash()
@@ -193,7 +228,7 @@ func (m *Manager) ensureDeps(ctx context.Context) error {
 		return fmt.Errorf("读不到 requirements.txt：%w", err)
 	}
 	if got, err := os.ReadFile(m.markerPath()); err == nil && strings.TrimSpace(string(got)) == want {
-		if _, err := os.Stat(m.venvPython()); err == nil {
+		if m.venvUsable(ctx) {
 			return nil // 已经装好，直接用
 		}
 	}
@@ -206,11 +241,25 @@ func (m *Manager) ensureDeps(ctx context.Context) error {
 		return err
 	}
 
-	if _, err := os.Stat(m.venvPython()); err != nil {
+	if !m.venvUsable(ctx) {
 		m.setState(StatePreparing, "正在创建 Python 虚拟环境")
 		m.cfg.Logf("[SIDECAR] 创建 venv：%s", m.venvDir())
+		// 半成品（上一次建到一半、或 ensurepip 缺失留下的空壳）必须先清掉，
+		// 否则 python -m venv 见到已存在的目录可能只做增量、留下同一个空壳。
+		if _, err := os.Stat(m.venvDir()); err == nil {
+			m.cfg.Logf("[SIDECAR] 清掉不可用的 venv 目录重新创建：%s", m.venvDir())
+			_ = os.RemoveAll(m.venvDir())
+		}
 		if out, err := runCmd(ctx, "", py, "-m", "venv", m.venvDir()); err != nil {
-			return fmt.Errorf("建 venv 失败：%w（%s）", err, tail(out, 300))
+			// 失败也会留下一个「看起来能跑、其实没有 pip」的目录 —— 不清掉，
+			// 下一次「重试启动」会被 venvUsable 判否后再次尝试建 venv（正确），
+			// 但留着它只会让日志与磁盘越来越乱。这里直接抹掉，保持干净。
+			_ = os.RemoveAll(m.venvDir())
+			return fmt.Errorf("建 venv 失败：%w（%s）%s", err, tail(out, 300), venvHint(out))
+		}
+		if !m.venvUsable(ctx) {
+			_ = os.RemoveAll(m.venvDir())
+			return fmt.Errorf("venv 建好了但没有 pip，无法装依赖%s", venvHint("no module named pip"))
 		}
 	}
 
@@ -220,7 +269,10 @@ func (m *Manager) ensureDeps(ctx context.Context) error {
 	out, err := runCmd(ctx, m.cfg.Dir, m.venvPython(), "-m", "pip", "install",
 		"--disable-pip-version-check", "-r", filepath.Join(m.cfg.Dir, "requirements.txt"))
 	if err != nil {
-		return fmt.Errorf("装依赖失败：%w（%s）", err, tail(out, 500))
+		// pip 这一趟失败常见两种：venv 本身没 pip（半成品，上面已挡），
+		// 或者出不去外网 / 拉不到包。后者换个网络或改镜像即可，不必重建 venv ——
+		// 所以这里**不**删 venv，只把原因说清楚。
+		return fmt.Errorf("装依赖失败：%w（%s）%s", err, tail(out, 500), venvHint(out))
 	}
 
 	if err := os.WriteFile(m.markerPath(), []byte(want), 0o644); err != nil {

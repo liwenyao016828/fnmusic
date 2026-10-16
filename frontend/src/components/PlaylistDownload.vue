@@ -4,7 +4,7 @@
     与「发现音乐」里粘链接的区别：这里是**专门的下载工作台**，
     解析结果直接给出「已在库 / 待下载」的判定，省得自己比对。
   -->
-  <component :is="embedded ? 'div' : PageShell" v-bind="shellProps">
+  <component :is="embedded ? 'div' : PageShell">
     <template v-if="!embedded" #metrics>
       <div class="grid grid-cols-2 gap-3 md:grid-cols-4">
         <div v-for="m in metrics" :key="m.label" class="rounded-xl border border-gray-200 bg-white px-[17px] py-[15px]">
@@ -159,18 +159,12 @@ import InlineNotice from './InlineNotice.vue'
 import PageShell from './PageShell.vue'
 
 const props = defineProps({
-  /** true = 供「曲库管家」内嵌，不自带页面外壳 */
+  /** true = 供「下载」页内嵌，不自带页面外壳 */
   embedded: { type: Boolean, default: false },
 })
 
-const shellProps = computed(() =>
-  props.embedded
-    ? {}
-    : {
-        title: '歌单下载',
-        desc: '粘贴歌单分享链接，解析出真实曲目后整单下载，或订阅它持续追新',
-      },
-)
+// 2026-10-18：shellProps 已撤 —— PageShell 不再收 title / desc，
+// 页面名与简介的唯一出处是 services/navViews.js（由 App.vue 顶栏渲染）。
 
 const link = ref('')
 const linkInput = ref(null)

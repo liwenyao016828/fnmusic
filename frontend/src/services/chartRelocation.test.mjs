@@ -133,9 +133,11 @@ test('榜单仍是一等入口：charts 这个词必须还能解析到「发现�
 })
 
 test('本地音乐：就是「本地曲库」顶层视图本身（2026-10-15 框架重做）', () => {
+  // 2026-10-18：VIEWS 里的条目改成多行字面量（多了 desc 字段），所以这里
+  // 只钉「有这个 id + 显示名是本地曲库」，不再钉单行形状。
   assert.match(
     navViewsJs,
-    /\{ id: 'library', name: '本地曲库'/,
+    /id: 'library',[\s\S]{0,80}?name: '本地曲库'/,
     'navViews 里应有 library 顶层视图（本地曲库）',
   )
   assert.ok(

@@ -1,15 +1,16 @@
 <template>
-  <PageShell title="设置" desc="下载音质、文件命名、存储目录与运行日志都在这里。改完即刻生效，不需要重启。">
+  <PageShell>
     <div class="space-y-4">
       <InlineNotice v-if="notice" :text="notice" :tone="noticeOk ? 'ok' : 'error'" :log-link="!noticeOk" />
 
-      <!-- ⑤ 下载音质 -->
+      <!-- ⑤ 下载音质
+           小节简介统一走 h2 的 title（2026-10-18 用户口径：「去掉简介」，改成悬浮可见）。
+           原来那句里还写着 Markdown 的 ** 星号，页面会照原样显示 —— 顺手去掉。 -->
       <section class="rounded-xl border border-gray-200 bg-white p-4 sm:p-5">
-        <h2 class="text-[15px] font-semibold text-gray-800">下载音质</h2>
-        <p class="mt-1 text-[12px] text-gray-500">
-          这个开关**盖住**下面两个入口各自的音质设置，不是改掉它们：改回「跟随」就能复原。
-          本应用不做转码（NAS 上没有 ffmpeg），所以是「点名要某一档」，拿不到会按原顺序兜底，不会变成下载失败。
-        </p>
+        <h2
+          class="text-[15px] font-semibold text-gray-800"
+          title="这个开关盖住下面两个入口各自的音质设置，不是改掉它们：改回「跟随」就能复原。本应用不做转码（NAS 上没有 ffmpeg），所以是「点名要某一档」，拿不到会按原顺序兜底，不会变成下载失败。"
+        >下载音质</h2>
         <div class="mt-3 grid gap-2 sm:grid-cols-3">
           <button
             v-for="o in qualityOptions"
@@ -30,10 +31,10 @@
 
       <!-- ② 文件命名 -->
       <section class="rounded-xl border border-gray-200 bg-white p-4 sm:p-5">
-        <h2 class="text-[15px] font-semibold text-gray-800">曲库文件命名</h2>
-        <p class="mt-1 text-[12px] text-gray-500">
-          影响**新下载**的文件名。已经躺在曲库里的文件不会被改名（改名会让飞牛当成新歌重新扫描一遍）。
-        </p>
+        <h2
+          class="text-[15px] font-semibold text-gray-800"
+          title="影响新下载的文件名。已经躺在曲库里的文件不会被改名（改名会让飞牛当成新歌重新扫描一遍）。"
+        >曲库文件命名</h2>
         <div class="mt-3 grid gap-2 sm:grid-cols-2">
           <button
             v-for="o in namingOptions"
@@ -53,11 +54,10 @@
 
       <!-- ⑧ 存储目录 -->
       <section class="rounded-xl border border-gray-200 bg-white p-4 sm:p-5">
-        <h2 class="text-[15px] font-semibold text-gray-800">存储目录</h2>
-        <p class="mt-1 text-[12px] text-gray-500">
-          缓存目录放的是「边听边存」的暂存档与试听滚动缓存，可以单独放一块盘。
-          两个目录**不得相同、也不得互为父子**（清理缓存会连成品一起删掉）。
-        </p>
+        <h2
+          class="text-[15px] font-semibold text-gray-800"
+          title="缓存目录放的是「边听边存」的暂存档与试听滚动缓存，可以单独放一块盘。两个目录不得相同、也不得互为父子（清理缓存会连成品一起删掉）。"
+        >存储目录</h2>
         <div class="mt-3 grid gap-3 sm:grid-cols-2">
           <label class="block">
             <span class="text-[12px] font-medium text-gray-700">下载目录（曲库）</span>
@@ -101,10 +101,10 @@
 
       <!-- 下载行为（v2.5.0 从旧「曲库管家 → 下载」标签搬来；四个开关行为原样未动） -->
       <section class="rounded-xl border border-gray-200 bg-white p-4 sm:p-5">
-        <h2 class="text-[15px] font-semibold text-gray-800">下载行为</h2>
-        <p class="mt-1 text-[12px] text-gray-500">
-          这几个开关都<b>真的控制行为</b>（不放「点了没反应」的开关）：打开后对应的自动动作开始占磁盘和带宽。
-        </p>
+        <h2
+          class="text-[15px] font-semibold text-gray-800"
+          title="这几个开关都真的控制行为（不放「点了没反应」的开关）：打开后对应的自动动作开始占磁盘和带宽。"
+        >下载行为</h2>
         <div class="mt-3 space-y-2">
           <div class="flex items-start justify-between gap-3 rounded-xl border border-gray-100 bg-gray-50/60 px-3 py-2.5">
             <div class="min-w-0">
@@ -224,6 +224,14 @@
             :title="exportTitle"
             @click="exportLogs"
           >{{ exporting ? '打包中…' : '导出运行日志' }}</button>
+          <!-- 条款入口（2026-10-18）：原来那张常驻卡在「音源管理」页，用户要求撤掉。
+               条款本身不能没有入口，就挪到这里 —— 设置 → 关于，找得到但不占版面。 -->
+          <button
+            type="button"
+            class="rounded-xl border border-gray-200 px-4 py-2 text-[13px] text-gray-700 hover:border-gray-300"
+            title="技术中立免责声明：纯本地技术容器，不内置在线音源；导入脚本请自负合规责任"
+            @click="emit('open-disclaimer')"
+          >免责声明与合规</button>
           <span v-if="exportNote" class="text-[12px] text-gray-500">{{ exportNote }}</span>
         </div>
       </section>
@@ -239,6 +247,9 @@ import { ConfigAPI, DownloadAPI, LogsAPI, AppAPI } from '../api/client'
 import { QUALITY_OVERRIDE_OPTIONS } from '../services/qualityOverride'
 import { fail, apiError } from '../services/userMsg'
 import InlineNotice from './InlineNotice.vue'
+
+/** 条款弹窗由 App.vue 持有（openDisclaimer），这里只负责把「想看条款」这件事报上去。 */
+const emit = defineEmits(['open-disclaimer'])
 
 // 成功/失败提示：沿用全局的 InlineNotice（AiSettingsPanel 同款），
 // 不是弹 toast —— 本项目提示已经够多了，能就地显示就别再弹一层。

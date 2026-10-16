@@ -17,7 +17,7 @@
         各页底部留白全部叠加它避让，不再各写各的魔数。
       · 原「导航密度三档」机制（fitNavDensity）删除：侧栏放得下全名，不再需要实测降档。
   -->
-  <div class="app-viewport flex w-full bg-[#f5f7f9] text-gray-800 overflow-hidden select-none font-sans">
+  <div class="app-viewport flex w-full flex-col bg-[#f5f7f9] text-gray-800 overflow-hidden select-none font-sans">
 
     <!-- ── Immersive Player (shown when playing) ── -->
     <ImmersivePlayer
@@ -43,16 +43,14 @@
       @clear-playlist="clearPlaylist"
     />
 
-    <!-- ════════════ 桌面左侧栏（sm+ 才出现；手机用底部标签栏） ════════════ -->
-    <aside class="z-20 hidden w-[204px] shrink-0 flex-col border-r border-gray-100 bg-white sm:flex">
-      <!--
-        品牌 + 开放接口入口。
-        2026-09-27 用户要求：原来右上角那个带文字的「开放接口」按钮挪到**软件图标本身**
-        ——点图标就滑出开放接口抽屉，图标保留。
-        提示只用**动态图标**（外圈旋转光环 + 图标呼吸，见 style.css 的 .brand-halo），
-        不写任何提示文字；抽屉开着时动效暂停。
-      -->
-      <div class="flex h-[68px] shrink-0 items-center px-4">
+    <!-- ════════════ 顶部一条栏：品牌 + 当前页面名 + 音源 ════════════
+         2026-10-18 用户口径：「页面最顶部，把发现音乐、本地曲库等页面名，移到 logo 和
+         音源管理那行去」——所以页面名**只**出现在这一条栏里，各页内容区不再重复写标题
+         （PageShell / SearchView 的自带标题都已撤掉）。
+         品牌按钮仍是「开放接口」入口（点图标滑出抽屉）。
+         ⚠️ `pt-safe` 挂 header、真实内边距挂内层 div —— 两者挂同一元素会互相覆盖。 -->
+    <header class="pt-safe z-20 shrink-0 border-b border-gray-100 bg-white">
+      <div class="flex h-12 items-center gap-2 px-3 sm:h-14 sm:px-4">
         <button
           type="button"
           class="brand-halo group flex shrink-0 cursor-pointer items-center gap-2.5 rounded-[13px]"
@@ -68,12 +66,59 @@
             <span class="brand-core" aria-hidden="true"></span>
             <span class="brand-core-ring" aria-hidden="true"></span>
           </span>
-          <span class="text-left leading-tight">
-            <b class="block text-[17px] font-extrabold tracking-[-0.5px] text-gray-800">曲率</b>
+          <span class="hidden text-left leading-tight sm:block">
+            <b class="block text-[15px] font-extrabold tracking-[-0.5px] text-gray-800">曲率</b>
             <small class="block text-[10px] font-medium text-gray-400">AI Music Hub</small>
           </span>
         </button>
+
+        <span class="hidden h-5 w-px shrink-0 bg-gray-200 sm:block" aria-hidden="true"></span>
+
+        <!-- 当前页面名（导航注册表 navViews.js 是单一数据源，不能在这儿另写一份表） -->
+        <h1
+          class="min-w-0 truncate text-[15px] font-bold tracking-tight text-gray-800 sm:text-[16px]"
+          :title="currentViewDesc"
+        >
+          {{ currentViewName }}
+        </h1>
+
+        <div class="ml-auto flex shrink-0 items-center gap-1.5">
+          <!-- 当前音源状态胶囊：窄屏只放前两字（长名会把胶囊顶出屏幕，用户 2026-09-28 反馈） -->
+          <button
+            @click="navigateTo('sources')"
+            class="flex min-w-0 max-w-[92px] items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1.5 text-emerald-700 transition-all hover:bg-emerald-100 sm:max-w-none sm:px-3"
+            :title="`当前音源：${activeSourceMeta?.name || '未设置'} —— 点开管理音源`"
+            :aria-label="`当前音源：${activeSourceMeta?.name || '未设置'}，打开音源管理`"
+          >
+            <span class="h-1.5 w-1.5 shrink-0 rounded-full" :class="activeSourceMeta ? 'bg-emerald-500' : 'bg-amber-400'"></span>
+            <span class="truncate text-[11px] sm:hidden">{{ shortSourceName }}</span>
+            <span class="hidden truncate text-[11px] sm:inline">{{ activeSourceMeta?.name || '音源' }}</span>
+          </button>
+          <!-- 播放器入口在桌面侧栏底部，手机没有侧栏，所以只有手机在这儿放一个图标入口 -->
+          <button
+            v-if="currentSong"
+            @click="showImmersive = true"
+            class="shrink-0 rounded-lg border border-emerald-200 bg-emerald-50 p-2 text-emerald-600 transition-all hover:bg-emerald-100 sm:hidden"
+            title="打开播放器"
+            aria-label="打开播放器"
+          >
+            <Disc class="h-4 w-4" />
+          </button>
+        </div>
       </div>
+    </header>
+
+    <!-- 顶栏之下 = 一行两列：桌面左侧栏 + 内容列。
+         内层用 `<div class="flex min-h-0 flex-1">` 包住这两个兄弟节点（原来是根容器的直接子节点）；
+         为了不制造 250 行纯缩进 diff，里面的缩进没有跟着加一级。 -->
+    <div class="flex min-h-0 flex-1">
+
+    <!-- ════════════ 桌面左侧栏（sm+ 才出现；手机用底部标签栏） ════════════ -->
+    <aside class="z-20 hidden w-[204px] shrink-0 flex-col border-r border-gray-100 bg-white sm:flex">
+      <!--
+        品牌 + 开放接口入口都搬到**顶部一条栏**了（2026-10-18 用户口径：「把页面名移到
+        logo 和音源那行去」）——侧栏不再有品牌行，从导航直接开始，省下 68px。
+      -->
 
       <!-- 分组导航：听（发现/曲库）· 管（整理/订阅/下载）· 配置（音源/账号/系统）。
            分组只影响呈现（navViews.js 的 group 字段），id 与深链不变。 -->
@@ -130,17 +175,8 @@
         </div>
       </div>
 
-      <!-- 侧栏底部：音源状态胶囊（顺手可点进音源页）+ 播放器入口 -->
+      <!-- 侧栏底部：只剩播放器入口（音源胶囊已搬到顶部一条栏，同一个按钮不出现两次） -->
       <div class="shrink-0 space-y-2 border-t border-gray-100 p-3">
-        <button
-          @click="navigateTo('sources')"
-          class="flex w-full min-w-0 items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-emerald-700 transition-all hover:bg-emerald-100"
-          :title="`当前音源：${activeSourceMeta?.name || '未设置'} —— 点开管理音源`"
-          :aria-label="`当前音源：${activeSourceMeta?.name || '未设置'}，打开音源管理`"
-        >
-          <span class="h-1.5 w-1.5 shrink-0 rounded-full" :class="activeSourceMeta ? 'bg-emerald-500' : 'bg-amber-400'"></span>
-          <span class="truncate text-[11px]">{{ activeSourceMeta?.name || '音源' }}</span>
-        </button>
         <button
           v-if="currentSong"
           @click="showImmersive = true"
@@ -153,53 +189,8 @@
       </div>
     </aside>
 
-    <!-- ════════════ 内容列（手机顶栏 + 主内容） ════════════ -->
+    <!-- ════════════ 内容列（主内容；品牌 + 页面名 + 音源已提到最上面那条栏） ════════════ -->
     <div class="flex min-w-0 flex-1 flex-col">
-
-      <!-- 手机顶栏：品牌图标（= 开放接口入口）+ 音源胶囊 + 播放器入口，单行只留图标。
-           用户 2026-09-26 口径：「顶部菜单显示不全的话，可以不显示文字啊，不要两行」。
-           ⚠️ `pt-safe` 挂在 header 上、真实内边距挂在内层 div 上 —— 两者挂同一元素会互相覆盖。 -->
-      <header class="pt-safe z-20 shrink-0 border-b border-gray-100 bg-white sm:hidden">
-        <div class="flex h-12 items-center gap-2 px-3">
-          <button
-            type="button"
-            class="brand-halo group flex shrink-0 cursor-pointer items-center rounded-[13px]"
-            :class="{ 'brand-halo-open': showApiDrawer }"
-            title="开放接口 · 供 AI 与外部程序调用"
-            aria-label="开放接口"
-            @click="showApiDrawer = true"
-          >
-            <span class="relative grid h-9 w-9 shrink-0 place-items-center rounded-[11px] bg-emerald-500 text-white transition-colors group-hover:bg-emerald-600">
-              <span class="brand-core-glow" aria-hidden="true"></span>
-              <Disc class="brand-disc h-[18px] w-[18px]" />
-              <span class="brand-core" aria-hidden="true"></span>
-              <span class="brand-core-ring" aria-hidden="true"></span>
-            </span>
-          </button>
-
-          <div class="ml-auto flex shrink-0 items-center gap-1.5">
-            <!-- 当前音源状态胶囊：窄屏只放前两字（长名会把胶囊顶出屏幕，用户 2026-09-28 反馈） -->
-            <button
-              @click="navigateTo('sources')"
-              class="flex min-w-0 max-w-[92px] items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1.5 text-emerald-700 transition-all hover:bg-emerald-100"
-              :title="`当前音源：${activeSourceMeta?.name || '未设置'} —— 点开管理音源`"
-              :aria-label="`当前音源：${activeSourceMeta?.name || '未设置'}，打开音源管理`"
-            >
-              <span class="h-1.5 w-1.5 shrink-0 rounded-full" :class="activeSourceMeta ? 'bg-emerald-500' : 'bg-amber-400'"></span>
-              <span class="truncate text-[11px]">{{ shortSourceName }}</span>
-            </button>
-            <button
-              v-if="currentSong"
-              @click="showImmersive = true"
-              class="shrink-0 rounded-lg border border-emerald-200 bg-emerald-50 p-2 text-emerald-600 transition-all hover:bg-emerald-100"
-              title="打开播放器"
-              aria-label="打开播放器"
-            >
-              <Disc class="h-4 w-4" />
-            </button>
-          </div>
-        </div>
-      </header>
 
       <!-- Main Content -->
       <!-- 主内容区：左右滑动切页（跟手位移 / 到头阻尼 / 速度判定，见 components/SwipePager.vue） -->
@@ -293,12 +284,18 @@
             </div>
             <div class="grid min-h-0 flex-1 grid-cols-1">
               <LogViewer v-if="segMounted('system', 'logs')" v-show="segmentOf('system') === 'logs'" />
-              <AppSettings v-if="segMounted('system', 'settings')" v-show="segmentOf('system') === 'settings'" />
+              <AppSettings
+                v-if="segMounted('system', 'settings')"
+                v-show="segmentOf('system') === 'settings'"
+                @open-disclaimer="openDisclaimer(false)"
+              />
             </div>
           </div>
         </template>
       </SwipePager>
     </div>
+
+    </div><!-- /侧栏 + 内容列 -->
 
     <!-- ════════════ 手机底部「灵动岛」（.mobile-dock：只在触屏 + 窄屏出现，见 style.css） ════════════
          2026-10-18 用户口径：「底部导航重构 ui，整体采用底部搜索框样式并融合…… 2:1 的方式展示
@@ -770,6 +767,26 @@ const NAV_ICONS = { search: Compass, library: Library, tidy: Wand2, push: Send, 
 const SEGMENT_ICONS = { discover: Compass, charts: Trophy, queue: ListMusic, playlist: ListOrdered, autodl: CloudDownload, logs: ScrollText, settings: Settings }
 
 const navItems = VIEWS.map((v) => ({ ...v, icon: NAV_ICONS[v.id] }))
+
+/**
+ * 顶部一条栏里显示的当前页面名（2026-10-18 用户口径：「把发现音乐、本地曲库等页面名，
+ * 移到 logo 和音源管理那行去」）。
+ * 全名取自导航注册表 navViews.js —— 各页内容区里那份重复标题已经全部撤掉，
+ * 所以这里是页名的**唯一**来源，改名字只改 navViews.js。
+ */
+const currentViewName = computed(() => navItems.find((i) => i.id === currentView.value)?.name || '')
+
+/**
+ * 页面名的悬停简介（2026-10-18 用户口径：「把导航里的其他页面的简介也去掉改hover」）。
+ * 简介只有一个出处：navViews.js 里该视图（有分段时优先取当前分段）的 `desc`。
+ * 页面里那份常驻说明文字已全部撤掉 —— 用户不想一进页面就被一段灰字介绍。
+ */
+const currentViewDesc = computed(() => {
+  const view = navItems.find((i) => i.id === currentView.value)
+  if (!view) return ''
+  const seg = (view.segments || []).find((s) => s.id === segmentOf(view.id))
+  return seg?.desc || view.desc || ''
+})
 
 /** 桌面侧栏：按「听 / 管 / 配置」分组（分组只影响呈现，id 与深链不变） */
 const navGroups = NAV_GROUPS.map((g) => ({

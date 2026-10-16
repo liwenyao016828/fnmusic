@@ -1,3 +1,75 @@
+## 曲率 (yinshu-ai) v2.8.0
+
+**导航收口：页面名上移、平台卡用真品牌标、简介改悬浮、musicdl 半成品 venv 不再卡死**
+
+用户口径：「把导航里的其他页面的简介也去掉改 hover。」「发现页，扫码登录那个卡片，把图标从 q 改为 qq，w 改为网易，或者你改为他们的官方图标。去掉 qq 音乐和网易云文字。」「下面的标签，全部、国语这些用一个新的卡片，移出下午好的卡片，放在下一行。」「页面最顶部，把发现音乐、本地曲库等页面名，移到 logo 和音源管理那行去。」「去掉音源管理，免责声明的卡片。」「musicdl 音源报错了。」「导航里的每个页面，有一些组件和 ui 不统一。优化一下，去掉简介。」
+
+### 一、顶部一条栏：logo + 当前页面名 + 音源
+- 桌面与手机共用**一个**顶部条：左侧品牌、当前页面名（来自 `services/navViews.js` 的
+  `name`，悬停可见 `desc`），右侧音源胶囊 + 播放器入口。
+- 旧版**桌面左侧栏品牌行**与**手机专属顶栏**整段合并掉，腾出 68 + 48 两块冗余高度。
+- 页面里**不再重复显示标题**：`PageShell` 去掉 `title` / `desc` 两个 prop（它们会诱使以后
+  又有人往页面里塞一份重复的标题或简介），8 个调用方收成无参 `<PageShell>`；搜
+  索视图自带页头也只保留「← 返回发现」与平台 chips，标题与简介删除。
+- 页面简介走 hover：原来散在各页 PageShell 之后的 4 段说明段
+  （`AppSettings` / `DownloadHub` / `PushManager` / `SourceManager`）现在都收进
+  各自标题的 `title=`；导航里每个页面的简介**只有一个出处** = `navViews.js` 的
+  `desc`，顶部条按当前视图/段实时取。
+
+### 二、品牌标 + 去掉「网易云音乐 / QQ 音乐」文字
+- 新增 `frontend/src/components/BrandMark.vue`：手绘 SVG —— 网易云取「单符干 + 符
+  尾与符头」、QQ 音乐取「两根符干 + 斜符梁」，分别用 `#C20C0C`（网易云官方红）、
+  `#31C27C`（QQ 音乐官方绿）。
+- 发现页问候卡里的「双平台推荐」两个卡片：图标换成 `BrandMark`、去掉卡片里那
+  行「网易云音乐 / QQ 音乐」文字（信息已经在悬停说明里），`PLATFORM_META` 里
+  的 `mark` / `markClass` 两个字段随之删除。
+
+### 三、歌单分类标签独立成卡
+- 「全部 / 国语 / 流行 …」那一排 chips 从「下午好」问候卡里**移出**到下一行的
+  独立白底卡片，间距与边距按其他操作卡统一。
+- 行为不变（点击切平台、展开收起、记忆选中），但视觉重心与问候卡解耦，
+  问 候卡只剩问候语 + 两个平台卡，更聚焦。
+
+### 四、免责声明卡下架，入口搬进「设置 → 关于」
+- 音源管理里的「技术中立免责声明」`ActionCard` 删除，条款文本改放到
+  `AppSettings`「关于」section 的「免责声明与合规」按钮里。
+- 启动时未读条款的弹窗（`App.vue:openDisclaimer`）保持不变 —— 首次安装仍会
+  强  提示。
+
+### 五、musicdl 半成品 venv 不再卡死 + 报错写人话
+- 事故现场：Debian/飞牛上没装 `python3-venv` 时，`python3 -m venv` 会**失败但
+  照 样留下目录**（`bin/python3` 只是个能执行的符号链接 + `pyvenv.cfg`）。
+  旧判据只看 `os.Stat(bin/python3)`，把半成品当成装好的 venv，
+  跳过建 venv 直接 `-m pip`，报「No module named pip」—— 而且点多少
+  次「重试启动」都修不好（每次都被同一个 Stat 短路）。
+- 修法（`backend/pkg/sidecar/sidecar.go`）：
+  - 新增 `venvUsable(ctx)`：要求 `pyvenv.cfg` 在 **且** venv 里真的能
+    `import pip`，从源头排除半成品。
+  - 半成品 / 建 venv 失败：**先 `os.RemoveAll` 掉残留目录再报错**，
+    「重试启动」真的能再试一次；pip install 失败（出不去外网）则**不删** venv。
+  - `venvHint()`：报错里附上「`sudo apt install python3-venv`」这句人话，
+    取代之前那段被截断的英文尾巴。
+- 验证（`pkg/sidecar/sidecar_test.go` 5 条新增全绿）：
+  - `TestVenvUsableRejectsHalfBuiltVenv` —— 没有 `pyvenv.cfg` 不算可用。
+  - `TestVenvUsableRejectsVenvWithoutPip` —— `pyvenv.cfg` 在但 `import pip`
+    失败不算可用。
+  - `TestEnsureDepsRebuildsHalfBuiltVenv` —— 标记匹配但 venv 是半成品时
+    必须重建（**这是用户报的「重试启动永远修不好」的回归**）。
+  - `TestEnsureDepsCleansUpFailedVenv` —— 建 venv 失败必清掉残留、错误
+    信息里带「python3-venv」提示。
+  - `TestEnsureDepsKeepsVenvWhenPipInstallFails` —— pip install 失败**不删**
+    venv（换个网络就能重试，不该浪费重建）。
+
+### 六、回归
+- 前端 `npm test` 364/364 全绿；`npm run build` 1830 modules 成功（既有 chunk>500kB
+  警告保持不动）。
+- 后端 `go build ./...` OK；`go vet ./...` 干净；`go test ./...` 33 个包全绿。
+- 真机实测：开发机 `192.168.1.230:8900` 在装了 `python3-venv` 之后 musicdl
+  真正能拉起（state=ready、`/api/musicdl/probe mg/周杰伦/limit=3` 返回 3 条结果），
+  不再是「已关闭」或「建 venv 失败」。
+
+---
+
 ## 曲率 (yinshu-ai) v2.7.0
 
 **发现页减负：平台选择收进音源管理，说明文字改悬浮提示，搜索圆改正圆**

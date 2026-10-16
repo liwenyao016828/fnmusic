@@ -49,7 +49,8 @@ test('自动下载记录：下载页有这一段、能多选、能一键清', ()
     '应 import AutoDownloadAPI')
   // 导航框架重做后「自动下载记录」不再是 LibraryManager 的二级标签，
   // 而是「下载」视图的第三段（queue / playlist / autodl）——分段登记在 navViews.js。
-  assert.match(navViewsJs, /\{ id: 'autodl', name: '自动记录'/, 'navViews 的 download 段里应有 autodl 项')
+  // 2026-10-18：条目现在带 desc，会折成多行，所以按 id/name 两段匹配而不是钉单行形状。
+  assert.match(navViewsJs, /id: 'autodl',[\s\S]{0,80}?name: '自动记录'/, 'navViews 的 download 段里应有 autodl 项')
   // 当前分段读 navBus 的 segmentOf('download')，autodl 段是 <template v-else> 分支
   assert.ok(downloadHubVue.includes("segmentOf('download')"), 'DownloadHub 应读 navBus 的当前分段')
   // 多选：用 Set 存 id，两个动作分别对应「清选中」与「一键清」

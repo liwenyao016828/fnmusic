@@ -1,8 +1,5 @@
 <template>
-  <PageShell
-    title="日志"
-    desc="界面上的报错只给一句结论，完整信息都在这里 —— 排查时不用登 NAS 翻文件，也不用开浏览器控制台"
-  >
+  <PageShell>
     <template #actions>
       <button
         class="rounded-lg bg-gray-100 px-3 py-1.5 text-[12px] font-medium text-gray-600 transition-colors hover:bg-gray-200 disabled:opacity-50"

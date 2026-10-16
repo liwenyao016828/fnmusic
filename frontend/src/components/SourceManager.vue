@@ -1,10 +1,5 @@
 <template>
-  <PageShell
-    :title="musicdlPageOpen ? 'musicdl 音源' : '音源引擎管理'"
-    :desc="musicdlPageOpen
-      ? 'musicdl 覆盖 56 个音源，逐个启用并检测'
-      : '多音源轮询取链 · 失败熔断 · 支持导入第三方脚本'"
-  >
+  <PageShell>
     <template #title-extra>
       <span class="text-[10px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-200 font-mono">已导入 {{ sources.length }} 个</span>
       <span
@@ -71,18 +66,19 @@
       </div>
 
       <!-- ── 外挂音源（musicdl）：入口行（v2.1.89 起详情在独立子页）──────
-           这一行只留状态与入口 —— 56 个源的开关在子页里，首页放不下。 -->
-      <div class="rounded-xl border border-gray-200 bg-white px-4 py-3 flex items-center justify-between gap-3">
+           这一行只留状态与入口 —— 56 个源的开关在子页里，首页放不下。
+           那句「覆盖 56 个音源……」的介绍收进整行的 title（2026-10-18 用户口径：
+           「导航里的每个页面……去掉简介」），不再常驻一行小字。 -->
+      <div
+        class="rounded-xl border border-gray-200 bg-white px-4 py-3 flex items-center justify-between gap-3"
+        title="覆盖 56 个音源（酷狗 / 酷我 / 咪咕 / B站 / Apple Music / Spotify…），与上面的 LX 脚本是两套独立的东西"
+      >
         <div class="min-w-0">
           <div class="flex items-center gap-2">
             <h3 class="text-sm font-semibold text-gray-800">musicdl 外挂音源</h3>
             <span :class="['text-[10px] px-1.5 py-0.5 rounded-full border font-mono', musicdlBadge.cls]">{{ musicdlBadge.text }}</span>
             <span v-if="musicdlEnabled" class="text-[10px] font-mono text-gray-400">已启用 {{ musicdlSources.length }} 个源</span>
           </div>
-          <p class="mt-1 text-[11px] leading-relaxed text-gray-500">
-            覆盖 56 个音源（酷狗 / 酷我 / 咪咕 / B站 / Apple Music / Spotify…），
-            与上面的 LX 脚本是两套独立的东西。
-          </p>
         </div>
         <button
           @click="musicdlPageOpen = true"
@@ -97,19 +93,10 @@
         <button @click="importNotice = ''" class="shrink-0 text-emerald-600 hover:text-emerald-800">关闭</button>
       </div>
 
-      <!-- 常驻合规与免责声明条
-           改成卡片：原来那一整行正文在手机上被 `truncate` 截掉后半句（合规责任那句
-           恰恰在后面），标题 + 一句简介反而每句都看得见，全文点卡片进弹窗。 -->
-      <div class="grid grid-cols-2 gap-2">
-        <ActionCard
-          title="技术中立免责声明"
-          hint="纯本地技术容器，不内置在线音源；导入脚本请自负合规责任"
-          :icon="ShieldAlert"
-          icon-class="text-amber-600"
-          badge="查看完整条款"
-          @click="$emit('open-disclaimer')"
-        />
-      </div>
+      <!-- 常驻合规与免责声明条 —— **已撤**（2026-10-18 用户口径：「去掉音源管理，免责声明的卡片」）。
+           卡片里的条款全文入口搬去了「系统 → 设置 → 关于」那一栏（AppSettings.vue 的 emit），
+           首次运行仍会按 disclaimer_accepted 自动弹一次（App.vue 的 openDisclaimer(true)），
+           所以撤掉这张卡不会让条款无处可看，只是不再常驻占版面。 -->
 
       <!--
         协议总览（改任何「音源能力」相关逻辑前先读这块）
@@ -400,10 +387,10 @@
         @drop.prevent="onDrop"
       >
         <div class="flex items-center justify-between mb-4">
-          <h3 class="text-base font-bold text-gray-800">导入第三方自定义音源</h3>
+          <!-- 简介统一走悬停（2026-10-18 用户口径「去掉简介」），原来那是 h3 下面常驻的一行灰字 -->
+          <h3 class="text-base font-bold text-gray-800" title="两种接入方式：导入脚本，或填一个自建服务地址">导入第三方自定义音源</h3>
           <button @click="showImportModal = false" class="text-gray-400 hover:text-gray-600"><X class="w-5 h-5" /></button>
         </div>
-        <p class="text-xs text-gray-500 mb-3">两种接入方式：导入脚本，或填一个自建服务地址</p>
 
         <!-- 接入方式切换 -->
         <div class="mb-3 flex w-max items-center gap-0.5 rounded-[11px] bg-gray-100 p-1">
@@ -722,7 +709,7 @@ import { SourcesAPI, ProtocolAPI, NasAPI, ConfigAPI } from '../api/client'
 import { lxRuntime } from '../engine/lx-runtime'
 import { sourceHealth } from '../services/sourceHealth'
 import {
-  Plus, Trash2, X, PlayCircle, ShieldAlert, ChevronDown, Folder, FileCode,
+  Plus, Trash2, X, PlayCircle, ChevronDown, Folder, FileCode,
   Gauge, ShieldOff, Loader2, Layers, Server, RotateCw,
   Headphones, Music2, ArrowLeft, Settings2
 } from 'lucide-vue-next'
