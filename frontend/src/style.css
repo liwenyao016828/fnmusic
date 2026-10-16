@@ -85,6 +85,20 @@
   .pb-dock { padding-bottom: calc(7rem + var(--dock-h)); }
 }
 
+/* 底部「灵动岛」搜索圆上的实时小绿点（正在播放时亮）：呼吸一下，别做成闪烁的信号灯。
+   只动 opacity/transform（合成器通道），减弱动效下保持常亮不跳。 */
+.island-live-dot {
+  box-shadow: 0 0 0 2px rgb(255 255 255 / 0.9);
+  animation: island-live-dot 2s ease-in-out infinite;
+}
+@keyframes island-live-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.45; transform: scale(0.8); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .island-live-dot { animation: none; }
+}
+
 
 @layer base {
   /* 动态视口：先写 vh（老 WebView 兜底），再写 dvh（支持的浏览器覆盖） */

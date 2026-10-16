@@ -97,3 +97,49 @@ test('busy 回调成对出现（否则界面永远卡在「保存中…」）', 
   // 换个写法就红：漏掉 finally 里的 onBusy(false)
   assert.deepEqual(states, [true, false])
 })
+
+// ── 回归（2026-10-18）：音质下载这一路曾整条漏掉 ──────────────────────────────
+// 现场表现：榜单段里改「音质下载」下拉，界面上选了、刷新页面又变回去 —— 因为
+// chartInject.js 调的 `writes.adq(...)` 根本不存在，抛的 TypeError 没人接。
+// 这几条钉住「每一个对外承诺的键都真的有方法」，不只是 adq 一个。
+test('音质下载：adq 是队列的方法，且真的会被写出去', async () => {
+  const writes = []
+  const q = createWriteQueue({ send: async (w) => { writes.push(w) } })
+  assert.equal(typeof q.adq, 'function', 'writes.adq 必须存在 —— 缺了就是改音质静默不生效')
+  await q.adq('320k')
+  await settle(q)
+  assert.deepEqual(writes, [{ ids: undefined, enabled: undefined, ui: undefined, adq: '320k' }])
+})
+
+test('音质下载：空串（「跟随」）是合法取值，不能被当成「没有待写」吃掉', async () => {
+  const writes = []
+  const q = createWriteQueue({ send: async (w) => { writes.push(w) } })
+  await q.adq('')
+  await settle(q)
+  assert.equal(writes.length, 1, '写「跟随」也必须发一次 —— 用真假值判会把它吃掉')
+  assert.equal(writes[0].adq, '')
+})
+
+test('四个键互不干扰：改音质不会顺手把勾选/开关写一遍', async () => {
+  const writes = []
+  const q = createWriteQueue({ send: async (w) => { writes.push(w) } })
+  await q.adq('flac')
+  await settle(q)
+  assert.equal(writes[0].ids, undefined, '没动的键必须是 undefined（后端选择性合并，undefined 才代表「不改」）')
+  assert.equal(writes[0].enabled, undefined)
+  assert.equal(writes[0].ui, undefined)
+})
+
+test('chartInject 调的每一个 writes.X 都真的存在（防「漏登记一个键」再演一次）', async () => {
+  const { readFileSync } = await import('node:fs')
+  const { fileURLToPath } = await import('node:url')
+  const { dirname, join } = await import('node:path')
+  const here = dirname(fileURLToPath(import.meta.url))
+  const src = readFileSync(join(here, './chartInject.js'), 'utf8')
+  const q = createWriteQueue({ send: async () => {} })
+  const used = [...src.matchAll(/writes\.([a-zA-Z_$][\w$]*)\s*\(/g)].map((m) => m[1])
+  assert.ok(used.length >= 4, `chartInject 应该用到 4 个写入口，实际只认出 ${used.length} 个`)
+  for (const k of new Set(used)) {
+    assert.equal(typeof q[k], 'function', `writeQueue 少了 ${k}() —— chartInject 正在调它，会静默失败`)
+  }
+})

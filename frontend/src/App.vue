@@ -205,10 +205,17 @@
       <!-- 主内容区：左右滑动切页（跟手位移 / 到头阻尼 / 速度判定，见 components/SwipePager.vue） -->
       <SwipePager :order="swipeOrderList" :current="currentView" @update:current="v => goView(v)">
         <!--
-          发现（含榜单）—— 2026-10-15 重构把「榜单管理」从顶层页降为**页内第二段**。
+          发现音乐（发现 / 榜单）—— 2026-10-15 重构把「榜单管理」从顶层页降为**页内第二段**。
           理由：它和「发现」都是浏览内容，平级排在导航里只会让导航越来越长（用户反馈过「挤」）；
           而整页替换又会丢掉另一段的滚动位置与已加载数据（切回来要重新等）。
           所以两段都常驻、v-show 切换 —— 与 SwipePager 对页面的策略一致。
+        -->
+        <!--
+          发现音乐（发现 / 榜单）—— 两段都是**浏览**，所以由同一个组件渲染：
+          榜单段的卡片网格与发现段的排行榜单网格本来就是同一份数据、同一个卡片 UI，
+          各自实现一遍就是「同一件事写两遍」（用户 2026-10-18：「逻辑不要重复」）。
+          SearchView 收 `segment` prop 自己决定渲染哪一段；榜榜单的注入设置是
+          它内部一个可折叠面板，不再是独立的一页。
         -->
         <template #view-search>
           <div class="flex h-full min-h-0 flex-col">
@@ -222,7 +229,7 @@
             <div class="grid min-h-0 flex-1 grid-cols-1">
               <SearchView
                 v-if="segMounted('search', 'discover')"
-                v-show="segmentOf('search') === 'discover'"
+                :segment="segmentOf('search')"
                 :active-source="activeSourceMeta"
                 :active-source-ids="activeSourceIds"
                 :play-mode="playMode"
@@ -237,16 +244,6 @@
                 @toggle-play="togglePlay"
                 :bar-query="barSearchQuery"
                 :bar-search-nonce="barSearchNonce"
-              />
-              <!--
-                它自己的「▶ 看一眼」通过 emit 上来，走导航总线把负载带给发现页 ——
-                navigateTo('search', {chartPreview}) 会被 onNavigate 解析成「发现页 + discover 段」，
-                负载仍由 SearchView 自己订阅总线消费，不新增第二套跳转协议。
-              -->
-              <ChartManager
-                v-if="segMounted('search', 'charts')"
-                v-show="segmentOf('search') === 'charts'"
-                @preview="item => navigateTo('search', { chartPreview: item })"
               />
             </div>
           </div>
@@ -303,50 +300,138 @@
       </SwipePager>
     </div>
 
-    <!-- ════════════ 手机底部标签栏（.mobile-dock：只在触屏 + 窄屏出现，见 style.css） ════════════
-         4 个高频视图 + 「更多」。总高 = --dock-h（56px + 底部安全区），
-         PlayerBar / FeedbackHost / 页面底部留白都按这个变量避让。 -->
-    <nav class="mobile-dock fixed inset-x-0 bottom-0 z-30 border-t border-gray-100 bg-white/95 pb-[var(--safe-bottom)] backdrop-blur supports-[backdrop-filter]:bg-white/85" aria-label="主导航">
-      <div class="flex h-14 items-stretch">
+    <!-- ════════════ 手机底部「灵动岛」（.mobile-dock：只在触屏 + 窄屏出现，见 style.css） ════════════
+         2026-10-18 用户口径：「底部导航重构 ui，整体采用底部搜索框样式并融合…… 2:1 的方式展示
+         导航和搜索框（中间要间隙，左边是椭圆，右边是个搜索圆。点击搜索圆，融合两个圆并出现
+         搜索框）有点像苹果灵动岛」。
+
+         结构 = 左椭圆（导航：4 个高频视图 + 更多） + 间隙 + 右圆（搜索），宽度 2:1。
+         点右圆 → `islandOpen`：间隙收到 0、两个形状贴合成**一条胶囊**（边框各留半边，
+         接缝处不画线），左边内容从「图标排」换成「输入框」。再点一次 / 点外面 / Esc 收回。
+
+         总高仍是 --dock-h（56px + 底部安全区）：PlayerBar / FeedbackHost / 页面底部留白
+         的避让量一个像素都不用改。 -->
+    <nav class="mobile-dock fixed inset-x-0 bottom-0 z-30 pb-[var(--safe-bottom)]" aria-label="主导航">
+      <div
+        class="mx-3 mt-1 flex h-14 items-stretch transition-[gap] duration-300 ease-out motion-reduce:duration-0"
+        :class="islandOpen ? 'gap-0' : 'gap-2'"
+      >
+        <!-- 左椭圆：导航（灵动岛打开时它变成搜索输入框） -->
+        <div
+          class="relative min-w-0 flex-[2] overflow-hidden rounded-full border bg-white/95 shadow-lg shadow-black/5 backdrop-blur transition-[border-radius] duration-300 ease-out motion-reduce:duration-0"
+          :class="islandOpen ? 'rounded-r-none border-r-0 border-gray-200' : 'border-gray-200/80'"
+        >
+          <!-- 闭：导航图标排 -->
+          <div
+            v-if="!islandOpen"
+            class="flex h-full items-stretch transition-opacity duration-200"
+          >
+            <button
+              v-for="item in mobileTabs"
+              :key="item.id"
+              @click="goView(item.id)"
+              :title="item.name"
+              :aria-label="item.name"
+              :aria-current="currentView === item.id ? 'page' : undefined"
+              :class="[
+                'relative flex flex-1 flex-col items-center justify-center gap-0.5 text-[10px] font-bold transition-colors',
+                currentView === item.id ? 'text-emerald-600' : 'text-gray-400'
+              ]"
+            >
+              <component :is="item.icon" class="h-[18px] w-[18px]" />
+              <!-- 停在有分段的页上时，标签跟着当前段走（「发现」页里切到榜单段就写「榜单」）
+                   —— 手机上分段器在页面顶部，标签栏是最低成本的「我在哪」提示 -->
+              <span>{{ mobileTabLabel(item) }}</span>
+            </button>
+            <button
+              @click="showMoreDrawer = true"
+              title="更多"
+              aria-label="更多（下载 / 音源 / 账号 / 系统）"
+              :aria-expanded="showMoreDrawer"
+              :class="[
+                'relative flex flex-1 flex-col items-center justify-center gap-0.5 text-[10px] font-bold transition-colors',
+                showMoreDrawer ? 'text-emerald-600' : 'text-gray-400'
+              ]"
+            >
+              <MoreHorizontal class="h-[18px] w-[18px]" />
+              <span>更多</span>
+              <!-- 下载现在住在抽屉里：进行中的数量就挂在这个入口上 -->
+              <span
+                v-if="downloadManager.activeCount.value > 0"
+                class="absolute right-[22%] top-1 min-w-[15px] rounded-full bg-emerald-500 px-1 text-center text-[9px] font-bold leading-[15px] text-white"
+              >{{ downloadManager.activeCount.value }}</span>
+              <!-- 否则有「需要你处理」的事项时给个红点（抽屉里才是完整列表） -->
+              <span
+                v-else-if="statusItems.some((s) => s.tone === 'error' || s.tone === 'warn')"
+                class="absolute right-[24%] top-2 h-1.5 w-1.5 rounded-full bg-rose-500"
+              ></span>
+            </button>
+          </div>
+
+          <!-- 开：搜索输入框（融合后左侧这一半） -->
+          <form
+            v-else
+            class="flex h-full items-center gap-2 px-3.5"
+            @submit.prevent="submitIslandSearch"
+          >
+            <Search class="h-4 w-4 shrink-0 text-emerald-500" />
+            <input
+              ref="islandInput"
+              v-model="islandQuery"
+              type="search"
+              enterkeyhint="search"
+              placeholder="搜索歌曲、歌手、专辑…"
+              aria-label="搜索歌曲、歌手、专辑"
+              class="min-w-0 flex-1 bg-transparent text-[13px] text-gray-700 outline-none placeholder:text-gray-400"
+              @keydown.esc="closeIsland"
+            />
+            <button
+              v-if="islandQuery"
+              type="button"
+              class="shrink-0 rounded-full p-1 text-gray-300 transition-colors hover:bg-gray-100 hover:text-gray-500"
+              title="清空"
+              aria-label="清空"
+              @click="islandQuery = ''"
+            >
+              <X class="h-3.5 w-3.5" />
+            </button>
+          </form>
+        </div>
+
+        <!-- 右圆：搜索（灵动岛打开时它变成「搜索」按钮，与左半边接成一条胶囊） -->
         <button
-          v-for="item in mobileTabs"
-          :key="item.id"
-          @click="goView(item.id)"
-          :title="item.name"
-          :aria-label="item.name"
-          :aria-current="currentView === item.id ? 'page' : undefined"
+          type="button"
+          :title="islandOpen ? '搜索' : '搜索歌曲、歌手、专辑'"
+          :aria-label="islandOpen ? '搜索' : '搜索歌曲、歌手、专辑'"
+          :aria-expanded="islandOpen"
+          @click="islandOpen ? submitIslandSearch() : openIsland()"
+          class="relative grid flex-1 place-items-center rounded-full border bg-white/95 shadow-lg shadow-black/5 backdrop-blur transition-[border-radius,color] duration-300 ease-out motion-reduce:duration-0"
           :class="[
-            'relative flex flex-1 flex-col items-center justify-center gap-0.5 text-[10px] font-bold transition-colors',
-            currentView === item.id ? 'text-emerald-600' : 'text-gray-400'
+            islandOpen
+              ? 'rounded-l-none border-l-0 border-emerald-500 bg-emerald-500 text-white'
+              : 'border-gray-200/80 text-gray-400 active:text-emerald-600',
           ]"
         >
-          <component :is="item.icon" class="h-[18px] w-[18px]" />
-          <span>{{ item.short }}</span>
-          <span
-            v-if="item.id === 'download' && downloadManager.activeCount.value > 0"
-            class="absolute right-[26%] top-1.5 min-w-[15px] rounded-full bg-emerald-500 px-1 text-center text-[9px] font-bold leading-[15px] text-white"
-          >{{ downloadManager.activeCount.value }}</span>
-        </button>
-        <button
-          @click="showMoreDrawer = true"
-          title="更多"
-          aria-label="更多（整理 / 音源 / 账号 / 系统）"
-          :aria-expanded="showMoreDrawer"
-          :class="[
-            'relative flex flex-1 flex-col items-center justify-center gap-0.5 text-[10px] font-bold transition-colors',
-            showMoreDrawer ? 'text-emerald-600' : 'text-gray-400'
-          ]"
-        >
-          <MoreHorizontal class="h-[18px] w-[18px]" />
-          <span>更多</span>
-          <!-- 有「需要你处理」的事项时给个红点提示（抽屉里才是完整列表） -->
-          <span
-            v-if="statusItems.some((s) => s.tone === 'error' || s.tone === 'warn')"
-            class="absolute right-[22%] top-2 h-1.5 w-1.5 rounded-full bg-rose-500"
-          ></span>
+          <span class="relative grid place-items-center">
+            <Search v-if="!islandOpen" class="h-[19px] w-[19px]" />
+            <ArrowRight v-else class="h-[19px] w-[19px]" />
+            <!-- 正在播放时给个小绿点：这一颗圆也是「实时」的（用户口径：第二个实时显示小圆） -->
+            <span
+              v-if="isPlaying && !islandOpen"
+              class="island-live-dot absolute -right-1 -top-1 h-2 w-2 rounded-full bg-emerald-500"
+            ></span>
+          </span>
         </button>
       </div>
     </nav>
+
+    <!-- 灵动岛展开时的「点外面就收」透明层：在岛之下、内容之上 -->
+    <div
+      v-if="islandOpen"
+      class="fixed inset-0 z-20 sm:hidden"
+      @click="closeIsland"
+      aria-hidden="true"
+    ></div>
 
     <!-- ════════════ 「更多」右侧抽屉（手机低频入口） ════════════
          方向与 ApiDrawer（左）相反：这个从右滑入，跟触发它的「更多」按钮同侧。 -->
@@ -401,10 +486,11 @@
             >
               <component :is="item.icon" class="h-[18px] w-[18px] shrink-0" />
               <span class="flex-1 text-left">{{ item.name }}</span>
+              <!-- 下载住进抽屉后，进行中的数量在这里也看得到（与标签栏入口同一个数） -->
               <span
-                v-if="item.id === 'tidy'"
-                class="shrink-0 text-[10px] font-medium text-gray-300"
-              >歌词 · 封面 · 查重</span>
+                v-if="item.id === 'download' && downloadManager.activeCount.value > 0"
+                class="shrink-0 animate-pulse rounded-full bg-emerald-500 px-1.5 text-[10px] font-bold text-white"
+              >{{ downloadManager.activeCount.value }}</span>
             </button>
 
             <!-- 任务状态（手机：抽屉里看；桌面：侧栏底部） -->
@@ -497,7 +583,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { lxRuntime } from './engine/lx-runtime'
 import { SearchAPI, SourcesAPI, NasAPI } from './api/client'
 import SearchView from './components/SearchView.vue'
@@ -510,7 +596,6 @@ import LibraryManager from './components/LibraryManager.vue'
 import TidyView from './components/TidyView.vue'
 import PushManager from './components/PushManager.vue'
 import DownloadHub from './components/DownloadHub.vue'
-import ChartManager from './components/ChartManager.vue'
 import ApiDrawer from './components/ApiDrawer.vue'
 import DisclaimerModal from './components/DisclaimerModal.vue'
 import AccountManager from './components/AccountManager.vue'
@@ -535,7 +620,7 @@ import { logError } from './services/appLog'
 import {
   Compass, Trophy, Cpu, Disc, Library, UserRound, ScrollText, Settings,
   Wand2, Send, Download, ListMusic, ListOrdered, CloudDownload,
-  MoreHorizontal, X, Loader2, AlertTriangle,
+  MoreHorizontal, X, Loader2, AlertTriangle, Search, ArrowRight,
 } from 'lucide-vue-next'
 import { sidebarStatusItems } from './services/libraryView'
 
@@ -617,6 +702,51 @@ function searchFromPlayerBar(q) {
   barSearchQuery.value = q
   goView('search')
   barSearchNonce.value += 1
+}
+
+// ── 手机底部「灵动岛」搜索（2026-10-18）──
+//
+// 手机上搜索的入口就在底部这一颗圆里（桌面端仍是播放条右下角那颗图标）。
+// 展开/收回、提交三件事都只在这里做，模板只读 `islandOpen`；提交复用
+// `searchFromPlayerBar` —— 搜索的落地（切到发现页 + 把词交给 SearchView）只有一条路。
+const islandOpen = ref(false)
+const islandQuery = ref('')
+const islandInput = ref(null)
+
+function openIsland() {
+  islandOpen.value = true
+  // 等输入框真的挂上来（v-if）再聚焦；没这步手机上点开只是「看到一个框」却不出键盘
+  nextTick(() => islandInput.value?.focus?.())
+}
+
+function closeIsland() {
+  islandOpen.value = false
+  islandQuery.value = ''
+}
+
+function submitIslandSearch() {
+  const q = islandQuery.value.trim()
+  if (!q) {
+    // 空词不搜：焦点留在框里，等用户打字（而不是把岛收了装作搜过）
+    islandInput.value?.focus?.()
+    return
+  }
+  closeIsland()
+  searchFromPlayerBar(q)
+}
+
+/**
+ * 手机标签栏的文字：有多个分段的视图，停在某一页时显示**那一段**的名字
+ * （「发现」页里切到榜单段 → 标签写「榜单」）；其余情况仍是视图短名。
+ *
+ * 手机标签栏一行只放 2~3 个字，段名天然比视图名更接近「我现在看的到底是什么」，
+ * 而多出来的分段器在页面顶部已经在那儿了。
+ */
+function mobileTabLabel(item) {
+  const seg = segmentOf(item.id)
+  const segs = segmentsOf(item.id)
+  if (!seg || segs.length < 2) return item.short
+  return segs.find((s) => s.id === seg)?.name || item.short
 }
 
 

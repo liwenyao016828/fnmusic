@@ -42,10 +42,13 @@
       · 聚焦绝不收、有词不算闲置；点别处 / 超时 8s / 提交 / 开始播放 / Esc → 滑回图标位置。
       状态机在 services/playerBarSearch.js（纯函数，有单测），这里只翻译 DOM 事件。
       ⚠️ 本框 z-50 高于播放态胶囊：播放条可见时展开搜索，框叠在条上方 —— 两者都完整可见。
+      ⚠️ 2026-10-18：手机上这一套（框 + 右下角图标）**不出现** —— 底部「灵动岛」的
+      搜索圆就把这件事做了，两者同时在场会叠在同一个角落（都是右下角、都是 z-50），
+      点谁都不对。桌面端没有岛，这里照旧。
     -->
     <div
       v-if="searchOpen"
-      class="pointer-events-auto ys-dock-lift fixed inset-x-0 bottom-0 z-50 px-3 pb-2 sm:pb-3"
+      class="pointer-events-auto ys-dock-lift fixed inset-x-0 bottom-0 z-50 px-3 pb-2 max-sm:hidden sm:pb-3"
       @focusout="onSearchFocusOut"
     >
       <form
@@ -95,7 +98,7 @@
       title="搜索"
       aria-label="搜索歌曲、歌手、专辑"
       aria-expanded="false"
-      class="ys-glass ys-player-glass ys-barsearch-icon ys-dock-lift [--dock-base:8px] sm:[--dock-base:12px] pointer-events-auto fixed right-3 z-50 grid h-11 w-11 place-items-center rounded-full text-white/85 transition-colors hover:text-white"
+      class="ys-glass ys-player-glass ys-barsearch-icon ys-dock-lift [--dock-base:8px] sm:[--dock-base:12px] pointer-events-auto fixed right-3 z-50 grid h-11 w-11 place-items-center rounded-full text-white/85 transition-colors hover:text-white max-sm:hidden"
     >
       <Search class="h-4 w-4" />
     </button>

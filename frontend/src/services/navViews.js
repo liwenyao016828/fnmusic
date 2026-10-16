@@ -71,8 +71,15 @@ export const VIEWS = [
 
 export const VIEW_IDS = VIEWS.map((v) => v.id)
 
-/** 手机底部标签栏：前 4 个高频视图 + 「更多」抽屉（抽屉里是其余全部）。 */
-export const MOBILE_TAB_IDS = ['search', 'library', 'push', 'download']
+/**
+ * 手机底部标签栏：4 个高频视图 + 「更多」抽屉（抽屉里是其余全部）。
+ *
+ * 2026-10-18 用户口径：「补全整理和下载替换一下，下载放到更多里面」——
+ * 手机上真正天天点的是**整理**（歌词/封面/查重，进去就要处理一批），
+ * 而下载队列是「挂上去就不管」的，更适合收进抽屉（抽屉里还有任务状态列表兜着）。
+ * 桌面侧栏不受影响：8 个视图照样全在。
+ */
+export const MOBILE_TAB_IDS = ['search', 'library', 'push', 'tidy']
 
 export function viewsOfGroup(groupId) {
   return VIEWS.filter((v) => v.group === groupId)

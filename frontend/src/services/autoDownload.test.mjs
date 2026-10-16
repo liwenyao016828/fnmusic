@@ -24,7 +24,9 @@ const clientJs = read('../api/client.js')
 const downloadHubVue = read('../components/DownloadHub.vue')
 const pushManagerVue = read('../components/PushManager.vue')
 const tidyViewVue = read('../components/TidyView.vue')
-const chartManagerVue = read('../components/ChartManager.vue')
+// 2026-10-18：榜单管理页（ChartManager.vue）已融进「发现音乐」的榜单段 ——
+// 这批开关与音质下拉现在住在 SearchView.vue 里，断言改指向它。
+const searchViewVue = read('../components/SearchView.vue')
 const queuePanelVue = read('../components/DownloadQueuePanel.vue')
 const downloadManagerJs = read('./downloadManager.js')
 const chartInjectJs = read('./chartInject.js')
@@ -72,9 +74,9 @@ test('自动下载记录：失败在记录表里逐行标红', () => {
   assert.ok(libraryViewJs.includes("tab: 'autodl'"), '该项仍应指向 autodl')
 })
 
-test('音质下载：榜单管理里的选项真的写回配置', () => {
-  assert.ok(chartManagerVue.includes('音质下载'), '榜单管理应有「音质下载」')
-  assert.ok(chartManagerVue.includes('@update:model-value="setAutoDownloadQuality"'),
+test('音质下载：榜单段里的选项真的写回配置', () => {
+  assert.ok(searchViewVue.includes('音质下载'), '榜单段应有「音质下载」')
+  assert.ok(searchViewVue.includes('@update:model-value="setAutoDownloadQuality"'),
     '选项应接到 setAutoDownloadQuality')
   assert.ok(chartInjectJs.includes('export function setAutoDownloadQuality'), 'chartInject 应导出它')
   assert.ok(chartInjectJs.includes('saveAutoDownloadQuality'), '写入队列应真的发这个键')

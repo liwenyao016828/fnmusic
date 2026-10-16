@@ -73,7 +73,7 @@
         右：深色「正在播放」卡
         主色用项目 emerald，未照搬 flow 的蓝。
       -->
-      <div v-if="currentMode === 'discover'" class="max-w-[1500px] mx-auto px-5 pt-6 pb-0 sm:px-8 sm:pt-7">
+      <div v-if="currentMode === 'discover' && !isChartsSegment" class="max-w-[1500px] mx-auto px-5 pt-6 pb-0 sm:px-8 sm:pt-7">
         <div class="grid grid-cols-1 gap-[18px] lg:grid-cols-[1.35fr_0.65fr]">
 
           <!-- 左：欢迎卡（同时收纳了平台选择与榜单/歌单切换，页面上方不再需要额外工具条） -->
@@ -219,7 +219,7 @@
         状态映射见 services/qrLogin.js。
         曲目来自 GET /api/accounts/tracks —— 已归一化为可播放形状，点击即入列表，可播放/下载。
       -->
-      <div v-if="currentMode === 'discover'" class="max-w-[1500px] mx-auto px-5 pt-6 pb-0 sm:px-8 sm:pt-7">
+      <div v-if="currentMode === 'discover' && !isChartsSegment" class="max-w-[1500px] mx-auto px-5 pt-6 pb-0 sm:px-8 sm:pt-7">
         <div class="mb-3 flex flex-wrap items-end justify-between gap-3">
           <div class="min-w-0">
             <h2 class="text-[19px] font-bold text-gray-800">双平台推荐</h2>
@@ -341,19 +341,103 @@
 
       <!-- 1. 发现大厅 - 排行榜单网格 (紧凑精致卡片排版) -->
       <!--
-        榜单管理（选哪些榜单进飞牛）现在是顶层导航里的一页（v2.1.120）；
-        「排行榜单」浏览网格右上角的「+ 注入」留着：就地加一个榜单仍是最顺手的一条路。
-        指路按钮直接切到那个顶层视图（走导航总线，见 setup 里的 openChartManager）。
+        榜单段（导航里那一格）。
+        2026-10-18 起它不再是独立页：**导航「榜单」段与发现页「排行榜单」胶囊是同一份 UI** ——
+        同一份 toplists、同一个卡片网格、同一个注入开关，只是入口不同。
       -->
 
-      <div v-if="currentMode === 'discover' && discoverTab === 'charts'" class="max-w-[1500px] mx-auto px-5 py-6 pb-28 pb-dock sm:px-8 sm:py-7 sm:pb-24">
-        <!--
-          控制条搬走了：勾选与开关现在住在顶层导航的「榜单管理」页。
-          这里只留一行指路 —— 这一页是**浏览**用的，用户是来看榜单的，不该被一排开关挡在最上面。
-          （卡片右上角那个「+ 注入」留着：就地加一个榜单是最顺手的一条路。）
-        -->
-        <div class="mb-3 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-xl border border-gray-100 bg-white px-3.5 py-2.5">
-          <span class="text-[12px] font-bold text-gray-800 whitespace-nowrap">🔥 排行榜单</span>
+      <div v-if="currentMode === 'discover' && (isChartsSegment || discoverTab === 'charts')" class="max-w-[1500px] mx-auto px-5 py-6 pb-28 pb-dock sm:px-8 sm:py-7 sm:pb-24">
+        <!-- 顶部控制条：只在**导航「榜单」段**出现（发现页里点胶囊进来时不该被它占位）。
+             「榜单管理」以前是独立一页，现在收成这里一个折叠面板 —— 浏览时收着，
+             要勾选时展开，网格一行都不动。 -->
+        <div v-if="isChartsSegment" class="mb-3">
+          <button
+            type="button"
+            @click="showInjectPanel = !showInjectPanel"
+            :aria-expanded="showInjectPanel"
+            class="flex w-full items-center gap-x-2 gap-y-1 rounded-xl border border-gray-100 bg-white px-3.5 py-2.5 text-left transition-colors hover:border-emerald-200"
+          >
+            <Trophy class="w-4 h-4 shrink-0 text-amber-500" />
+            <span class="text-[12px] font-bold text-gray-800 whitespace-nowrap">排行榜单</span>
+            <span class="min-w-0 flex-1 text-[11px] leading-snug text-gray-500">
+              勾选后这些榜单会出现在<strong class="text-gray-700">飞牛音乐</strong>里
+              <template v-if="chartInjectIds.length"> · 已勾选 <strong class="text-emerald-600">{{ chartInjectIds.length }}</strong> 张</template>
+            </span>
+            <!-- 面板收着的时候也要能一眼看出注入开没开、有没有在用 -->
+            <span
+              class="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold whitespace-nowrap"
+              :class="chartInjectEnabled ? 'bg-emerald-50 text-emerald-600' : 'bg-gray-100 text-gray-400'"
+            >{{ chartInjectEnabled ? '注入已开' : '注入已关' }}</span>
+            <ChevronRight
+              class="w-3.5 h-3.5 shrink-0 text-gray-400 transition-transform duration-200 motion-reduce:duration-0"
+              :class="showInjectPanel ? 'rotate-90' : ''"
+            />
+          </button>
+
+          <!-- 展开：与旧「榜单管理」页同一批开关，只是不再各占一屏 -->
+          <div v-if="showInjectPanel" class="mt-2 space-y-2 rounded-xl border border-gray-100 bg-white p-3.5">
+            <div class="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                :disabled="chartInjectBusy"
+                @click="toggleChartInjectEnabled"
+                class="rounded-full px-3 py-1 text-[11px] font-bold transition-colors disabled:opacity-40"
+                :class="chartInjectEnabled ? 'bg-emerald-500 text-white' : 'bg-gray-100 text-gray-500'"
+              >{{ chartInjectEnabled ? '已启用' : '已停用' }}</button>
+              <button
+                type="button" :disabled="chartInjectBusy" @click="selectAllLoaded"
+                class="rounded-full border border-gray-200 px-3 py-1 text-[11px] font-bold text-gray-600 transition-colors hover:border-emerald-300 hover:text-emerald-600 disabled:opacity-40"
+              >全部启用</button>
+              <button
+                type="button" :disabled="chartInjectBusy" @click="clearChartInjects"
+                class="rounded-full border border-gray-200 px-3 py-1 text-[11px] font-bold text-gray-600 transition-colors hover:border-rose-300 hover:text-rose-500 disabled:opacity-40"
+              >全部关闭</button>
+              <button
+                type="button" :disabled="chartInjectBusy" @click="selectOnlyChartPlatform('wy')"
+                class="rounded-full border border-gray-200 px-3 py-1 text-[11px] font-bold text-gray-600 transition-colors hover:border-emerald-300 hover:text-emerald-600 disabled:opacity-40"
+              >仅网易云</button>
+              <button
+                type="button" :disabled="chartInjectBusy" @click="selectOnlyChartPlatform('tx')"
+                class="rounded-full border border-gray-200 px-3 py-1 text-[11px] font-bold text-gray-600 transition-colors hover:border-emerald-300 hover:text-emerald-600 disabled:opacity-40"
+              >仅 QQ 音乐</button>
+              <span class="text-[10px] text-gray-300">{{ chartInjectBusy ? '保存中…' : injectSavedText }}</span>
+            </div>
+
+            <!-- 页面注入开关：注的是**飞牛自带页面**（首页/歌单页那几个卡），与上面「榜单进歌单」是两件事 -->
+            <label class="flex cursor-pointer items-start gap-2 rounded-lg bg-gray-50 px-3 py-2">
+              <input type="checkbox" :checked="uiInjectEnabled" :disabled="chartInjectBusy" @change="toggleUIInject" class="mt-0.5 shrink-0 accent-emerald-500" />
+              <span class="min-w-0 text-[11px] leading-snug text-gray-600">
+                <strong class="text-gray-700">同时重排飞牛自带的页面</strong>（首页/歌单页那几张卡换成我们的榜单）
+                <span class="block text-[10px] text-gray-400">关掉就逐字节原样返回官方页面 —— 页面显示不对时这是退路；改动在飞牛页面**下次加载**时生效</span>
+              </span>
+            </label>
+
+            <!-- 音质：勾选的榜单在飞牛里点播放/下载时用哪一档（后端拦截层读它） -->
+            <div class="flex flex-wrap items-center gap-2 rounded-lg bg-gray-50 px-3 py-2">
+              <span class="text-[11px] font-bold text-gray-700 whitespace-nowrap">音质下载</span>
+              <SelectField
+                class="w-36"
+                :model-value="chartInjectState.autoDownloadQuality.value"
+                :options="AUTO_DOWNLOAD_QUALITY_OPTIONS"
+                @update:model-value="setAutoDownloadQuality"
+              />
+              <span class="min-w-0 flex-1 text-[10px] leading-snug text-gray-400">{{ autoDownloadQualityHint }}</span>
+            </div>
+
+            <p v-if="chartInjectError" class="text-[11px] text-rose-500">{{ chartInjectError }}</p>
+            <p class="text-[10px] leading-snug text-gray-400">
+              只保留能播放的曲目，所以飞牛里的歌单会比平台榜单短。改动会在**飞牛音乐的页面下次加载**时生效。
+            </p>
+          </div>
+        </div>
+        <!-- 发现页里的「排行榜单」段：顶部一行指路 —— 勾选注入的完整面板在导航「榜单」段里，
+             这里只给一个入口，不把面板再铺一遍（发现页是**浏览**用的）。 -->
+        <div
+          v-if="!isChartsSegment"
+          class="mb-3 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-xl border border-gray-100 bg-white px-3.5 py-2.5"
+        >
+          <Trophy class="w-4 h-4 shrink-0 text-amber-500" />
+          <span class="text-[12px] font-bold text-gray-800 whitespace-nowrap">排行榜单</span>
           <span class="text-[11px] leading-snug text-gray-500">
             要让这些榜单出现在<strong class="text-gray-700">飞牛音乐</strong>里，去
             <button
@@ -426,7 +510,7 @@
       </div>
 
       <!-- 2. 发现大厅 - 精选歌单网格 -->
-      <div v-else-if="currentMode === 'discover' && discoverTab === 'playlists'" class="max-w-[1500px] mx-auto px-5 py-6 pb-28 pb-dock sm:px-8 sm:py-7 sm:pb-24">
+      <div v-else-if="currentMode === 'discover' && !isChartsSegment && discoverTab === 'playlists'" class="max-w-[1500px] mx-auto px-5 py-6 pb-28 pb-dock sm:px-8 sm:py-7 sm:pb-24">
         <div v-if="isLoadingPlaylists" class="flex flex-col items-center justify-center py-20 text-gray-400">
           <Loader2 class="w-8 h-8 animate-spin text-emerald-500 mb-2" />
           <p class="text-xs">正在载入精选歌单...</p>
@@ -849,11 +933,12 @@ import { SearchAPI, ChartsAPI, MonitorAPI, AccountAPI, PushAPI, ChartInjectAPI, 
 import { lxRuntime } from '../engine/lx-runtime'
 import { qualityLabel, isHighestQuality } from '../engine/quality'
 import { downloadManager } from '../services/downloadManager'
-import { loadPref, savePref, memGet, memSet } from '../services/prefs'
+import { loadPref, savePref, memGet, memSet, loadBool } from '../services/prefs'
 import QRCode from 'qrcode'
 import DownloadQualityModal from './DownloadQualityModal.vue'
 import InlineNotice from './InlineNotice.vue'
 import QrLoginModal from './QrLoginModal.vue'
+import SelectField from './SelectField.vue'
 import { onNavigate, navigateTo, currentView } from '../services/navBus'
 import {
   chartInject,
@@ -862,6 +947,7 @@ import {
   replaceIds as replaceInjectIds,
   setEnabled as setInjectEnabled,
   setUIInject as setUIInjectEnabled,
+  setAutoDownloadQuality,
   loadConfig as loadInjectConfig,
 } from '../services/chartInject'
 import { fail, apiError, describeError } from '../services/userMsg'
@@ -881,7 +967,7 @@ import {
 import {
   Search, Play, Loader2, Music2, Download, HardDriveDownload,
   Folder, ArrowLeft, Shuffle, Repeat, Repeat1, Check, X, Radio, BellPlus,
-  CalendarHeart, ChevronRight
+  CalendarHeart, ChevronRight, Trophy
 } from 'lucide-vue-next'
 
 const props = defineProps({
@@ -902,6 +988,15 @@ const props = defineProps({
   barQuery: { type: String, default: '' },
   /** 递增计数：同一个词连搜两次也要能触发 */
   barSearchNonce: { type: Number, default: 0 },
+  /**
+   * 当前页内分段（`discover` | `charts`）—— 本组件一个人负责两段。
+   *
+   * 2026-10-18 用户口径：「发现音乐顶部导航榜单与发现排行榜单重复了吧。融合一下，
+   * 保留发现排行榜单的内部卡片 ui，替换到导航榜单……逻辑不要重复」。
+   * 改法：榜单段直接长成了「排行榜单」那张卡片网格（同一份 toplists、同一个卡片、
+   * 同一个注入开关），不再有第二个组件把它再实现一遍；注入设置收进折叠面板。
+   */
+  segment: { type: String, default: 'discover' },
 })
 
 const emit = defineEmits(['play', 'play-all', 'update:play-mode', 'navigate', 'prev', 'next', 'toggle-play'])
@@ -1182,6 +1277,9 @@ const {
   busy: chartInjectBusy,
   error: chartInjectError,
 } = chartInject
+// 模板里还要读 autoDownloadQuality / savedAt（原来的 ChartManager 页用的是整个对象）——
+// 那两处不值得再拆两个名字，直接把整个单例也暴露出来，模板用 `chartInjectState.xxx`。
+const chartInjectState = chartInject
 
 /** 榜单卡片 → 配置里的键（`<平台>_<榜单 id>`，与虚拟歌单 guid 的后缀同形） */
 function chartInjectKeyOf(chart) {
@@ -1219,6 +1317,54 @@ function toggleUIInject() {
 function loadChartInject() {
   return loadInjectConfig()
 }
+
+// ── 榜单管理面板（原 ChartManager.vue，2026-10-18 融进「榜单」段的一个折叠面板）──
+//
+// 面板默认收着：这一页是**浏览**用的，用户是来看榜单的，不该被一排开关挡在最上面；
+// 要勾选时展开，网格一行都不动。设过一次就记住（下次进来还是展开着的）。
+const showInjectPanel = ref(loadBool('chart_inject_panel', false))
+
+/** 「已生效 HH:MM:SS」——保存成功后的小回执 */
+const injectSavedText = computed(() => {
+  const t = chartInjectState.savedAt?.value
+  if (!t) return ''
+  return `已生效 ${new Date(t).toLocaleTimeString('zh-CN', { hour12: false })}`
+})
+
+/** 全部启用：只对**已经加载出来的**榜单生效（没加载到的平台原样保留，见 applyPlatform） */
+function selectAllLoaded() {
+  const next = new Set(chartInjectIds.value)
+  for (const chart of toplists.value) next.add(chartInjectKeyOf(chart))
+  replaceInjectIds([...next])
+}
+
+/** 只保留某个平台已加载的榜单（「仅网易云」/「仅 QQ 音乐」） */
+function selectOnlyChartPlatform(platformId) {
+  if (platformId !== selectedChartPlatform.value) {
+    switchChartPlatform(platformId)
+  }
+  // 切平台后 toplists 会清空重拉，这里先按**当前**已加载的算；拉到新数据后用户再点一次即可
+  const kept = chartInjectIds.value.filter((k) => !CHART_PLATFORMS.some((p) => k.startsWith(`${p}_`)))
+  const mine = toplists.value.map((c) => chartInjectKeyOf(c))
+  replaceInjectIds([...kept, ...mine])
+}
+
+// 音质下载（这几个选项与后端 backend/pkg/downloader 的档位一一对应）
+const AUTO_DOWNLOAD_QUALITY_OPTIONS = [
+  { value: 'highest', label: '最高音质' },
+  { value: 'flac', label: '无损 FLAC' },
+  { value: '320k', label: '320K MP3' },
+  { value: '128k', label: '128K MP3' },
+]
+
+/** 一句话说清当前这一档意味着什么（挂在下拉旁边，不占一整行） */
+const autoDownloadQualityHint = computed(() => {
+  const q = chartInject.autoDownloadQuality?.value
+  if (q === 'flac') return '飞牛里点下载时优先取无损；取不到会退到有损'
+  if (q === '320k') return '统一取 320K MP3：体积小、兼容最好'
+  if (q === '128k') return '统一取 128K MP3：最省流量'
+  return '跟随 App 设置里的音质，不额外干预'
+})
 
 // 数据列表
 const toplists = ref([])
@@ -1546,9 +1692,20 @@ async function switchDiscoverTab(tab) {
     await loadPlaylistCategories(selectedChartPlatform.value)
     loadPlaylists(selectedCategory.value, selectedChartPlatform.value)
   }
-  // tab === 'playlists' 之外的分支：榜单管理是顶层导航里的一页，
-  // 发现页不再有 manage 子标签；charts 由上面的 if 处理。
 }
+
+/**
+ * 「榜单」段真正在展示什么 —— 也就是那两件事的**唯一一份实现**：
+ *   · 这套卡片网格（排行榜单）：发现页里点「排行榜单」胶囊看的，就是它；
+ *   · 榜单管理（勾选注入 + 音质下载）：以前是一个独立顶层页 ChartManager.vue。
+ *
+ * 2026-10-18 用户口径：「发现音乐顶部导航榜单与发现排行榜单重复了吧。融合一下，
+ * 保留发现排行榜单的内部卡片 ui，替换到导航榜单……逻辑不要重复」。
+ * 于是删掉 ChartManager.vue，把「勾选/注入/音质」收成网格上方一个**折叠面板**，
+ * 网格本身一个字节都没重写 —— 导航「榜单」段与页内「排行榜单」胶囊指向同一份 UI，
+ * 从结构上就不可能再漂移。
+ */
+const isChartsSegment = computed(() => props.segment === 'charts')
 
 watch(() => poolIds.value.join(','), (key) => {
   if (!key) return
@@ -1688,11 +1845,11 @@ function openChartPreview(item) {
 }
 
 /**
- * 指路按钮：从「排行榜单」跳到顶层导航的「榜单管理」页。
+ * 跳到「榜单」段（本组件自己的第二段）。
  *
- * v2.1.119 那会儿它借一个 chartManager 负载让**管家**落到 charts 侧栏项；
- * v2.1.120 起榜单管理自己就是顶层视图，直接切过去即可 —— 少一层间接，也少一条
- * 「payload 名字对不上就静默失效」的隐式约定。
+ * 2026-10-18：榜单管理不再是独立顶层页，`navigateTo('charts')` 经 navViews 的别名表
+ * 解析成 `{view:'search', segment:'charts'}` —— 走同一条导航总线，外面（比如任务提示、
+ * 飞牛页面的深链）想直接落到榜单段时仍然只要说「charts」这一个词。
  */
 function openChartManager() {
   navigateTo('charts')
@@ -1976,6 +2133,25 @@ function resetToDiscover() {
   hasMore.value = false
   currentDetailMeta.value = null
 }
+
+/**
+ * 点了顶部的「发现 / 榜单」段 → 一定回到**浏览**态。
+ *
+ * 少了这一步就会出现「点了榜单没反应」：搜索结果（`currentMode === 'search'`）与
+ * 榜单详情都是 `v-else` 分支，只要 currentMode 不回到 discover，切段只换了高亮，
+ * 页面内容纹丝不动 —— 用户看到的就是「这个按钮坏了」。
+ * 详情页同理：从榜单段切回发现段不该还停在上一张榜单里。
+ */
+watch(() => props.segment, (seg, prev) => {
+  if (seg === prev) return
+  if (currentMode.value !== 'discover') resetToDiscover()
+  // 换到榜单段时按需补一次数据（本组件可能一直是「发现」段，从没拉过榜单）
+  if (seg === 'charts' && toplists.value.length === 0) {
+    loadToplists(selectedChartPlatform.value)
+  }
+  // 榜单段的开关状态每次进来都刷一遍（别的地方可能改过）
+  if (seg === 'charts') loadChartInject()
+})
 
 // ── 播放触发 (关键：点击单曲带上完整歌单上下文，自动顺序播放本歌单/榜单所有歌曲) ──
 function playSong(song, idx) {
