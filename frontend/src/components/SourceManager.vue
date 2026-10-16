@@ -180,6 +180,46 @@
               <span v-if="p.id === 'lx' && p.source_count !== undefined" class="ml-1">· 已导入 {{ p.source_count }} 个</span>
             </div>
 
+            <!--
+              官方协议当前平台（按钮切换）。
+              2026-10-18 用户口径：「发现页的平台选择 tx、wy 迁移到音源管理的官方协议中，
+              用按钮交互切换」。以前它是发现页 hero 卡里的两个小胶囊，显示的还是裸平台码
+              （`wy` / `tx`），看不出是网易云与 QQ 音乐 —— 而它本质是**官方协议的能力配置**
+              （后端 pkg/charts 只有这两个平台有完整的榜单/歌单能力），放在这里语义才对。
+
+              状态在 services/officialPlatform.js（模块级单例），所以这里一切，
+              「发现音乐 / 榜单」段立刻跟着变，不需要来回传 prop。
+
+              `@click.stop`：整张协议卡是「点击展开/收起」，点平台按钮不该顺手把卡片折叠掉。
+            -->
+            <div
+              v-if="p.id === 'official'"
+              class="mt-2.5 border-t border-gray-100 pt-2.5"
+              @click.stop
+            >
+              <div class="mb-1.5 flex flex-wrap items-center gap-1 text-[10px] text-gray-400">
+                <span>当前平台</span>
+                <span class="text-gray-300">·</span>
+                <span>决定「发现 / 榜单」看哪个平台的内容</span>
+              </div>
+              <div class="flex flex-wrap items-center gap-1.5">
+                <button
+                  v-for="opt in OFFICIAL_PLATFORM_OPTIONS"
+                  :key="opt.id"
+                  type="button"
+                  :title="opt.desc"
+                  :aria-pressed="officialPlatform === opt.id"
+                  @click="setOfficialPlatform(opt.id)"
+                  class="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12px] font-bold transition-all"
+                  :class="officialPlatform === opt.id
+                    ? 'bg-emerald-500 text-white shadow-sm'
+                    : 'border border-gray-200 bg-white text-gray-500 hover:border-emerald-300 hover:text-emerald-600'"
+                >
+                  <span>{{ opt.icon }}</span><span>{{ opt.name }}</span>
+                </button>
+              </div>
+            </div>
+
             <!-- ⬇️ 折叠时**唯一**藏起来的东西：两段文字解释 -->
             <template v-if="expandedProtocols.includes(p.id)">
               <p class="mt-2 text-[11px] leading-relaxed text-gray-500">{{ p.description }}</p>
@@ -704,6 +744,8 @@ import ActionCard from './ActionCard.vue'
 import MusicDLSourcePanel from './MusicDLSourcePanel.vue'
 import { fail, apiError, describeError } from '../services/userMsg'
 import { logError, logInfo, logWarn } from '../services/appLog'
+// 官方协议在用的平台（模块级单例）：2026-10-18 用户口径把这组按钮从发现页搬到了这里。
+import { OFFICIAL_PLATFORM_OPTIONS, officialPlatform, setOfficialPlatform } from '../services/officialPlatform'
 
 const sources = ref([])
 /**

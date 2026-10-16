@@ -58,7 +58,7 @@ test('榜单融合（2026-10-18）：独立的「榜单管理」组件已经不�
   )
 })
 
-test('榜单融合：榜单卡片网格在 SearchView 里，且两段共用同一份（v-if 条件合并）', () => {
+test('榜单融合：榜单卡片网格在 SearchView 里，且只长在「榜单」段（2026-10-18 二次收口）', () => {
   // 网格本体（卡片 + 注入按钮）只此一份
   assert.ok(
     searchViewVue.includes('isChartInjected(chart)'),
@@ -68,11 +68,12 @@ test('榜单融合：榜单卡片网格在 SearchView 里，且两段共用同�
     searchViewVue.includes('openChartDetail(chart)'),
     'SearchView 里应能打开榜单详情',
   )
-  // 同一个 v-if 里同时认「导航榜单段」与「发现页排行榜单胶囊」两个来源
+  // 2026-10-18 用户口径：「去掉排行榜单和精选歌单。发现页默认暂时歌单。」
+  // —— 发现段只剩精选歌单，榜单网格只认 segment='charts'。
   assert.match(
     searchViewVue,
-    /v-if="currentMode === 'discover' && \(isChartsSegment \|\| discoverTab === 'charts'\)"/,
-    '榜单网格的显示条件应同时认「榜单段」与「发现页排行榜单胶囊」—— 这就是合二为一的那一行',
+    /v-if="currentMode === 'discover' && isChartsSegment"/,
+    '榜单网格的显示条件应只认「榜单段」（发现页不再重复渲染它）',
   )
   // 榜单段必须有那批开关（原 ChartManager 的能力，一个都不能丢）
   for (const needle of [
@@ -86,6 +87,28 @@ test('榜单融合：榜单卡片网格在 SearchView 里，且两段共用同�
   ]) {
     assert.ok(searchViewVue.includes(needle), `榜单段应带 ${needle}（原榜单管理页的能力）`)
   }
+})
+
+test('发现段的「榜单 / 精选歌单」切换胶囊已撤（2026-10-18 用户口径）', () => {
+  // 「去掉排行榜单和精选歌单。发现页默认暂时歌单。」
+  assert.ok(
+    !searchViewVue.includes('discoverTab'),
+    'SearchView 里不该再有 discoverTab（发现段只剩歌单一处内容，没有第二个 tab）',
+  )
+  assert.ok(
+    !searchViewVue.includes('switchDiscoverTab'),
+    'switchDiscoverTab 应已删除（没有第二个 tab 可切）',
+  )
+  assert.ok(
+    !searchViewVue.includes("loadPref('discover_tab'") && !searchViewVue.includes("savePref('discover_tab'"),
+    "不该再读写旧偏好 discover_tab（留着就是死键；注释里提它是可以的历史说明）",
+  )
+  // 歌单网格是发现段的**唯一**内容：条件里不该再出现 tab 判断
+  assert.match(
+    searchViewVue,
+    /v-else-if="currentMode === 'discover' && !isChartsSegment"/,
+    '精选歌单网格应是发现段唯一内容（只按段判断，不按 tab）',
+  )
 })
 
 test('榜单仍是一等入口：charts 这个词必须还能解析到「发现音乐 + 榜单段」', () => {
@@ -157,14 +180,21 @@ test('侧栏项集合：有 nas、没有 charts', () => {
   )
 })
 
-test('榜单管理：指路按钮走导航总线，落到「榜单」段', () => {
+test('榜单管理不再是另一个入口：指路按钮已撤，榜单段自己就是面板', () => {
+  // 2026-10-18 二次收口：发现页不再渲染榜单网格，那条「去榜单管理勾选」的指路条
+  // 也跟着删了（它指向的按钮就在自己旁边，纯冗余）。openChartManager 随之成为死代码。
   assert.ok(
-    searchViewVue.includes('openChartManager'),
-    '发现页应有 openChartManager（指路入口，现在指向本组件自己的榜单段）',
+    !searchViewVue.includes('openChartManager'),
+    'openChartManager 应已删除（指路条撤了，没有人再调它）',
   )
   assert.ok(
-    searchViewVue.includes("navigateTo('charts')"),
-    "openChartManager 应请求 charts（由 resolveRoute 解析成「发现音乐 + 榜单段」）",
+    !searchViewVue.includes("navigateTo('charts')"),
+    '不该再有 navigateTo(\'charts\') —— charts 段靠导航分段器进，不需要页内再跳一次',
+  )
+  // 榜单管理的能力必须还在（只是不再需要一个「跳过去」的按钮）
+  assert.ok(
+    searchViewVue.includes('toggleChartInject(chart)'),
+    '榜单卡片的「+ 注入 / ★ 已注入」按钮必须还在（那才是真入口）',
   )
   assert.ok(
     !searchViewVue.includes('chartManager: true'),
@@ -229,11 +259,14 @@ test('手机底部标签栏：下载收进「更多」，整理顶上（2026-10-
   )
 })
 
-test('手机底部：搜索是「灵动岛」（2:1 导航 + 搜索圆，点开融合成一框）', () => {
+test('手机底部：搜索是「灵动岛」（导航椭圆 + 搜索**正圆**，点开融合成一框）', () => {
   // 用户口径：「以 2:1 的方式展示导航和搜索框（中间要间隙，左边是椭圆，右边是个搜索圆。
   // 点击搜索圆，融合两个圆并出现搜索框）」
+  // 2026-10-18 追加：「底部导航右边的搜索椭圆大了，就正常正圆就可以了。」
+  // → 右圆从 flex-1（被抻宽成椭圆）改成固定 w-14 的**正圆**；左椭圆吃满剩余宽度。
   assert.ok(appVue.includes('islandOpen'), '手机底部应有灵动岛开合状态')
-  assert.match(appVue, /flex-\[2\]/, '左椭圆应占 2 份宽（导航:搜索 = 2:1）')
+  assert.match(appVue, /w-14 shrink-0/, '搜索圆应是固定宽的正圆（w-14 = 56px，高也是 56px）')
+  assert.ok(!/flex-\[2\]/.test(appVue), '不该再有 flex-[2]（那会把右圆抻成椭圆）')
   assert.match(appVue, /gap-2/, '闭态两形状之间要有间隙')
   assert.match(appVue, /islandOpen \? 'gap-0' : 'gap-2'/, '点开后间隙收到 0（两个形状贴合）')
   assert.ok(appVue.includes('openIsland'), '点右圆应展开灵动岛')

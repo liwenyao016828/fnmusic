@@ -318,7 +318,7 @@
       >
         <!-- 左椭圆：导航（灵动岛打开时它变成搜索输入框） -->
         <div
-          class="relative min-w-0 flex-[2] overflow-hidden rounded-full border bg-white/95 shadow-lg shadow-black/5 backdrop-blur transition-[border-radius] duration-300 ease-out motion-reduce:duration-0"
+          class="relative min-w-0 flex-1 overflow-hidden rounded-full border bg-white/95 shadow-lg shadow-black/5 backdrop-blur transition-[border-radius] duration-300 ease-out motion-reduce:duration-0"
           :class="islandOpen ? 'rounded-r-none border-r-0 border-gray-200' : 'border-gray-200/80'"
         >
           <!-- 闭：导航图标排 -->
@@ -405,7 +405,7 @@
           :aria-label="islandOpen ? '搜索' : '搜索歌曲、歌手、专辑'"
           :aria-expanded="islandOpen"
           @click="islandOpen ? submitIslandSearch() : openIsland()"
-          class="relative grid flex-1 place-items-center rounded-full border bg-white/95 shadow-lg shadow-black/5 backdrop-blur transition-[border-radius,color] duration-300 ease-out motion-reduce:duration-0"
+          class="relative grid w-14 shrink-0 place-items-center rounded-full border bg-white/95 shadow-lg shadow-black/5 backdrop-blur transition-[border-radius,color] duration-300 ease-out motion-reduce:duration-0"
           :class="[
             islandOpen
               ? 'rounded-l-none border-l-0 border-emerald-500 bg-emerald-500 text-white'

@@ -76,59 +76,148 @@
       <div v-if="currentMode === 'discover' && !isChartsSegment" class="max-w-[1500px] mx-auto px-5 pt-6 pb-0 sm:px-8 sm:pt-7">
         <div class="grid grid-cols-1 gap-[18px] lg:grid-cols-[1.35fr_0.65fr]">
 
-          <!-- 左：欢迎卡（同时收纳了平台选择与榜单/歌单切换，页面上方不再需要额外工具条） -->
-          <div class="rounded-[18px] border border-emerald-100 bg-gradient-to-br from-emerald-50 via-white to-white px-6 py-6 sm:px-[30px] sm:py-[26px]">
-            <div class="text-[12px] font-bold text-emerald-600">{{ heroEyebrow }}</div>
-            <h1 class="my-1.5 text-[26px] font-bold tracking-tight text-gray-800 sm:text-[29px]">{{ heroGreeting }}</h1>
-            <p class="text-[13px] leading-relaxed text-gray-500">
-              搜索全网曲库，或浏览官方榜单与精选歌单。
-            </p>
-
-            <!-- 第 1 行：平台选择 -->
-            <div class="mt-5 flex flex-wrap items-center gap-2">
-              <span class="shrink-0 text-[11px] font-medium text-gray-400">平台</span>
-              <div
-                v-if="availablePlatforms.length > 0"
-                class="flex flex-wrap items-center gap-0.5 rounded-[11px] bg-white/80 p-1 ring-1 ring-gray-200/70"
+          <!--
+            左：欢迎卡。
+            2026-10-18 用户口径起它同时收纳：问候语 +「双平台推荐」两张卡片 + 歌单分类筛选。
+            原先长在这里的「平台选择（wy/tx）」搬去了「音源管理 → 官方协议」
+            （状态见 services/officialPlatform.js）；「排行榜单 / 精选歌单」两个切换胶囊整个去掉 ——
+            榜单有自己的顶层导航段，不必在发现页再放第二个入口。
+            说明性文案一律收进 title（悬浮可见），不常驻占位。
+          -->
+          <div class="flex min-w-0 flex-col rounded-[18px] border border-emerald-100 bg-gradient-to-br from-emerald-50 via-white to-white px-6 py-6 sm:px-[30px] sm:py-[26px]">
+            <div class="flex items-start justify-between gap-3">
+              <div class="min-w-0">
+                <div class="text-[12px] font-bold text-emerald-600">{{ heroEyebrow }}</div>
+                <h1
+                  class="my-1.5 text-[26px] font-bold tracking-tight text-gray-800 sm:text-[29px]"
+                  title="搜索全网曲库，或浏览官方榜单与精选歌单"
+                >{{ heroGreeting }}</h1>
+              </div>
+              <!-- 就地刷新两个平台的账号连接状态（不再是「管理账号 → 跳走」）。
+                   2026-10-18：改成图标按钮 + 悬浮说明，不再常驻「刷新状态」四个字。 -->
+              <button
+                type="button"
+                @click="refreshAccounts()"
+                :disabled="accountsLoading"
+                title="重新读取两个平台的连接状态"
+                aria-label="刷新连接状态"
+                class="mt-1 grid h-8 w-8 shrink-0 place-items-center rounded-lg text-gray-400 transition-colors hover:bg-white hover:text-emerald-600 disabled:opacity-50"
               >
-                <button
-                  v-for="p in availablePlatforms" :key="p.id"
-                  @click="switchChartPlatform(p.id)"
-                  :class="[
-                    'px-2.5 py-1.5 rounded-lg text-[12px] font-bold transition-all flex items-center gap-1 whitespace-nowrap',
-                    selectedChartPlatform === p.id ? 'bg-emerald-500 text-white shadow-sm' : 'text-gray-500 hover:text-gray-700'
-                  ]"
+                <RefreshCw class="h-4 w-4" :class="accountsLoading ? 'animate-spin' : ''" />
+              </button>
+            </div>
+
+            <!--
+              双平台推荐：网易云 + QQ 音乐的个人推荐。
+              2026-10-18 用户口径：「双平台推荐下的两个卡片嵌入到上方『中午好』卡片内」——
+              原来那一节的标题（「双平台推荐」+ 一句说明）整个删掉，卡片直接长在这里，
+              页面上少一层标题、少一段常驻说明。说明性文案改挂 title（悬浮可见）。
+              扫码登录 / 登出**就在这两张卡片里**（2026-09-27 从「账号连接」搬来：那页的扫码
+              登录与这里重复，用户要求只留一处）。二维码弹窗见 components/QrLoginModal.vue，
+              状态映射见 services/qrLogin.js。
+              曲目来自 GET /api/accounts/tracks —— 已归一化为可播放形状，点击即入列表，可播放/下载。
+            -->
+            <div class="mt-4 grid grid-cols-2 gap-3 md:gap-4">
+              <div
+                v-for="p in recommendPlatforms" :key="p.id"
+                class="overflow-hidden rounded-xl border border-gray-200 bg-white"
+                :class="p.topBorder"
+              >
+                <!-- 卡片头：平台说明收进 title，不再常驻一行小字 -->
+                <div
+                  class="flex items-center justify-between gap-2 border-b border-gray-100 px-3 py-3 sm:gap-3 sm:px-4 sm:py-3.5"
+                  :title="p.desc"
                 >
-                  <span>{{ p.icon }}</span><span>{{ p.name }}</span>
-                </button>
+                  <div class="flex min-w-0 items-center gap-2 sm:gap-2.5">
+                    <div class="grid h-8 w-8 shrink-0 place-items-center rounded-[9px] text-[14px] font-extrabold sm:h-9 sm:w-9 sm:rounded-[10px] sm:text-[17px]" :class="p.markClass">
+                      {{ p.mark }}
+                    </div>
+                    <div class="min-w-0">
+                      <b class="block truncate text-[13px] text-gray-800 sm:text-sm">{{ p.name }}</b>
+                    </div>
+                  </div>
+                  <span
+                    class="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium sm:px-2.5 sm:py-1 sm:text-[11px]"
+                    :class="p.connected ? 'bg-emerald-50 text-emerald-600' : 'bg-gray-100 text-gray-500'"
+                  >{{ p.connected ? '已连接' : '未连接' }}</span>
+                </div>
+
+                <!-- 卡片体 -->
+                <div class="px-3 py-3 sm:px-4 sm:py-4">
+                  <template v-if="p.connected">
+                    <!-- 账号行：谁登着 + 登出（登出=断开本机凭据，下次要重新扫码）。
+                         UID 收进 title，不再占一行。 -->
+                    <div class="mb-2.5 flex items-center gap-2 sm:mb-3 sm:gap-2.5" :title="`UID ${p.uid || '-'}`">
+                      <img
+                        v-if="p.avatar"
+                        :src="p.avatar"
+                        class="h-8 w-8 shrink-0 rounded-full object-cover sm:h-9 sm:w-9"
+                        referrerpolicy="no-referrer"
+                        @error="(e) => (e.target.style.display = 'none')"
+                      />
+                      <div v-else class="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-gray-100 text-[12px] font-bold text-gray-400 sm:h-9 sm:w-9 sm:text-[13px]">
+                        {{ (p.nickname || p.mark).slice(0, 1) }}
+                      </div>
+                      <div class="min-w-0 flex-1">
+                        <b class="block truncate text-[12px] text-gray-800 sm:text-[13px]">{{ p.nickname || '已登录' }}</b>
+                      </div>
+                      <button
+                        class="shrink-0 rounded-lg border border-gray-200 px-2 py-1 text-[11px] font-medium text-gray-500 transition-all hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 disabled:opacity-50 sm:px-2.5 sm:py-1.5 sm:text-[12px]"
+                        :disabled="!!platformBusy"
+                        @click="disconnectPlatform(p)"
+                      >{{ platformBusy === p.id + ':disconnect' ? '登出中…' : '登出' }}</button>
+                    </div>
+
+                    <!-- 每日推荐（提示语收进 title） -->
+                    <button
+                      @click="loadRecommend(p.id, 'daily')"
+                      :disabled="!!recommendLoading"
+                      :title="p.dailyHint"
+                      class="flex w-full items-center gap-2 rounded-xl border border-gray-200 px-2.5 py-2.5 text-left transition-all hover:border-emerald-300 hover:bg-emerald-50/30 disabled:opacity-60 sm:gap-3 sm:px-3.5 sm:py-3"
+                    >
+                      <div class="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-emerald-50 text-emerald-600 sm:h-9 sm:w-9">
+                        <CalendarHeart class="w-4 h-4" />
+                      </div>
+                      <div class="min-w-0 flex-1">
+                        <b class="block text-[12px] text-gray-800 sm:text-[13px]">每日推荐</b>
+                      </div>
+                      <Loader2 v-if="recommendLoading === p.id + ':daily'" class="w-4 h-4 shrink-0 animate-spin text-emerald-500" />
+                      <ChevronRight v-else class="w-4 h-4 shrink-0 text-gray-300" />
+                    </button>
+
+                    <!-- 我的歌单（最多 4 个） -->
+                    <div v-if="p.playlists.length" class="mt-2.5">
+                      <span class="mb-1.5 block text-[11px] text-gray-400">我的歌单</span>
+                      <div class="flex flex-wrap gap-1.5">
+                        <button
+                          v-for="pl in p.playlists.slice(0, 4)" :key="pl.id"
+                          @click="loadRecommend(p.id, 'playlist', pl.id)"
+                          :disabled="!!recommendLoading"
+                          class="max-w-full truncate rounded-lg bg-gray-50 px-2.5 py-1.5 text-[11px] text-gray-600 ring-1 ring-gray-200 transition-colors hover:bg-emerald-50 hover:text-emerald-600 disabled:opacity-60"
+                          :title="pl.name + (pl.count ? ` · ${pl.count} 首` : '')"
+                        >{{ pl.name }}</button>
+                      </div>
+                    </div>
+                    <p v-else-if="p.playlistsLoading" class="mt-2.5 text-[11px] text-gray-300">正在读取歌单…</p>
+                  </template>
+
+                  <!-- 未连接：就地扫码登录（二维码弹窗在本组件里，不再跳到「账号连接」）。
+                       提示语收进 title，不再占两行文字。 -->
+                  <div v-else class="flex flex-col items-center gap-2.5 py-4 text-center">
+                    <button
+                      @click="startPlatformLogin(p)"
+                      :disabled="!!platformBusy"
+                      :title="p.loginHint"
+                      class="rounded-lg bg-emerald-500 px-3.5 py-1.5 text-[12px] font-semibold text-white transition-all hover:bg-emerald-600 disabled:opacity-50"
+                    >{{ platformBusy === p.id + ':qr' ? '正在获取二维码…' : '扫码登录' }}</button>
+                  </div>
+                </div>
               </div>
             </div>
 
-            <!-- 第 2 行：榜单 / 歌单 切换 -->
-            <div class="mt-2.5 flex shrink-0 items-center gap-0.5 rounded-[11px] bg-white/80 p-1 ring-1 ring-gray-200/70 w-max">
-              <button
-                @click="switchDiscoverTab('charts')"
-                :class="[
-                  'px-3 py-1.5 rounded-lg text-[12px] font-bold transition-all flex items-center gap-1 whitespace-nowrap',
-                  discoverTab === 'charts' ? 'bg-emerald-500 text-white shadow-sm' : 'text-gray-500 hover:text-gray-700'
-                ]"
-              >
-                <span>🔥</span><span>排行榜单</span>
-              </button>
-              <button
-                @click="switchDiscoverTab('playlists')"
-                :class="[
-                  'px-3 py-1.5 rounded-lg text-[12px] font-bold transition-all flex items-center gap-1 whitespace-nowrap',
-                  discoverTab === 'playlists' ? 'bg-emerald-500 text-white shadow-sm' : 'text-gray-500 hover:text-gray-700'
-                ]"
-              >
-                <span>🎧</span><span>精选歌单</span>
-              </button>
-              <!--
-                「⚙️ 榜单管理」原来是这里的第三个胶囊，v2.1.119 先搬进曲库管家，
-                v2.1.120 又独立成顶层导航里的一页（与「发现音乐」并列）——
-                浏览（本页）与配置（那一页）分开，本页的顶栏不必再挤一个入口。
-              -->
+            <!-- 卡片区内的失败提示（一句人话，完整信息进日志） -->
+            <div v-if="platformError" class="mt-3">
+              <InlineNotice :text="platformError" />
             </div>
 
             <!--
@@ -141,8 +230,8 @@
               当前选中的那个会强制排到第一位，保证「正在筛什么」始终可见。
             -->
             <div
-              v-if="discoverTab === 'playlists' && sortedCategories.length > 0"
-              class="mt-2.5 flex items-start gap-1.5"
+              v-if="sortedCategories.length > 0"
+              class="mt-3.5 flex items-start gap-1.5"
             >
               <div
                 ref="catBoxRef"
@@ -212,130 +301,6 @@
         </div>
       </div>
 
-      <!--
-        双平台推荐：网易云 + QQ 音乐的个人推荐。
-        扫码登录 / 登出**就在这两张卡片里**（2026-09-27 从「账号连接」搬来：那页的扫码登录
-        与这里重复，用户要求只留一处）。二维码弹窗见 components/QrLoginModal.vue，
-        状态映射见 services/qrLogin.js。
-        曲目来自 GET /api/accounts/tracks —— 已归一化为可播放形状，点击即入列表，可播放/下载。
-      -->
-      <div v-if="currentMode === 'discover' && !isChartsSegment" class="max-w-[1500px] mx-auto px-5 pt-6 pb-0 sm:px-8 sm:pt-7">
-        <div class="mb-3 flex flex-wrap items-end justify-between gap-3">
-          <div class="min-w-0">
-            <h2 class="text-[19px] font-bold text-gray-800">双平台推荐</h2>
-            <p class="mt-1 text-[12px] text-gray-400">网易云与 QQ 音乐各自独立的个人推荐空间</p>
-          </div>
-          <!-- 就地刷新连接状态（不再是「管理账号 → 跳走」） -->
-          <button
-            @click="refreshAccounts()"
-            :disabled="accountsLoading"
-            class="shrink-0 text-[12px] font-semibold text-emerald-600 hover:underline disabled:opacity-50"
-          >{{ accountsLoading ? '刷新中…' : '刷新状态' }}</button>
-        </div>
-
-        <!-- 移动端就一行两个（用户 2026-09-28：「两个卡片可以窄一点，一行两个」）：
-             两列在所有宽度都保留，只把内边距/字号/图标在窄屏收小 —— 不用整体缩放。 -->
-        <div class="grid grid-cols-2 gap-3 md:gap-4">
-          <div
-            v-for="p in recommendPlatforms" :key="p.id"
-            class="overflow-hidden rounded-xl border border-gray-200 bg-white"
-            :class="p.topBorder"
-          >
-            <!-- 卡片头 -->
-            <div class="flex items-center justify-between gap-2 border-b border-gray-100 px-3 py-3 sm:gap-3 sm:px-4 sm:py-3.5">
-              <div class="flex min-w-0 items-center gap-2 sm:gap-2.5">
-                <div class="grid h-8 w-8 shrink-0 place-items-center rounded-[9px] text-[14px] font-extrabold sm:h-9 sm:w-9 sm:rounded-[10px] sm:text-[17px]" :class="p.markClass">
-                  {{ p.mark }}
-                </div>
-                <div class="min-w-0">
-                  <b class="block truncate text-[13px] text-gray-800 sm:text-sm">{{ p.name }}</b>
-                  <span class="block truncate text-[10px] text-gray-400 sm:text-[11px]">{{ p.desc }}</span>
-                </div>
-              </div>
-              <span
-                class="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium sm:px-2.5 sm:py-1 sm:text-[11px]"
-                :class="p.connected ? 'bg-emerald-50 text-emerald-600' : 'bg-gray-100 text-gray-500'"
-              >{{ p.connected ? '已连接' : '未连接' }}</span>
-            </div>
-
-            <!-- 卡片体 -->
-            <div class="px-3 py-3 sm:px-4 sm:py-4">
-              <template v-if="p.connected">
-                <!-- 账号行：谁登着 + 登出（登出=断开本机凭据，下次要重新扫码） -->
-                <div class="mb-2.5 flex items-center gap-2 sm:mb-3 sm:gap-2.5">
-                  <img
-                    v-if="p.avatar"
-                    :src="p.avatar"
-                    class="h-8 w-8 shrink-0 rounded-full object-cover sm:h-9 sm:w-9"
-                    referrerpolicy="no-referrer"
-                    @error="(e) => (e.target.style.display = 'none')"
-                  />
-                  <div v-else class="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-gray-100 text-[12px] font-bold text-gray-400 sm:h-9 sm:w-9 sm:text-[13px]">
-                    {{ (p.nickname || p.mark).slice(0, 1) }}
-                  </div>
-                  <div class="min-w-0 flex-1">
-                    <b class="block truncate text-[12px] text-gray-800 sm:text-[13px]">{{ p.nickname || '已登录' }}</b>
-                    <span class="block truncate text-[10px] text-gray-400 sm:text-[11px]">UID {{ p.uid || '-' }}</span>
-                  </div>
-                  <button
-                    class="shrink-0 rounded-lg border border-gray-200 px-2 py-1 text-[11px] font-medium text-gray-500 transition-all hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 disabled:opacity-50 sm:px-2.5 sm:py-1.5 sm:text-[12px]"
-                    :disabled="!!platformBusy"
-                    @click="disconnectPlatform(p)"
-                  >{{ platformBusy === p.id + ':disconnect' ? '登出中…' : '登出' }}</button>
-                </div>
-
-                <!-- 每日推荐 -->
-                <button
-                  @click="loadRecommend(p.id, 'daily')"
-                  :disabled="!!recommendLoading"
-                  class="flex w-full items-center gap-2 rounded-xl border border-gray-200 px-2.5 py-2.5 text-left transition-all hover:border-emerald-300 hover:bg-emerald-50/30 disabled:opacity-60 sm:gap-3 sm:px-3.5 sm:py-3"
-                >
-                  <div class="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-emerald-50 text-emerald-600 sm:h-9 sm:w-9">
-                    <CalendarHeart class="w-4 h-4" />
-                  </div>
-                  <div class="min-w-0 flex-1">
-                    <b class="block text-[12px] text-gray-800 sm:text-[13px]">每日推荐</b>
-                    <span class="block text-[11px] text-gray-400">{{ p.dailyHint }}</span>
-                  </div>
-                  <Loader2 v-if="recommendLoading === p.id + ':daily'" class="w-4 h-4 shrink-0 animate-spin text-emerald-500" />
-                  <ChevronRight v-else class="w-4 h-4 shrink-0 text-gray-300" />
-                </button>
-
-                <!-- 我的歌单（最多 4 个） -->
-                <div v-if="p.playlists.length" class="mt-2.5">
-                  <span class="mb-1.5 block text-[11px] text-gray-400">我的歌单</span>
-                  <div class="flex flex-wrap gap-1.5">
-                    <button
-                      v-for="pl in p.playlists.slice(0, 4)" :key="pl.id"
-                      @click="loadRecommend(p.id, 'playlist', pl.id)"
-                      :disabled="!!recommendLoading"
-                      class="max-w-full truncate rounded-lg bg-gray-50 px-2.5 py-1.5 text-[11px] text-gray-600 ring-1 ring-gray-200 transition-colors hover:bg-emerald-50 hover:text-emerald-600 disabled:opacity-60"
-                      :title="pl.name + (pl.count ? ` · ${pl.count} 首` : '')"
-                    >{{ pl.name }}</button>
-                  </div>
-                </div>
-                <p v-else-if="p.playlistsLoading" class="mt-2.5 text-[11px] text-gray-300">正在读取歌单…</p>
-              </template>
-
-              <!-- 未连接：就地扫码登录（二维码弹窗在本组件里，不再跳到「账号连接」） -->
-              <div v-else class="flex flex-col items-center gap-2.5 py-4 text-center">
-                <p class="text-[12px] leading-relaxed text-gray-400">{{ p.loginHint }}</p>
-                <button
-                  @click="startPlatformLogin(p)"
-                  :disabled="!!platformBusy"
-                  class="rounded-lg bg-emerald-500 px-3.5 py-1.5 text-[12px] font-semibold text-white transition-all hover:bg-emerald-600 disabled:opacity-50"
-                >{{ platformBusy === p.id + ':qr' ? '正在获取二维码…' : '扫码登录' }}</button>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- 卡片区内的失败提示（一句人话，完整信息进日志） -->
-        <div v-if="platformError" class="mt-3">
-          <InlineNotice :text="platformError" />
-        </div>
-      </div>
-
       <!-- 平台扫码登录弹窗（状态全在 services/qrLogin.js） -->
       <QrLoginModal :session="qr" @close="closeQr" @restart="restartQr" />
 
@@ -346,23 +311,26 @@
         同一份 toplists、同一个卡片网格、同一个注入开关，只是入口不同。
       -->
 
-      <div v-if="currentMode === 'discover' && (isChartsSegment || discoverTab === 'charts')" class="max-w-[1500px] mx-auto px-5 py-6 pb-28 pb-dock sm:px-8 sm:py-7 sm:pb-24">
-        <!-- 顶部控制条：只在**导航「榜单」段**出现（发现页里点胶囊进来时不该被它占位）。
-             「榜单管理」以前是独立一页，现在收成这里一个折叠面板 —— 浏览时收着，
-             要勾选时展开，网格一行都不动。 -->
-        <div v-if="isChartsSegment" class="mb-3">
+      <div v-if="currentMode === 'discover' && isChartsSegment" class="max-w-[1500px] mx-auto px-5 py-6 pb-28 pb-dock sm:px-8 sm:py-7 sm:pb-24">
+        <!-- 榜单网格：**只**长在导航「榜单」段里。
+             2026-10-18 用户口径：「去掉排行榜单和精选歌单（切换胶囊），发现页默认展示歌单」——
+             发现页不再渲染这张网格，删掉 ChartManager.vue 后「榜单管理」收成这里一个折叠面板：
+             浏览时收着，要勾选时展开，网格一行都不动。 -->
+        <div class="mb-3">
           <button
             type="button"
             @click="showInjectPanel = !showInjectPanel"
             :aria-expanded="showInjectPanel"
+            title="勾选后这些榜单会以在线歌单出现在飞牛音乐里；只保留能播放的曲目，所以会比平台榜单短"
             class="flex w-full items-center gap-x-2 gap-y-1 rounded-xl border border-gray-100 bg-white px-3.5 py-2.5 text-left transition-colors hover:border-emerald-200"
           >
             <Trophy class="w-4 h-4 shrink-0 text-amber-500" />
             <span class="text-[12px] font-bold text-gray-800 whitespace-nowrap">排行榜单</span>
-            <span class="min-w-0 flex-1 text-[11px] leading-snug text-gray-500">
-              勾选后这些榜单会出现在<strong class="text-gray-700">飞牛音乐</strong>里
-              <template v-if="chartInjectIds.length"> · 已勾选 <strong class="text-emerald-600">{{ chartInjectIds.length }}</strong> 张</template>
-            </span>
+            <span class="min-w-0 flex-1" />
+            <span
+              v-if="chartInjectIds.length"
+              class="shrink-0 text-[11px] font-bold text-emerald-600 whitespace-nowrap"
+            >已勾选 {{ chartInjectIds.length }} 张</span>
             <!-- 面板收着的时候也要能一眼看出注入开没开、有没有在用 -->
             <span
               class="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold whitespace-nowrap"
@@ -403,17 +371,20 @@
               <span class="text-[10px] text-gray-300">{{ chartInjectBusy ? '保存中…' : injectSavedText }}</span>
             </div>
 
-            <!-- 页面注入开关：注的是**飞牛自带页面**（首页/歌单页那几个卡），与上面「榜单进歌单」是两件事 -->
-            <label class="flex cursor-pointer items-start gap-2 rounded-lg bg-gray-50 px-3 py-2">
+            <!-- 页面注入开关：注的是**飞牛自带页面**（首页/歌单页那几个卡），与上面「榜单进歌单」是两件事。
+                 解释文字收进 title，不再常驻两行小字。 -->
+            <label
+              class="flex cursor-pointer items-start gap-2 rounded-lg bg-gray-50 px-3 py-2"
+              title="关掉就逐字节原样返回官方页面 —— 页面显示不对时这是退路；改动在飞牛页面下次加载时生效"
+            >
               <input type="checkbox" :checked="uiInjectEnabled" :disabled="chartInjectBusy" @change="toggleUIInject" class="mt-0.5 shrink-0 accent-emerald-500" />
               <span class="min-w-0 text-[11px] leading-snug text-gray-600">
-                <strong class="text-gray-700">同时重排飞牛自带的页面</strong>（首页/歌单页那几张卡换成我们的榜单）
-                <span class="block text-[10px] text-gray-400">关掉就逐字节原样返回官方页面 —— 页面显示不对时这是退路；改动在飞牛页面**下次加载**时生效</span>
+                <strong class="text-gray-700">同时重排飞牛自带的页面</strong>
               </span>
             </label>
 
             <!-- 音质：勾选的榜单在飞牛里点播放/下载时用哪一档（后端拦截层读它） -->
-            <div class="flex flex-wrap items-center gap-2 rounded-lg bg-gray-50 px-3 py-2">
+            <div class="flex flex-wrap items-center gap-2 rounded-lg bg-gray-50 px-3 py-2" :title="autoDownloadQualityHint">
               <span class="text-[11px] font-bold text-gray-700 whitespace-nowrap">音质下载</span>
               <SelectField
                 class="w-36"
@@ -421,35 +392,10 @@
                 :options="AUTO_DOWNLOAD_QUALITY_OPTIONS"
                 @update:model-value="setAutoDownloadQuality"
               />
-              <span class="min-w-0 flex-1 text-[10px] leading-snug text-gray-400">{{ autoDownloadQualityHint }}</span>
             </div>
 
             <p v-if="chartInjectError" class="text-[11px] text-rose-500">{{ chartInjectError }}</p>
-            <p class="text-[10px] leading-snug text-gray-400">
-              只保留能播放的曲目，所以飞牛里的歌单会比平台榜单短。改动会在**飞牛音乐的页面下次加载**时生效。
-            </p>
           </div>
-        </div>
-        <!-- 发现页里的「排行榜单」段：顶部一行指路 —— 勾选注入的完整面板在导航「榜单」段里，
-             这里只给一个入口，不把面板再铺一遍（发现页是**浏览**用的）。 -->
-        <div
-          v-if="!isChartsSegment"
-          class="mb-3 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-xl border border-gray-100 bg-white px-3.5 py-2.5"
-        >
-          <Trophy class="w-4 h-4 shrink-0 text-amber-500" />
-          <span class="text-[12px] font-bold text-gray-800 whitespace-nowrap">排行榜单</span>
-          <span class="text-[11px] leading-snug text-gray-500">
-            要让这些榜单出现在<strong class="text-gray-700">飞牛音乐</strong>里，去
-            <button
-              type="button"
-              @click="openChartManager"
-              class="font-bold text-emerald-600 underline decoration-emerald-300 underline-offset-2 hover:text-emerald-700"
-            >榜单管理</button>
-            勾选
-          </span>
-          <span class="text-[11px] leading-snug text-amber-600/80">
-            只保留能播放的曲目，所以飞牛里的歌单会比平台榜单短
-          </span>
         </div>
         <div v-if="isLoadingCharts" class="flex flex-col items-center justify-center py-20 text-gray-400">
           <Loader2 class="w-8 h-8 animate-spin text-emerald-500 mb-2" />
@@ -509,8 +455,8 @@
         </div>
       </div>
 
-      <!-- 2. 发现大厅 - 精选歌单网格 -->
-      <div v-else-if="currentMode === 'discover' && !isChartsSegment && discoverTab === 'playlists'" class="max-w-[1500px] mx-auto px-5 py-6 pb-28 pb-dock sm:px-8 sm:py-7 sm:pb-24">
+      <!-- 2. 发现大厅 - 精选歌单网格（发现段的**默认也是唯一**的内容，不再有榜单/歌单切换） -->
+      <div v-else-if="currentMode === 'discover' && !isChartsSegment" class="max-w-[1500px] mx-auto px-5 py-6 pb-28 pb-dock sm:px-8 sm:py-7 sm:pb-24">
         <div v-if="isLoadingPlaylists" class="flex flex-col items-center justify-center py-20 text-gray-400">
           <Loader2 class="w-8 h-8 animate-spin text-emerald-500 mb-2" />
           <p class="text-xs">正在载入精选歌单...</p>
@@ -939,7 +885,7 @@ import DownloadQualityModal from './DownloadQualityModal.vue'
 import InlineNotice from './InlineNotice.vue'
 import QrLoginModal from './QrLoginModal.vue'
 import SelectField from './SelectField.vue'
-import { onNavigate, navigateTo, currentView } from '../services/navBus'
+import { onNavigate, currentView } from '../services/navBus'
 import {
   chartInject,
   chartInjectKey,
@@ -952,6 +898,10 @@ import {
 } from '../services/chartInject'
 import { fail, apiError, describeError } from '../services/userMsg'
 import { createSearchPager, SEARCH_PAGE_SIZE } from '../services/searchPaging'
+import {
+  officialPlatform, setOfficialPlatform, ensureOfficialPlatform,
+  OFFICIAL_PLATFORM_IDS,
+} from '../services/officialPlatform'
 import { logError, logWarn } from '../services/appLog'
 import {
   QR_POLL_MS,
@@ -967,7 +917,7 @@ import {
 import {
   Search, Play, Loader2, Music2, Download, HardDriveDownload,
   Folder, ArrowLeft, Shuffle, Repeat, Repeat1, Check, X, Radio, BellPlus,
-  CalendarHeart, ChevronRight, Trophy
+  CalendarHeart, ChevronRight, Trophy, RefreshCw
 } from 'lucide-vue-next'
 
 const props = defineProps({
@@ -1249,7 +1199,8 @@ const currentMode = ref('discover') // 'discover' | 'chartDetail' | 'playlistDet
  */
 const loadError = ref('')
 // 下列选择项都做本地记忆：重新打开应用后仍停留在上次选的站点/分类
-const discoverTab = ref(loadPref('discover_tab', 'charts'))   // 'charts' | 'playlists'（榜单管理是顶层导航里的一页）
+// 2026-10-18 用户口径：榜单/歌单两个段合并成「发现 = 歌单」，discover_tab 这个偏好整个删掉。
+// 看哪个平台由 services/officialPlatform.js 统一持有（音源管理 → 官方协议里切换）。
 const selectedCategory = ref(loadPref('playlist_category', '全部'))
 const query = ref('')
 
@@ -1485,7 +1436,6 @@ function measureCategories() {
 }
 
 watch(sortedCategories, () => nextTick(measureCategories))
-watch(discoverTab, () => nextTick(measureCategories))
 
 /** resize 监听句柄（挂载时装、卸载时摘） */
 let catResizeHandler = null
@@ -1585,26 +1535,25 @@ const hasActiveSource = computed(() => {
 const OFFICIAL_PLATFORMS = ['wy', 'tx', 'kg', 'kw']
 
 /**
- * 发现页「榜单 / 精选歌单」只展示这两个平台。
+ * 「官方协议」用的两个平台 —— 决定发现页歌单、榜单段、下载解析看哪个平台的内容。
  *
  * 后端其实四个平台都支持（pkg/charts），但酷狗/酷我的歌单能力较弱
- * （没有分类筛选、榜单结构也简单），用户要求界面上不再暴露 ——
- * 少而准比多而杂好。**搜索平台列表不受影响**（那个走 LX 脚本，仍是全部平台）。
+ * （没有分类筛选、榜单结构也简单），界面上不再暴露 —— 少而准比多而杂好。
+ * **搜索平台列表不受影响**（那个走 LX 脚本，仍是全部平台）。
+ *
+ * 2026-10-18 用户口径：这个选择**只**在「音源管理 → 官方协议」里用按钮切换
+ * （见 services/officialPlatform.js，模块级单例 + 自己落 localStorage）。
+ * 发现页 hero 上那排平台胶囊已经删掉，这里保留一个只读镜像给本组件内部用。
  */
-const CHART_PLATFORMS = ['wy', 'tx']
+const CHART_PLATFORMS = OFFICIAL_PLATFORM_IDS
 
-/** 榜单 / 精选歌单用的平台列表（只含上面两个） */
-const availablePlatforms = computed(() =>
-  CHART_PLATFORMS.map(id => ({
-    id,
-    name: platformNames[id] || id,
-    icon: platformIcons[id] || '🎵',
-  })),
-)
-
-// 默认用网易云（榜单/歌单最全）。注意旧版本可能持久化成 kw/kg，
-// 那种值已经不在列表里了，下面 onMounted 会纠正。
-const selectedChartPlatform = ref(loadPref('chart_platform', 'wy'))
+// 当前平台：读写在 services/officialPlatform.js（音源管理那页也在改它，两边必须同一份）。
+// 这里用带 setter 的 computed 包一层，纯粹是为了让下面几十处 `selectedChartPlatform.value = x`
+// 不用改写法 —— 赋值会走 setOfficialPlatform，顺带落盘。
+const selectedChartPlatform = computed({
+  get: () => officialPlatform.value,
+  set: (v) => { setOfficialPlatform(v) },
+})
 
 const platforms = computed(() => {
   const list = [{ id: 'all', name: '全网聚合', icon: '🌐' }]
@@ -1666,32 +1615,17 @@ async function loadMusicDLPlatforms() {
 }
 
 async function switchChartPlatform(pid) {
-  selectedChartPlatform.value = pid
-  savePref('chart_platform', pid)
+  // 值没变（点了同一个）也照样重拉一遍，当「刷新」用
+  setOfficialPlatform(pid)
   toplists.value = []
   playlists.value = []
-  if (discoverTab.value === 'charts') {
-    loadToplists(pid)
-    // 分类随平台变，提前拉好，切到歌单页时筛选条就是对的
-    loadPlaylistCategories(pid)
-  } else {
-    // 必须先等分类回来：它会纠正 selectedCategory（换平台后旧分类可能不存在），
-    // 否则会拿着旧平台的分类去请求新平台。
-    await loadPlaylistCategories(pid)
-    loadPlaylists(selectedCategory.value, pid)
-  }
-}
-
-async function switchDiscoverTab(tab) {
-  discoverTab.value = tab
-  savePref('discover_tab', tab)
-  if (tab === 'charts') {
-    loadToplists(selectedChartPlatform.value)
-    loadChartInject()
-  } else if (tab === 'playlists') {
-    await loadPlaylistCategories(selectedChartPlatform.value)
-    loadPlaylists(selectedCategory.value, selectedChartPlatform.value)
-  }
+  // 榜单段与发现段（歌单）都要跟着换 —— 两边的数据源都按平台分。
+  loadToplists(pid)
+  loadChartInject()
+  // 必须先等分类回来：它会纠正 selectedCategory（换平台后旧分类可能不存在），
+  // 否则会拿着旧平台的分类去请求新平台。
+  await loadPlaylistCategories(pid)
+  loadPlaylists(selectedCategory.value, pid)
 }
 
 /**
@@ -1712,25 +1646,20 @@ watch(() => poolIds.value.join(','), (key) => {
   const list = lxRuntime.unionPlatforms(poolIds.value).filter(id => id !== 'mg' && id !== 'local')
   // ⚠️ 榜单平台**不再**跟着音源走：它是官方协议的能力（固定 wy/tx），
   // 与 LX 脚本声明哪些平台无关。这里只做「持久化的值已不在列表里就回退」。
-  if (!CHART_PLATFORMS.includes(selectedChartPlatform.value)) {
-    selectedChartPlatform.value = CHART_PLATFORMS[0]
-    savePref('chart_platform', CHART_PLATFORMS[0])
-  }
+  ensureOfficialPlatform()
   // 搜索站点仍要跟着音源校验：换音源后若不再支持上次选的站点，回退到「全网聚合」
   if (list.length > 0 && selectedPlatform.value !== 'all' && !list.includes(selectedPlatform.value)) {
     selectedPlatform.value = 'all'
     savePref('search_platform', 'all')
   }
-  if (discoverTab.value === 'charts') {
-    if (toplists.value.length === 0) {
-      loadToplists(selectedChartPlatform.value)
-    }
-    // 直接落在榜单 tab（刷新 / 换端）时也要把注入状态读回来
-    loadChartInject()
-  } else {
-    if (playlists.value.length === 0) {
-      loadPlaylists(selectedCategory.value, selectedChartPlatform.value)
-    }
+  // 榜单与歌单都在本组件里（只是段不同），两份数据都补齐。
+  if (toplists.value.length === 0) {
+    loadToplists(selectedChartPlatform.value)
+  }
+  // 直接落在榜单段（刷新 / 换端）时也要把注入状态读回来
+  loadChartInject()
+  if (playlists.value.length === 0) {
+    loadPlaylists(selectedCategory.value, selectedChartPlatform.value)
   }
 }, { immediate: true })
 
@@ -1826,12 +1755,8 @@ function selectPlaylistCategory(cat) {
 }
 
 /**
- * 榜单管理页点一行右侧的 ▶：切回本页「排行榜单」并打开那张榜单。
+ * 打开一张榜单（可能来自导航总线的 { chartPreview } 负载）。
  * 平台顺手一起切 —— 回到浏览页时，看到的就该是他刚点的那张榜单所属的平台。
- *
- * 那一页不直接 import 本组件（两个顶层视图互相 import 会成环），所以走导航总线：
- * 管家调 navigateTo('search', { chartPreview: item })，App.vue 转给当前视图，
- * 这里在 onNavigate 里接住并打开详情。负载不是榜单时（老调用方只传 view）忽略。
  */
 function openChartPreview(item) {
   if (!item?.id) return
@@ -1839,20 +1764,7 @@ function openChartPreview(item) {
   if (CHART_PLATFORMS.includes(source) && source !== selectedChartPlatform.value) {
     switchChartPlatform(source)
   }
-  discoverTab.value = 'charts'
-  savePref('discover_tab', 'charts')
   openChartDetail({ ...item, source })
-}
-
-/**
- * 跳到「榜单」段（本组件自己的第二段）。
- *
- * 2026-10-18：榜单管理不再是独立顶层页，`navigateTo('charts')` 经 navViews 的别名表
- * 解析成 `{view:'search', segment:'charts'}` —— 走同一条导航总线，外面（比如任务提示、
- * 飞牛页面的深链）想直接落到榜单段时仍然只要说「charts」这一个词。
- */
-function openChartManager() {
-  navigateTo('charts')
 }
 
 const offChartNav = onNavigate((view, payload) => {
@@ -2231,12 +2143,10 @@ function batchDownloadAll() {
 }
 
 onMounted(async () => {
-  // 旧版本可能把平台持久化成 kw/kg，这两个已不在榜单平台列表里 ——
+  // 旧版本可能把平台持久化成 kw/kg，这两个已不在官方协议平台列表里 ——
   // 不纠正的话会出现「一个平台都没高亮」，而且请求的还是隐藏平台。
-  if (!CHART_PLATFORMS.includes(selectedChartPlatform.value)) {
-    selectedChartPlatform.value = CHART_PLATFORMS[0]
-    savePref('chart_platform', CHART_PLATFORMS[0])
-  }
+  // 纠正逻辑收在 services/officialPlatform.js（音源管理那页也读它，必须同一份）。
+  ensureOfficialPlatform()
 
   // 外挂平台（musicdl）的按钮要看配置才知道该不该出现 —— 不等它，页面照常先渲染
   loadMusicDLPlatforms()
