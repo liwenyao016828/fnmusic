@@ -31,9 +31,9 @@ type bitReader struct {
 }
 
 const (
-	modeBoth   byte = iota // 帧头字节：crc8 + crc16
-	modeFrame              // 帧体字节：只算 crc16（含 CRC-8 字节自身）
-	modeNone               // 校验和字节本身：不算任何 CRC
+	modeBoth  byte = iota // 帧头字节：crc8 + crc16
+	modeFrame             // 帧体字节：只算 crc16（含 CRC-8 字节自身）
+	modeNone              // 校验和字节本身：不算任何 CRC
 )
 
 func newBitReader(r io.Reader) *bitReader {

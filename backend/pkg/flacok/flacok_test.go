@@ -126,8 +126,8 @@ func fixtureFrame(s fixtureStreamInfo, blockSizeCode, sampleRateCode, sampleSize
 		0xFF, 0xF8, // 同步码 + 保留位 + 定长块
 		blockSizeCode<<4 | sampleRateCode,
 		0<<4 | sampleSizeCode<<1, // 声道赋值 0（单声道）+ 位宽码 + 保留位
-		0x00,                   // 帧号 0（UTF-8 风格：小于 0x80 的值就是一个字节）
-		byte(16 - 1),           // 显式块长 16
+		0x00,                     // 帧号 0（UTF-8 风格：小于 0x80 的值就是一个字节）
+		byte(16 - 1),             // 显式块长 16
 	}
 	hdr = append(hdr, crc8Bitwise(hdr))
 
@@ -277,7 +277,7 @@ func TestStreamInfoLengthMustBe34(t *testing.T) {
 	block := si.bytes()
 	data := []byte{'f', 'L', 'a', 'C'}
 	data = append(data, 0x80, 0x00, 0x00, byte(len(block)-1)) // 声明 33 字节
-	data = append(data, block...)                            // 实际给 34
+	data = append(data, block...)                             // 实际给 34
 	data = append(data, fixtureFrame(si, 0xFF, 0xFF, 0xFF)...)
 	if err := ValidateFile(writeTemp(t, data)); !errors.Is(err, ErrHeaderCorrupt) {
 		t.Fatalf("STREAMINFO 长度不对却没报 ErrHeaderCorrupt：%v", err)

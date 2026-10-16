@@ -626,9 +626,9 @@ func fixtureFrame(seq byte) []byte {
 	const blockSize = 4096 // 采样数
 	hdr := []byte{
 		0xFF, 0xF8, // 同步码 + 保留位 + 定长块
-		0x79,       // 块长码 7（16 位显式）| 采样率码 9（44.1kHz）
-		0x08,       // 声道赋值 0（单声道）| 位宽码 4（16 位）| 保留位 0
-		seq,        // 帧号（裸字节，必须 < 0x80）
+		0x79,                                                     // 块长码 7（16 位显式）| 采样率码 9（44.1kHz）
+		0x08,                                                     // 声道赋值 0（单声道）| 位宽码 4（16 位）| 保留位 0
+		seq,                                                      // 帧号（裸字节，必须 < 0x80）
 		byte((blockSize - 1) >> 8), byte((blockSize - 1) & 0xFF), // 显式块长
 	}
 	hdr = append(hdr, fixtureCRC8(hdr))
