@@ -106,6 +106,47 @@
     height: 100vh;
     height: 100dvh;
   }
+
+  /* ── 表单控件全局统一（2026-10-18 用户：「全局多选和单选按钮统一一下」）──
+     以前每个页面的 `<input type="checkbox">` 各写各的：有的带 accent-emerald-500、
+     有的裸着（浏览器默认蓝）、有的又叠了 Tailwind forms 的 text/rounded/focus:ring
+     （那套要 @tailwindcss/forms 插件才生效，本项目没装 —— 于是写了等于没写，
+     看上去反而更像「坏了」）。原生控件的**内部**由浏览器绘制，能改的只有
+     accent-color（选中色）、尺寸、圆角与光标，所以统一就统一在这些属性上。
+
+     放在 @layer base：Tailwind 的工具类在 @layer utilities 里，优先级更高，
+     所以 `w-3.5 h-3.5` 这类显式尺寸仍然能覆盖这里（局部确实需要更小的除外）。 */
+  input[type="checkbox"],
+  input[type="radio"] {
+    accent-color: #10b981;   /* emerald-500，与全站主色一致 */
+    width: 1rem;
+    height: 1rem;
+    flex-shrink: 0;
+    cursor: pointer;
+    vertical-align: middle;
+  }
+
+  input[type="checkbox"]:disabled,
+  input[type="radio"]:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+
+  /* 下拉与数字输入也统一圆角与聚焦色 —— 原生 <select> 此前是方块直角 */
+  select:not([multiple]) {
+    cursor: pointer;
+    border-radius: 0.5rem;
+  }
+
+  select:focus-visible,
+  input[type="text"]:focus-visible,
+  input[type="search"]:focus-visible,
+  input[type="number"]:focus-visible,
+  textarea:focus-visible {
+    outline: none;
+    border-color: #34d399;   /* emerald-400 */
+    box-shadow: 0 0 0 2px rgb(52 211 153 / 0.2);
+  }
 }
 
 @layer utilities {

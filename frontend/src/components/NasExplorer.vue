@@ -5,18 +5,19 @@
     页头那排动作按钮原样留着，只是从 PageShell 的 #actions 槽挪成了普通工具栏。
   -->
   <div>
-    <div class="mb-3 flex flex-wrap items-start gap-x-3 gap-y-2">
-      <div class="min-w-0">
-        <div class="flex items-center gap-2">
-          <h2 class="text-[15px] font-bold text-gray-900">本地音乐</h2>
-          <span class="text-[10px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-200 font-mono">
-            原生存储卷支持
-          </span>
-        </div>
-        <p class="mt-0.5 max-w-[720px] text-[11px] leading-snug text-gray-500">
-          飞牛 NAS 本地曲库 · FLAC / APE / WAV / DSD / MP3 串流。
-        </p>
-      </div>
+    <!--
+      2026-10-18：这里原来还有「本地音乐」大标题 + 「飞牛 NAS 本地曲库 · FLAC / APE / WAV / DSD / MP3 串流。」
+      一行简介。用户要求把页面名统一挪到顶部那一条栏，简介改成悬停可见 —— 顶部栏已经显示
+      「本地曲库」，页面里再写一遍就是重复。简介收进这一行的 title，动作按钮原地保留。
+      同一批改造里，这排按钮也从裸在页面底色上收进了白底圆角卡（用户：「全局卡片化」）。
+    -->
+    <div
+      class="mb-3 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border border-gray-200 bg-white px-3.5 py-2.5"
+      title="飞牛 NAS 本地曲库 · FLAC / APE / WAV / DSD / MP3 串流。"
+    >
+      <span class="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 font-mono text-[10px] text-emerald-600">
+        原生存储卷支持
+      </span>
       <div class="ml-auto flex flex-wrap items-center gap-1.5">
       <button
         @click="playAllNasSongs"

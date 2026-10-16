@@ -61,9 +61,16 @@
           </div>
 
           <div class="grid grid-cols-1 gap-3 md:grid-cols-3">
+            <!--
+              2026-10-18 用户：「订阅更新怎么还是那么多的文字，简化一下。」
+              步骤卡原来是「标题 + 一整段 hint + 按钮」三行字，三张卡就是三段说明；
+              现在整段 hint 收进卡片的 title（悬停可见），卡片只剩「序号 + 标题 + 动作按钮」。
+              首次使用仍然看得懂：标题本身就是动作，按钮就是入口。
+            -->
             <div v-for="s in pushGuideSteps" :key="s.id"
               class="flex flex-col rounded-xl border p-3.5"
-              :class="s.done ? 'border-emerald-200 bg-emerald-50/40' : 'border-gray-200'">
+              :class="s.done ? 'border-emerald-200 bg-emerald-50/40' : 'border-gray-200'"
+              :title="s.done ? s.doneHint : s.hint">
               <div class="flex items-center gap-2.5">
                 <span :class="[
                   'flex h-[23px] w-[23px] shrink-0 items-center justify-center rounded-full text-[12px] font-extrabold',
@@ -72,11 +79,9 @@
                   <Check v-if="s.done" class="h-3 w-3" />
                   <template v-else>{{ s.no }}</template>
                 </span>
-                <b class="text-[13px]" :class="s.done ? 'text-emerald-700' : 'text-gray-700'">{{ s.title }}</b>
+                <b class="min-w-0 flex-1 truncate text-[13px]" :class="s.done ? 'text-emerald-700' : 'text-gray-700'">{{ s.title }}</b>
+                <Check v-if="s.done" class="h-3.5 w-3.5 shrink-0 text-emerald-500" />
               </div>
-              <p class="mt-2.5 flex-1 text-[11px] leading-relaxed text-gray-500">
-                {{ s.done ? s.doneHint : s.hint }}
-              </p>
               <div class="mt-3 flex flex-wrap gap-1.5">
                 <button
                   :class="[
@@ -98,11 +103,9 @@
           <button class="text-emerald-600 hover:underline" @click="openPushGuide">展开看看</button>
         </div>
 
-        <div class="flex items-stretch gap-3">
-          <!-- 新建订阅的入口始终在右侧（引导收起后也不能没有它） -->
-          <div class="min-w-0 flex-1" />
+        <div class="flex items-center justify-end gap-2">
           <button
-            class="flex shrink-0 items-center justify-center rounded-lg bg-emerald-500 px-4 text-[13px] font-semibold text-white transition-all hover:bg-emerald-600"
+            class="flex shrink-0 items-center justify-center rounded-lg bg-emerald-500 px-4 py-2 text-[13px] font-semibold text-white transition-all hover:bg-emerald-600"
             @click="openCreate"
           >
             + 新建订阅
@@ -116,16 +119,17 @@
           配了服务型音源则由后端直连取链、关页面也能下，所以只在**没配**时提示。
           引导卡片的第①步已经把这件事说清了，所以**引导显示时不再重复**；
           等用户把引导收起（那时他可能压根没读过第①步的文案）才把这条常驻提醒放出来。
+
+          2026-10-18 简化：原来这一段是三行正文，现在压成一行标题 +
+          完整说明进 title；它是一条**提示**，不该在页面上占掉三行。
         -->
         <p
           v-if="pushGuideCollapsed && !apiSourceCount"
-          class="rounded-xl border border-gray-200 bg-white px-4 py-3 text-[11px] leading-relaxed text-gray-500"
+          class="rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-[11px] text-gray-500"
+          title="取链脚本只能在浏览器里跑；关掉窗口后已排队的会停，下次打开继续。想关掉页面也能下：到「音源管理 → 按服务地址接入」配一个服务型音源，那种音源由后端直接取链，跟浏览器无关。"
         >
-          <b class="text-gray-700">「下载到本地曲库」需要让曲率 这个窗口一直开着。</b>
-          取链脚本只能在浏览器里跑；
-          关掉窗口后已排队的会停，下次打开继续。
-          想关掉页面也能下：到「音源管理 → 按服务地址接入」配一个<b>服务型音源</b>，
-          那种音源由后端直接取链，跟浏览器无关。
+          <b class="text-gray-700">「下载到本地曲库」需要让曲率 这个窗口一直开着</b>
+          <span class="ml-1 text-gray-400">（关掉也能下：配一个服务型音源）</span>
         </p>
 
         <!--
@@ -134,10 +138,11 @@
         -->
         <p
           v-if="!fnosConnected"
-          class="rounded-xl border border-amber-100 bg-amber-50/70 px-4 py-3 text-[11px] leading-relaxed text-amber-900/80"
+          class="rounded-xl border border-amber-100 bg-amber-50/70 px-4 py-2.5 text-[11px] text-amber-900/80"
+          title="到「账号连接」登录飞牛即可；只勾「下载到本地曲库」不受影响。"
         >
-          <b class="text-amber-700">飞牛音乐未连接</b>，「同步到飞牛歌单」暂时建不了。
-          到「账号连接」登录飞牛即可（只勾「下载到本地曲库」不受影响）。
+          <b class="text-amber-700">飞牛音乐未连接</b>
+          <span class="ml-1">，暂时建不了「同步到飞牛歌单」</span>
         </p>
 
         <div v-if="!subscriptions.length" class="rounded-xl border border-gray-100 bg-white py-12 text-center">

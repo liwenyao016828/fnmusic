@@ -15,6 +15,15 @@
     所以这一页的核心是「让用户看得出哪些能用」，不是「把 56 个开关摆出来」。
   -->
   <div class="space-y-3">
+    <!--
+      pageError 只放**真的要用户动手**的错误。
+      2026-10-18 用户报「musicdl 音源报错了」，截图里是一条淡红条
+      「sidecar 没响应：… dial tcp 127.0.0.1:8901: connect: connection refused」——
+      那其实是**首次开启时 sidecar 还在建 venv / 装依赖**（1-2 分钟）的正常中间态：
+      源清单要连 8901，而那时进程还没起来。把它渲染成红色报错，用户会以为坏了。
+      所以现在这种「还没起来」的情况归 statusNote（琥珀色的准备中），
+      只有 failed / 真读不到清单才走这条红条。见 load() 里的 shouldShowSourcesError。
+    -->
     <InlineNotice :text="pageError" />
 
     <!-- ── 状态 + 总开关 ── -->
@@ -113,7 +122,12 @@
             <span class="mt-0.5 block text-[11px] leading-snug text-gray-400">未启用的源可先试；不写配置、不进搜索</span>
           </div>
         </div>
-        <p class="mt-2 text-[11px] text-gray-400">
+        <!--
+          2026-10-18 用户：「全局卡片化，那些没有包含在卡片里的文字，适配一下，用卡片包含。」
+          这句提醒原来是一段裸文字贴在动作卡下面，现在给它一块**淡琥珀底**的圆角条 ——
+          它是一条注意事项，不再和卡片网格抢视觉重量，也不会看着像没人管的散字。
+        -->
+        <p class="mt-2 rounded-lg bg-amber-50/70 px-2.5 py-1.5 text-[11px] text-amber-700">
           ⚠️ 启用一个<b>用不了</b>的源，每次搜索都要等它超时 —— 先检测再启用。
         </p>
       </div>
@@ -329,7 +343,27 @@ const visibleSources = computed(() => {
 function isOn(id) { return selected.value.includes(id) }
 function probeOf(id) { return probed.value.find((r) => r.id === id) || null }
 
+/**
+ * 这个源清单读不到时，还要不要弹红条。
+ *
+ * 2026-10-18 用户报「musicdl 音源报错了」——截图里那条淡红条写的是
+ * 「sidecar 没响应：… dial tcp 127.0.0.1:8901: connect: connection refused」。
+ * 它出现的时机是**首次开启**：配置已写、总开关已亮，但 sidecar 正在建 venv + 装依赖
+ * （1-2 分钟），端口自然连不上。这不是故障，是**进度**，界面已经在用琥珀色的
+ * 「准备中 / 正在安装 Python 依赖」说同一件事了 —— 再叠一条红条只会让人以为坏了。
+ *
+ * 反之，只有进程**本该起来却没起来**（failed / 已就绪却读不到）才是真错误。
+ */
+function shouldShowSourcesError(state) {
+  if (state === 'preparing' || state === 'starting') return false
+  if (state === 'off' || state === 'stopped' || state === '') return false
+  return true // ready（进程在却没响应）或 failed（本次尝试已失败）都该说
+}
+
 async function load() {
+  // 每一轮都从「没有错误」开始：否则上一轮的红条会在恢复之后一直挂着
+  // （sidecar 起来之后源清单能读了，但没人去清它）。
+  pageError.value = ''
   try {
     const cfg = await ConfigAPI.get()
     const c = cfg?.config || cfg?.data || cfg || {}
@@ -342,7 +376,12 @@ async function load() {
     if (enabled.value) {
       const src = await MusicDLAPI.sources()
       if (src?.code && src.code !== 200) {
-        pageError.value = src.msg || '读不到源清单'
+        // 见 shouldShowSourcesError：首次开启的那一两分钟不算错，让琥珀色的
+        // statusNote 去说「准备中」，别在这里再压一条红条。
+        const state = status.value?.sidecar?.state || ''
+        if (shouldShowSourcesError(state)) {
+          pageError.value = src.msg || '读不到源清单'
+        }
       } else {
         const d = src?.data || src || {}
         allSources.value = d.sources || []
@@ -354,9 +393,38 @@ async function load() {
   } catch (e) {
     pageError.value = describeError(e)
   }
+  // 正在起进程时自己盯着，起来之后把源清单填上 —— 否则用户开着这一页等，
+  // 得手动刷新才看得到「运行中」和 56 个源（首启要 1-2 分钟，没人会盯着刷）。
+  syncReadinessPolling()
   // 试运行的状态与这一页的其它状态**分开取**：它由服务端持有（到点由服务端回收），
   // 刷新页面要能接着看到 —— 拿不到也不影响上面那些。
   await refreshPreview()
+}
+
+// 只在这两种「还在干活」的状态下轮询；ready / failed / off 都停手。
+const UNREADY_STATES = ['preparing', 'starting']
+let readinessPoller = null
+let readinessTicks = 0
+
+function syncReadinessPolling() {
+  const st = status.value?.sidecar?.state || ''
+  const want = enabled.value && UNREADY_STATES.includes(st)
+  if (want && !readinessPoller) {
+    readinessTicks = 0
+    readinessPoller = setInterval(async () => {
+      // 上限 ~5 分钟：装依赖再慢也该出结果了，别让一个卡死的进程把这一页
+      // 永远变成每秒一次的后台请求。
+      readinessTicks += 1
+      if (readinessTicks > 100) { stopReadinessPolling(); return }
+      await load()
+    }, 3000)
+  } else if (!want) {
+    stopReadinessPolling()
+  }
+}
+
+function stopReadinessPolling() {
+  if (readinessPoller) { clearInterval(readinessPoller); readinessPoller = null }
 }
 
 /** 只提交动到的键（局部 patch），别的设置不受影响 */
@@ -541,6 +609,7 @@ async function stopPreview() {
 
 onMounted(load)
 // 离开这一页就把定时器收掉：试运行本身由服务端照管（到点照样回收），
-// 前端没必要在别的页面里继续每秒重绘一个没人看的倒计时。
-onUnmounted(stopTimers)
+// 前端没必要在别的页面里继续每秒重绘一个没人看的倒计时，
+// 也没必要继续每 3 秒问一次 sidecar 起没起来。
+onUnmounted(() => { stopTimers(); stopReadinessPolling() })
 </script>

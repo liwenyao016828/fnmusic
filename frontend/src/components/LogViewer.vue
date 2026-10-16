@@ -13,8 +13,9 @@
       >清空</button>
     </template>
 
-    <!-- 标签 + 过滤 -->
-    <div class="mb-3 flex flex-wrap items-center gap-2">
+    <!-- 标签 + 过滤（2026-10-18 用户「全局卡片化」：这一排控件原来裸在页面底色上，
+         现在按全站统一样式收进白底圆角卡，与下面的日志面板接成一张连贯的界面） -->
+    <div class="mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-gray-200 bg-white px-3.5 py-2.5">
       <button
         v-for="t in tabs" :key="t.id"
         class="rounded-lg px-3.5 py-2 text-[12px] font-medium transition-all"
