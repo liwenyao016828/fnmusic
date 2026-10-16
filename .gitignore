@@ -56,6 +56,12 @@ backend/dist/
 .refs/
 .workbuddy-ai/
 
+# Python 字节码（sidecar 自带代码也有 .py，import 时生成 __pycache__）。
+# 不进仓库 —— 内容跟 .py 重复，IDE/打包都会重新生成。
+__pycache__/
+*.pyc
+*.pyo
+
 # 打包中间产物
 fpk-package/app.tgz
 *.pak
