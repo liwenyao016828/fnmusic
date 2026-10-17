@@ -15,7 +15,7 @@
 
     <!-- 标签 + 过滤（2026-10-18 用户「全局卡片化」：这一排控件原来裸在页面底色上，
          现在按全站统一样式收进白底圆角卡，与下面的日志面板接成一张连贯的界面） -->
-    <div class="mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-gray-200 bg-white px-3.5 py-2.5">
+    <div class="mb-3 flex flex-wrap items-center gap-2 rounded-[18px] border border-gray-200 bg-white px-3.5 py-2.5">
       <button
         v-for="t in tabs" :key="t.id"
         class="rounded-lg px-3.5 py-2 text-[12px] font-medium transition-all"
@@ -40,9 +40,9 @@
     </div>
 
     <!-- 运行日志（后端 + 前端上报，同一时间轴） -->
-    <div v-if="tab === 'server'" class="overflow-hidden rounded-xl border border-gray-200 bg-white">
-      <p v-if="!serverEntries.length" class="py-14 text-center text-[12px] text-gray-400">
-        还没有日志。后端启动信息、请求与报错都会出现在这里。
+    <div v-if="tab === 'server'" class="overflow-hidden rounded-[18px] border border-gray-200 bg-white">
+      <p v-if="!serverEntries.length" class="m-3 rounded-xl border border-dashed border-gray-200 bg-gray-50/50 py-12 text-center text-[12px] text-gray-400">
+        还没有日志 —— 后端启动信息、请求与报错都会出现在这里
       </p>
       <template v-else>
         <div class="max-h-[620px] divide-y divide-gray-50 overflow-y-auto">
@@ -71,9 +71,9 @@
     </div>
 
     <!-- 任务日志 -->
-    <div v-else-if="tab === 'task'" class="overflow-hidden rounded-xl border border-gray-200 bg-white">
-      <p v-if="!visibleTaskRuns.length" class="py-14 text-center text-[12px] text-gray-400">
-        {{ onlyFailed ? '没有失败的任务记录。' : '还没有任务执行记录。下载、整理、推送每跑一次都会记在这里。' }}
+    <div v-else-if="tab === 'task'" class="overflow-hidden rounded-[18px] border border-gray-200 bg-white">
+      <p v-if="!visibleTaskRuns.length" class="m-3 rounded-xl border border-dashed border-gray-200 bg-gray-50/50 py-12 text-center text-[12px] text-gray-400">
+        {{ onlyFailed ? '没有失败的任务记录' : '还没有任务执行记录 —— 下载、整理、推送每跑一次都会记在这里' }}
       </p>
       <div v-else class="max-h-[620px] divide-y divide-gray-50 overflow-y-auto">
         <div v-for="(r, i) in visibleTaskRuns" :key="i" class="flex flex-wrap items-start gap-3 px-4 py-2.5">
@@ -92,9 +92,9 @@
     </div>
 
     <!-- 操作日志（本机留存，重启不丢） -->
-    <div v-else class="overflow-hidden rounded-xl border border-gray-200 bg-white">
-      <p v-if="!visibleLocal.length" class="py-14 text-center text-[12px] text-gray-400">
-        {{ onlyFailed ? '没有失败的操作记录。' : '还没有操作记录。你在界面上的操作一旦出错，完整信息会记在这里。' }}
+    <div v-else class="overflow-hidden rounded-[18px] border border-gray-200 bg-white">
+      <p v-if="!visibleLocal.length" class="m-3 rounded-xl border border-dashed border-gray-200 bg-gray-50/50 py-12 text-center text-[12px] text-gray-400">
+        {{ onlyFailed ? '没有失败的操作记录' : '还没有操作记录 —— 界面操作一旦出错，完整信息会记在这里' }}
       </p>
       <template v-else>
         <div class="max-h-[620px] divide-y divide-gray-50 overflow-y-auto">

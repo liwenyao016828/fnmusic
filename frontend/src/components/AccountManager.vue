@@ -12,8 +12,9 @@
       2026-10-18 用户：「全局卡片化，那些没有包含在卡片里的文字，适配一下，用卡片包含。」
       这行字原来裸在页面底色上，现在收进白底圆角卡（与下面两个面板同样的边框/圆角/内边距）。
     -->
-    <div class="mb-3 flex flex-wrap items-center gap-x-1.5 gap-y-1 rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-[11.5px] text-gray-400">
-      <span>网易云 / QQ 音乐的扫码登录在「发现音乐 → 双平台推荐」</span>
+    <div class="mb-4 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-[18px] border border-gray-200 bg-white px-4 py-3 text-[11.5px] text-gray-500">
+      <span class="grid h-6 w-6 shrink-0 place-items-center rounded-lg bg-gray-100 text-[13px]">🔗</span>
+      <span>网易云 / QQ 音乐的扫码登录在「发现音乐」的双平台推荐卡里</span>
       <button class="font-semibold text-emerald-600 underline decoration-dotted underline-offset-2 hover:text-emerald-700" @click="goDiscover">前往</button>
     </div>
 

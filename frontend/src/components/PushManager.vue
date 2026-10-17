@@ -16,7 +16,7 @@
 
     <template #metrics>
       <div v-if="metrics.length" class="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <div v-for="m in metrics" :key="m.label" class="rounded-xl border border-gray-200 bg-white px-[17px] py-[15px]">
+        <div v-for="m in metrics" :key="m.label" class="rounded-[18px] border border-gray-200 bg-white px-[17px] py-[15px]">
           <b class="block text-[24px] font-bold" :class="m.color">{{ m.value }}</b>
           <span class="text-[12px] text-gray-400">{{ m.label }}</span>
         </div>
@@ -38,7 +38,7 @@
           收起**由用户点**（flow 也是如此，不自动消失），点了以后记窗口记忆，横幅上一眼能看到「展开」。
         -->
         <div v-if="!pushGuideCollapsed"
-          class="rounded-xl border border-gray-200 bg-white p-4 shadow-2xs space-y-3">
+          class="rounded-[18px] border border-gray-200 bg-white p-4 sm:p-5 space-y-3">
           <div class="flex flex-wrap items-start justify-between gap-3">
             <div class="min-w-0 flex-1">
               <p class="text-[10px] font-bold uppercase tracking-wide text-emerald-600">首次使用</p>
@@ -95,7 +95,7 @@
           </div>
         </div>
         <div v-else
-          class="flex flex-wrap items-center gap-2 rounded-xl border border-gray-200 bg-white px-[17px] py-3 text-[11px] text-gray-500 shadow-2xs">
+          class="flex flex-wrap items-center gap-2 rounded-[18px] border border-gray-200 bg-white px-[17px] py-3 text-[11px] text-gray-500 shadow-2xs">
           <span class="flex h-5 w-5 items-center justify-center rounded-md bg-emerald-100 text-emerald-600">
             <Check class="h-3 w-3" />
           </span>
@@ -125,7 +125,7 @@
         -->
         <p
           v-if="pushGuideCollapsed && !apiSourceCount"
-          class="rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-[11px] text-gray-500"
+          class="rounded-[18px] border border-gray-200 bg-white px-4 py-2.5 text-[11px] text-gray-500"
           title="取链脚本只能在浏览器里跑；关掉窗口后已排队的会停，下次打开继续。想关掉页面也能下：到「音源管理 → 按服务地址接入」配一个服务型音源，那种音源由后端直接取链，跟浏览器无关。"
         >
           <b class="text-gray-700">「下载到本地曲库」需要让曲率 这个窗口一直开着</b>
@@ -138,22 +138,21 @@
         -->
         <p
           v-if="!fnosConnected"
-          class="rounded-xl border border-amber-100 bg-amber-50/70 px-4 py-2.5 text-[11px] text-amber-900/80"
+          class="rounded-[18px] border border-amber-100 bg-amber-50/70 px-4 py-2.5 text-[11px] text-amber-900/80"
           title="到「账号连接」登录飞牛即可；只勾「下载到本地曲库」不受影响。"
         >
           <b class="text-amber-700">飞牛音乐未连接</b>
           <span class="ml-1">，暂时建不了「同步到飞牛歌单」</span>
         </p>
 
-        <div v-if="!subscriptions.length" class="rounded-xl border border-gray-100 bg-white py-12 text-center">
-          <p class="mb-1 text-sm text-gray-500">还没有订阅</p>
-          <p class="text-[11px] text-gray-400">点上方「新建订阅」开始</p>
+        <div v-if="!subscriptions.length" class="rounded-[18px] border border-dashed border-gray-200 bg-gray-50/50 py-12 text-center">
+          <p class="text-[12px] text-gray-400">还没有订阅 —— 点右上角「新建订阅」开始</p>
         </div>
 
         <div v-else class="space-y-2.5">
           <div
             v-for="row in subscriptions" :key="row.key"
-            class="rounded-xl border border-gray-200 bg-white p-4"
+            class="rounded-[18px] border border-gray-200 bg-white p-4"
           >
             <div class="flex items-start justify-between gap-3">
               <div class="min-w-0 flex-1">

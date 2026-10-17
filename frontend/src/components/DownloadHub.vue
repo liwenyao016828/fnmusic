@@ -9,7 +9,7 @@
     <template #metrics>
       <!-- 指标随分段切换（口径与旧「曲库管家·下载页」一致）；自动记录段不摆大卡（表里都有） -->
       <div v-if="metrics.length" class="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <div v-for="m in metrics" :key="m.label" class="rounded-xl border border-gray-200 bg-white px-[17px] py-[15px]">
+        <div v-for="m in metrics" :key="m.label" class="rounded-[18px] border border-gray-200 bg-white px-[17px] py-[15px]">
           <b class="block text-[24px] font-bold" :class="m.color">{{ m.value }}</b>
           <span class="text-[12px] text-gray-400">{{ m.label }}</span>
         </div>
@@ -23,42 +23,39 @@
     <template v-else>
       <!-- ══ 自动下载记录 ══ -->
         <div class="space-y-3">
-          <div class="rounded-xl border border-gray-200 bg-white p-4">
-            <div class="flex flex-wrap items-start gap-x-3 gap-y-2">
-              <div class="min-w-0">
-                <h3
-                  class="text-[13px] font-bold text-gray-800"
-                  title="飞牛页面里收藏 / 加歌单 / 点下载触发的那批。成功与失败都记。"
-                >自动下载记录</h3>
-              </div>
-              <div class="ml-auto flex flex-wrap items-center gap-1.5">
-                <button
-                  @click="loadAutoDownload"
-                  :disabled="autoDownloadLoading"
-                  class="rounded-lg border border-gray-200 bg-white px-2.5 py-1 text-[11px] font-bold text-gray-500 transition-colors hover:border-emerald-300 hover:text-emerald-600 disabled:opacity-50"
-                >{{ autoDownloadLoading ? '读取中…' : '刷新' }}</button>
-                <button
-                  @click="clearAutoDownload(selectedAutoIds)"
-                  :disabled="!autoDownloadSelected.size"
-                  class="rounded-lg border border-gray-200 px-2.5 py-1 text-[11px] font-bold text-gray-600 transition-colors hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 disabled:opacity-40"
-                >清除选中<template v-if="autoDownloadSelected.size">（{{ autoDownloadSelected.size }}）</template></button>
-                <button
-                  @click="clearAutoDownload([])"
-                  :disabled="!autoDownloadRecords.length"
-                  class="rounded-lg border border-gray-200 px-2.5 py-1 text-[11px] font-bold text-gray-600 transition-colors hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 disabled:opacity-40"
-                >一键清除</button>
-              </div>
-            </div>
+          <SectionCard
+            :icon="History"
+            title="自动下载记录"
+            title-title="飞牛页面里收藏 / 加歌单 / 点下载触发的那批。成功与失败都记。"
+            compact
+          >
+            <template #actions>
+              <button
+                @click="loadAutoDownload"
+                :disabled="autoDownloadLoading"
+                class="rounded-lg border border-gray-200 bg-white px-2.5 py-1 text-[11px] font-bold text-gray-500 transition-colors hover:border-emerald-300 hover:text-emerald-600 disabled:opacity-50"
+              >{{ autoDownloadLoading ? '读取中…' : '刷新' }}</button>
+              <button
+                @click="clearAutoDownload(selectedAutoIds)"
+                :disabled="!autoDownloadSelected.size"
+                class="rounded-lg border border-gray-200 px-2.5 py-1 text-[11px] font-bold text-gray-600 transition-colors hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 disabled:opacity-40"
+              >清除选中<template v-if="autoDownloadSelected.size">（{{ autoDownloadSelected.size }}）</template></button>
+              <button
+                @click="clearAutoDownload([])"
+                :disabled="!autoDownloadRecords.length"
+                class="rounded-lg border border-gray-200 px-2.5 py-1 text-[11px] font-bold text-gray-600 transition-colors hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 disabled:opacity-40"
+              >一键清除</button>
+            </template>
             <!-- 「没有记录」与「功能没起来」必须分开说：界面上长得一样会让人以为功能坏了 -->
-            <p v-if="autoDownloadAvailable === false" class="mt-2 text-[11px] text-amber-600">
+            <p v-if="autoDownloadAvailable === false" class="rounded-xl bg-amber-50/70 px-3 py-2 text-[11px] text-amber-700">
               记录功能本次没起来（数据目录不可写）—— 下面是空的，但不代表你没下过歌。
             </p>
-            <p v-else-if="!autoDownloadRecords.length" class="mt-2 text-[11px] text-gray-400">
-              还没有自动下载记录。在飞牛音乐里收藏一首在线歌曲试试。
+            <p v-else-if="!autoDownloadRecords.length" class="rounded-xl border border-dashed border-gray-200 bg-gray-50/50 px-3 py-4 text-center text-[11px] text-gray-400">
+              还没有自动下载记录 —— 在飞牛音乐里收藏一首在线歌曲试试
             </p>
-          </div>
+          </SectionCard>
 
-          <div v-if="autoDownloadRecords.length" class="overflow-hidden rounded-xl border border-gray-200 bg-white">
+          <div v-if="autoDownloadRecords.length" class="overflow-hidden rounded-[18px] border border-gray-200 bg-white">
             <!--
               手机上 `table-fixed`：列宽由容器决定，表格**永远等于屏宽**（与「本地音乐」那张表
               同一个做法与理由，见 NasExplorer 里那段注释）。「触发」列窄屏直接不显示 ——
@@ -123,6 +120,8 @@
  */
 import { computed, onMounted, ref, watch } from 'vue'
 import PageShell from './PageShell.vue'
+import SectionCard from './SectionCard.vue'
+import { History } from 'lucide-vue-next'
 import DownloadQueueView from './DownloadQueueView.vue'
 import PlaylistDownload from './PlaylistDownload.vue'
 import { segmentOf } from '../services/navBus'

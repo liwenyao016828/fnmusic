@@ -4,14 +4,15 @@
       <InlineNotice v-if="notice" :text="notice" :tone="noticeOk ? 'ok' : 'error'" :log-link="!noticeOk" />
 
       <!-- ⑤ 下载音质
-           小节简介统一走 h2 的 title（2026-10-18 用户口径：「去掉简介」，改成悬浮可见）。
+           小节简介统一走 SectionCard 的 subTitle（2026-10-18 用户口径：「去掉简介」，改成悬浮可见）。
            原来那句里还写着 Markdown 的 ** 星号，页面会照原样显示 —— 顺手去掉。 -->
-      <section class="rounded-xl border border-gray-200 bg-white p-4 sm:p-5">
-        <h2
-          class="text-[15px] font-semibold text-gray-800"
-          title="这个开关盖住下面两个入口各自的音质设置，不是改掉它们：改回「跟随」就能复原。本应用不做转码（NAS 上没有 ffmpeg），所以是「点名要某一档」，拿不到会按原顺序兜底，不会变成下载失败。"
-        >下载音质</h2>
-        <div class="mt-3 grid gap-2 sm:grid-cols-3">
+      <SectionCard
+        :icon="AudioLines"
+        title="下载音质"
+        title-title="这个开关盖住下面两个入口各自的音质设置，不是改掉它们：改回「跟随」就能复原。本应用不做转码（NAS 上没有 ffmpeg），所以是「点名要某一档」，拿不到会按原顺序兜底，不会变成下载失败。"
+        compact
+      >
+        <div class="grid gap-2 sm:grid-cols-3">
           <button
             v-for="o in qualityOptions"
             :key="o.value"
@@ -27,15 +28,16 @@
             <div class="mt-1 text-[11px] leading-relaxed text-gray-500">{{ o.desc }}</div>
           </button>
         </div>
-      </section>
+      </SectionCard>
 
       <!-- ② 文件命名 -->
-      <section class="rounded-xl border border-gray-200 bg-white p-4 sm:p-5">
-        <h2
-          class="text-[15px] font-semibold text-gray-800"
-          title="影响新下载的文件名。已经躺在曲库里的文件不会被改名（改名会让飞牛当成新歌重新扫描一遍）。"
-        >曲库文件命名</h2>
-        <div class="mt-3 grid gap-2 sm:grid-cols-2">
+      <SectionCard
+        :icon="FileAudio"
+        title="曲库文件命名"
+        title-title="影响新下载的文件名。已经躺在曲库里的文件不会被改名（改名会让飞牛当成新歌重新扫描一遍）。"
+        compact
+      >
+        <div class="grid gap-2 sm:grid-cols-2">
           <button
             v-for="o in namingOptions"
             :key="o.value"
@@ -50,15 +52,16 @@
             <div class="mt-1 rounded-lg bg-gray-50 px-2 py-1.5 font-mono text-[11px] text-gray-600">{{ o.sample }}</div>
           </button>
         </div>
-      </section>
+      </SectionCard>
 
       <!-- ⑧ 存储目录 -->
-      <section class="rounded-xl border border-gray-200 bg-white p-4 sm:p-5">
-        <h2
-          class="text-[15px] font-semibold text-gray-800"
-          title="缓存目录放的是「边听边存」的暂存档与试听滚动缓存，可以单独放一块盘。两个目录不得相同、也不得互为父子（清理缓存会连成品一起删掉）。"
-        >存储目录</h2>
-        <div class="mt-3 grid gap-3 sm:grid-cols-2">
+      <SectionCard
+        :icon="FolderCog"
+        title="存储目录"
+        title-title="缓存目录放的是「边听边存」的暂存档与试听滚动缓存，可以单独放一块盘。两个目录不得相同、也不得互为父子（清理缓存会连成品一起删掉）。"
+        compact
+      >
+        <div class="grid gap-3 sm:grid-cols-2">
           <label class="block">
             <span class="text-[12px] font-medium text-gray-700">下载目录（曲库）</span>
             <input
@@ -97,15 +100,16 @@
           >{{ savingDirs ? '保存中…' : '保存目录' }}</button>
           <span v-if="dirError" class="text-[12px] text-red-500">{{ dirError }}</span>
         </div>
-      </section>
+      </SectionCard>
 
       <!-- 下载行为（v2.5.0 从旧「曲库管家 → 下载」标签搬来；四个开关行为原样未动） -->
-      <section class="rounded-xl border border-gray-200 bg-white p-4 sm:p-5">
-        <h2
-          class="text-[15px] font-semibold text-gray-800"
-          title="这几个开关都真的控制行为（不放「点了没反应」的开关）：打开后对应的自动动作开始占磁盘和带宽。"
-        >下载行为</h2>
-        <div class="mt-3 space-y-2">
+      <SectionCard
+        :icon="Download"
+        title="下载行为"
+        title-title="这几个开关都真的控制行为（不放「点了没反应」的开关）：打开后对应的自动动作开始占磁盘和带宽。"
+        compact
+      >
+        <div class="space-y-2">
           <div class="flex items-start justify-between gap-3 rounded-xl border border-gray-100 bg-gray-50/60 px-3 py-2.5">
             <div class="min-w-0">
               <div class="flex items-center gap-2">
@@ -207,12 +211,11 @@
             </div>
           </div>
         </div>
-      </section>
+      </SectionCard>
 
       <!-- ③ 关于 / 导出日志 -->
-      <section class="rounded-xl border border-gray-200 bg-white p-4 sm:p-5">
-        <h2 class="text-[15px] font-semibold text-gray-800">关于</h2>
-        <dl class="mt-2 grid gap-x-6 gap-y-1 text-[12px] text-gray-600 sm:grid-cols-2">
+      <SectionCard :icon="Info" title="关于" compact>
+        <dl class="grid gap-x-6 gap-y-1 text-[12px] text-gray-600 sm:grid-cols-2">
           <div class="flex gap-2"><dt class="text-gray-400">版本</dt><dd>{{ version || '…' }}</dd></div>
           <div class="flex gap-2"><dt class="text-gray-400">用途</dt><dd>自用；没有商用的取舍</dd></div>
         </dl>
@@ -234,7 +237,7 @@
           >免责声明与合规</button>
           <span v-if="exportNote" class="text-[12px] text-gray-500">{{ exportNote }}</span>
         </div>
-      </section>
+      </SectionCard>
 
     </div>
   </PageShell>
@@ -243,6 +246,8 @@
 <script setup>
 import { onMounted, ref } from 'vue'
 import PageShell from './PageShell.vue'
+import SectionCard from './SectionCard.vue'
+import { AudioLines, Download, FileAudio, FolderCog, Info } from 'lucide-vue-next'
 import { ConfigAPI, DownloadAPI, LogsAPI, AppAPI } from '../api/client'
 import { QUALITY_OVERRIDE_OPTIONS } from '../services/qualityOverride'
 import { fail, apiError } from '../services/userMsg'

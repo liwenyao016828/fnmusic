@@ -69,23 +69,22 @@
            这一行只留状态与入口 —— 56 个源的开关在子页里，首页放不下。
            那句「覆盖 56 个音源……」的介绍收进整行的 title（2026-10-18 用户口径：
            「导航里的每个页面……去掉简介」），不再常驻一行小字。 -->
-      <div
-        class="rounded-xl border border-gray-200 bg-white px-4 py-3 flex items-center justify-between gap-3"
-        title="覆盖 56 个音源（酷狗 / 酷我 / 咪咕 / B站 / Apple Music / Spotify…），与上面的 LX 脚本是两套独立的东西"
+      <SectionCard
+        :icon="Puzzle"
+        title="musicdl 外挂音源"
+        title-title="覆盖 56 个音源（酷狗 / 酷我 / 咪咕 / B站 / Apple Music / Spotify…），与上面的 LX 脚本是两套独立的东西"
+        compact
       >
-        <div class="min-w-0">
-          <div class="flex items-center gap-2">
-            <h3 class="text-sm font-semibold text-gray-800">musicdl 外挂音源</h3>
-            <span :class="['text-[10px] px-1.5 py-0.5 rounded-full border font-mono', musicdlBadge.cls]">{{ musicdlBadge.text }}</span>
-            <span v-if="musicdlEnabled" class="text-[10px] font-mono text-gray-400">已启用 {{ musicdlSources.length }} 个源</span>
-          </div>
-        </div>
-        <button
-          @click="musicdlPageOpen = true"
-          class="shrink-0 px-3 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-xs text-gray-600 flex items-center gap-1.5">
-          <Settings2 class="w-3.5 h-3.5" />管理音源
-        </button>
-      </div>
+        <template #actions>
+          <span :class="['text-[10px] px-1.5 py-0.5 rounded-full border font-mono shrink-0', musicdlBadge.cls]">{{ musicdlBadge.text }}</span>
+          <span v-if="musicdlEnabled" class="shrink-0 font-mono text-[10px] text-gray-400">已启用 {{ musicdlSources.length }} 个源</span>
+          <button
+            @click="musicdlPageOpen = true"
+            class="shrink-0 px-3 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-xs text-gray-600 flex items-center gap-1.5">
+            <Settings2 class="w-3.5 h-3.5" />管理音源
+          </button>
+        </template>
+      </SectionCard>
 
       <!-- 导入结果条：关掉弹窗也能看到刚才那批音源测成什么样 -->
       <div v-if="importNotice" class="rounded-xl border border-emerald-200 bg-emerald-50 px-3.5 py-2.5 text-[11px] text-emerald-800 flex items-start justify-between gap-2">
@@ -105,17 +104,7 @@
           · LX 协议  —— 浏览器沙箱执行用户脚本，负责 取直链
         数据来自 GET /api/protocols（后端 pkg/protocol），此处只做展示。
       -->
-      <div v-if="protocols.length" class="rounded-2xl border border-gray-200 bg-white p-4">
-        <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <div class="flex items-center gap-2">
-            <Layers class="w-4 h-4 text-emerald-500" />
-            <span class="text-xs font-semibold text-gray-700">音源协议</span>
-            <span class="rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 font-mono text-[10px] text-gray-500">
-              {{ protocols.length }} 种
-            </span>
-          </div>
-          <span v-if="protocolSummary" class="text-[11px] leading-relaxed text-gray-400">{{ protocolSummary }}</span>
-        </div>
+      <SectionCard v-if="protocols.length" :icon="Layers" title="音源协议" :sub="protocolSummary" compact>
 
         <!--
           音源协议卡片：**手机也一行两个**（用户 2026-09-30）。
@@ -214,17 +203,13 @@
             </template>
           </div>
         </div>
-      </div>
+      </SectionCard>
 
       <!-- 空状态提示 (纯播放器，0 内置音源) -->
       <!-- ══ 按服务地址接入的音源（服务型：后端直连，不执行第三方 JS）══
            注意：这块必须放在下面 sources 的 v-if/v-else 之前，
            否则会把那一对 v-if/v-else 拆开、让 v-else 挂到这里来。 -->
-      <div v-if="apiSources.length" class="rounded-2xl border border-blue-200/70 bg-blue-50/40 p-4">
-        <div class="mb-3 flex items-center gap-2">
-          <Server class="w-4 h-4 text-blue-600" />
-          <span class="text-[13px] font-semibold text-gray-700">服务型音源</span>
-        </div>
+      <SectionCard v-if="apiSources.length" :icon="Server" title="服务型音源" sub="后端直连，不需要浏览器执行脚本" compact>
         <div class="mb-3 grid grid-cols-2 gap-2">
           <ActionCard
             title="再接入一个"
@@ -262,16 +247,16 @@
             </button>
           </div>
         </div>
-      </div>
+      </SectionCard>
 
-      <div v-if="sources.length === 0" class="flex flex-col items-center justify-center py-16 text-center bg-white rounded-2xl border border-gray-100 p-6 shadow-2xs">
-        <div class="w-14 h-14 rounded-2xl bg-gray-100 flex items-center justify-center text-2xl mb-3 text-gray-400">
+      <div v-if="sources.length === 0" class="flex flex-col items-center justify-center rounded-[18px] border border-dashed border-gray-200 bg-white py-14 text-center">
+        <div class="mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-gray-100 text-xl text-gray-400">
           📦
         </div>
-        <h3 class="text-base font-semibold text-gray-700 mb-1">暂无已导入音源</h3>
-        <p class="text-xs text-gray-400 max-w-sm mb-5 leading-relaxed px-4">
-          官方协议已可用：搜索、榜单、歌单、歌词都不需要音源。若还要<b>播放</b>，请点击下方按钮导入一份
-          LX 音源脚本（支持网络 URL 或本地 .js 文件）用于解析直链。
+        <h3 class="mb-1 text-[13px] font-semibold text-gray-700">还没有导入第三方音源</h3>
+        <p class="mb-5 max-w-sm px-4 text-[11px] leading-relaxed text-gray-400">
+          官方协议已可用：搜索、榜单、歌单、歌词都不需要音源。若还要<b>播放</b>，导入一份
+          LX 音源脚本（网络 URL 或本地 .js）用于解析直链。
         </p>
         <button @click="openImportModal"
           class="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-semibold flex items-center gap-1.5 shadow-sm transition-all">
@@ -291,7 +276,7 @@
       <div v-else class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
         <div v-for="s in sources" :key="s.id"
           :class="[
-            'bg-white rounded-xl border p-4 flex items-center gap-3 transition-all cursor-pointer hover:border-emerald-300 hover:shadow-sm',
+            'bg-white rounded-[18px] border p-4 flex items-center gap-3 transition-all cursor-pointer hover:border-emerald-300 hover:shadow-sm',
             isActive(s.id) ? 'border-emerald-400 shadow-sm ring-1 ring-emerald-400/20' : 'border-gray-200',
             !healthOf(s.id).available ? 'opacity-70 border-rose-200' : ''
           ]"
@@ -711,7 +696,7 @@ import { sourceHealth } from '../services/sourceHealth'
 import {
   Plus, Trash2, X, PlayCircle, ChevronDown, Folder, FileCode,
   Gauge, ShieldOff, Loader2, Layers, Server, RotateCw,
-  Headphones, Music2, ArrowLeft, Settings2
+  Headphones, Music2, ArrowLeft, Settings2, Puzzle
 } from 'lucide-vue-next'
 import { loadPref, savePref } from '../services/prefs'
 import { volumeOf } from '../services/nasView'
@@ -726,6 +711,7 @@ import {
 import { isNotReadyError, explainSourceError } from '../engine/source-error'
 import { DEAD_STREAK, SWEEP_BUDGET, isDeadByHistory as isDeadByHistoryOf, sweepPlan } from '../services/probePlan'
 import PageShell from './PageShell.vue'
+import SectionCard from './SectionCard.vue'
 import InlineNotice from './InlineNotice.vue'
 import ActionCard from './ActionCard.vue'
 import MusicDLSourcePanel from './MusicDLSourcePanel.vue'
