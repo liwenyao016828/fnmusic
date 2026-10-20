@@ -7,7 +7,7 @@
     <template v-if="!embedded" #title-extra>
       <span
         v-if="downloadManager.activeCount.value > 0"
-        class="rounded-full bg-emerald-500 px-2 py-0.5 text-[10px] font-bold text-white animate-pulse"
+        class="rounded-full bg-[var(--ys-accent-soft)] px-2 py-0.5 text-[10px] font-medium text-[var(--ys-accent)]"
       >
         {{ downloadManager.activeCount.value }} 首进行中
       </span>
@@ -16,9 +16,18 @@
     <!-- 指标行 -->
     <template v-if="!embedded" #metrics>
       <div class="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <div v-for="m in metrics" :key="m.label" class="rounded-xl border border-gray-200 bg-white px-[17px] py-[15px]">
-          <b class="block text-[24px] font-bold" :class="m.color">{{ m.value }}</b>
-          <span class="text-[12px] text-gray-400">{{ m.label }}</span>
+        <div
+          v-for="m in metrics"
+          :key="m.label"
+          class="rounded-[var(--ys-radius-card)] border border-[var(--ys-border)] bg-white px-[18px] py-4 shadow-[0_1px_2px_rgba(0,0,0,0.03)]"
+        >
+          <!-- 指标卡：标签在上（带一颗状态点表示倾向），数字在下且一律墨色 ——
+               彩色大数字一排下来像仪表盘，Apple 的做法是「数字说事实，颜色只提示」。 -->
+          <span class="flex items-center gap-1.5 text-[11px] font-medium text-[var(--ys-text-muted)]">
+            <span class="h-1.5 w-1.5 shrink-0 rounded-full" :class="m.dot"></span>
+            {{ m.label }}
+          </span>
+          <b class="mt-1.5 block text-[26px] font-semibold tracking-[-0.02em] tabular-nums text-[var(--ys-text)]">{{ m.value }}</b>
         </div>
       </div>
     </template>
@@ -57,9 +66,9 @@ const props = defineProps({
 // 由 App.vue 顶栏渲染。所以这里不再传任何参数。
 
 const metrics = computed(() => [
-  { label: '全部任务', value: downloadManager.totalCount.value, color: 'text-gray-800' },
-  { label: '进行中', value: downloadManager.activeCount.value, color: 'text-emerald-600' },
-  { label: '已暂停', value: downloadManager.pausedCount.value, color: 'text-amber-600' },
-  { label: '失败', value: downloadManager.failedCount.value, color: 'text-rose-600' },
+  { label: '全部任务', value: downloadManager.totalCount.value, dot: 'bg-[var(--ys-text-faint)]' },
+  { label: '进行中', value: downloadManager.activeCount.value, dot: 'bg-emerald-500' },
+  { label: '已暂停', value: downloadManager.pausedCount.value, dot: 'bg-amber-500' },
+  { label: '失败', value: downloadManager.failedCount.value, dot: 'bg-rose-500' },
 ])
 </script>

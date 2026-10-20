@@ -1,30 +1,43 @@
 <!doctype html>
-<html lang="zh-CN" class="dark" style="background-color: #07080d;">
+<html lang="zh-CN" style="background-color: #F5F5F7; color-scheme: light;">
   <head>
     <meta charset="UTF-8" />
     <meta name="referrer" content="no-referrer" />
     <link rel="icon" type="image/png" href="/favicon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <!-- 顶栏玻璃色；Safari 地址栏与 PWA 标题栏跟随画布 -->
+    <meta name="theme-color" content="#F5F5F7" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <title>曲率 - AI Music Hub</title>
+    <!--
+      首屏底色与字体必须在 CSS 生效前就位，否则会闪一下暗底/系统默认字体。
+
+      2026-10-19 视觉重构：应用是**亮色**界面（App.vue 画布 #f5f7f9），
+      而这里原来是 #07080d 暗底 —— 首屏会先黑一下再变白。统一成画布色 #F5F5F7。
+      字体与 tailwind.config.js 的 fontFamily.sans 保持一致（SF Pro 字栈）。
+    -->
     <style>
       html, body {
         margin: 0;
         padding: 0;
         width: 100%;
         height: 100%;
-        background-color: #07080d !important;
-        color: #f1f5f9;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        background-color: #F5F5F7;
+        color: #1D1D1F;
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
+          "Helvetica Neue", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
         overflow: hidden;
       }
       #app {
         width: 100%;
         height: 100%;
-        background-color: #07080d;
+        background-color: #F5F5F7;
       }
     </style>
   </head>
-  <body class="bg-dark-950 text-slate-100 select-none overflow-hidden" style="background-color: #07080d;">
+  <body class="bg-gray-100 text-gray-900 select-none overflow-hidden">
     <div id="app"></div>
     <script type="module" src="/src/main.js"></script>
   </body>

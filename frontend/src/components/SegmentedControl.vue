@@ -12,7 +12,7 @@
     这样「切页」和「切段」在视觉上是一家的，用户不需要学两套。
   -->
   <div
-    class="inline-flex max-w-full items-center gap-1 overflow-x-auto rounded-[var(--ys-radius-control)] bg-[var(--ys-surface-sunken)] p-1 no-scrollbar"
+    class="inline-flex max-w-full items-center gap-0.5 overflow-x-auto rounded-[var(--ys-radius-control)] bg-[var(--ys-surface-sunken)] p-1 no-scrollbar"
     role="tablist"
   >
     <button
@@ -20,15 +20,21 @@
       :key="seg.id"
       role="tab"
       :aria-selected="seg.id === modelValue"
-      class="flex shrink-0 items-center gap-1.5 rounded-[var(--ys-radius-control)] px-3 py-1.5 text-[12px] font-bold transition-all"
+      class="ys-press flex shrink-0 items-center gap-1.5 rounded-[8px] px-3 py-1.5 text-[12px] font-medium"
       :class="
         seg.id === modelValue
-          ? 'bg-[var(--ys-surface)] text-[var(--ys-accent)] shadow-sm'
+          ? 'bg-[var(--ys-surface)] text-[var(--ys-text)] shadow-[0_1px_2px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.04]'
           : 'text-[var(--ys-text-muted)] hover:text-[var(--ys-text)]'
       "
       @click="emit('update:modelValue', seg.id)"
     >
-      <component :is="seg.icon" v-if="seg.icon" class="h-3.5 w-3.5 shrink-0" />
+      <component
+        :is="seg.icon"
+        v-if="seg.icon"
+        class="h-3.5 w-3.5 shrink-0"
+        :class="seg.id === modelValue ? 'text-[var(--ys-accent)]' : ''"
+        :stroke-width="1.8"
+      />
       <span class="whitespace-nowrap">{{ seg.name }}</span>
     </button>
   </div>

@@ -17,7 +17,7 @@
         各页底部留白全部叠加它避让，不再各写各的魔数。
       · 原「导航密度三档」机制（fitNavDensity）删除：侧栏放得下全名，不再需要实测降档。
   -->
-  <div class="app-viewport flex w-full flex-col bg-[#f5f7f9] text-gray-800 overflow-hidden select-none font-sans">
+  <div class="app-viewport flex w-full flex-col overflow-hidden bg-[var(--ys-canvas)] font-sans text-[var(--ys-text)] select-none">
 
     <!-- ── Immersive Player (shown when playing) ── -->
     <ImmersivePlayer
@@ -49,8 +49,8 @@
          （PageShell / SearchView 的自带标题都已撤掉）。
          品牌按钮仍是「开放接口」入口（点图标滑出抽屉）。
          ⚠️ `pt-safe` 挂 header、真实内边距挂内层 div —— 两者挂同一元素会互相覆盖。 -->
-    <header class="pt-safe z-20 shrink-0 border-b border-gray-100 bg-white">
-      <div class="flex h-12 items-center gap-2 px-3 sm:h-14 sm:px-4">
+    <header class="pt-safe z-20 shrink-0 border-b border-[var(--ys-border)] bg-[var(--ys-surface-glass)] backdrop-blur-xl backdrop-saturate-150">
+      <div class="flex h-[52px] items-center gap-2 px-3 sm:h-[56px] sm:px-5">
         <button
           type="button"
           class="brand-halo group flex shrink-0 cursor-pointer items-center gap-2.5 rounded-[13px]"
@@ -59,7 +59,7 @@
           aria-label="开放接口"
           @click="showApiDrawer = true"
         >
-          <span class="relative grid h-9 w-9 shrink-0 place-items-center rounded-[11px] bg-emerald-500 text-white transition-colors group-hover:bg-emerald-600">
+          <span class="relative grid h-9 w-9 shrink-0 place-items-center rounded-[11px] bg-[linear-gradient(180deg,#14A87E_0%,#0B8A66_100%)] text-white shadow-[0_1px_2px_rgba(0,0,0,0.12),inset_0_1px_0_rgba(255,255,255,0.22)] transition-[filter,transform] duration-200 group-hover:brightness-105 group-active:scale-[0.97]">
             <span class="brand-core-glow" aria-hidden="true"></span>
             <Disc class="brand-disc h-[18px] w-[18px]" />
             <!-- 中间圆点（静止，盖住 Disc 的内圈）+ 它外层那个**呼吸的圆圈** -->
@@ -67,38 +67,40 @@
             <span class="brand-core-ring" aria-hidden="true"></span>
           </span>
           <span class="hidden text-left leading-tight sm:block">
-            <b class="block text-[15px] font-extrabold tracking-[-0.5px] text-gray-800">曲率</b>
-            <small class="block text-[10px] font-medium text-gray-400">AI Music Hub</small>
+            <b class="block text-[15px] font-semibold tracking-[-0.01em] text-[var(--ys-text)]">曲率</b>
+            <small class="block text-[10px] font-medium tracking-[0.02em] text-[var(--ys-text-faint)]">AI Music Hub</small>
           </span>
         </button>
 
-        <span class="hidden h-5 w-px shrink-0 bg-gray-200 sm:block" aria-hidden="true"></span>
+        <span class="hidden h-5 w-px shrink-0 bg-[var(--ys-border)] sm:block" aria-hidden="true"></span>
 
         <!-- 当前页面名（导航注册表 navViews.js 是单一数据源，不能在这儿另写一份表） -->
         <h1
-          class="min-w-0 truncate text-[15px] font-bold tracking-tight text-gray-800 sm:text-[16px]"
+          class="min-w-0 truncate text-[15px] font-semibold tracking-[-0.01em] text-[var(--ys-text)] sm:text-[16px]"
           :title="currentViewDesc"
         >
           {{ currentViewName }}
         </h1>
 
         <div class="ml-auto flex shrink-0 items-center gap-1.5">
-          <!-- 当前音源状态胶囊：窄屏只放前两字（长名会把胶囊顶出屏幕，用户 2026-09-28 反馈） -->
+          <!-- 当前音源状态胶囊：中性底 + 一颗状态点。
+               原来是绿底绿字的药丸 —— 满屏绿色是因为这类「装饰性强调」太多，
+               强调色应该留给「正在发生的事」，而不是每个常驻控件。 -->
           <button
             @click="navigateTo('sources')"
-            class="flex min-w-0 max-w-[92px] items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1.5 text-emerald-700 transition-all hover:bg-emerald-100 sm:max-w-none sm:px-3"
+            class="flex min-w-0 max-w-[92px] items-center gap-1.5 rounded-full border border-[var(--ys-border)] bg-white/70 px-2 py-1.5 text-[var(--ys-text-muted)] transition-colors hover:bg-white hover:text-[var(--ys-text)] sm:max-w-none sm:px-3"
             :title="`当前音源：${activeSourceMeta?.name || '未设置'} —— 点开管理音源`"
             :aria-label="`当前音源：${activeSourceMeta?.name || '未设置'}，打开音源管理`"
           >
             <span class="h-1.5 w-1.5 shrink-0 rounded-full" :class="activeSourceMeta ? 'bg-emerald-500' : 'bg-amber-400'"></span>
-            <span class="truncate text-[11px] sm:hidden">{{ shortSourceName }}</span>
-            <span class="hidden truncate text-[11px] sm:inline">{{ activeSourceMeta?.name || '音源' }}</span>
+            <span class="truncate text-[11px] font-medium sm:hidden">{{ shortSourceName }}</span>
+            <span class="hidden truncate text-[11px] font-medium sm:inline">{{ activeSourceMeta?.name || '音源' }}</span>
           </button>
           <!-- 播放器入口在桌面侧栏底部，手机没有侧栏，所以只有手机在这儿放一个图标入口 -->
           <button
             v-if="currentSong"
             @click="showImmersive = true"
-            class="shrink-0 rounded-lg border border-emerald-200 bg-emerald-50 p-2 text-emerald-600 transition-all hover:bg-emerald-100 sm:hidden"
+            class="shrink-0 rounded-[10px] border border-[var(--ys-border)] bg-white/70 p-2 text-[var(--ys-text-muted)] transition-colors hover:bg-white hover:text-[var(--ys-text)] sm:hidden"
             title="打开播放器"
             aria-label="打开播放器"
           >
@@ -114,17 +116,19 @@
     <div class="flex min-h-0 flex-1">
 
     <!-- ════════════ 桌面左侧栏（sm+ 才出现；手机用底部标签栏） ════════════ -->
-    <aside class="z-20 hidden w-[204px] shrink-0 flex-col border-r border-gray-100 bg-white sm:flex">
+    <aside class="z-20 hidden w-[216px] shrink-0 flex-col border-r border-[var(--ys-border)] bg-[#FBFBFD] sm:flex">
       <!--
         品牌 + 开放接口入口都搬到**顶部一条栏**了（2026-10-18 用户口径：「把页面名移到
         logo 和音源那行去」）——侧栏不再有品牌行，从导航直接开始，省下 68px。
       -->
 
       <!-- 分组导航：听（发现/曲库）· 管（整理/订阅/下载）· 配置（音源/账号/系统）。
-           分组只影响呈现（navViews.js 的 group 字段），id 与深链不变。 -->
-      <nav class="no-scrollbar min-h-0 flex-1 space-y-5 overflow-y-auto px-2.5 py-4" aria-label="主导航">
+           分组只影响呈现（navViews.js 的 group 字段），id 与深链不变。
+           ⚠️ 分组标题不再用「10px 加粗 + 0.14em 字距」的英文小标题写法：
+           中文这么排会碎成一条虚线，改成 11px 常规灰即可。 -->
+      <nav class="no-scrollbar min-h-0 flex-1 space-y-5 overflow-y-auto px-2 py-4" aria-label="主导航">
         <div v-for="g in navGroups" :key="g.id">
-          <p class="mb-1.5 px-2.5 text-[10px] font-bold tracking-[0.14em] text-gray-300">{{ g.name }}</p>
+          <p class="mb-1 px-2.5 text-[11px] font-medium text-[var(--ys-text-faint)]">{{ g.name }}</p>
           <div class="space-y-0.5">
             <button
               v-for="item in g.items"
@@ -134,23 +138,28 @@
               :aria-label="item.name"
               :aria-current="currentView === item.id ? 'page' : undefined"
               :class="[
-                'flex w-full items-center gap-2.5 rounded-[10px] px-2.5 py-2 text-[13px] font-bold transition-colors',
+                'ys-press flex w-full items-center gap-2.5 rounded-[9px] px-2.5 py-[7px] text-[13px] font-medium',
                 currentView === item.id
-                  ? 'bg-emerald-50 text-emerald-600'
-                  : 'text-gray-500 hover:bg-gray-50 hover:text-gray-700'
+                  ? 'bg-white text-[var(--ys-text)] shadow-[0_1px_2px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.04]'
+                  : 'text-[var(--ys-text-muted)] hover:bg-black/[0.04] hover:text-[var(--ys-text)]'
               ]"
             >
-              <component :is="item.icon" class="h-4 w-4 shrink-0" />
+              <component
+                :is="item.icon"
+                class="h-4 w-4 shrink-0"
+                :class="currentView === item.id ? 'text-[var(--ys-accent)]' : 'text-[var(--ys-text-faint)]'"
+                :stroke-width="1.8"
+              />
               <span class="truncate">{{ item.name }}</span>
               <!-- 下载进行中的数量角标（跟着任务走，队列空了自动消失） -->
               <span
                 v-if="item.id === 'download' && downloadManager.activeCount.value > 0"
-                class="ml-auto shrink-0 animate-pulse rounded-full bg-emerald-500 px-1.5 text-[10px] font-bold text-white"
+                class="ml-auto grid shrink-0 place-items-center rounded-full bg-emerald-500 px-1.5 py-px text-[10px] font-semibold text-white"
               >{{ downloadManager.activeCount.value }}</span>
               <!-- 订阅总数角标（静态计数，灰色不抢眼） -->
               <span
                 v-else-if="item.id === 'push' && pushEngine.pushTotalCount.value > 0"
-                class="ml-auto shrink-0 rounded-full bg-gray-100 px-1.5 text-[10px] font-bold text-gray-400"
+                class="ml-auto shrink-0 rounded-full bg-black/[0.05] px-1.5 py-px text-[10px] font-medium text-[var(--ys-text-muted)]"
               >{{ pushEngine.pushTotalCount.value }}</span>
             </button>
           </div>
@@ -159,31 +168,31 @@
 
       <!-- 任务状态：只列「需要你处理」的项；都为 0 时给一句明确结论，而不是摆一排 0。
            跳转走 resolveRoute 的别名表（tab: 'complete'→整理页、'download'→下载队列…）。 -->
-      <div class="shrink-0 border-t border-gray-100 px-2.5 py-3" v-if="statusItems.length">
-        <p class="mb-1.5 px-2.5 text-[10px] font-bold tracking-[0.14em] text-gray-300">任务状态</p>
+      <div class="shrink-0 border-t border-[var(--ys-border)] px-2 py-3" v-if="statusItems.length">
+        <p class="mb-1 px-2.5 text-[11px] font-medium text-[var(--ys-text-faint)]">任务状态</p>
         <div class="space-y-0.5">
           <button
             v-for="s in statusItems" :key="s.id"
             @click="s.go()"
-            class="flex w-full items-center gap-2 rounded-[10px] px-2.5 py-1.5 text-left text-[12px] text-gray-600 transition-colors hover:bg-gray-50"
+            class="ys-press flex w-full items-center gap-2 rounded-[9px] px-2.5 py-1.5 text-left text-[12px] text-[var(--ys-text-muted)] hover:bg-black/[0.04] hover:text-[var(--ys-text)]"
             :title="s.label"
           >
-            <component :is="s.icon" class="h-3.5 w-3.5 shrink-0" :class="s.iconClass" />
+            <component :is="s.icon" class="h-3.5 w-3.5 shrink-0" :class="s.iconClass" :stroke-width="1.8" />
             <span class="min-w-0 flex-1 truncate">{{ s.label }}</span>
-            <span class="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-bold" :class="s.badgeClass">{{ s.count }}</span>
+            <span class="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium" :class="s.badgeClass">{{ s.count }}</span>
           </button>
         </div>
       </div>
 
       <!-- 侧栏底部：只剩播放器入口（音源胶囊已搬到顶部一条栏，同一个按钮不出现两次） -->
-      <div class="shrink-0 space-y-2 border-t border-gray-100 p-3">
+      <div class="shrink-0 space-y-2 border-t border-[var(--ys-border)] p-3">
         <button
           v-if="currentSong"
           @click="showImmersive = true"
-          class="flex w-full items-center justify-center gap-1.5 rounded-[10px] border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-[11px] font-bold text-emerald-600 transition-all hover:bg-emerald-100"
+          class="ys-press flex w-full items-center justify-center gap-1.5 rounded-[10px] border border-[var(--ys-border)] bg-white px-3 py-2 text-[12px] font-medium text-[var(--ys-text)] shadow-sm hover:bg-gray-50"
           title="打开播放器"
         >
-          <Disc class="h-3.5 w-3.5" />
+          <Disc class="h-3.5 w-3.5 text-[var(--ys-accent)]" />
           <span class="truncate">打开播放器</span>
         </button>
       </div>
@@ -210,7 +219,7 @@
         -->
         <template #view-search>
           <div class="flex h-full min-h-0 flex-col">
-            <div class="shrink-0 border-b border-[var(--ys-border)] bg-white/95 px-3 py-2 backdrop-blur">
+            <div class="shrink-0 border-b border-[var(--ys-border)] bg-[var(--ys-surface-glass)] px-3 py-2 backdrop-blur-xl">
               <SegmentedControl
                 :segments="decoratedSegments('search')"
                 :model-value="segmentOf('search')"
@@ -251,7 +260,7 @@
         <!-- 下载（队列 / 歌单 / 自动记录）：分段器由壳提供，DownloadHub 读 navBus 的当前分段 -->
         <template #view-download>
           <div class="flex h-full min-h-0 flex-col">
-            <div class="shrink-0 border-b border-[var(--ys-border)] bg-white/95 px-3 py-2 backdrop-blur">
+            <div class="shrink-0 border-b border-[var(--ys-border)] bg-[var(--ys-surface-glass)] px-3 py-2 backdrop-blur-xl">
               <SegmentedControl
                 :segments="decoratedSegments('download')"
                 :model-value="segmentOf('download')"
@@ -275,7 +284,7 @@
         -->
         <template #view-system>
           <div class="flex h-full min-h-0 flex-col">
-            <div class="shrink-0 border-b border-[var(--ys-border)] bg-white/95 px-3 py-2 backdrop-blur">
+            <div class="shrink-0 border-b border-[var(--ys-border)] bg-[var(--ys-surface-glass)] px-3 py-2 backdrop-blur-xl">
               <SegmentedControl
                 :segments="decoratedSegments('system')"
                 :model-value="segmentOf('system')"
@@ -315,8 +324,8 @@
       >
         <!-- 左椭圆：导航（灵动岛打开时它变成搜索输入框） -->
         <div
-          class="relative min-w-0 flex-1 overflow-hidden rounded-full border bg-white/95 shadow-lg shadow-black/5 backdrop-blur transition-[border-radius] duration-300 ease-out motion-reduce:duration-0"
-          :class="islandOpen ? 'rounded-r-none border-r-0 border-gray-200' : 'border-gray-200/80'"
+          class="relative min-w-0 flex-1 overflow-hidden rounded-full border bg-white/90 shadow-[0_8px_30px_rgba(0,0,0,0.10)] backdrop-blur-xl transition-[border-radius] duration-300 ease-out motion-reduce:duration-0"
+          :class="islandOpen ? 'rounded-r-none border-r-0 border-[var(--ys-border)]' : 'border-[var(--ys-border)]'"
         >
           <!-- 闭：导航图标排 -->
           <div
@@ -331,8 +340,8 @@
               :aria-label="item.name"
               :aria-current="currentView === item.id ? 'page' : undefined"
               :class="[
-                'relative flex flex-1 flex-col items-center justify-center gap-0.5 text-[10px] font-bold transition-colors',
-                currentView === item.id ? 'text-emerald-600' : 'text-gray-400'
+                'relative flex flex-1 flex-col items-center justify-center gap-0.5 text-[10px] font-medium transition-colors',
+                currentView === item.id ? 'text-[var(--ys-accent)]' : 'text-[var(--ys-text-faint)]'
               ]"
             >
               <component :is="item.icon" class="h-[18px] w-[18px]" />
@@ -346,8 +355,8 @@
               aria-label="更多（下载 / 音源 / 账号 / 系统）"
               :aria-expanded="showMoreDrawer"
               :class="[
-                'relative flex flex-1 flex-col items-center justify-center gap-0.5 text-[10px] font-bold transition-colors',
-                showMoreDrawer ? 'text-emerald-600' : 'text-gray-400'
+                'relative flex flex-1 flex-col items-center justify-center gap-0.5 text-[10px] font-medium transition-colors',
+                showMoreDrawer ? 'text-[var(--ys-accent)]' : 'text-[var(--ys-text-faint)]'
               ]"
             >
               <MoreHorizontal class="h-[18px] w-[18px]" />
@@ -371,7 +380,7 @@
             class="flex h-full items-center gap-2 px-3.5"
             @submit.prevent="submitIslandSearch"
           >
-            <Search class="h-4 w-4 shrink-0 text-emerald-500" />
+            <Search class="h-4 w-4 shrink-0 text-[var(--ys-accent)]" />
             <input
               ref="islandInput"
               v-model="islandQuery"
@@ -379,13 +388,13 @@
               enterkeyhint="search"
               placeholder="搜索歌曲、歌手、专辑…"
               aria-label="搜索歌曲、歌手、专辑"
-              class="min-w-0 flex-1 bg-transparent text-[13px] text-gray-700 outline-none placeholder:text-gray-400"
+              class="min-w-0 flex-1 bg-transparent text-[13px] text-[var(--ys-text)] outline-none placeholder:text-[var(--ys-text-faint)]"
               @keydown.esc="closeIsland"
             />
             <button
               v-if="islandQuery"
               type="button"
-              class="shrink-0 rounded-full p-1 text-gray-300 transition-colors hover:bg-gray-100 hover:text-gray-500"
+              class="shrink-0 rounded-full p-1 text-[var(--ys-text-faint)] transition-colors hover:bg-black/[0.05] hover:text-[var(--ys-text-muted)]"
               title="清空"
               aria-label="清空"
               @click="islandQuery = ''"
@@ -402,11 +411,11 @@
           :aria-label="islandOpen ? '搜索' : '搜索歌曲、歌手、专辑'"
           :aria-expanded="islandOpen"
           @click="islandOpen ? submitIslandSearch() : openIsland()"
-          class="relative grid w-14 shrink-0 place-items-center rounded-full border bg-white/95 shadow-lg shadow-black/5 backdrop-blur transition-[border-radius,color] duration-300 ease-out motion-reduce:duration-0"
+          class="relative grid w-14 shrink-0 place-items-center rounded-full border bg-white/90 shadow-[0_8px_30px_rgba(0,0,0,0.10)] backdrop-blur-xl transition-[border-radius,color] duration-300 ease-out motion-reduce:duration-0"
           :class="[
             islandOpen
-              ? 'rounded-l-none border-l-0 border-emerald-500 bg-emerald-500 text-white'
-              : 'border-gray-200/80 text-gray-400 active:text-emerald-600',
+              ? 'rounded-l-none border-l-0 border-[var(--ys-accent)] bg-[var(--ys-accent)] text-white'
+              : 'border-[var(--ys-border)] text-[var(--ys-text-faint)] active:text-[var(--ys-accent)]',
           ]"
         >
           <span class="relative grid place-items-center">
@@ -457,14 +466,14 @@
       >
         <aside
           v-if="showMoreDrawer"
-          class="fixed inset-y-0 right-0 z-50 flex w-[280px] max-w-[85vw] flex-col bg-white shadow-2xl sm:hidden"
+          class="fixed inset-y-0 right-0 z-50 flex w-[280px] max-w-[85vw] flex-col bg-white/85 shadow-[0_28px_72px_rgba(0,0,0,0.18)] backdrop-blur-2xl sm:hidden"
           aria-label="更多页面"
         >
-          <div class="flex h-14 shrink-0 items-center justify-between border-b border-gray-100 px-4 pt-[var(--safe-top)]">
-            <b class="text-[14px] font-bold text-gray-700">更多</b>
+          <div class="flex h-14 shrink-0 items-center justify-between border-b border-[var(--ys-border)] px-4 pt-[var(--safe-top)]">
+            <b class="text-[15px] font-semibold tracking-[-0.01em] text-[var(--ys-text)]">更多</b>
             <button
               @click="showMoreDrawer = false"
-              class="grid h-8 w-8 place-items-center rounded-lg text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600"
+              class="grid h-8 w-8 place-items-center rounded-full text-[var(--ys-text-muted)] transition-colors hover:bg-black/[0.05] hover:text-[var(--ys-text)]"
               title="关闭"
               aria-label="关闭"
             >
@@ -477,8 +486,10 @@
               :key="item.id"
               @click="goView(item.id)"
               :class="[
-                'flex w-full items-center gap-3 rounded-[10px] px-3 py-3 text-[13px] font-bold transition-colors',
-                currentView === item.id ? 'bg-emerald-50 text-emerald-600' : 'text-gray-600 hover:bg-gray-50'
+                'ys-press flex w-full items-center gap-3 rounded-[10px] px-3 py-3 text-[13px] font-medium',
+                currentView === item.id
+                  ? 'bg-white text-[var(--ys-text)] shadow-[0_1px_2px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.04]'
+                  : 'text-[var(--ys-text-muted)] hover:bg-black/[0.05] hover:text-[var(--ys-text)]'
               ]"
             >
               <component :is="item.icon" class="h-[18px] w-[18px] shrink-0" />
@@ -486,29 +497,29 @@
               <!-- 下载住进抽屉后，进行中的数量在这里也看得到（与标签栏入口同一个数） -->
               <span
                 v-if="item.id === 'download' && downloadManager.activeCount.value > 0"
-                class="shrink-0 animate-pulse rounded-full bg-emerald-500 px-1.5 text-[10px] font-bold text-white"
+                class="shrink-0 rounded-full bg-emerald-500 px-1.5 py-px text-[10px] font-semibold text-white"
               >{{ downloadManager.activeCount.value }}</span>
             </button>
 
             <!-- 任务状态（手机：抽屉里看；桌面：侧栏底部） -->
             <template v-if="statusItems.length">
-              <p class="mt-3 mb-1 px-3 text-[10px] font-bold tracking-[0.14em] text-gray-300">任务状态</p>
+              <p class="mb-1 mt-4 px-3 text-[11px] font-medium text-[var(--ys-text-faint)]">任务状态</p>
               <button
                 v-for="s in statusItems" :key="s.id"
                 @click="goView(s.tab); showMoreDrawer = false"
-                class="flex w-full items-center gap-2 rounded-[10px] px-3 py-2 text-left text-[12px] text-gray-600 transition-colors hover:bg-gray-50"
+                class="ys-press flex w-full items-center gap-2 rounded-[10px] px-3 py-2 text-left text-[12px] text-[var(--ys-text-muted)] hover:bg-black/[0.05] hover:text-[var(--ys-text)]"
                 :title="s.label"
               >
                 <component :is="s.icon" class="h-3.5 w-3.5 shrink-0" :class="s.iconClass" />
                 <span class="min-w-0 flex-1 truncate">{{ s.label }}</span>
-                <span class="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-bold" :class="s.badgeClass">{{ s.count }}</span>
+                <span class="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium" :class="s.badgeClass">{{ s.count }}</span>
               </button>
             </template>
           </nav>
-          <div class="shrink-0 border-t border-gray-100 p-3 pb-[calc(0.75rem+var(--safe-bottom))]">
+          <div class="shrink-0 border-t border-[var(--ys-border)] p-3 pb-[calc(0.75rem+var(--safe-bottom))]">
             <button
               @click="navigateTo('sources')"
-              class="flex w-full min-w-0 items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-2 text-emerald-700 transition-all hover:bg-emerald-100"
+              class="flex w-full min-w-0 items-center gap-1.5 rounded-full border border-[var(--ys-border)] bg-white px-3 py-2 text-[var(--ys-text-muted)] transition-colors hover:bg-gray-50 hover:text-[var(--ys-text)]"
               :title="`当前音源：${activeSourceMeta?.name || '未设置'} —— 点开管理音源`"
             >
               <span class="h-1.5 w-1.5 shrink-0 rounded-full" :class="activeSourceMeta ? 'bg-emerald-500' : 'bg-amber-400'"></span>

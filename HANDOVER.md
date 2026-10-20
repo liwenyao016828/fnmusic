@@ -22,10 +22,12 @@
 | **后端依赖** | **已引入第三方依赖**（`modernc.org/sqlite v1.36.1`，纯 Go）。旧版「零依赖」规则已作废，见 §2 规则二 |
 | **前端依赖** | vue / vite / tailwindcss / axios / lucide-vue-next / crypto-js / buffer / qrcode |
 | **打包** | `bash scripts/build.sh`，**不需要 fnpack** |
-| **当前版本** | `2.10.0`（代码与 manifest 已同步，见 §7） |
+| **当前版本** | `2.12.0`（代码与 manifest 已同步，见 §7） |
 | **名称** | 显示名 **曲率**（2026-09-28 由「音枢 AI」更名）；技术标识 **`yinshu-ai`**（`appname` / 启动项 / 包文件名 / API 身份串）**刻意不改** |
 | **改名红线** | 显示名随便改（`display_name`、界面、文档）；**`appname` 是技术标识，动之前必须单独跟用户确认** —— 它决定飞牛应用中心认不认"同一个应用"，改了就是新装一个，旧配置和数据不继承 |
 | **版本规则** | ⚠️ **只要改过代码就必须升版本号**（用户 2026-09-28 定），四处同步：`backend/pkg/api/server.go` 的 `CurrentVersion`、`fpk-package/manifest` 的 `version`、`RELEASE_NOTES.md` 顶部、本表。**不许用同一个版本号重打包** |
+| **视觉口径** | v2.11.0 起全站走「Quiet Glass」：画布 `#F5F5F7` / 卡片纯白 / 发丝线 `rgba(0,0,0,.07)`；品牌青玉 `#0B8A66`（压白字 4.7:1）**只用于「正在发生的事」**（实心按钮 / 当前导航 / 进度 / 激活态），状态标签与平台 chip 一律中性、选中态用近黑药丸 `#1D1D1F`；卡片圆角 18px、控件 10px；动效统一 `cubic-bezier(.32,.72,0,1)` 三档时长并尊重 `prefers-reduced-motion`。令牌与理由都在 `frontend/tailwind.config.js` 与 `frontend/src/style.css` 的注释里 —— 改色前先读，别新增第二个强调色 |
+| **交互口径** | v2.12.0 起全部导航页按「渐进式披露」组织：**一屏只留当前这一步的控件**。分层规则：① 常驻=当前任务的唯一主按钮 + 筛选 + 状态；② 低频动作进右上角 `OverflowMenu`（⋯）；③ 批量/选中类动作进底部 `SelectionBar`（勾选才浮出）；④ 低频设置进右侧 `SideSheet`；⑤ 设置类页用 `DisclosureSection` 折叠成「标题 + 当前值摘要」，一次只展开一组；⑥ 统计从「四张大卡」降级成一行 `StatLine`。新增页面请先套这四个原语，不要再往页面上加常驻按钮 |
 | **推荐开发环境** | **WSL2 Debian**（见 §1.0）——Windows 下也能跑，但需要额外环境变量 |
 | **接口总数** | `backend/pkg/api/catalog.go` 共 **134 个**（core 97 / internal 37，见 §6.1）。目录**面向 AI**：顶层 `guide` 先说「是干嘛的、怎么做」，接口清单只是参考 ⚠️ `/api/catalog` 是**扁平结构** —— 数组在**顶层 `endpoints`**，不是 `data.endpoints` |
 | **音乐入口接管** | 可选能力（`QULV_TAKEOVER=1`），默认关闭。接管官方 Unix socket 并全透传，见 §2 规则六 / §3.6 |

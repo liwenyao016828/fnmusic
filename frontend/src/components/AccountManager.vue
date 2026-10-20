@@ -12,10 +12,10 @@
       2026-10-18 用户：「全局卡片化，那些没有包含在卡片里的文字，适配一下，用卡片包含。」
       这行字原来裸在页面底色上，现在收进白底圆角卡（与下面两个面板同样的边框/圆角/内边距）。
     -->
-    <div class="mb-4 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-[18px] border border-gray-200 bg-white px-4 py-3 text-[11.5px] text-gray-500">
-      <span class="grid h-6 w-6 shrink-0 place-items-center rounded-lg bg-gray-100 text-[13px]">🔗</span>
+    <div class="mb-3 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-[14px] border border-[var(--ys-border)] bg-[#FBFBFD] px-3.5 py-2.5 text-[11.5px] text-[var(--ys-text-muted)]">
+      <Link2 class="h-3.5 w-3.5 shrink-0 text-[var(--ys-text-faint)]" :stroke-width="1.8" />
       <span>网易云 / QQ 音乐的扫码登录在「发现音乐」的双平台推荐卡里</span>
-      <button class="font-semibold text-emerald-600 underline decoration-dotted underline-offset-2 hover:text-emerald-700" @click="goDiscover">前往</button>
+      <button class="font-medium text-[var(--ys-accent)] hover:underline" @click="goDiscover">前往</button>
     </div>
 
     <!-- ── 飞牛音乐连接（与第三方账号并列，都是"外部连接"） ── -->
@@ -43,6 +43,7 @@ import { markLoaded } from '../services/viewCache'
 // ——2026-09-27 全部搬到「发现音乐 → 双平台推荐」（用户要求：两处重复，只留一处）。
 // 因此本组件不再需要 AccountAPI / QRCode / 轮询定时器那些东西。
 import PageShell from './PageShell.vue'
+import { Link2 } from 'lucide-vue-next'
 import FnosSyncPanel from './FnosSyncPanel.vue'
 import AiSettingsPanel from './AiSettingsPanel.vue'
 import { navigateTo } from '../services/navBus'

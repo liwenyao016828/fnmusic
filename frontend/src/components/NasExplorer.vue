@@ -15,22 +15,22 @@
       class="mb-3 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border border-gray-200 bg-white px-3.5 py-2.5"
       title="飞牛 NAS 本地曲库 · FLAC / APE / WAV / DSD / MP3 串流。"
     >
-      <span class="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 font-mono text-[10px] text-emerald-600">
+      <span class="rounded-full border border-[var(--ys-border)] bg-black/[0.03] px-2.5 py-0.5 text-[10px] font-medium tracking-[0.02em] text-[var(--ys-text-muted)]">
         原生存储卷支持
       </span>
       <div class="ml-auto flex flex-wrap items-center gap-1.5">
       <button
         @click="playAllNasSongs"
         :disabled="!songs.length"
-        class="px-3.5 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-semibold text-xs border border-emerald-200/80 shadow-xs flex items-center gap-1.5 transition-all disabled:opacity-50"
+        class="flex items-center gap-1.5 rounded-[10px] border border-[var(--ys-border)] bg-white px-3.5 py-1.5 text-xs font-medium text-[var(--ys-text)] transition-colors hover:bg-black/[0.03] disabled:opacity-50"
       >
-        <Play class="w-3.5 h-3.5 fill-current text-emerald-600" />
+        <Play class="w-3.5 h-3.5 fill-current text-[var(--ys-accent)]" />
         <span>播放全部</span>
       </button>
 
       <button
         @click="openFolderModal"
-        class="px-3.5 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white font-semibold text-xs shadow-sm flex items-center gap-1.5 transition-all"
+        class="ys-press flex items-center gap-1.5 rounded-[10px] bg-emerald-500 px-3.5 py-1.5 text-xs font-semibold text-white shadow-[0_1px_2px_rgba(11,138,102,0.3)] transition-colors hover:bg-emerald-600"
       >
         <FolderOpen class="w-3.5 h-3.5" />
         <span>选择曲库目录</span>
@@ -41,7 +41,7 @@
         :disabled="isScanning"
         class="px-3.5 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 text-xs font-medium transition-all flex items-center gap-1.5"
       >
-        <RotateCw :class="['w-3.5 h-3.5 text-emerald-500', isScanning ? 'animate-spin' : '']" />
+        <RotateCw :class="['w-3.5 h-3.5', isScanning ? 'animate-spin' : '']" />
         <span>{{ isScanning ? '扫描中...' : '重新扫描' }}</span>
       </button>
 
@@ -69,8 +69,8 @@
       <!-- 2026-09-28 用户反馈「当前目录：路径显示不全」——原来是 `overflow-hidden` + `overflow-x-auto`，
            深路径只显示前几段、还得手动横滚。改成**换行铺开**：整条路径完整可见，不再裁。 -->
       <div class="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
-        <div class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 font-mono border border-emerald-200/60 shrink-0">
-          <Folder class="w-3.5 h-3.5 text-emerald-600" />
+        <div class="flex shrink-0 items-center gap-1.5 rounded-[8px] border border-[var(--ys-border)] bg-black/[0.02] px-2.5 py-1 font-mono text-[var(--ys-text-muted)]">
+          <Folder class="w-3.5 h-3.5 text-[var(--ys-accent)]" />
           <span class="font-bold">当前目录:</span>
         </div>
 
@@ -80,7 +80,7 @@
             :key="idx"
             @click="switchDir(crumb.path)"
             :title="crumb.path"
-            class="flex max-w-full items-center gap-1 break-all rounded px-1.5 py-0.5 text-left transition-colors hover:bg-gray-100 hover:text-emerald-600"
+            class="flex max-w-full items-center gap-1 break-all rounded px-1.5 py-0.5 text-left transition-colors hover:bg-black/[0.05] hover:text-[var(--ys-accent)]"
           >
             <span>{{ crumb.name }}</span>
             <span v-if="idx < breadcrumbs.length - 1" class="text-gray-300">/</span>
@@ -120,7 +120,7 @@
         </button>
         <button
           @click="openFolderModal"
-          class="px-2 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-600 text-[11px] font-medium transition-colors whitespace-nowrap"
+          class="whitespace-nowrap rounded-[8px] bg-black/[0.04] px-2 py-1 text-[11px] font-medium text-[var(--ys-text-muted)] transition-colors hover:bg-black/[0.07] hover:text-[var(--ys-text)]"
         >
           + 更多目录
         </button>
@@ -185,7 +185,7 @@
               v-for="(song, idx) in songs" 
               :key="song.path"
               @dblclick="playSong(song, idx)"
-              class="hover:bg-emerald-50/40 transition-colors group cursor-pointer"
+              class="group cursor-pointer transition-colors hover:bg-black/[0.02]"
             >
               <td class="py-3 px-2 sm:px-3 text-center text-gray-400 font-mono">{{ idx + 1 }}</td>
               <td class="py-3 px-3 sm:px-4 flex items-center gap-2.5 sm:gap-3 min-w-0">
@@ -204,7 +204,7 @@
                   <div class="flex min-w-0 items-center gap-1.5">
                     <!-- 悬停给完整文件名：文件名本身不再占一行（见下） -->
                     <p
-                      class="max-w-full truncate font-semibold text-gray-800 transition-colors group-hover:text-emerald-600 sm:max-w-xs"
+                      class="max-w-full truncate font-medium text-[var(--ys-text)] transition-colors group-hover:text-[var(--ys-accent)] sm:max-w-xs"
                       :title="song.filename || ''"
                     >
                       {{ song.title || song.filename }}
@@ -227,7 +227,7 @@
               </td>
               <td class="hidden md:table-cell py-3 px-4 text-gray-400 truncate max-w-[150px]">{{ song.album || 'NAS 音乐' }}</td>
               <td class="hidden sm:table-cell py-3 px-3 text-center">
-                <span class="text-[10px] uppercase px-1.5 py-0.5 rounded font-mono font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                <span class="rounded border border-[var(--ys-border)] bg-black/[0.03] px-1.5 py-0.5 font-mono text-[10px] font-medium text-[var(--ys-text-muted)]">
                   {{ song.format }}
                 </span>
               </td>
@@ -236,7 +236,7 @@
                 <div class="flex items-center justify-center gap-1">
                   <button 
                     @click.stop="playSong(song, idx)"
-                    class="p-1.5 sm:p-2 rounded-lg bg-emerald-50 hover:bg-emerald-500 hover:text-white text-emerald-600 transition-all shadow-xs"
+                    class="grid h-7 w-7 place-items-center rounded-[7px] text-[var(--ys-text-faint)] transition-colors hover:bg-[var(--ys-accent-soft)] hover:text-[var(--ys-accent)]"
                     title="立即播放"
                   >
                     <Play class="w-3.5 h-3.5 fill-current" />
@@ -244,7 +244,7 @@
                   <button
                     @click.stop="embedLyricFor(song)"
                     :disabled="embeddingPaths.includes(song.path)"
-                    class="p-1.5 sm:p-2 rounded-lg bg-amber-50 hover:bg-amber-500 hover:text-white text-amber-600 transition-all shadow-xs disabled:opacity-50"
+                    class="grid h-7 w-7 place-items-center rounded-[7px] text-[var(--ys-text-faint)] transition-colors hover:bg-amber-50 hover:text-amber-600 disabled:opacity-50"
                     :title="song.has_lyric ? '已有歌词，点击重新抓取并内嵌进音频标签' : '抓取歌词并内嵌进音频文件标签'"
                   >
                     <Loader2 v-if="embeddingPaths.includes(song.path)" class="w-3.5 h-3.5 animate-spin" />
@@ -256,7 +256,7 @@
                   -->
                   <button
                     @click.stop="openCoverPicker(song)"
-                    class="p-1.5 sm:p-2 rounded-lg bg-sky-50 hover:bg-sky-500 hover:text-white text-sky-600 transition-all shadow-xs"
+                    class="grid h-7 w-7 place-items-center rounded-[7px] text-[var(--ys-text-faint)] transition-colors hover:bg-sky-50 hover:text-sky-600"
                     title="搜索并更换封面（内嵌进音频文件）"
                   >
                     <ImageIcon class="w-3.5 h-3.5" />

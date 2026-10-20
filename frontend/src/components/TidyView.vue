@@ -1,81 +1,43 @@
 <template>
-  <PageShell>
-    <template #title-extra>
-      <span class="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 font-mono text-[10px] text-emerald-600">
-        体检 · 补全 · 查重
-      </span>
-    </template>
+  <!--
+    补全整理页（2026-10-19 渐进式披露重构）
 
+    用户口径：「一个页面里一样有好多功能，按钮，选项，卡片，都是一窝蜂挤在一起……
+    一些不必要的按钮和交互可以通过现代化方式实现交互显示，而不是挤在一个页面。」
+
+    重构前的版面（一屏里同时存在的控件）：目录输入框 + 4 张动作卡（扫描缺失 / 增量扫描 /
+    体检 / 查找重复）+ 三步流程条 + 6 张字段勾选卡 + 一行选项（最多N首 / 覆盖 / AI / 4 个平台 chip）
+    + 预览表 + 结果卡 + 第二张「体检·索引·查重」空卡。
+
+    重构后的分层：
+      · 版面上常驻：曲库目录（一行可点）· 缺口数字（一行）· 已选字段（一行 chip）· 结果区；
+      · 主按钮：只放**当前这一步**该点的那个（扫描缺失 / 预览要写的内容）；
+      · 其余全部收进右上角 ⋯：增量扫描 / 体检 / 查重 / 撤销；
+      · 目录、最多 N 首、覆盖、AI、主力平台 → 右侧抽屉「补全选项」。
+    结果区（预览表 / 进度 / 卡片墙 / 失败清单）保持常驻 —— 它们只在有数据时出现。
+  -->
+  <PageShell>
     <template #actions>
+      <!-- 当前步骤的主按钮：第 3 步不给按钮（确认写入就在预览表里，紧挨着要确认的清单） -->
       <button
-        @click="onRefresh"
-        :disabled="reloading"
-        class="rounded-lg border border-gray-200 bg-white px-3.5 py-2 text-xs font-semibold text-gray-600 transition-all hover:border-emerald-300 hover:text-emerald-600 disabled:opacity-50"
-      >{{ reloading ? '刷新中…' : '刷新' }}</button>
+        v-if="completeStep === 1"
+        :disabled="gapsLoading"
+        :title="completeHint"
+        class="ys-press rounded-full bg-emerald-500 px-4 py-1.5 text-[12px] font-semibold text-white shadow-[0_1px_2px_rgba(11,138,102,0.3)] transition-colors hover:bg-emerald-600 disabled:opacity-50"
+        @click="scanGaps"
+      >{{ gapsLoading ? '统计中…' : '扫描缺失' }}</button>
+      <button
+        v-else-if="completeStep === 2"
+        :disabled="previewing || completing || !selectedFields.length"
+        :title="completeHint + (selectedFields.length ? '' : '（先在「补全选项」里勾要补的字段）')"
+        class="ys-press rounded-full bg-emerald-500 px-4 py-1.5 text-[12px] font-semibold text-white shadow-[0_1px_2px_rgba(11,138,102,0.3)] transition-colors hover:bg-emerald-600 disabled:opacity-50"
+        @click="runComplete"
+      >{{ previewing ? '匹配中…' : '预览要写的内容' }}</button>
+
+      <OverflowMenu :items="tidyMenu" @select="onTidyMenu" />
     </template>
 
     <div class="space-y-3.5">
-
-      <!-- ══ 曲库 · 四个动作 ══
-           2026-10-18 重排：目录与四个动作合成一张卡。以前「标题行 + 裸输入框 +
-           四张卡」三段各自成排，卡片又没有外框，整块飘在页面底色上。
-           同日第二轮：改用 SectionCard，与其他页面（设置 / 下载 / 音源管理）
-           的卡头完全同源 —— 圆角、图标方块、标题字号都从这一个组件来。 -->
-      <SectionCard
-        :icon="Wand2"
-        title="曲库目录"
-        sub="下面四个动作都作用在这个目录"
-        sub-title="补全整理、体检、增量扫描、查重都以这个目录为准；不填就用设置里的默认曲库"
-      >
-          <!--
-            目录单独一行（它是这四个动作的**共同输入**），四个动作改成卡片
-            （用户 2026-10-07：「可以用一行多个，每个按照卡片形式展示按钮和文字标题，
-            简介就可以」）。以前是四个裸按钮，用户得靠名字猜「体检」和「扫描缺失」
-            差在哪 —— 而它们一个只看索引、一个会读磁盘，混起来点会白等。
-          -->
-          <input
-            v-model="tidyDir"
-            class="mt-3 w-full rounded-xl border border-gray-200 bg-gray-50/70 px-3 py-2 font-mono text-[12px] text-gray-700 transition-colors focus:border-emerald-400 focus:bg-white focus:outline-none"
-            :placeholder="nasDir || '/vol1/Music'"
-          />
-          <div class="mt-2 grid grid-cols-2 gap-2 lg:grid-cols-4">
-            <ActionCard
-              :title="gapsLoading ? '统计中…' : '扫描缺失'"
-              hint="只读索引，秒回"
-              :icon="AlertTriangle"
-              :disabled="gapsLoading"
-              @click="scanGaps"
-            />
-            <ActionCard
-              :title="indexing ? '扫描中…' : '增量扫描'"
-              hint="把新加改过的文件读进索引"
-              :icon="HardDrive"
-              icon-class="text-gray-400"
-              :disabled="indexing"
-              @click="runIndexScan"
-            />
-            <ActionCard
-              :title="auditing ? '体检中…' : '体检'"
-              hint="索引与磁盘是否对得上"
-              :icon="Check"
-              icon-class="text-gray-400"
-              :disabled="auditing"
-              @click="runAudit"
-            />
-            <ActionCard
-              :title="deduping ? '查重中…' : '查找重复'"
-              hint="按音频指纹找重复曲目"
-              :icon="Trash2"
-              icon-class="text-gray-400"
-              :disabled="deduping"
-              @click="runDedupe"
-            />
-          </div>
-      </SectionCard>
-      <!-- ══ 补全整理：三步流程 ══
-           2026-10-18 拆卡：以前「目录 + 四动作 + 流程条 + 字段 + 选项」挤在同一张卡里，
-           一屏看不到底。现在「选目录 / 点动作」与「补全这一步做什么」分成两张卡，
-           后者进来就告诉你「现在在第几步、下一步点哪个」。 -->
       <SectionCard
         :icon="Sparkles"
         tone="brand"
@@ -83,492 +45,399 @@
         sub="歌词 / 封面 / 年份，写回文件本身"
         sub-title="补全的歌曲信息一律来自搜索结果，不由 AI 猜填"
       >
+        <template #actions>
+          <button
+            type="button"
+            class="flex items-center gap-1.5 rounded-[9px] px-2 py-1 text-[12px] font-medium text-[var(--ys-text-muted)] transition-colors hover:bg-black/[0.05] hover:text-[var(--ys-text)]"
+            title="曲库目录、补全字段、最多处理几首、主力平台"
+            @click="optionsOpen = true"
+          >
+            <SlidersHorizontal class="h-3.5 w-3.5" :stroke-width="1.8" />
+            选项
+          </button>
+        </template>
 
-          <!--
-            三步流程条（2026-10-12 用户反馈「点完扫描缺失不知道下一步做什么」）。
-            改之前：缺口数字单独占一排、勾字段又占一排（同一组 6 个字段画了两遍），
-            而真正的下一步按钮埋在选项行最右边 —— 数字看完了，眼睛没有落点。
+        <!-- 一行摘要：目录（可点开选项）、缺口数字 -->
+        <div class="flex flex-wrap items-center gap-x-4 gap-y-2">
+          <button
+            type="button"
+            class="flex min-w-0 max-w-full items-center gap-1.5 rounded-[8px] border border-[var(--ys-border)] bg-black/[0.02] px-2 py-1 text-left transition-colors hover:bg-black/[0.04]"
+            title="点开修改曲库目录"
+            @click="optionsOpen = true"
+          >
+            <FolderOpen class="h-3.5 w-3.5 shrink-0 text-[var(--ys-accent)]" :stroke-width="1.8" />
+            <span class="min-w-0 truncate font-mono text-[11.5px] text-[var(--ys-text-muted)]">{{ tidyDir || nasDir || '/vol1/Music' }}</span>
+          </button>
+          <StatLine
+            v-if="gaps"
+            :items="[
+              { label: '首曲目', value: gaps.total },
+              { label: '首读过标签', value: gaps.read },
+              { label: '首待补', value: gaps.any_field, dot: 'bg-amber-500' },
+            ]"
+          />
+          <span v-if="gapsAtText" class="text-[10.5px] text-[var(--ys-text-faint)]">{{ gapsAtText }}</span>
+        </div>
 
-            2026-10-14 用户再看：扫描完**还是**不知道下一步 —— 因为这条只是说明文字，
-            「下一步点哪」三个字不能点，真正的预览按钮埋在几百像素之下。
-            升级成「流程 + 主行动」一体：右侧直接给出当前步的**可点按钮**
-            （第 1 步 = 扫描缺失 → 第 2 步 = 预览 → 第 3 步 = 确认写入），
-            数字看完手不用往下找。状态判断仍只由 gaps / plan 推出，不新增状态机。
+        <!--
+          字段选择压成一行 chip（原来 6 张卡片画满一屏）。
+          数字 = 该字段缺的曲目数；点一下就勾 / 取消，不需要进抽屉。
+        -->
+        <div class="mt-3 flex flex-wrap items-center gap-1.5">
+          <button
+            v-for="f in fieldOptions"
+            :key="f.key"
+            type="button"
+            :title="f.hint"
+            class="flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11.5px] transition-colors"
+            :class="selectedFields.includes(f.key)
+              ? 'border-emerald-500/35 bg-[var(--ys-accent-soft)] text-[var(--ys-accent)]'
+              : 'border-[var(--ys-border)] text-[var(--ys-text-faint)] hover:bg-black/[0.03] hover:text-[var(--ys-text-muted)]'"
+            @click="toggleField(f.key)"
+          >
+            <Check v-if="selectedFields.includes(f.key)" class="h-3 w-3" :stroke-width="2.4" />
+            <span class="font-medium">{{ f.name }}</span>
+            <span v-if="gaps" class="font-mono text-[10.5px]" :class="f.missing ? 'text-amber-600' : 'opacity-50'">{{ f.missing }}</span>
+          </button>
+          <span class="ml-0.5 text-[11px] text-[var(--ys-text-faint)]">点字段可勾选 / 取消</span>
+        </div>
 
-            2026-10-18：步骤条从灰底整条压成不含底色的一行，当前步只留一个实心pill，
-            其余步骤降为浅灰文字 —— 一眼只有"我在哪、下一步点哪"两个信息。
-          -->
-          <div class="mt-3.5 flex flex-wrap items-center gap-x-2.5 gap-y-2">
-            <template v-for="(s, i) in completeSteps" :key="s.n">
-              <span
-                :class="[
-                  'rounded-full px-2.5 py-1 text-[11px] font-semibold transition-colors',
-                  s.n === completeStep ? 'bg-emerald-500 text-white shadow-sm shadow-emerald-500/25' : 'text-gray-400',
-                ]"
-              >{{ s.name }}</span>
-              <span v-if="i < completeSteps.length - 1" class="text-[10px] text-gray-300">→</span>
-            </template>
-            <!-- 当前步的可点动作：取代原来那句纯文字 completeHint（文案仍由服务层 completeHint 提供） -->
-            <button
-              v-if="completeStep === 1"
-              :disabled="gapsLoading"
-              :title="completeHint"
-              class="ml-auto rounded-full bg-emerald-500 px-4 py-1.5 text-[12px] font-semibold text-white shadow-sm shadow-emerald-500/25 transition-colors hover:bg-emerald-600 disabled:opacity-50"
-              @click="scanGaps"
-            >{{ gapsLoading ? '统计中…' : '扫描缺失' }}</button>
-            <button
-              v-else-if="completeStep === 2"
-              :disabled="previewing || completing || !selectedFields.length"
-              :title="completeHint + (selectedFields.length ? '' : '（先在下面勾选要补的字段）')"
-              class="ml-auto rounded-full bg-emerald-500 px-4 py-1.5 text-[12px] font-semibold text-white shadow-sm shadow-emerald-500/25 transition-colors hover:bg-emerald-600 disabled:opacity-50"
-              @click="runComplete"
-            >{{ previewing ? '匹配中…' : '预览要写的内容' }}</button>
-            <!--
-              第 3 步**不给按钮**：「确认写入」就在下方预览表里（紧挨着要确认的清单），
-              这里再放一个就是同一动作出现两次 —— 以后改一个忘一个。
-              这一步换成 completeHint 原文案指路即可。
-            -->
-            <span v-else class="ml-auto text-[11px] text-gray-500">{{ completeHint }}</span>
-          </div>
+        <!-- 还没读过标签的曲目：缺口无从判断，必须单独说清楚 -->
+        <p
+          v-if="gaps && (gaps.unread || gaps.unsupported)"
+          class="mt-2 border-t border-[var(--ys-border)] pt-2 text-[10.5px] leading-relaxed text-[var(--ys-text-faint)]"
+        >
+          <span v-if="gaps.unread" class="text-amber-600">另有 {{ gaps.unread }} 首还没读过标签（先「增量扫描」，只能算待查）</span>
+          <span v-if="gaps.unread && gaps.unsupported" class="mx-1.5">·</span>
+          <span v-if="gaps.unsupported">
+            另有 {{ gaps.unsupported }} 首格式写不了标签<template v-if="unsupportedExtsText">（{{ unsupportedExtsText }}）</template>
+          </span>
+        </p>
 
-          <!--
-            缺口统计只读索引（秒回），所以「还没读过标签」与「真的不缺」必须分清：
-            unread 不为 0 时那些记录的缺口无从判断，先点「增量扫描」。
-
-            2026-10-18：从一整段流水句改成「数字块 + 一句脚注」。
-            数字用等宽大字号排成一行，眼睛先拿到 3 个数，再决定要不要读那行小字。
-          -->
-          <div v-if="gaps" class="mt-3.5 rounded-xl border border-gray-100 bg-gray-50/70 px-3.5 py-3">
-            <div class="flex flex-wrap items-baseline gap-x-5 gap-y-1.5">
-              <span class="text-[11px] text-gray-400">
-                合计 <b class="ml-0.5 font-mono text-[15px] text-gray-700">{{ gaps.total }}</b> 首
+        <!-- ── 预览表：还没写任何文件 ── -->
+        <div v-if="completePlan" class="mt-3.5 space-y-2.5 rounded-[12px] border border-[var(--ys-border)] bg-[#FAFAFC] p-3.5">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <span class="text-[11px] font-semibold text-[var(--ys-text)]">即将写入（还没有动过文件）</span>
+            <span class="text-[11px] text-[var(--ys-text-faint)]">
+              共 {{ completePlan.total }} 首 · 匹配到 {{ completePlan.matched }} 首
+              <span v-if="completePlan.matched_by_ai" class="text-[var(--ys-text-muted)]">
+                · 其中 {{ completePlan.matched_by_ai }} 首由 AI 判断
               </span>
-              <span class="text-[11px] text-gray-400">
-                读过标签 <b class="ml-0.5 font-mono text-[15px] text-gray-700">{{ gaps.read }}</b> 首
-              </span>
-              <span class="text-[11px] text-amber-600">
-                待补 <b class="ml-0.5 font-mono text-[15px] text-amber-600">{{ gaps.any_field }}</b> 首
-              </span>
-              <span class="ml-auto text-[10px] text-gray-400">{{ gapsAtText }}</span>
-            </div>
-            <p
-              v-if="gaps.unread || gaps.unsupported"
-              class="mt-2 border-t border-gray-200/70 pt-2 text-[10.5px] leading-relaxed text-gray-400"
-            >
-              <span v-if="gaps.unread" class="text-amber-600">另有 {{ gaps.unread }} 首还没读过标签（先「增量扫描」，只能算待查）</span>
-              <span v-if="gaps.unread && gaps.unsupported" class="mx-1.5">·</span>
-              <span v-if="gaps.unsupported">
-                另有 {{ gaps.unsupported }} 首格式写不了标签<template v-if="unsupportedExtsText">（{{ unsupportedExtsText }}）</template>
-              </span>
-            </p>
-          </div>
-          <!--
-            （2026-10-14）删掉原来的空态提示「点扫描缺失看每个字段缺多少 —— 只读索引，
-            秒回，不动文件」：上面流程条的主按钮就叫「下一步 · 扫描缺失」，
-            操作卡的 hint 也写着「只读索引，秒回；不会动任何文件」——同一句话说三遍。
-          -->
-
-          <!--
-            字段卡 = 缺口数字 + 勾选开关，同一处。
-            以前这两件事各画一遍（上面一排只读数字、下面一排勾选），六个字段在屏幕上出现两次，
-            既占地方又让人怀疑「上面那排和下面那排是不是两回事」。现在点卡片就是勾/取消。
-
-            2026-10-18：标题从「第 2 步 · 点卡片勾选要补的字段」压成「要补哪些字段」——
-            第几步由上面那条流程条负责说，这里只说这一块是什么。
-          -->
-          <div class="mt-3.5 space-y-2">
-            <p class="text-[11px] font-medium text-gray-500" title="卡片数字是该字段缺的曲目数；没勾的字段不会补">
-              要补哪些字段
-            </p>
-            <div class="grid grid-cols-2 gap-2 md:grid-cols-3">
-              <button
-                v-for="f in fieldOptions" :key="f.key"
-                type="button"
-                :title="f.hint"
-                class="flex items-center gap-2 rounded-xl border px-3 py-2.5 text-left transition-colors"
-                :class="selectedFields.includes(f.key)
-                  ? 'border-emerald-300 bg-emerald-50'
-                  : 'border-gray-200 hover:border-gray-300'"
-                @click="toggleField(f.key)"
-              >
-                <span
-                  class="flex h-4 w-4 shrink-0 items-center justify-center rounded-md border transition-colors"
-                  :class="selectedFields.includes(f.key) ? 'border-emerald-500 bg-emerald-500 text-white' : 'border-gray-300'"
-                >
-                  <Check v-if="selectedFields.includes(f.key)" class="h-3 w-3" />
-                </span>
-                <b class="min-w-0 flex-1 truncate text-[12.5px] text-gray-700">{{ f.name }}</b>
-                <span
-                  v-if="gaps"
-                  class="shrink-0 font-mono text-[12px]"
-                  :class="f.missing ? 'text-amber-600' : 'text-gray-300'"
-                >{{ f.missing }}</span>
-              </button>
-            </div>
-          </div>
-
-          <!--
-            选项（怎么补的细节）：默认值就是推荐值，所以视觉上压到最轻的一行，
-            不再和主按钮抢焦点。主力平台仍然常驻 —— 它决定搜索结果好坏，
-            不是「高级设置」，藏起来用户会找不到为什么年份是错的。
-
-            2026-10-18：挪到卡片底部，上方加一条细分割线，和「要补哪些字段」分开。
-          -->
-          <div class="mt-3.5 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-gray-100 pt-3 text-[11px] text-gray-500">
-            <label class="flex items-center gap-1.5">
-              本次最多
-              <input v-model.number="completeLimit" type="number" min="1" max="200"
-                class="w-14 rounded-lg border border-gray-200 px-1.5 py-0.5 text-center font-mono text-[11px]" />
-              首
-            </label>
-            <label class="flex cursor-pointer items-center gap-1.5">
-              <input v-model="overwriteExisting" type="checkbox" />
-              覆盖已有的歌词 / 封面
-            </label>
-            <label class="flex cursor-pointer items-center gap-1.5" :title="aiGenreHint">
-              <input v-model="allowAIGenre" type="checkbox" :disabled="!selectedFields.includes('genre')" />
-              允许 AI 推断风格
-            </label>
-            <!--
-              主力平台：默认网易 + QQ，酷狗/酷我只兜底「只有它们上有」的歌。
-              它同时决定补全的搜索顺序，以及「兜底命中缺字段时回哪家借元数据」。
-              写回 /api/config（带完整对象，别只发局部字段 —— 那会踩到别的设置）。
-            -->
-            <span class="flex items-center gap-1.5">
-              主力
-              <button
-                v-for="p in platformChips" :key="p.id"
-                @click="togglePreferred(p.id)"
-                :title="p.preferred ? '点击取消主力（仍会在兜底时用到）' : '点击设为主力平台'"
-                :class="[
-                  'rounded-full border px-2 py-0.5 text-[10px] transition-colors',
-                  p.preferred ? 'border-emerald-300 bg-emerald-50 text-emerald-700' : 'border-gray-200 bg-white text-gray-400',
-                ]"
-              >{{ p.name }}</button>
             </span>
           </div>
 
-          <!--
-            （2026-10-14）原来这里还有一行「还没动过任何文件 —— 先预览…」的绿色 CTA 条。
-            主行动按钮已上移到三步流程条（扫完缺口第一眼就能看到），这里再放一个就是
-            同一动作出现两次 + 多占一行版面（用户：「提示太多，看起来很挤」）。
-            「还没动过任何文件」的安心话保留在预览表头（「即将写入（还没有动过文件）」）。
-          -->
-
-          <!--
-            预览表：**还没写任何文件**。
-            补全会真正改写用户的音频文件 —— 先让用户看清「文件 → 匹配到的歌 → 每个字段将写成什么」，
-            确认后才落盘。撤销是兜底，这个才是主防线。
-
-            2026-10-18：从「白底嵌白底的小内框」改成灰底分区，和上面的设置区在视觉上分开。
-          -->
-          <div v-if="completePlan" class="mt-3.5 space-y-2.5 rounded-xl border border-gray-100 bg-gray-50/70 p-3.5">
-            <div class="flex flex-wrap items-center justify-between gap-2">
-              <span class="text-[11px] font-semibold text-gray-700">即将写入（还没有动过文件）</span>
-              <span class="text-[11px] text-gray-400">
-                共 {{ completePlan.total }} 首 · 匹配到 {{ completePlan.matched }} 首
-                <span v-if="completePlan.matched_by_ai" class="text-violet-600">
-                  · 其中 {{ completePlan.matched_by_ai }} 首由 AI 判断
-                </span>
-              </span>
-            </div>
-
-            <div class="max-h-56 overflow-y-auto rounded-lg border border-gray-200 bg-white">
-              <table class="w-full text-[11px]">
-                <thead class="sticky top-0 bg-gray-50 text-gray-400">
-                  <tr>
-                    <th class="px-2 py-1.5 text-left font-medium">文件</th>
-                    <th class="px-2 py-1.5 text-left font-medium">匹配到</th>
-                    <th class="px-2 py-1.5 text-left font-medium">会写</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="it in completePlan.items" :key="it.path" class="border-t border-gray-50">
-                    <td class="max-w-[200px] truncate px-2 py-1 font-mono text-gray-600" :title="it.path">
-                      {{ baseName(it.path) }}
-                    </td>
-                    <td class="px-2 py-1">
-                      <template v-if="it.matched">
-                        <span class="text-gray-700">{{ it.matched_name }}</span>
-                        <span class="text-gray-400"> · {{ platformName(it.matched_by) }}</span>
-                        <span v-if="it.matched_by_ai" class="text-violet-600"> · AI 判断</span>
-                      </template>
-                      <span v-else class="text-amber-600">{{ it.note || '没匹配上' }}</span>
-                    </td>
-                    <td class="px-2 py-1 text-gray-500">
-                      <template v-if="it.matched">
-                        <span v-for="c in planCells(it)" :key="c.k" class="mr-1.5 inline-block">
-                          {{ c.k }}<b class="font-mono text-gray-700">{{ c.v }}</b>
-                        </span>
-                        <span v-if="!planCells(it).length">—</span>
-                        <!-- 元数据是从主力平台借的，要标出来：命中的是酷狗、年份却写着 QQ 的值 -->
-                        <span v-if="it.metadata_from" class="block text-[10px] text-gray-400">
-                          元数据借自 {{ platformName(it.metadata_from) }}
-                        </span>
-                        <span v-if="it.note" class="block text-[10px] text-amber-600">{{ it.note }}</span>
-                      </template>
-                      <span v-else>—</span>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-
-            <div class="flex flex-wrap items-center gap-2">
-              <button
-                :disabled="completing || !completePlan.matched"
-                class="rounded-full bg-emerald-500 px-4 py-1.5 text-[12px] font-semibold text-white shadow-sm shadow-emerald-500/25 transition-colors hover:bg-emerald-600 disabled:opacity-50"
-                @click="executeComplete"
-              >确认写入 {{ completePlan.matched }} 首</button>
-              <button
-                :disabled="completing"
-                class="rounded-full px-3 py-1.5 text-[12px] text-gray-400 transition-colors hover:text-gray-600 disabled:opacity-50"
-                @click="completePlan = null"
-              >取消</button>
-              <span class="text-[11px] text-gray-400">写入前会自动备份，可随时撤销</span>
-            </div>
+          <div class="max-h-56 overflow-y-auto rounded-[10px] border border-[var(--ys-border)] bg-white">
+            <table class="w-full text-[11px]">
+              <thead class="sticky top-0 bg-white text-[var(--ys-text-faint)]">
+                <tr>
+                  <th class="px-2 py-1.5 text-left font-medium">文件</th>
+                  <th class="px-2 py-1.5 text-left font-medium">匹配到</th>
+                  <th class="px-2 py-1.5 text-left font-medium">会写</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="it in completePlan.items" :key="it.path" class="border-t border-[var(--ys-border)]">
+                  <td class="max-w-[200px] truncate px-2 py-1 font-mono text-[var(--ys-text-muted)]" :title="it.path">
+                    {{ baseName(it.path) }}
+                  </td>
+                  <td class="px-2 py-1">
+                    <template v-if="it.matched">
+                      <span class="text-[var(--ys-text)]">{{ it.matched_name }}</span>
+                      <span class="text-[var(--ys-text-faint)]"> · {{ platformName(it.matched_by) }}</span>
+                      <span v-if="it.matched_by_ai" class="text-[var(--ys-text-muted)]"> · AI 判断</span>
+                    </template>
+                    <span v-else class="text-amber-600">{{ it.note || '没匹配上' }}</span>
+                  </td>
+                  <td class="px-2 py-1 text-[var(--ys-text-muted)]">
+                    <template v-if="it.matched">
+                      <span v-for="c in planCells(it)" :key="c.k" class="mr-1.5 inline-block">
+                        {{ c.k }}<b class="font-mono text-[var(--ys-text)]">{{ c.v }}</b>
+                      </span>
+                      <span v-if="!planCells(it).length">—</span>
+                      <span v-if="it.metadata_from" class="block text-[10px] text-[var(--ys-text-faint)]">
+                        元数据借自 {{ platformName(it.metadata_from) }}
+                      </span>
+                      <span v-if="it.note" class="block text-[10px] text-amber-600">{{ it.note }}</span>
+                    </template>
+                    <span v-else>—</span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
           </div>
 
-          <!-- ── 补全进度 / 上次结果 ── -->
+          <div class="flex flex-wrap items-center gap-2">
+            <button
+              :disabled="completing || !completePlan.matched"
+              class="ys-press rounded-full bg-emerald-500 px-4 py-1.5 text-[12px] font-semibold text-white shadow-[0_1px_2px_rgba(11,138,102,0.3)] transition-colors hover:bg-emerald-600 disabled:opacity-50"
+              @click="executeComplete"
+            >确认写入 {{ completePlan.matched }} 首</button>
+            <button
+              :disabled="completing"
+              class="rounded-full px-3 py-1.5 text-[12px] text-[var(--ys-text-muted)] transition-colors hover:text-[var(--ys-text)] disabled:opacity-50"
+              @click="completePlan = null"
+            >取消</button>
+            <span class="text-[11px] text-[var(--ys-text-faint)]">写入前会自动备份，可随时撤销</span>
+          </div>
+        </div>
+
+        <!-- ── 补全进度 / 上次结果 ── -->
+        <div v-if="completeJob" class="mt-3.5 space-y-2.5 rounded-[12px] border border-[var(--ys-border)] bg-[#FAFAFC] p-3.5">
+          <div class="flex items-center justify-between gap-2">
+            <span class="text-[12px] font-semibold text-[var(--ys-text)]">{{ completeTitle }}</span>
+            <span class="flex shrink-0 items-center gap-2">
+              <span v-if="completeJob.running" class="font-mono text-[11px] text-[var(--ys-text-faint)]">
+                {{ completeJob.done }}/{{ completeJob.total }}
+              </span>
+              <button
+                v-if="completeJob.running && !completeJob.cancelled"
+                :disabled="stopBusy"
+                class="rounded-[8px] px-2.5 py-1 text-[11px] text-rose-600 transition-colors hover:bg-rose-50 disabled:opacity-50"
+                title="不再开始新的曲目；已写入的文件保留，可以用「撤销上一次补全」回退"
+                @click="stopComplete"
+              >{{ stopBusy ? '停止中…' : '停止' }}</button>
+            </span>
+          </div>
+
+          <div v-if="completeJob.running" class="h-1.5 w-full overflow-hidden rounded-full bg-black/[0.06]">
+            <div class="h-full rounded-full bg-emerald-500 transition-all duration-300" :style="{ width: completePercent + '%' }"></div>
+          </div>
+          <p v-if="completeJob.running && completeJob.current" class="truncate text-[11px] text-[var(--ys-text-faint)]">
+            正在处理：{{ completeJob.current }}
+          </p>
+
+          <InlineNotice :text="completeJob.error" />
+
+          <p v-if="completeJob.summary" class="text-[11px] leading-relaxed text-[var(--ys-text-muted)]">
+            <span v-for="c in summaryCells" :key="c.k" class="mr-2 inline-block">
+              {{ c.k }}<b class="font-mono" :class="c.color">{{ c.v }}</b>
+            </span>
+            <span v-if="completeJob.summary.lyric_rejected" class="text-amber-600">
+              · {{ completeJob.summary.lyric_rejected }} 首歌词对不上，已跳过不写
+            </span>
+            <span v-if="completeJob.summary.cancelled" class="text-rose-600">
+              · {{ completeJob.summary.cancelled }} 首没处理（任务被停止）
+            </span>
+          </p>
+
           <div
-            v-if="completeJob"
-            class="mt-3.5 space-y-2.5 rounded-xl border border-gray-100 bg-gray-50/70 p-3.5"
+            v-if="completeJob.undo_available && !completeJob.running"
+            class="flex flex-wrap items-center gap-2 border-t border-[var(--ys-border)] pt-2"
           >
-            <div class="flex items-center justify-between gap-2">
-              <span class="text-[12px] font-semibold text-gray-700">
-                {{ completeTitle }}
-              </span>
-              <span class="flex shrink-0 items-center gap-2">
-                <span v-if="completeJob.running" class="font-mono text-[11px] text-gray-400">
-                  {{ completeJob.done }}/{{ completeJob.total }}
-                </span>
-                <!--
-                  停止入口：只在正在跑的时候出现。
-                  补全一批最多 200 首、每首都要打外网并改写文件，几分钟内没有任何叫停方式
-                  是不可接受的 —— 点错了只能看着它把文件全改完。
-                  不弹确认框：停止不是破坏性操作（已写入的保留、还能撤销），
-                  弹窗反而会让人以为「停了会丢东西」而不敢停。
-                -->
-                <button
-                  v-if="completeJob.running && !completeJob.cancelled"
-                  :disabled="stopBusy"
-                  class="rounded-lg bg-rose-50 px-2.5 py-1 text-[11px] text-rose-600 hover:bg-rose-100 disabled:opacity-50"
-                  title="不再开始新的曲目；已写入的文件保留，可以用「撤销上一次补全」回退"
-                  @click="stopComplete"
-                >{{ stopBusy ? '停止中…' : '停止' }}</button>
-              </span>
-            </div>
+            <button
+              :disabled="undoBusy"
+              class="rounded-[8px] bg-black/[0.04] px-2.5 py-1 text-[11px] text-[var(--ys-text-muted)] transition-colors hover:bg-black/[0.07] disabled:opacity-50"
+              @click="undoComplete"
+            >{{ undoBusy ? '还原中…' : '撤销上一次补全' }}</button>
+            <span class="text-[11px] text-[var(--ys-text-faint)]">还原成补全前的样子</span>
+          </div>
+        </div>
 
-            <!-- 进度条：一首歌要走两次外网请求，不显示进度会像卡住 -->
-            <div v-if="completeJob.running" class="h-1.5 w-full overflow-hidden rounded-full bg-gray-100">
-              <div
-                class="h-full rounded-full bg-emerald-500 transition-all duration-300"
-                :style="{ width: completePercent + '%' }"
-              ></div>
-            </div>
-            <p v-if="completeJob.running && completeJob.current" class="truncate text-[11px] text-gray-400">
-              正在处理：{{ completeJob.current }}
-            </p>
-
-            <InlineNotice :text="completeJob.error" />
-
-            <p v-if="completeJob.summary" class="text-[11px] leading-relaxed text-gray-600">
-              <span v-for="c in summaryCells" :key="c.k" class="mr-2 inline-block">
-                {{ c.k }}<b class="font-mono" :class="c.color">{{ c.v }}</b>
-              </span>
-              <!--
-                核验不通过 ≠ 没取到歌词。分开显示，否则用户看不出为什么没补上。
-                文案用「对不上」而不是「核验失败」—— 前者用户能懂，后者是我们内部的叫法。
-              -->
-              <span v-if="completeJob.summary.lyric_rejected" class="text-amber-600">
-                · {{ completeJob.summary.lyric_rejected }} 首歌词对不上，已跳过不写
-              </span>
-              <!--
-                「被停止」和「失败」必须分开说：没处理不是出错，是用户自己叫停的，
-                抹掉不提会让人以为所有歌都补过了。
-              -->
-              <span v-if="completeJob.summary.cancelled" class="text-rose-600">
-                · {{ completeJob.summary.cancelled }} 首没处理（任务被停止）
-              </span>
-            </p>
-
-            <!--
-              撤销入口：只在「有备份且任务已结束」时出现。
-              补全会真正改写用户的音频文件 —— 没有回滚手段的话，用户是不敢批量用的。
-            -->
-            <div
-              v-if="completeJob.undo_available && !completeJob.running"
-              class="flex flex-wrap items-center gap-2 border-t border-gray-100 pt-2"
-            >
-              <button
-                :disabled="undoBusy"
-                class="rounded-lg bg-gray-100 px-2.5 py-1 text-[11px] text-gray-600 hover:bg-gray-200 disabled:opacity-50"
-                @click="undoComplete"
-              >{{ undoBusy ? '还原中…' : '撤销上一次补全' }}</button>
-              <span class="text-[11px] text-gray-400">
-                还原成补全前的样子
-              </span>
-            </div>
+        <!-- ── 补全结果卡片墙（读自文件，不是「打算写成什么」）── -->
+        <div v-if="cardsLoading || completedCards.length" class="mt-3.5 space-y-2 rounded-[12px] border border-[var(--ys-border)] bg-white p-3">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <span class="text-[11px] font-semibold text-[var(--ys-text)]">
+              {{ cardsLoading ? '正在回读文件标签…' : '补全后的歌曲信息（读自文件）' }}
+            </span>
+            <span class="text-[11px] text-[var(--ys-text-faint)]">
+              {{ completedCards.length }} 张卡片<span v-if="skippedCards.length"> · {{ skippedCards.length }} 首没补上</span>
+            </span>
           </div>
 
-          <!--
-            补全结果卡片墙：显示的是**回读文件得到的真实标签**（GET /api/nas/tags），
-            不是「打算写成什么」—— 两者可以不一致（某首写失败、或文件被别的程序改过）。
-            界面上说「补好了」而飞牛里没有，是最伤信任的一种错法。
-            带 ✚ 的字段是这次真写进去的。
-          -->
-          <div v-if="cardsLoading || completedCards.length" class="space-y-2 rounded-lg border border-gray-200 bg-white p-3">
-            <div class="flex flex-wrap items-center justify-between gap-2">
-              <span class="text-[11px] font-semibold text-gray-700">
-                {{ cardsLoading ? '正在回读文件标签…' : '补全后的歌曲信息（读自文件）' }}
-              </span>
-              <span class="text-[11px] text-gray-400">
-                {{ completedCards.length }} 张卡片<span v-if="skippedCards.length"> · {{ skippedCards.length }} 首没补上</span>
-              </span>
-            </div>
+          <div class="flex flex-wrap gap-1.5">
+            <span v-for="b in completeBar" :key="b.key"
+              :class="[
+                'rounded-lg border px-2 py-1 text-[10px]',
+                b.selected ? 'border-emerald-500/30 bg-[var(--ys-accent-soft)] text-[var(--ys-accent)]' : 'border-[var(--ys-border)] bg-black/[0.02] text-[var(--ys-text-faint)]',
+              ]">
+              {{ b.name }} <b class="font-mono">{{ b.count }}</b>
+              <i v-if="!b.selected" class="not-italic">· 未勾</i>
+            </span>
+          </div>
 
-            <!-- 本次勾选了什么、各成功几首（没勾的置灰，别让人以为也顺手补了） -->
-            <div class="flex flex-wrap gap-1.5">
-              <span v-for="b in completeBar" :key="b.key"
-                :class="[
-                  'rounded-lg border px-2 py-1 text-[10px]',
-                  b.selected ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-gray-100 bg-gray-50 text-gray-400',
-                ]">
-                {{ b.name }} <b class="font-mono">{{ b.count }}</b>
-                <i v-if="!b.selected" class="not-italic">· 未勾</i>
-              </span>
-            </div>
-
-            <div class="grid grid-cols-2 gap-2">
-              <div v-for="c in completedCards" :key="c.path"
-                class="flex gap-2 rounded-lg border border-gray-100 bg-gray-50/60 p-2">
-                <img v-if="c.hasCover" :src="c.coverUrl" :alt="c.title" class="h-14 w-14 shrink-0 rounded object-cover" loading="lazy" />
-                <div v-else class="flex h-14 w-14 shrink-0 items-center justify-center rounded bg-gray-200">
-                  <ImageIcon class="h-4 w-4 text-gray-400" />
-                </div>
-                <div class="min-w-0 flex-1">
-                  <p class="truncate text-[11px] font-semibold text-gray-700" :title="c.path">
-                    {{ c.title || baseName(c.path) }}
-                  </p>
-                  <p class="truncate text-[10px] text-gray-500">
-                    {{ c.artist || '未标注歌手' }}<span v-if="c.album"> · {{ c.album }}</span>
-                  </p>
-                  <p class="mt-0.5 flex flex-wrap gap-x-2 gap-y-0.5 text-[10px] text-gray-500">
-                    <span v-for="fd in cardFields(c)" :key="fd.k">
-                      {{ fd.k }}
-                      <b :class="['font-mono', fd.wrote ? 'text-emerald-600' : 'text-gray-600']">{{ fd.v }}</b>
-                      <i v-if="fd.wrote" class="not-italic text-emerald-500">✚</i>
-                    </span>
-                  </p>
-                </div>
+          <div class="grid grid-cols-2 gap-2">
+            <div v-for="c in completedCards" :key="c.path" class="flex gap-2 rounded-[10px] border border-[var(--ys-border)] bg-[#FAFAFC] p-2">
+              <img v-if="c.hasCover" :src="c.coverUrl" :alt="c.title" class="h-14 w-14 shrink-0 rounded-[6px] object-cover" loading="lazy" />
+              <div v-else class="flex h-14 w-14 shrink-0 items-center justify-center rounded-[6px] bg-black/[0.05]">
+                <ImageIcon class="h-4 w-4 text-[var(--ys-text-faint)]" />
+              </div>
+              <div class="min-w-0 flex-1">
+                <p class="truncate text-[11px] font-medium text-[var(--ys-text)]" :title="c.path">
+                  {{ c.title || baseName(c.path) }}
+                </p>
+                <p class="truncate text-[10px] text-[var(--ys-text-muted)]">
+                  {{ c.artist || '未标注歌手' }}<span v-if="c.album"> · {{ c.album }}</span>
+                </p>
+                <p class="mt-0.5 flex flex-wrap gap-x-2 gap-y-0.5 text-[10px] text-[var(--ys-text-muted)]">
+                  <span v-for="fd in cardFields(c)" :key="fd.k">
+                    {{ fd.k }}
+                    <b :class="['font-mono', fd.wrote ? 'text-[var(--ys-accent)]' : 'text-[var(--ys-text)]']">{{ fd.v }}</b>
+                    <i v-if="fd.wrote" class="not-italic text-[var(--ys-accent)]">✚</i>
+                  </span>
+                </p>
               </div>
             </div>
           </div>
+        </div>
 
-          <!-- 没补成的单独一组：绝不混进卡片墙装成「补好了」 -->
-          <div v-if="skippedCards.length" class="space-y-1 rounded-lg border border-amber-200 bg-amber-50/60 p-3">
-            <p class="text-[11px] font-semibold text-amber-800">这些没补上（{{ skippedCards.length }} 首）</p>
-            <p v-for="c in skippedCards" :key="c.path" class="truncate text-[11px] text-amber-900/80">
-              {{ baseName(c.path) }} —— {{ c.error || '没匹配到曲目' }}
-            </p>
-          </div>
+        <!-- 没补成的单独一组：绝不混进卡片墙装成「补好了」 -->
+        <div v-if="skippedCards.length" class="mt-3 space-y-1 rounded-[12px] border border-amber-200/70 bg-amber-50/50 p-3">
+          <p class="text-[11px] font-semibold text-amber-800">这些没补上（{{ skippedCards.length }} 首）</p>
+          <p v-for="c in skippedCards" :key="c.path" class="truncate text-[11px] text-amber-900/80">
+            {{ baseName(c.path) }} —— {{ c.error || '没匹配到曲目' }}
+          </p>
+        </div>
       </SectionCard>
 
-      <!-- ══ 体检 · 索引 · 查重结果（动作在第一张卡）══
-           2026-10-18：原来是第二张白卡里的一排小字说明 + 散落的数字块。
-           改成与上面同款的分区卡，标题带图标，空态就是一句「还没跑过」。 -->
+      <!-- ══ 体检 / 索引 / 查重结果 ══
+           2026-10-19：**空的时候整张卡不渲染**。原来这块是一张写着「还没有体检结果」的卡，
+           占掉首屏一整块，却什么也没说。现在从 ⋯ 菜单跑完才出现。 -->
       <SectionCard
+        v-if="audit || indexResult || dupResult || auditing"
         :icon="FolderOpen"
         title="体检 · 索引 · 查重"
-        sub="结果落在下面，两个动作跑完才看得到数字"
+        sub="从右上角 ⋯ 里跑，结果落在这里"
       >
         <template v-if="audit && auditAtText" #actions>
-          <span class="text-[10px] text-gray-400">体检于 {{ auditAtText }}</span>
+          <span class="text-[10.5px] text-[var(--ys-text-faint)]">体检于 {{ auditAtText }}</span>
         </template>
 
-          <!-- 索引快照：只说来源和时间，数字本体在下面的体检结果里 -->
-          <p v-if="statsLoading" class="mt-3.5 text-[11px] text-gray-400">正在读取上次整理快照…</p>
-          <p
-            v-else-if="indexStats"
-            class="mt-3.5 text-[11px] leading-relaxed text-gray-400"
-            title="下面这组数字是直接扫文件得到的（跟「扫描缺失」的索引口径各算各的），两边对不上就说明索引过期了"
-          >{{ lastScanText || '索引还没整理过' }} —— 点「增量扫描」会更新</p>
+        <p v-if="statsLoading" class="text-[11px] text-[var(--ys-text-faint)]">正在读取上次整理快照…</p>
+        <p
+          v-else-if="indexStats"
+          class="text-[11px] leading-relaxed text-[var(--ys-text-faint)]"
+          title="下面这组数字是直接扫文件得到的（跟「扫描缺失」的索引口径各算各的），两边对不上就说明索引过期了"
+        >{{ lastScanText || '索引还没整理过' }} —— 点「增量扫描」会更新</p>
 
-          <!-- 体检结果 -->
-          <div v-if="!audit" class="mt-3.5 rounded-xl border border-dashed border-gray-200 bg-gray-50/50 px-4 py-6 text-center text-[11px] text-gray-400">
-            {{ auditing ? '正在体检…' : '还没有体检结果 —— 点上面「体检」' }}
+        <div v-if="!audit" class="mt-3 rounded-[12px] border border-dashed border-[var(--ys-border)] px-4 py-6 text-center text-[11px] text-[var(--ys-text-faint)]">
+          {{ auditing ? '正在体检…' : '还没有体检结果' }}
+        </div>
+        <div v-else class="mt-3 grid grid-cols-2 gap-2 md:grid-cols-4">
+          <div class="rounded-[12px] border border-[var(--ys-border)] bg-[#FAFAFC] px-3 py-2.5">
+            <div class="text-[10.5px] text-[var(--ys-text-faint)]">曲目总数</div>
+            <div class="mt-0.5 font-mono text-[19px] font-semibold text-[var(--ys-text)]">{{ audit.total }}</div>
           </div>
-          <div v-else class="mt-3.5 grid grid-cols-2 gap-2 md:grid-cols-4">
-            <div class="rounded-xl border border-gray-100 bg-gray-50 px-3 py-2.5">
-              <div class="text-[10px] text-gray-400">曲目总数</div>
-              <div class="font-mono text-[19px] font-bold text-gray-700">{{ audit.total }}</div>
-            </div>
-            <div class="rounded-xl border border-amber-100 bg-amber-50/70 px-3 py-2.5">
-              <div class="text-[10px] text-amber-600">缺歌词</div>
-              <div class="font-mono text-[19px] font-bold text-amber-700">{{ audit.no_lyric }}</div>
-            </div>
-            <div class="rounded-xl border border-amber-100 bg-amber-50/70 px-3 py-2.5">
-              <div class="text-[10px] text-amber-600">缺封面</div>
-              <div class="font-mono text-[19px] font-bold text-amber-700">{{ audit.no_cover }}</div>
-            </div>
-            <div class="rounded-xl border border-rose-100 bg-rose-50/70 px-3 py-2.5">
-              <div class="text-[10px] text-rose-600">两者都缺</div>
-              <div class="font-mono text-[19px] font-bold text-rose-700">{{ audit.both_missing }}</div>
-            </div>
+          <div class="rounded-[12px] border border-[var(--ys-border)] bg-[#FAFAFC] px-3 py-2.5">
+            <div class="text-[10.5px] text-amber-600">缺歌词</div>
+            <div class="mt-0.5 font-mono text-[19px] font-semibold text-[var(--ys-text)]">{{ audit.no_lyric }}</div>
           </div>
+          <div class="rounded-[12px] border border-[var(--ys-border)] bg-[#FAFAFC] px-3 py-2.5">
+            <div class="text-[10.5px] text-amber-600">缺封面</div>
+            <div class="mt-0.5 font-mono text-[19px] font-semibold text-[var(--ys-text)]">{{ audit.no_cover }}</div>
+          </div>
+          <div class="rounded-[12px] border border-[var(--ys-border)] bg-[#FAFAFC] px-3 py-2.5">
+            <div class="text-[10.5px] text-rose-600">两者都缺</div>
+            <div class="mt-0.5 font-mono text-[19px] font-semibold text-[var(--ys-text)]">{{ audit.both_missing }}</div>
+          </div>
+        </div>
 
-          <!-- 增量扫描结果 -->
-          <div v-if="indexResult" class="mt-2.5 rounded-xl border border-gray-100 bg-gray-50 px-3.5 py-2.5 text-[11px] text-gray-500">
-            增量扫描：新增 <b class="font-mono text-gray-700">{{ indexResult.added }}</b> ·
-            变化 <b class="font-mono text-gray-700">{{ indexResult.changed }}</b> ·
-            未变 <b class="font-mono text-gray-700">{{ indexResult.unchanged }}</b> ·
-            索引总数 <b class="font-mono text-gray-700">{{ indexResult.index_total }}</b>
-            <div v-if="!indexResult.complete" class="mt-1 text-amber-700">
-              本次枚举不完整，已跳过删除判定（保护索引不被误清）
-            </div>
+        <div v-if="indexResult" class="mt-2.5 rounded-[12px] border border-[var(--ys-border)] bg-[#FAFAFC] px-3.5 py-2.5 text-[11px] text-[var(--ys-text-muted)]">
+          增量扫描：新增 <b class="font-mono text-[var(--ys-text)]">{{ indexResult.added }}</b> ·
+          变化 <b class="font-mono text-[var(--ys-text)]">{{ indexResult.changed }}</b> ·
+          未变 <b class="font-mono text-[var(--ys-text)]">{{ indexResult.unchanged }}</b> ·
+          索引总数 <b class="font-mono text-[var(--ys-text)]">{{ indexResult.index_total }}</b>
+          <div v-if="!indexResult.complete" class="mt-1 text-amber-700">
+            本次枚举不完整，已跳过删除判定（保护索引不被误清）
           </div>
+        </div>
 
-          <!-- 重复结果 -->
-          <div v-if="dupResult" class="mt-2.5 space-y-2.5 rounded-xl border border-gray-100 bg-gray-50/70 p-3.5">
-            <div class="flex flex-wrap items-center justify-between gap-2">
-              <span class="text-[12px] font-semibold text-gray-700">
-                发现 <b class="font-mono text-rose-600">{{ dupResult.group_count }}</b> 组重复
-              </span>
-              <div class="flex gap-1.5">
-                <button @click="resolveDup(true)" class="rounded-full bg-white px-3 py-1 text-[11px] text-gray-600 ring-1 ring-gray-200 transition-colors hover:bg-gray-100">干跑预览</button>
-                <button @click="resolveDup(false)" class="rounded-full bg-rose-500 px-3 py-1 text-[11px] font-medium text-white transition-colors hover:bg-rose-600">移入回收站</button>
-              </div>
-            </div>
-            <div v-if="dupResult.groups.length" class="max-h-64 space-y-1.5 overflow-y-auto">
-              <div v-for="(g, i) in dupResult.groups.slice(0, 30)" :key="i"
-                class="rounded-xl border border-gray-100 bg-white p-2.5 text-[11px]">
-                <div class="flex items-center gap-2">
-                  <span :class="['rounded-full px-1.5 py-0.5 font-mono text-[10px]', g.type === 'content' ? 'bg-rose-50 text-rose-600' : 'bg-amber-50 text-amber-600']">
-                    {{ g.type === 'content' ? '内容相同' : '同名不同版' }}
-                  </span>
-                  <span class="text-gray-400">{{ g.count }} 个文件</span>
-                </div>
-                <div class="mt-1 text-emerald-700">保留：{{ baseName(g.keep) }}</div>
-                <div class="text-rose-500">清理：{{ g.delete.map(baseName).join('、') }}</div>
-              </div>
-            </div>
-            <div v-if="dupResolveResult" class="rounded-xl border border-gray-100 bg-white px-3.5 py-2.5 text-[11px] text-gray-600">
-              {{ dupResolveResult.dry_run ? '干跑估算' : '执行完成' }}：
-              移动 <b class="font-mono">{{ dupResolveResult.moved }}</b> ·
-              删除 <b class="font-mono">{{ dupResolveResult.deleted }}</b> ·
-              释放 <b class="font-mono">{{ fmtSize(dupResolveResult.freed_bytes) }}</b>
-              <div v-if="dupResolveResult.errors && dupResolveResult.errors.length" class="mt-1 flex flex-wrap items-center gap-2 text-rose-500">
-                <span>{{ dupResolveResult.errors.length }} 个文件处理失败</span>
-                <button
-                  class="underline decoration-dotted underline-offset-2 hover:no-underline"
-                  @click="navigateTo('logs')"
-                >查看日志</button>
-              </div>
+        <div v-if="dupResult" class="mt-2.5 space-y-2.5 rounded-[12px] border border-[var(--ys-border)] bg-[#FAFAFC] p-3.5">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <span class="text-[12px] font-semibold text-[var(--ys-text)]">
+              发现 <b class="font-mono text-rose-600">{{ dupResult.group_count }}</b> 组重复
+            </span>
+            <div class="flex gap-1.5">
+              <button @click="resolveDup(true)" class="ys-press rounded-full border border-[var(--ys-border)] bg-white px-3 py-1 text-[11px] text-[var(--ys-text-muted)] transition-colors hover:text-[var(--ys-text)]">干跑预览</button>
+              <button @click="resolveDup(false)" class="ys-press rounded-full bg-rose-500 px-3 py-1 text-[11px] font-medium text-white transition-colors hover:bg-rose-600">移入回收站</button>
             </div>
           </div>
+          <div v-if="dupResult.groups.length" class="max-h-64 space-y-1.5 overflow-y-auto">
+            <div v-for="(g, i) in dupResult.groups.slice(0, 30)" :key="i" class="rounded-[10px] border border-[var(--ys-border)] bg-white p-2.5 text-[11px]">
+              <div class="flex items-center gap-2">
+                <span :class="['rounded-full px-1.5 py-0.5 font-mono text-[10px]', g.type === 'content' ? 'bg-rose-50 text-rose-600' : 'bg-amber-50 text-amber-600']">
+                  {{ g.type === 'content' ? '内容相同' : '同名不同版' }}
+                </span>
+                <span class="text-[var(--ys-text-faint)]">{{ g.count }} 个文件</span>
+              </div>
+              <div class="mt-1 text-[var(--ys-accent)]">保留：{{ baseName(g.keep) }}</div>
+              <div class="text-rose-500">清理：{{ g.delete.map(baseName).join('、') }}</div>
+            </div>
+          </div>
+          <div v-if="dupResolveResult" class="rounded-[10px] border border-[var(--ys-border)] bg-white px-3.5 py-2.5 text-[11px] text-[var(--ys-text-muted)]">
+            {{ dupResolveResult.dry_run ? '干跑估算' : '执行完成' }}：
+            移动 <b class="font-mono">{{ dupResolveResult.moved }}</b> ·
+            删除 <b class="font-mono">{{ dupResolveResult.deleted }}</b> ·
+            释放 <b class="font-mono">{{ fmtSize(dupResolveResult.freed_bytes) }}</b>
+            <div v-if="dupResolveResult.errors && dupResolveResult.errors.length" class="mt-1 flex flex-wrap items-center gap-2 text-rose-500">
+              <span>{{ dupResolveResult.errors.length }} 个文件处理失败</span>
+              <button class="underline decoration-dotted underline-offset-2 hover:no-underline" @click="navigateTo('logs')">查看日志</button>
+            </div>
+          </div>
+        </div>
       </SectionCard>
-
     </div>
+
+    <!-- ── 补全选项抽屉：目录 / 最多几首 / 覆盖 / AI / 主力平台 ── -->
+    <SideSheet v-model="optionsOpen" title="补全选项" subtitle="默认值就是推荐值；改完只影响下一次补全">
+      <div class="space-y-5">
+        <label class="block">
+          <span class="text-[12px] font-medium text-[var(--ys-text)]">曲库目录</span>
+          <input
+            v-model="tidyDir"
+            class="mt-1.5 w-full rounded-[10px] border border-[var(--ys-border)] bg-[#FAFAFC] px-3 py-2 font-mono text-[12px] text-[var(--ys-text)] transition-colors focus:border-[var(--ys-accent)] focus:bg-white focus:outline-none"
+            :placeholder="nasDir || '/vol1/Music'"
+          />
+          <span class="mt-1 block text-[11px] leading-relaxed text-[var(--ys-text-faint)]">
+            补全整理、体检、增量扫描、查重都以这个目录为准；留空就用设置里的默认曲库
+          </span>
+        </label>
+
+        <label class="block">
+          <span class="text-[12px] font-medium text-[var(--ys-text)]">本次最多处理</span>
+          <div class="mt-1.5 flex items-center gap-2">
+            <input v-model.number="completeLimit" type="number" min="1" max="200"
+              class="w-20 rounded-[10px] border border-[var(--ys-border)] bg-[#FAFAFC] px-2 py-2 text-center font-mono text-[12px]" />
+            <span class="text-[11px] text-[var(--ys-text-muted)]">首（每首要走两次外网请求）</span>
+          </div>
+        </label>
+
+        <div class="space-y-2.5">
+          <label class="flex cursor-pointer items-start gap-2.5">
+            <input v-model="overwriteExisting" type="checkbox" class="mt-0.5" />
+            <span>
+              <span class="block text-[12px] font-medium text-[var(--ys-text)]">覆盖已有的歌词 / 封面</span>
+              <span class="mt-0.5 block text-[11px] text-[var(--ys-text-faint)]">不勾就只补空的字段</span>
+            </span>
+          </label>
+          <label class="flex cursor-pointer items-start gap-2.5" :title="aiGenreHint">
+            <input v-model="allowAIGenre" type="checkbox" class="mt-0.5" :disabled="!selectedFields.includes('genre')" />
+            <span>
+              <span class="block text-[12px] font-medium text-[var(--ys-text)]">允许 AI 推断风格</span>
+              <span class="mt-0.5 block text-[11px] text-[var(--ys-text-faint)]">只在勾了「风格」时可用；结果会标出「AI 判断」</span>
+            </span>
+          </label>
+        </div>
+
+        <div>
+          <span class="text-[12px] font-medium text-[var(--ys-text)]">主力平台</span>
+          <p class="mt-1 text-[11px] leading-relaxed text-[var(--ys-text-faint)]">
+            决定搜索顺序，以及兜底命中缺字段时回哪家借元数据
+          </p>
+          <div class="mt-2 flex flex-wrap gap-1.5">
+            <button
+              v-for="p in platformChips" :key="p.id"
+              type="button"
+              @click="togglePreferred(p.id)"
+              :title="p.preferred ? '点击取消主力（仍会在兜底时用到）' : '点击设为主力平台'"
+              :class="[
+                'rounded-full border px-2.5 py-1 text-[11.5px] transition-colors',
+                p.preferred ? 'border-emerald-500/35 bg-[var(--ys-accent-soft)] text-[var(--ys-accent)]' : 'border-[var(--ys-border)] bg-white text-[var(--ys-text-faint)] hover:text-[var(--ys-text-muted)]',
+              ]"
+            >{{ p.name }}</button>
+          </div>
+        </div>
+      </div>
+    </SideSheet>
   </PageShell>
 </template>
 
@@ -580,11 +449,16 @@
 //   2. 补全卡片补上了 coverUrl（旧代码 cardCover 定义了却从未被调用，
 //      模板里 `:src="c.coverUrl"` 一直是 undefined —— 卡片封面其实从来没显示过）。
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { Wand2, Sparkles, AlertTriangle, HardDrive, Trash2, Check, FolderOpen, Image as ImageIcon } from 'lucide-vue-next'
+import {
+  Wand2, Sparkles, AlertTriangle, HardDrive, Trash2, Check, FolderOpen,
+  SlidersHorizontal, RotateCcw, ScanSearch, FolderSearch, Copy,
+} from 'lucide-vue-next'
 import PageShell from './PageShell.vue'
 import SectionCard from './SectionCard.vue'
-import ActionCard from './ActionCard.vue'
 import InlineNotice from './InlineNotice.vue'
+import OverflowMenu from './OverflowMenu.vue'
+import SideSheet from './SideSheet.vue'
+import StatLine from './StatLine.vue'
 import { TidyAPI, TagsAPI, NasAPI, ConfigAPI } from '../api/client'
 import { loadPref, savePref, loadBool, loadCache, saveCache } from '../services/prefs'
 import {
@@ -614,7 +488,33 @@ function flash(msg, isError = false) {
 // ── 目录与状态 ──
 const nasDir = computed(() => loadPref('nas_dir', ''))
 const tidyDir = ref('')
+// 2026-10-19 渐进式披露：所有「偶尔才改一次的设置」收进右侧抽屉，
+// 所有「偶尔才跑一次的动作」收进右上角 ⋯ —— 版面上只留当前这一步。
+const optionsOpen = ref(false)
 const auditing = ref(false)
+
+/**
+ * 右上角 ⋯ 菜单。顺序 = 从「最常跑」到「最不常跑」。
+ * 「扫描缺失」同时也可能出现在主按钮位上（第 1 步），这里保留一份是为了
+ * 用户在别的步骤时也能重新统计 —— 不放到抽屉里，因为它仍然高频。
+ */
+const tidyMenu = computed(() => [
+  { key: 'gaps', label: gapsLoading.value ? '统计中…' : '扫描缺失', icon: AlertTriangle, disabled: gapsLoading.value },
+  { key: 'index', label: indexing.value ? '扫描中…' : '增量扫描', icon: FolderSearch, disabled: indexing.value },
+  { key: 'audit', label: auditing.value ? '体检中…' : '曲库体检', icon: ScanSearch, disabled: auditing.value },
+  { key: 'dedupe', label: deduping.value ? '查重中…' : '查找重复', icon: Copy, disabled: deduping.value },
+  { key: 'undo', label: '撤销上一次补全', icon: RotateCcw, disabled: undoBusy.value || !completeJob.value?.undo_available },
+  { key: 'options', label: '补全选项…', icon: SlidersHorizontal },
+])
+
+function onTidyMenu(key) {
+  if (key === 'gaps') scanGaps()
+  else if (key === 'index') runIndexScan()
+  else if (key === 'audit') runAudit()
+  else if (key === 'dedupe') runDedupe()
+  else if (key === 'undo') undoComplete()
+  else if (key === 'options') optionsOpen.value = true
+}
 const indexing = ref(false)
 const deduping = ref(false)
 const audit = ref(null)

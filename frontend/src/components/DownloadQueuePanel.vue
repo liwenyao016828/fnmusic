@@ -1,161 +1,69 @@
 <template>
-  <div class="flex-1 flex flex-col overflow-hidden min-h-0">
-  <!-- 2. 当前存储目录提示条 -->
-  <div class="px-5 py-2.5 bg-gray-50/80 border-b border-gray-100 flex items-center justify-between text-xs text-gray-600 shrink-0">
-    <div class="flex items-center gap-1.5 min-w-0">
-      <Folder class="w-3.5 h-3.5 text-amber-500 shrink-0" />
-      <span class="text-gray-400 shrink-0">存储路径:</span>
-      <span class="font-mono text-gray-700 truncate text-[11px]" :title="downloadManager.currentDownloadDir.value">
-        {{ downloadManager.currentDownloadDir.value }}
-      </span>
+  <div class="flex min-h-0 flex-1 flex-col overflow-hidden">
+    <!--
+      工具条（2026-10-19 渐进式披露重构）
+
+      改之前这一行里挤着：存储路径条（独立一整行灰底）、6 个筛选标签、
+      全选、全部暂停、全部继续、全部恢复、重试失败、停止全部、清除选中、
+      一键清除记录、下载设置 —— 11 个控件争一条 40px 的行。
+
+      现在分三层：
+        · 常驻：存储位置（一行小字，点击即改）+ 筛选分段 + 两个「当前真能做」的图标按钮
+        · ⋯：全部恢复 / 重试失败 / 停止全部 / 一键清除记录 / 下载设置
+        · 勾选了任务才浮出底部操作条（清除选中 / 全选当前筛选）
+    -->
+    <div class="flex shrink-0 flex-wrap items-center gap-2 border-b border-[var(--ys-border)] bg-white px-4 py-2.5">
+      <button
+        type="button"
+        class="flex min-w-0 max-w-[340px] items-center gap-1.5 rounded-[8px] px-1.5 py-1 text-[11px] text-[var(--ys-text-muted)] transition-colors hover:bg-black/[0.04] hover:text-[var(--ys-text)]"
+        :title="`存储位置：${downloadManager.currentDownloadDir.value}（点击更改）`"
+        @click="downloadManager.openDirModal()"
+      >
+        <Folder class="h-3.5 w-3.5 shrink-0 text-[var(--ys-text-faint)]" :stroke-width="1.8" />
+        <span class="truncate font-mono text-[11px]">{{ downloadManager.currentDownloadDir.value }}</span>
+      </button>
+
+      <!-- 筛选：分段控件（沉底轨道 + 白色药丸），与全站其它分段同款 -->
+      <div class="flex min-w-0 flex-wrap items-center gap-0.5 rounded-[10px] bg-[var(--ys-surface-sunken)] p-1">
+        <button
+          v-for="tab in filterTabs" :key="tab.id"
+          @click="currentFilter = tab.id"
+          :class="[
+            'ys-press whitespace-nowrap rounded-[8px] px-2.5 py-1 text-[11.5px] font-medium transition-colors',
+            currentFilter === tab.id
+              ? 'bg-white text-[var(--ys-text)] shadow-[0_1px_2px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.04]'
+              : 'text-[var(--ys-text-muted)] hover:text-[var(--ys-text)]',
+          ]"
+        >
+          {{ tab.name }}
+          <span class="ml-0.5 text-[10px] opacity-60">{{ tab.count }}</span>
+        </button>
+      </div>
+
+      <div class="ml-auto flex items-center gap-1">
+        <!-- 这两个是「此刻真能做的事」：暂停/继续，图标化后不占文字空间 -->
+        <button
+          v-if="downloadManager.activeCount.value > 0"
+          @click="downloadManager.pauseAll()"
+          class="ys-press grid h-8 w-8 place-items-center rounded-full text-[var(--ys-text-muted)] transition-colors hover:bg-black/[0.05] hover:text-[var(--ys-text)]"
+          title="暂停所有下载中的任务"
+        >
+          <Pause class="h-4 w-4" :stroke-width="1.9" />
+        </button>
+        <button
+          v-if="downloadManager.pausedCount.value > 0"
+          @click="downloadManager.resumeAll(activeSource?.id)"
+          class="ys-press grid h-8 w-8 place-items-center rounded-full text-[var(--ys-text-muted)] transition-colors hover:bg-black/[0.05] hover:text-[var(--ys-text)]"
+          title="继续所有已暂停的任务"
+        >
+          <Play class="h-4 w-4" :stroke-width="1.9" />
+        </button>
+        <OverflowMenu :items="queueMenu" @select="onQueueMenu" />
+      </div>
     </div>
-    <button
-      @click="downloadManager.openDirModal()"
-      class="text-emerald-600 hover:text-emerald-700 hover:underline shrink-0 text-[11px] font-medium ml-2"
-    >
-      更改目录
-    </button>
-  </div>
-
-  <!--
-    下载设置：已从「整行可折叠条」改为「筛选栏上的醒目按钮 + 弹窗」。
-    原因：① 折叠条占了整整一行，展开后还把队列挤下去；
-         ② 它是个低频入口，不值得占固定版面；
-         ③ 与项目其它「新建 X」入口（推送任务 / 推送任务同步）保持同一种交互。
-    弹窗在文件末尾的 Teleport 区块里。
-  -->
-
-  <!-- 3. 筛选标签 & 操作栏 -->
-  <div class="px-5 py-2 border-b border-gray-100 flex flex-wrap items-center justify-between gap-2 bg-white shrink-0">
-    <!-- 标签切换 -->
-    <div class="flex flex-wrap items-center gap-1 bg-gray-100 p-0.5 rounded-lg text-xs">
-      <button
-        v-for="tab in filterTabs" :key="tab.id"
-        @click="currentFilter = tab.id"
-        :class="[
-          'px-2.5 py-1 rounded-md text-[11px] font-medium transition-all whitespace-nowrap',
-          currentFilter === tab.id
-            ? 'bg-white text-emerald-600 shadow-xs font-semibold'
-            : 'text-gray-500 hover:text-gray-700'
-        ]"
-      >
-        {{ tab.name }}
-        <span class="opacity-70 ml-0.5 text-[10px]">({{ tab.count }})</span>
-      </button>
-    </div>
-
-    <!-- 批量控制操作 -->
-    <div class="flex items-center gap-1.5">
-      <!-- 全选：只圈当前筛选里**已结束**的那些 -->
-      <label
-        v-if="terminalTasks.length > 1"
-        class="flex items-center gap-1 text-[11px] text-gray-500 cursor-pointer select-none mr-1"
-        title="勾选当前列表里所有已结束的记录"
-      >
-        <input type="checkbox" class="align-middle accent-emerald-500" :checked="allSelected" @change="toggleSelectAll" />
-        <span>全选</span>
-      </label>
-      <!-- 全部暂停 -->
-      <button
-        v-if="downloadManager.activeCount.value > 0"
-        @click="downloadManager.pauseAll()"
-        class="px-2 py-1 rounded-md bg-amber-50 text-amber-600 hover:bg-amber-100 text-[11px] font-medium transition-colors flex items-center gap-1 cursor-pointer"
-        title="暂停所有下载中的任务"
-      >
-        <Pause class="w-3 h-3" />
-        <span>全部暂停</span>
-      </button>
-
-      <!-- 全部继续 -->
-      <button
-        v-if="downloadManager.pausedCount.value > 0"
-        @click="downloadManager.resumeAll(activeSource?.id)"
-        class="px-2 py-1 rounded-md bg-emerald-50 text-emerald-600 hover:bg-emerald-100 text-[11px] font-medium transition-colors flex items-center gap-1 cursor-pointer"
-        title="继续所有已暂停的任务"
-      >
-        <Play class="w-3 h-3" />
-        <span>全部继续</span>
-      </button>
-
-      <!--
-        全部恢复：只针对「已停止」的任务。
-        与「全部继续」分开是因为两者语义不同（暂停 vs 停止），混在一个按钮里
-        会让「全部继续」突然开始恢复用户主动停掉的任务。
-      -->
-      <button
-        v-if="stoppedCount > 0"
-        @click="downloadManager.resumeStopped(activeSource?.id)"
-        class="px-2 py-1 rounded-md bg-emerald-50 text-emerald-600 hover:bg-emerald-100 text-[11px] font-medium transition-colors flex items-center gap-1 cursor-pointer"
-        title="把所有已停止的任务重新排队并继续"
-      >
-        <Play class="w-3 h-3" />
-        <span>全部恢复</span>
-      </button>
-
-      <!-- 全部重试 -->
-      <button
-        v-if="downloadManager.failedCount.value > 0"
-        @click="downloadManager.retryAllFailed(activeSource?.id)"
-        class="px-2 py-1 rounded-md bg-blue-50 text-blue-600 hover:bg-blue-100 text-[11px] font-medium transition-colors flex items-center gap-1 cursor-pointer"
-        title="重新尝试所有失败的任务"
-      >
-        <RotateCw class="w-3 h-3" />
-        <span>重试失败</span>
-      </button>
-
-      <!-- 停止全部进行中任务 -->
-      <button
-        v-if="downloadManager.activeCount.value > 0 || downloadManager.pausedCount.value > 0"
-        @click="downloadManager.stopAll()"
-        class="px-2 py-1 rounded-md bg-rose-50 text-rose-600 hover:bg-rose-100 text-[11px] font-medium transition-colors flex items-center gap-1 cursor-pointer"
-        title="停止并取消所有正在进行与排队中的任务"
-      >
-        <Square class="w-3 h-3" />
-        <span>停止全部</span>
-      </button>
-
-      <!--
-        多选与清除记录（用户 2026-10-07 指令：「任务状态的几个页面中增加多选或者
-        一键清除记录按钮」）。
-        ⚠️ 勾选框只出现在**已结束**的行上（已完成/失败/已停止）：给正在下载的行
-        也放一个，会让「清除选中」看起来像「取消下载」—— 两个动作的后果差得远。
-      -->
-      <button
-        v-if="selectedIds.length"
-        @click="clearSelected"
-        class="px-2 py-1 rounded-md bg-rose-50 text-rose-600 hover:bg-rose-100 text-[11px] font-medium transition-colors cursor-pointer"
-        title="移除勾选的记录"
-      >
-        清除选中（{{ selectedIds.length }}）
-      </button>
-      <button
-        v-if="terminalCount > 0"
-        @click="clearAllRecords"
-        class="px-2 py-1 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 text-[11px] transition-colors cursor-pointer"
-        title="清除已完成 / 失败 / 已停止的记录（正在下载与排队中的不受影响）"
-      >
-        一键清除记录
-      </button>
-
-      <!--
-        下载设置：醒目入口。
-        用实心 emerald（而不是灰色描边）—— 它是这一行里唯一「打开面板」的动作，
-        其余都是对队列的操作；用户反馈要求「做得醒目一些，可以采用颜色或背景色」。
-        当前策略放进 title，不展开也能看到。
-      -->
-      <button
-        @click="showSettings = true"
-        class="px-2.5 py-1 rounded-md bg-emerald-500 text-white shadow-xs hover:bg-emerald-600 text-[11px] font-semibold transition-colors flex items-center gap-1 cursor-pointer"
-        :title="`下载策略：${settingsSummary}`"
-      >
-        <Settings2 class="w-3 h-3" />
-        <span>下载设置</span>
-      </button>
-    </div>
-  </div>
 
   <!-- 4. 任务列表内容区 -->
-  <div class="flex-1 overflow-y-auto p-4 space-y-2.5 bg-gray-50/50">
+  <div class="min-h-0 flex-1 space-y-2 overflow-y-auto bg-[#FAFAFC] p-3 sm:p-4">
     <!-- 空状态 -->
     <div
       v-if="!filteredTasks.length"
@@ -176,7 +84,7 @@
     <div
       v-for="task in filteredTasks"
       :key="task.id"
-      class="bg-white rounded-xl border border-gray-100 p-3 shadow-2xs hover:border-gray-200 transition-all flex items-center gap-3 group"
+      class="group flex items-center gap-3 rounded-[12px] border border-[var(--ys-border)] bg-white p-3 transition-colors hover:border-[var(--ys-border-strong)]"
     >
       <!-- 勾选框：只在已结束的行上出现（见工具栏那段注释） -->
       <input
@@ -197,7 +105,7 @@
           class="w-full h-full object-cover"
           @error="task.song.cover = ''"
         />
-        <span v-else class="text-base">🎵</span>
+        <Music2 v-else class="h-4 w-4 text-[var(--ys-text-faint)]" :stroke-width="1.8" />
       </div>
 
       <!-- 歌曲信息与状态 -->
@@ -491,7 +399,17 @@
         >完成</button>
       </div>
     </div>
-  </div>
+      <!-- 勾选了任务才浮出的操作条：清除选中 / 全选当前筛选 -->
+    <SelectionBar
+      :count="selectedIds.length"
+      :actions="[
+        { key: 'clear', label: '清除选中', icon: Trash2, danger: true },
+        { key: 'all', label: allSelected ? '取消全选' : '全选已结束', icon: ListChecks },
+      ]"
+      @action="(k) => (k === 'clear' ? clearSelected() : toggleSelectAll())"
+      @clear="selected = new Set()"
+    />
+</div>
 </Teleport>
 
 </template>
@@ -500,10 +418,12 @@
 import { ref, computed } from 'vue'
 import { downloadManager } from '../services/downloadManager'
 import SelectField from './SelectField.vue'
+import OverflowMenu from './OverflowMenu.vue'
+import SelectionBar from './SelectionBar.vue'
 import {
   X, Folder, RotateCw, Trash2, Check,
   AlertCircle, Loader2, Music2, Clock, Pause, Play, Square,
-  Settings2
+  Settings2, Settings, ListChecks, Eraser, RotateCcw
 } from 'lucide-vue-next'
 
 const props = defineProps({
@@ -512,6 +432,27 @@ const props = defineProps({
 
 // 下载设置面板默认折叠，避免一屏挤满控件
 const showSettings = ref(false)
+
+/**
+ * 队列页右上角 ⋯。
+ * 判定标准：这个动作**不需要先勾选**、也不是此刻正在发生的事 → 进菜单。
+ * 「全部恢复 / 重试失败 / 停止全部」三个批量动作只在对应状态存在时才出现。
+ */
+const queueMenu = computed(() => [
+  { key: 'resumeStopped', label: '全部恢复', icon: Play, disabled: stoppedCount.value === 0, hint: `${stoppedCount.value} 首已停止` },
+  { key: 'retryFailed', label: '重试失败', icon: RotateCcw, disabled: downloadManager.failedCount.value === 0, hint: `${downloadManager.failedCount.value} 首失败` },
+  { key: 'stopAll', label: '停止全部', icon: Square, danger: true, disabled: downloadManager.activeCount.value + downloadManager.pausedCount.value === 0 },
+  { key: 'clearRecords', label: '清除所有记录', icon: Eraser, danger: true, disabled: terminalCount.value === 0, hint: '已完成 / 失败 / 已停止' },
+  { key: 'settings', label: '下载设置…', icon: Settings },
+])
+
+function onQueueMenu(key) {
+  if (key === 'resumeStopped') downloadManager.resumeStopped(activeSource?.id)
+  else if (key === 'retryFailed') downloadManager.retryAllFailed(activeSource?.id)
+  else if (key === 'stopAll') downloadManager.stopAll()
+  else if (key === 'clearRecords') clearAllRecords()
+  else if (key === 'settings') showSettings.value = true
+}
 
 // ── 下载策略设置的读写模型 ──
 const qualityModel = computed({

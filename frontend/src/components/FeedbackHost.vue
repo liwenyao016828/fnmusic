@@ -18,12 +18,24 @@
       <button
         v-for="item in visible"
         :key="item.id"
-        class="pointer-events-auto flex max-w-full items-center gap-2 rounded-[var(--ys-radius-control)] px-4 py-2.5 text-left leading-relaxed text-white shadow-lg"
-        :class="[TONE[item.level] || TONE.info, item.goLogs ? 'cursor-pointer hover:brightness-110' : 'cursor-default']"
+        class="pointer-events-auto flex max-w-full items-center gap-2.5 rounded-full border border-white/10 bg-[var(--ys-toast-bg)] px-4 py-2.5 text-left leading-relaxed text-white shadow-[0_10px_30px_rgba(0,0,0,0.22)] backdrop-blur-xl"
+        :class="item.goLogs
+          ? 'cursor-pointer transition-transform duration-200 [transition-timing-function:var(--ys-ease)] hover:scale-[1.02] active:scale-[0.99]'
+          : 'cursor-default'"
         :style="{ fontSize: 'var(--ys-fs-toast)' }"
         @click="onTap(item)"
       >
-        <component :is="ICONS[item.level] || ICONS.info" class="h-3.5 w-3.5 shrink-0" />
+        <!--
+          提示条改成「深色玻璃一条圆角药丸 + 一个彩色图标」（v2.11.0）。
+          原来四色实心底（info/ok/warn/fail 直接铺满）在同一屏里并排出现时太吵，
+          而这东西是**瞬时**反馈：主信息是那句话，颜色只该做「轻重缓急」的提示。
+        -->
+        <component
+          :is="ICONS[item.level] || ICONS.info"
+          class="h-4 w-4 shrink-0"
+          :class="TINT[item.level] || TINT.info"
+          :stroke-width="2"
+        />
         <span class="min-w-0 break-words">{{ item.text }}</span>
         <!-- 「看日志」是可点提示唯一的附加动作：一句话说不清的细节都在日志里 -->
         <span v-if="item.goLogs" class="shrink-0 whitespace-nowrap opacity-75">查看日志 ›</span>
@@ -40,11 +52,12 @@ import { Info, CheckCircle2, AlertTriangle, XCircle } from 'lucide-vue-next'
 
 const visible = computed(() => feedbackItems.value.slice(-FEEDBACK_MAX_VISIBLE))
 
-const TONE = {
-  info: 'bg-[var(--ys-toast-info)]',
-  ok: 'bg-[var(--ys-toast-ok)]',
-  warn: 'bg-[var(--ys-toast-warn)]',
-  fail: 'bg-[var(--ys-toast-fail)]',
+/** 颜色只上图标：底统一是深色玻璃（--ys-toast-bg），不再四色铺满整条。 */
+const TINT = {
+  info: 'text-[var(--ys-toast-info)]',
+  ok: 'text-[var(--ys-toast-ok)]',
+  warn: 'text-[var(--ys-toast-warn)]',
+  fail: 'text-[var(--ys-toast-fail)]',
 }
 const ICONS = { info: Info, ok: CheckCircle2, warn: AlertTriangle, fail: XCircle }
 
@@ -61,14 +74,21 @@ function onTap(item) {
 <style scoped>
 .ys-feedback-enter-active,
 .ys-feedback-leave-active {
-  transition: opacity 0.18s ease, transform 0.18s ease;
+  transition: opacity 0.22s cubic-bezier(0.32, 0.72, 0, 1), transform 0.22s cubic-bezier(0.32, 0.72, 0, 1);
 }
 .ys-feedback-enter-from,
 .ys-feedback-leave-to {
   opacity: 0;
-  transform: translateY(8px);
+  transform: translateY(10px) scale(0.97);
 }
 .ys-feedback-move {
-  transition: transform 0.18s ease;
+  transition: transform 0.22s cubic-bezier(0.32, 0.72, 0, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .ys-feedback-enter-active,
+  .ys-feedback-leave-active,
+  .ys-feedback-move {
+    transition-duration: 0.001s;
+  }
 }
 </style>

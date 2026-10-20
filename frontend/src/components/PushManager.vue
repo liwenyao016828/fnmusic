@@ -10,15 +10,24 @@
       <button
         @click="onRefresh"
         :disabled="reloading"
-        class="rounded-lg border border-gray-200 bg-white px-3.5 py-2 text-xs font-semibold text-gray-600 transition-all hover:border-emerald-300 hover:text-emerald-600 disabled:opacity-50"
+        class="rounded-[10px] border border-[var(--ys-border)] bg-white px-3.5 py-2 text-xs font-medium text-[var(--ys-text-muted)] transition-colors hover:bg-black/[0.03] hover:text-[var(--ys-text)] disabled:opacity-50"
       >{{ reloading ? '刷新中…' : '刷新' }}</button>
     </template>
 
     <template #metrics>
       <div v-if="metrics.length" class="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <div v-for="m in metrics" :key="m.label" class="rounded-[18px] border border-gray-200 bg-white px-[17px] py-[15px]">
-          <b class="block text-[24px] font-bold" :class="m.color">{{ m.value }}</b>
-          <span class="text-[12px] text-gray-400">{{ m.label }}</span>
+        <div
+          v-for="m in metrics"
+          :key="m.label"
+          class="rounded-[var(--ys-radius-card)] border border-[var(--ys-border)] bg-white px-[18px] py-4 shadow-[0_1px_2px_rgba(0,0,0,0.03)]"
+        >
+          <!-- 指标卡：标签在上（带一颗状态点表示倾向），数字在下且一律墨色 ——
+               彩色大数字一排下来像仪表盘，Apple 的做法是「数字说事实，颜色只提示」。 -->
+          <span class="flex items-center gap-1.5 text-[11px] font-medium text-[var(--ys-text-muted)]">
+            <span class="h-1.5 w-1.5 shrink-0 rounded-full" :class="m.dot"></span>
+            {{ m.label }}
+          </span>
+          <b class="mt-1.5 block text-[26px] font-semibold tracking-[-0.02em] tabular-nums text-[var(--ys-text)]">{{ m.value }}</b>
         </div>
       </div>
     </template>
@@ -601,10 +610,10 @@ async function onRefresh() {
 const metrics = computed(() => {
   const rows = subscriptions.value
   return [
-    { label: '订阅', value: rows.length, color: 'text-gray-800' },
-    { label: '自动下载', value: rows.filter((r) => r.download).length, color: 'text-emerald-600' },
-    { label: '同步飞牛', value: rows.filter((r) => r.fnos).length, color: 'text-emerald-600' },
-    { label: '待下载', value: rows.reduce((n, r) => n + r.pendingCount, 0), color: 'text-amber-600' },
+    { label: '订阅', value: rows.length, dot: 'bg-[var(--ys-text-faint)]' },
+    { label: '自动下载', value: rows.filter((r) => r.download).length, dot: 'bg-emerald-500' },
+    { label: '同步飞牛', value: rows.filter((r) => r.fnos).length, dot: 'bg-emerald-500' },
+    { label: '待下载', value: rows.reduce((n, r) => n + r.pendingCount, 0), dot: 'bg-amber-500' },
   ]
 })
 

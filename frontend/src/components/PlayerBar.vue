@@ -57,7 +57,7 @@
         class="ys-glass ys-player-glass ys-player ys-barsearch mx-auto flex h-[64px] items-center gap-3 px-4 sm:h-[72px]"
         :class="reducedMotion ? 'ys-barsearch--now' : ''"
       >
-        <span class="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-white/10 text-emerald-400/70">
+        <span class="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-white/10 text-white/60">
           <Disc3 class="h-4 w-4" />
         </span>
         <span class="min-w-0 flex-1">
@@ -78,7 +78,7 @@
           type="submit"
           :disabled="!searchQuery.trim()"
           title="搜索"
-          class="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-emerald-500 text-white transition-colors hover:bg-emerald-400 disabled:opacity-40"
+          class="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-white text-black transition-transform hover:scale-[1.04] active:scale-95 disabled:opacity-40"
         >
           <Search class="h-4 w-4" />
         </button>
@@ -115,7 +115,7 @@
           aria-hidden="true"
           class="pointer-events-none absolute inset-0 h-full w-full scale-150 object-cover opacity-30 blur-2xl"
         />
-        <span class="pointer-events-none absolute inset-0 bg-black/30" aria-hidden="true"></span>
+        <span class="pointer-events-none absolute inset-0 bg-black/45" aria-hidden="true"></span>
 
         <!-- 左：播放控制（trim.music 最左侧就是控制组，`h-12 shrink-0 items-center`） -->
         <div class="relative flex h-12 shrink-0 items-center gap-0.5">
@@ -139,7 +139,7 @@
             @click="$emit('toggle-play')"
             :disabled="isResolving"
             :title="isPlaying ? '暂停' : '播放'"
-            class="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-emerald-500 text-white transition-all hover:bg-emerald-400 active:scale-95 disabled:opacity-60"
+            class="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-white text-black shadow-[0_1px_2px_rgba(0,0,0,0.25)] transition-transform hover:scale-[1.04] active:scale-95 disabled:opacity-50"
           >
             <Loader2 v-if="isResolving" class="h-4 w-4 animate-spin" />
             <Pause v-else-if="isPlaying" class="h-4 w-4 fill-current" />
@@ -159,7 +159,7 @@
         <div class="relative flex min-w-0 flex-1 items-center gap-2.5">
           <button
             @click="$emit('toggle-fullscreen')"
-            class="grid h-[38px] w-[38px] shrink-0 place-items-center overflow-hidden rounded-md bg-white/10 text-white/50 transition-transform hover:scale-[1.03]"
+            class="grid h-[38px] w-[38px] shrink-0 place-items-center overflow-hidden rounded-[9px] bg-white/10 text-white/50 transition-transform hover:scale-[1.04]"
             title="打开播放页"
           >
             <img
@@ -174,7 +174,7 @@
           </button>
 
           <div class="min-w-0 flex-1">
-            <b class="block max-w-[234px] truncate text-[13px] font-semibold text-white/90 sm:text-sm">
+            <b class="block max-w-[234px] truncate text-[13px] font-semibold tracking-[-0.01em] text-white sm:text-sm">
               {{ currentSong.name || currentSong.title || '曲率' }}
             </b>
             <small class="hidden max-w-[234px] truncate text-[11px] text-white/45 sm:block">
@@ -182,15 +182,15 @@
             </small>
             <!-- 进度：细线；≥sm 时两端带时间。手机（<sm）它就在歌名下面那一行 -->
             <div class="mt-1 flex items-center gap-2">
-              <span class="hidden w-9 shrink-0 text-right font-mono text-[10px] text-white/40 sm:block">{{ formatTime(currentTime) }}</span>
+              <span class="ys-num hidden w-9 shrink-0 text-right text-[10px] text-white/45 sm:block">{{ formatTime(currentTime) }}</span>
               <!-- ⚠️ 视觉只有 4px，手指点不准：before 伪元素把命中区上下各撑 12px（视觉粗细不变） -->
               <span
                 @click="handleSeek"
-                class="relative h-1 flex-1 cursor-pointer rounded-full bg-white/15 before:absolute before:inset-x-0 before:-top-3 before:-bottom-3 before:content-['']"
+                class="group/progress relative h-1 flex-1 cursor-pointer rounded-full bg-white/20 before:absolute before:inset-x-0 before:-top-3 before:-bottom-3 before:content-['']"
               >
-                <span class="block h-1 rounded-full bg-emerald-400" :style="{ width: progressPercent + '%' }"></span>
+                <span class="block h-1 rounded-full bg-white transition-[width] duration-150 ease-linear" :style="{ width: progressPercent + '%' }"></span>
               </span>
-              <span class="hidden w-9 shrink-0 font-mono text-[10px] text-white/40 sm:block">{{ formatTime(duration) }}</span>
+              <span class="ys-num hidden w-9 shrink-0 text-[10px] text-white/45 sm:block">{{ formatTime(duration) }}</span>
             </div>
           </div>
         </div>
@@ -204,7 +204,7 @@
           ><Search class="h-4 w-4" /></button>
           <button
             @click="$emit('toggle-lyrics')"
-            :class="['hidden h-9 rounded-full px-2 text-[11px] font-semibold transition-colors lg:block', showLyrics ? 'bg-emerald-500/20 text-emerald-300' : 'text-white/55 hover:bg-white/10 hover:text-white']"
+            :class="['hidden h-9 rounded-full px-2.5 text-[11px] font-medium transition-colors lg:block', showLyrics ? 'bg-white/15 text-white' : 'text-white/55 hover:bg-white/10 hover:text-white']"
             title="歌词"
           >词</button>
           <div class="hidden items-center gap-1.5 xl:flex">
@@ -216,7 +216,7 @@
             <input
               type="range" min="0" max="1" step="0.01" v-model="volume"
               title="音量"
-              class="h-1 w-16 cursor-pointer appearance-none rounded-full bg-white/20 accent-emerald-500"
+              class="h-1 w-16 cursor-pointer appearance-none rounded-full bg-white/20 accent-white"
             />
           </div>
           <button

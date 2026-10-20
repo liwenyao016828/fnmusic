@@ -1,7 +1,7 @@
 <template>
   <PageShell>
     <template #title-extra>
-      <span class="text-[10px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-200 font-mono">已导入 {{ sources.length }} 个</span>
+      <span class="rounded-full border border-[var(--ys-border)] bg-black/[0.03] px-2.5 py-0.5 text-[10px] font-medium tracking-[0.02em] text-[var(--ys-text-muted)]">已导入 {{ sources.length }} 个</span>
       <span
         v-if="sourceHealth.cooldownCount.value > 0"
         class="text-[10px] px-2 py-0.5 rounded-full bg-rose-50 text-rose-600 border border-rose-200 font-mono"
@@ -87,9 +87,9 @@
       </SectionCard>
 
       <!-- 导入结果条：关掉弹窗也能看到刚才那批音源测成什么样 -->
-      <div v-if="importNotice" class="rounded-xl border border-emerald-200 bg-emerald-50 px-3.5 py-2.5 text-[11px] text-emerald-800 flex items-start justify-between gap-2">
+      <div v-if="importNotice" class="flex items-start justify-between gap-2 rounded-xl border border-emerald-500/25 bg-[var(--ys-accent-soft)] px-3.5 py-2.5 text-[11px] text-[var(--ys-text)]">
         <span class="leading-relaxed">导入结果 · {{ importNotice }}</span>
-        <button @click="importNotice = ''" class="shrink-0 text-emerald-600 hover:text-emerald-800">关闭</button>
+        <button @click="importNotice = ''" class="shrink-0 text-[var(--ys-accent)] hover:opacity-70">关闭</button>
       </div>
 
       <!-- 常驻合规与免责声明条 —— **已撤**（2026-10-18 用户口径：「去掉音源管理，免责声明的卡片」）。
@@ -116,17 +116,17 @@
         <div class="grid grid-cols-2 gap-3">
           <div
             v-for="p in protocols" :key="p.id"
-            class="cursor-pointer rounded-xl border p-3.5 transition-all hover:shadow-sm"
-            :class="p.ready ? 'border-emerald-200 bg-emerald-50/40' : 'border-gray-200 bg-gray-50'"
+            class="cursor-pointer rounded-xl border p-3.5 transition-all hover:shadow-[0_2px_8px_rgba(0,0,0,0.05)]"
+            :class="p.ready ? 'border-[var(--ys-border)] bg-white' : 'border-[var(--ys-border)] bg-[#FAFAFC]'"
             @click="toggleProtocol(p.id)"
             :title="expandedProtocols.includes(p.id) ? '点击收起' : '点击展开全部信息'"
           >
             <!-- 折叠时也一定可见：名称 + 就绪状态 -->
             <div class="flex items-center gap-1.5">
-              <b class="min-w-0 flex-1 truncate text-sm text-gray-800" :title="p.name">{{ p.name }}</b>
+              <b class="min-w-0 flex-1 truncate text-sm font-medium text-[var(--ys-text)]" :title="p.name">{{ p.name }}</b>
               <span
-                class="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold"
-                :class="p.ready ? 'bg-emerald-500 text-white' : 'bg-gray-200 text-gray-500'"
+                class="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium"
+                :class="p.ready ? 'bg-[var(--ys-accent-soft)] text-[var(--ys-accent)]' : 'bg-black/[0.05] text-[var(--ys-text-faint)]'"
               >{{ p.ready ? '已就绪' : '未就绪' }}</span>
               <ChevronDown
                 class="h-3.5 w-3.5 shrink-0 text-gray-400 transition-transform"
@@ -186,10 +186,10 @@
                   :title="opt.desc"
                   :aria-pressed="officialPlatform === opt.id"
                   @click="setOfficialPlatform(opt.id)"
-                  class="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12px] font-bold transition-all"
+                  class="ys-press flex items-center gap-1.5 rounded-[9px] px-2.5 py-1.5 text-[12px] font-medium transition-colors"
                   :class="officialPlatform === opt.id
-                    ? 'bg-emerald-500 text-white shadow-sm'
-                    : 'border border-gray-200 bg-white text-gray-500 hover:border-emerald-300 hover:text-emerald-600'"
+                    ? 'bg-[var(--ys-text)] text-white'
+                    : 'border border-[var(--ys-border)] bg-white text-[var(--ys-text-muted)] hover:bg-black/[0.04] hover:text-[var(--ys-text)]'"
                 >
                   <span>{{ opt.icon }}</span><span>{{ opt.name }}</span>
                 </button>
@@ -276,8 +276,8 @@
       <div v-else class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
         <div v-for="s in sources" :key="s.id"
           :class="[
-            'bg-white rounded-[18px] border p-4 flex items-center gap-3 transition-all cursor-pointer hover:border-emerald-300 hover:shadow-sm',
-            isActive(s.id) ? 'border-emerald-400 shadow-sm ring-1 ring-emerald-400/20' : 'border-gray-200',
+            'flex items-center gap-3 rounded-[18px] border border-[var(--ys-border)] bg-white p-4 transition-all cursor-pointer hover:shadow-[0_2px_10px_rgba(0,0,0,0.06)]',
+            isActive(s.id) ? 'border-transparent ring-2 ring-emerald-500/40' : '',
             !healthOf(s.id).available ? 'opacity-70 border-rose-200' : ''
           ]"
           @click="toggleSource(s.id)"
@@ -285,10 +285,10 @@
         >
           <!-- 左：耳机；已启用时中间叠一个单音符 -->
           <div class="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border"
-               :class="isActive(s.id) ? 'border-emerald-200 bg-emerald-50' : 'border-gray-100 bg-gray-50'">
-            <Headphones class="h-6 w-6" :class="isActive(s.id) ? 'text-emerald-600' : 'text-gray-400'" />
+               :class="isActive(s.id) ? 'border-emerald-500/25 bg-[var(--ys-accent-soft)]' : 'border-[var(--ys-border)] bg-[#FAFAFC]'">
+            <Headphones class="h-6 w-6" :class="isActive(s.id) ? 'text-[var(--ys-accent)]' : 'text-[var(--ys-text-faint)]'" />
             <!-- 位置往右挪一点（用户说偏左）、笔画加粗 -->
-            <Music2 v-if="isActive(s.id)" :stroke-width="2.8" class="absolute h-2.5 w-2.5 translate-x-[1.5px] text-emerald-700" />
+            <Music2 v-if="isActive(s.id)" :stroke-width="2.8" class="absolute h-2.5 w-2.5 translate-x-[1.5px] text-[var(--ys-accent)]" />
           </div>
 
           <!--
@@ -297,7 +297,7 @@
           -->
           <div class="min-w-0 flex-1 overflow-hidden">
             <div class="flex items-center gap-1.5 flex-wrap">
-              <span class="min-w-0 max-w-full truncate font-semibold text-sm text-gray-800" :title="s.name">{{ s.name }}</span>
+              <span class="min-w-0 max-w-full truncate text-sm font-medium text-[var(--ys-text)]" :title="s.name">{{ s.name }}</span>
               <span v-if="s.version" class="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-400 font-mono">v{{ s.version }}</span>
               <span class="text-[10px] px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200/80 font-medium">第三方</span>
             </div>
@@ -382,15 +382,15 @@
           <button
             @click="importMode = 'script'"
             :class="[
-              'px-3 py-1.5 rounded-lg text-[12px] font-bold transition-all whitespace-nowrap',
-              importMode === 'script' ? 'bg-white text-emerald-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+              'ys-press rounded-[9px] px-3 py-1.5 text-[12px] font-medium whitespace-nowrap transition-colors',
+              importMode === 'script' ? 'bg-white text-[var(--ys-text)] shadow-[0_1px_2px_rgba(0,0,0,0.06)]' : 'text-[var(--ys-text-muted)] hover:text-[var(--ys-text)]'
             ]"
           >导入脚本</button>
           <button
             @click="importMode = 'api'"
             :class="[
-              'px-3 py-1.5 rounded-lg text-[12px] font-bold transition-all whitespace-nowrap',
-              importMode === 'api' ? 'bg-white text-emerald-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+              'ys-press rounded-[9px] px-3 py-1.5 text-[12px] font-medium whitespace-nowrap transition-colors',
+              importMode === 'api' ? 'bg-white text-[var(--ys-text)] shadow-[0_1px_2px_rgba(0,0,0,0.06)]' : 'text-[var(--ys-text-muted)] hover:text-[var(--ys-text)]'
             ]"
           >按服务地址</button>
         </div>

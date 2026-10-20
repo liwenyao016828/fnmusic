@@ -26,13 +26,13 @@
         ...内容...
       </PageShell>
   -->
-  <div class="h-full overflow-y-auto bg-[#f5f7f9]">
+  <div class="h-full overflow-y-auto bg-[var(--ys-canvas)]">
     <!--
       手机端把左右内边距从 20px 收到 12px、上下从 24px 收到 12px：390px 宽的屏上
       40px 的横向留白等于白白吃掉一成宽度，而这一页要塞的是两列的卡片。
       （用户 2026-10-08：「适配手机端，一行可以用两个元素」）
     -->
-    <div class="mx-auto w-full max-w-[1500px] px-3 py-3 pb-28 pb-dock sm:px-8 sm:py-7 sm:pb-24">
+    <div class="ys-stagger mx-auto w-full max-w-[1500px] px-4 py-4 pb-28 pb-dock sm:px-8 sm:py-7 sm:pb-24">
 
       <!--
         操作栏（不再是「标题区」）。
@@ -43,7 +43,12 @@
         · 页面名 → 顶栏的 <h1>（数据源仍是 navViews.js）
         · 介绍语 → 一律进 `title=` 悬停提示，不占版面（用户 2026-10-18：「去掉简介」）。
       -->
-      <div v-if="$slots.actions || $slots['title-extra']" class="mb-3 flex flex-wrap items-center justify-between gap-2 sm:mb-6 sm:gap-3">
+      <!--
+        ⚠️ 必须 relative z-30：内容区同样带 ys-stagger 入场动画（transform 会建立
+        stacking context），而它在 DOM 里更靠后 —— 不加 z-index 时，⋯ 菜单弹出来会被
+        下面的白色卡片盖住（2026-10-19 实测）。
+      -->
+      <div v-if="$slots.actions || $slots['title-extra']" class="relative z-30 mb-3 flex flex-wrap items-center justify-between gap-2 sm:mb-6 sm:gap-3">
         <div class="min-w-0">
           <slot name="title-extra" />
         </div>

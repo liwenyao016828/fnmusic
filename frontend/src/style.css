@@ -3,19 +3,22 @@
 @tailwind utilities;
 
 /* ============================================================================
-   移动端基础层（2026-09-26 添加）
+   曲率 · 全局视觉地基（v2.11.0 视觉重构）
 
-   这一层只做「桌面端不需要、移动端必须有」的四件事，不碰任何视觉风格：
-     1. 动态视口高度（`.app-viewport`）—— 移动端浏览器地址栏/工具栏会吃掉
-        100vh 的一部分，直接用 h-screen 会把底部播放条挤出可视区。
-     2. 安全区（刘海 / Home 指示条）—— index.html 已开 viewport-fit=cover，
-        所以这里必须自己补上，否则控件会被压住。
-     3. 触屏手感 —— 去掉点击高亮方块、去掉双击缩放延迟、触摸设备上收细滚动条。
-     4. 横向滚动容器滚到底不再带着整页一起晃。
+   方向：**Quiet Glass / 安静玻璃** —— Apple 系统级的克制，不是「加更多效果」。
 
-   ⚠️ 判定断点一律用 `@media (hover: none) and (pointer: coarse)`
-      （= 真的用手指点的设备），不用屏宽 —— 手机横屏、平板、触屏笔记本都能覆盖，
-      而桌面浏览器即使窗口很窄也不会被误伤。
+   这一层只做三件事，其余全交给 tailwind.config.js 的色阶/圆角/阴影：
+     1. 令牌：颜色语义、层级、动效曲线只在这里定义一次（组件里不再写死十六进制）；
+     2. 基础层：字体、滚动条、选区、聚焦环、表单控件；
+     3. 动效原语：入场 / 按压 / 悬停抬升 / 数字等宽 —— 全站共用同一套曲线。
+
+   ⚠️ 三条口径（改之前先读）：
+     · 强调色只有翡翠绿一支，**只用于**主按钮、选中态、状态点、聚焦环；
+       大面积填绿会让界面像「后台模板」，这是本次重构要治的病。
+     · 深度靠「1px 发丝线 + 极淡大扩散阴影」，不靠粗边框和色块。
+     · 所有动效都要能吃 `prefers-reduced-motion`。
+
+   移动端基础层（动态视口 / 安全区 / 触屏手感）见下方独立段落，未改动行为。
    ============================================================================ */
 
 :root {
@@ -24,41 +27,63 @@
   --safe-left: env(safe-area-inset-left, 0px);
   --safe-right: env(safe-area-inset-right, 0px);
 
-  /* ==========================================================================
-     设计令牌（2026-10-15 全站 UI/UX 重构 P0）
-
-     要解决的问题：同一个意思在不同页面写成不同数值 —— 卡片圆角有
-     rounded-lg / rounded-xl / rounded-2xl 三种，提示底色有 gray-900 / emerald-600 /
-     amber-500 各自硬编码，改一次外观得全文替换且必然漏掉几处。
-
-    原则：**只定义已经在组件里用上、且确实需要跨页统一的那些**。
-      · 不给「将来可能会用」的东西预先造令牌（那只会变成又一批死代码）；
-      · 令牌名描述**用途**（surface / border / text-muted）而不是颜色值，
-        换配色时不需要改调用点；
-      · 用 Tailwind 任意值语法消费：`rounded-[var(--ys-radius-card)]`。
-        这样它和现有类名混写不冲突，也不需要改 tailwind.config。
-
-     详见 docs/UI重构方案.md 第三节「三层容器」。
-     ========================================================================== */
-  --ys-radius-card: 12px;      /* 卡片 / 面板 / 抽屉内页 */
-  --ys-radius-control: 10px;   /* 按钮 / 输入框 / 分段器 */
+  /* ── 亮色表面 ──────────────────────────────────────────────────────────
+     画布 #F5F5F7 与卡片纯白之间只差 5% 明度：层次靠 1px 发丝线建立，
+     不用阴影堆叠（阴影一多就「脏」）。 */
+  --ys-canvas: #f5f5f7;
   --ys-surface: #ffffff;
-  --ys-surface-sunken: #f3f4f6; /* 卡片内的凹陷区（分段器底、只读块）*/
-  --ys-border: #e5e7eb;
-  --ys-accent: #059669;         /* emerald-600：全站唯一强调色 */
-  --ys-text: #111827;
-  --ys-text-muted: #6b7280;
+  --ys-surface-sunken: #f0f0f3;   /* 分段器底、只读块、卡内凹陷区 */
+  --ys-surface-2: #fafafc;        /* 需要比画布再浅一点的内层 */
+  --ys-surface-glass: rgb(250 250 252 / 0.72); /* 顶栏 / 抽屉：磨砂白 */
+  --ys-border: rgb(0 0 0 / 0.07);  /* 发丝线：白底上唯一的分隔手段 */
+  --ys-border-strong: rgb(0 0 0 / 0.12);
+
+  /* ── 文字 ──────────────────────────────────────────────────────────────
+     Apple 的三级灰：正文近黑、次要中灰、辅助浅灰。三级之外不要再造第四级。 */
+  --ys-text: #1d1d1f;
+  --ys-text-muted: #6e6e73;
+  --ys-text-faint: #aeaeb2;
+
+  /* ── 强调色（品牌青玉）────────────────────────────────────────────────
+     500 压白字 4.7:1（AA），600 压白底 5.3:1，400 只给深色玻璃用。 */
+  --ys-accent: #0b8a66;
+  --ys-accent-hover: #0a7a5b;
+  --ys-accent-soft: rgb(11 138 102 / 0.08);
+  --ys-accent-ring: rgb(11 138 102 / 0.28);
+
+  /* ── 形状与阴影 ──────────────────────────────────────────────────────── */
+  --ys-radius-card: 18px;
+  --ys-radius-control: 10px;
+  --ys-shadow-1: 0 1px 2px rgb(0 0 0 / 0.04), 0 1px 1px rgb(0 0 0 / 0.03);
+  --ys-shadow-2: 0 4px 16px rgb(0 0 0 / 0.06);
+  --ys-shadow-3: 0 18px 48px rgb(0 0 0 / 0.12);
+
+  /* ── 动效 ──────────────────────────────────────────────────────────────
+     160ms 用于颜色/描边这类「不移动」的变化；260ms 用于位移；360ms 用于面板进出。
+     曲线「快出慢收」，与 Apple 的 spring 手感同源。 */
+  --ys-ease: cubic-bezier(0.32, 0.72, 0, 1);
+  --ys-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ys-dur-1: 160ms;
+  --ys-dur-2: 260ms;
+  --ys-dur-3: 360ms;
+
+  /* ── 字号（组件里用任意值消费，这里只记口径）────────────────────────── */
+  --ys-fs-display: 29px;  /* 页面主标题 */
+  --ys-fs-title: 15px;    /* 卡片标题 */
+  --ys-fs-body: 13px;     /* 正文 */
+  --ys-fs-caption: 11px;  /* 说明 */
   --ys-fs-toast: 12px;
-  /* 瞬时提示底色：按等级区分，失败最显眼（用户只在这一处看到红色） */
-  --ys-toast-info: rgba(17, 24, 39, 0.85);
-  --ys-toast-ok: rgba(5, 150, 105, 0.93);
-  --ys-toast-warn: rgba(217, 119, 6, 0.95);
-  --ys-toast-fail: rgba(190, 18, 60, 0.94);
+
+  /* ── 瞬时提示：统一深色玻璃 + 彩色图标（颜色不再整块铺底）────────────── */
+  --ys-toast-bg: rgb(24 24 26 / 0.9);
+  --ys-toast-info: #5a9cff;
+  --ys-toast-ok: #34c759;
+  --ys-toast-warn: #ff9f2e;
+  --ys-toast-fail: #ff5a4e;
 
   /* 手机底部标签栏占位高度（2026-10-17 导航框架重做）：
      桌面 0；触屏 = 56px 标签栏 + 底部安全区。
-     PlayerBar / FeedbackHost / 页面底部留白（PageShell、SearchView）都按它避让，
-     别再各自写死 bottom 值 —— 加一处、全站生效。 */
+     PlayerBar / FeedbackHost / 页面底部留白（PageShell、SearchView）都按它避让。 */
   --dock-h: 0px;
 }
 
@@ -69,7 +94,7 @@
   :root { --dock-h: calc(56px + var(--safe-bottom)); }
   .mobile-dock { display: block; }
   /* 播放条根容器的 pb-safe 与 --dock-h 里的安全区重复（抬升量已含 safe-bottom），
-     触屏下归零，避免播放条与标签栏之间凭空多一条 Home 指示条高度的缝。 */
+      触屏下归零，避免播放条与标签栏之间凭空多一条 Home 指示条高度的缝。 */
   .ys-playerbar-root { padding-bottom: 0; }
 }
 
@@ -107,18 +132,35 @@
     height: 100dvh;
   }
 
-  /* ── 表单控件全局统一（2026-10-18 用户：「全局多选和单选按钮统一一下」）──
-     以前每个页面的 `<input type="checkbox">` 各写各的：有的带 accent-emerald-500、
-     有的裸着（浏览器默认蓝）、有的又叠了 Tailwind forms 的 text/rounded/focus:ring
-     （那套要 @tailwindcss/forms 插件才生效，本项目没装 —— 于是写了等于没写，
-     看上去反而更像「坏了」）。原生控件的**内部**由浏览器绘制，能改的只有
-     accent-color（选中色）、尺寸、圆角与光标，所以统一就统一在这些属性上。
+  /* 字体渲染：SF Pro / 苹方在小字号下加抗锯齿，笔画不会糊成灰块；
+     中文正文默认 -0.01em 字距，13px 时读起来更紧致（大标题由组件自己 tracking-tight）。 */
+  body {
+    color: var(--ys-text);
+    background-color: var(--ys-canvas);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    letter-spacing: -0.006em;
+  }
 
-     放在 @layer base：Tailwind 的工具类在 @layer utilities 里，优先级更高，
-     所以 `w-3.5 h-3.5` 这类显式尺寸仍然能覆盖这里（局部确实需要更小的除外）。 */
+  /* 选中态：强调色的淡底，不用浏览器默认那抹高饱和蓝 */
+  ::selection {
+    background: rgb(11 138 102 / 0.18);
+    color: var(--ys-text);
+  }
+
+  /* 键盘聚焦环：只有键盘操作才出现（鼠标点击不画出焦点框） */
+  :focus-visible {
+    outline: 2px solid var(--ys-accent-ring);
+    outline-offset: 2px;
+  }
+
+  /* ── 表单控件全局统一（2026-10-18 用户：「全局多选和单选按钮统一一下」）──
+     原生控件的**内部**由浏览器绘制，能改的只有 accent-color、尺寸、圆角与光标。
+     放在 @layer base：Tailwind 的工具类优先级更高，显式尺寸仍能覆盖。 */
   input[type="checkbox"],
   input[type="radio"] {
-    accent-color: #10b981;   /* emerald-500，与全站主色一致 */
+    accent-color: var(--ys-accent);
     width: 1rem;
     height: 1rem;
     flex-shrink: 0;
@@ -132,10 +174,9 @@
     opacity: 0.5;
   }
 
-  /* 下拉与数字输入也统一圆角与聚焦色 —— 原生 <select> 此前是方块直角 */
   select:not([multiple]) {
     cursor: pointer;
-    border-radius: 0.5rem;
+    border-radius: 0.625rem;
   }
 
   select:focus-visible,
@@ -144,9 +185,17 @@
   input[type="number"]:focus-visible,
   textarea:focus-visible {
     outline: none;
-    border-color: #34d399;   /* emerald-400 */
-    box-shadow: 0 0 0 2px rgb(52 211 153 / 0.2);
+    border-color: var(--ys-accent);
+    box-shadow: 0 0 0 3px var(--ys-accent-ring);
   }
+}
+
+/* 入场位移的关键帧（定义在层外，避免部分解析器把 layer 内的 @keyframes 丢掉） */
+@keyframes ys-rise {
+  from { opacity: 0; transform: translate3d(0, 8px, 0); }
+  /* 终态必须是 `none` 而不是 translate3d(0,0,0)：animation-fill-mode: both 会把终态
+     一直挂在元素上，而非 none 的 transform 会让它成为 fixed 子元素的包含块。 */
+  to   { opacity: 1; transform: none; }
 }
 
 @layer utilities {
@@ -173,38 +222,100 @@
     height: 44px;
     transform: translate(-50%, -50%);
   }
+
+  /* ── 动效原语（全站共用，别在组件里另写 keyframes）────────────────────── */
+
+  /* 入场：8px 上浮 + 淡入。位移大就「跳」，苹果的入场几乎只有 6~10px。 */
+  .ys-rise {
+    animation: ys-rise var(--ys-dur-3) var(--ys-ease) both;
+  }
+
+  /* 分组入场：子元素依次浮起（40ms 递进）。只在首屏挂载时跑一次，切换页面不重放。
+     ⚠️ 只给「入口容器」用，不要套在滚动容器上 —— 动画期间会形成包含块，影响 fixed 子节点。 */
+  .ys-stagger > * {
+    animation: ys-rise var(--ys-dur-3) var(--ys-ease) both;
+  }
+  .ys-stagger > *:nth-child(1) { animation-delay: 0ms; }
+  .ys-stagger > *:nth-child(2) { animation-delay: 40ms; }
+  .ys-stagger > *:nth-child(3) { animation-delay: 80ms; }
+  .ys-stagger > *:nth-child(4) { animation-delay: 120ms; }
+  .ys-stagger > *:nth-child(5) { animation-delay: 160ms; }
+  .ys-stagger > *:nth-child(6) { animation-delay: 200ms; }
+  .ys-stagger > *:nth-child(n+7) { animation-delay: 240ms; }
+
+  /* 按压反馈：缩放比「换颜色」更接近真实手感，幅度必须小于 3%，否则像在抖 */
+  .ys-press {
+    transition: transform var(--ys-dur-1) var(--ys-ease),
+                background-color var(--ys-dur-1) linear,
+                color var(--ys-dur-1) linear,
+                box-shadow var(--ys-dur-2) var(--ys-ease);
+  }
+  .ys-press:active {
+    transform: scale(0.97);
+  }
+
+  /* 可点卡片的悬停抬升：只对鼠标设备生效（触屏没有 hover，别让它一直「浮着」） */
+  .ys-lift {
+    transition: transform var(--ys-dur-2) var(--ys-ease),
+                box-shadow var(--ys-dur-2) var(--ys-ease),
+                border-color var(--ys-dur-1) linear,
+                background-color var(--ys-dur-1) linear;
+  }
+  @media (hover: hover) and (pointer: fine) {
+    .ys-lift:hover {
+      transform: translateY(-2px);
+      box-shadow: var(--ys-shadow-2);
+      border-color: var(--ys-border-strong);
+    }
+  }
+
+  /* 数字等宽：进度时间、曲目数、下载速度跳动时不会左右抖 */
+  .ys-num {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum" 1;
+  }
+
+  /* 单行 / 双行截断（中文更容易溢出，统一用这两个而不是各写各的） */
+  .ys-clamp-1 {
+    display: -webkit-box;
+    -webkit-line-clamp: 1;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
 }
 
-/* Custom Scrollbar - light theme */
+/* Custom Scrollbar - 细、圆、悬停才显出强调色（常显彩色会抢内容注意力） */
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
 ::-webkit-scrollbar-track {
-  background: #f8fafc;
+  background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
-  border-radius: 6px;
-  border: 2px solid #f8fafc;
+  background: rgb(0 0 0 / 0.16);
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #10b981;
+  background: rgb(11 138 102 / 0.55);
+  background-clip: content-box;
 }
 
 /* Vinyl Tonearm Animation */
 .tonearm {
   transform-origin: 24px 24px;
-  transition: transform 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: transform 0.6s cubic-bezier(0.32, 0.72, 0, 1);
 }
 .tonearm-playing { transform: rotate(26deg); }
 .tonearm-paused  { transform: rotate(0deg); }
 
 /* Lyrics Active */
 .lyric-active {
-  color: #10b981;
+  color: var(--ys-accent);
   font-size: 1.15rem;
-  font-weight: 700;
+  font-weight: 600;
   transform: scale(1.04);
 }
 
@@ -259,20 +370,23 @@
   .hide-on-touch {
     display: none !important;
   }
+
+  /* 触屏上不做悬停抬升（会被误触发，手指离开后又弹回去） */
+  .ys-lift:hover {
+    transform: none;
+    box-shadow: none;
+  }
 }
 
 /* ============================================================================
    顶栏软件图标 = 开放接口入口（2026-09-27）
 
-   原先「开放接口」是右上角一个**带文字**的按钮；用户要求把入口换到左上角的软件图标上，
-   并且「保留软件图标、用动态图标提示（非文字）让用户知道可以点」。
-
-   2026-09-28 用户反馈「logo 外圈旋转的方框不需要了」——**外圈光环（.brand-halo-ring）已删除**，
-   只留两个更安静的动作：
-     · `.brand-disc circle:last-of-type` —— Disc 的**内圈实心圆**自己放大缩小（呼吸）；
-     · `.brand-core-glow`                 —— 内圈呼吸时透出一层柔光。
-   悬停时底色变深（Tailwind 的 group-hover 管底色）；抽屉已经开着就暂停动效 ——
-   不需要再提示「这里能点」了。`prefers-reduced-motion` 下全部静止（只留图标本身、不发散）。
+   用户口径：「保留软件图标、用动态图标提示（非文字）让用户知道可以点」；
+   2026-09-28 又反馈「logo 外圈旋转的方框不需要了」——外圈光环已删除，只留两个安静动作：
+     · 中间圆点 `.brand-core` **静止**，只当参考物（别让它自己缩放，第一版做错了）；
+     · 圆点外层圆圈 `.brand-core-ring` 呼吸，内圈透出 `.brand-core-glow` 柔光。
+   只动 transform / opacity（走合成层），悬停时底色变深、抽屉开着时暂停、页面失焦时暂停、
+   prefers-reduced-motion 下全部静止。
    ============================================================================ */
 /* 呼吸的节奏：0 → 45% 放大、45~55% 停在顶点、再收回来 —— 中间留个「停顿」才像呼吸，
    两个关键帧硬碰硬（0/50/100）在慢速下会看出「一顿一顿」。缓动用 sine 型贝塞尔，别用 ease-in-out。 */
@@ -292,21 +406,12 @@
 .brand-halo {
   -webkit-tap-highlight-color: transparent;
 }
-/* 2026-09-28 用户口径：「可以采用呼吸感，logo的内圈圆形放大缩小」；同日晚些时候又反馈
-   「logo的呼吸灯，可以增加点帧率，看起来比较卡」—— 卡的原因有两个，都修在这里：
-     ① 原来呼吸的是 SVG 里的 `circle`（配 `transform-box: fill-box`）：SVG 的 transform
-        **不参与合成**，每帧都要重绘那一小块，慢速动画下就是可见的顿。
-     ② 柔光那层同时动 `opacity` + `scale`，缩放一个 radial-gradient 等于每帧重新栅格化。
-   现在改为：中间那个**圆点 `.brand-core` 固定不动**，呼吸交给它**外层那个圆圈 `.brand-core-ring`**
-   —— 都是绝对定位的 HTML 元素，只动 `transform` / `opacity`，`will-change` 提到合成层走 GPU；
-   柔光**只动 opacity**（图层不重新栅格化）。SVG 里的内圈保持静止，被圆点正好盖住。
-
-   ⚠️ 用户 2026-09-28 的最终口径：「**圆点不变，是圆点外层的圆圈呼吸效果**」——
-   别再让圆点自己缩放（我第一版就做错了）。 */
+/* 用户 2026-09-28 的最终口径：「**圆点不变，是圆点外层的圆圈呼吸效果**」。
+   呼吸交给 HTML 元素（不是 SVG circle：SVG 的 transform 不参与合成，慢速动画会顿）；
+   柔光**只动 opacity**，缩放 radial-gradient 等于每帧重新栅格化。 */
 .brand-halo .brand-disc circle:last-of-type {
   animation: none;
 }
-/* 中间的圆点：**静止**，只负责当参考物 */
 .brand-halo .brand-core {
   position: absolute;
   left: 50%;
@@ -318,7 +423,6 @@
   background: rgb(255 255 255 / 0.96);
   pointer-events: none;
 }
-/* 圆点外层那个圆圈：**它**呼吸（放大时顺带淡一点，才像呼吸而不是硬脉冲） */
 .brand-halo .brand-core-ring {
   position: absolute;
   left: 50%;
@@ -337,7 +441,8 @@
   position: absolute;
   inset: 5px;
   border-radius: 9999px;
-  background: radial-gradient(circle, rgb(255 255 255 / 0.5) 0%, rgb(16 185 129 / 0.32) 46%, rgb(16 185 129 / 0) 72%);
+  /* 光晕跟着品牌青玉走（原来写死 emerald-500 的 rgb(16 185 129)） */
+  background: radial-gradient(circle, rgb(255 255 255 / 0.5) 0%, rgb(11 138 102 / 0.34) 46%, rgb(11 138 102 / 0) 72%);
   pointer-events: none;
   will-change: opacity;
   animation: yinshu-brand-core-glow 3.2s cubic-bezier(0.37, 0, 0.63, 1) infinite;
@@ -351,9 +456,9 @@
   animation-play-state: paused;
 }
 
-/* v2.1.66：页面不可见 / 窗口失焦时也停 —— 在飞牛宿主里 iframe 被别的窗格盖住、用户正在拖
-   分栏的时候，品牌呼吸没必要继续跑。<html> 上的 ys-app-idle 由 ImmersivePlayer 里
-   的 visibilitychange + window blur/focus 维护。 */
+/* v2.1.66：页面不可见 / 窗口失焦时也停 —— 在飞牛宿主里 iframe 被别的窗格盖住、
+   用户正在拖分栏的时候，品牌呼吸没必要继续跑。<html> 上的 ys-app-idle 由 ImmersivePlayer
+   里的 visibilitychange + window blur/focus 维护。 */
 html.ys-app-idle .brand-halo .brand-core-ring,
 html.ys-app-idle .brand-halo .brand-core-glow {
   animation-play-state: paused;
@@ -370,49 +475,40 @@ html.ys-app-idle .brand-halo .brand-core-glow {
 /* ── 环境光光斑：默认「静止」，不再一直飘（2026-10-06） ────────────────────
    YG 反馈播放页动效影响性能。定位后的结论是：贵的不是「模糊」，而是
    **让带大半径模糊的巨层一直动**。
-
-   静态模糊只会光栅化一次然后被缓存；但这里三个 42vmax（接近全屏）的光斑
-   各自带 `blur(46px) saturate(1.45)` 且挂着无限 `transform` 动画 —— 每帧都
-   要把三张接近全屏的模糊图层重新光栅化一遍。这正是手机上最贵的那类开销。
-
-   所以保留光斑的**样子**（配色、位置、模糊半径全不动），只去掉「动」：
-   播放时背景静止，视觉身份还在，每帧成本回到接近零。
-
-   想恢复飘动：给 <html> 加上 `ys-ambient-anim` 这个类即可（不用改这里）。
-   上面 `prefers-reduced-motion` 与 `ys-app-idle` 两处原有开关行为不变。 */
+   静态模糊只会光栅化一次然后被缓存；但三个 42vmax 的光斑各自带
+   blur(46px) saturate(1.45) 且挂着无限 transform 动画 —— 每帧都要把三张接近全屏的
+   模糊图层重新光栅化一遍。所以保留光斑的样子（配色、位置、模糊半径全不动），只去掉「动」。
+   想恢复飘动：给 <html> 加上 `ys-ambient-anim` 这个类即可。 */
 html:not(.ys-ambient-anim) .ys-ambient__orb {
   animation: none !important;
 }
 
 
 /* ============================================================================
-   深色半透明「玻璃悬浮」皮肤（2026-09-28，播放栏 + 沉浸页共用）
+   深色半透明「玻璃悬浮」皮肤（播放栏 + 沉浸页共用）
 
-   YG 给了 trim.music 的风格说明（深黑紫底 + 半透明面板 + 轻磨砂 + 极细描边 + 大圆角 +
-   克制阴影），我把那个 fpk 解开核了它真实的令牌，这里是落地版：
-     --ds-bg-gradient-primary: linear-gradient(#2d293a → #14121b)   ← 「深黑紫」来源
-     --ds-bg-modal 暗色 #1e1c26eb    --ds-glass-control-filter blur(12px)
-     --ds-glass-control-border #ffffff1f（0.12 白）  --shadow 0 4px 16px #0000001f
-     环境光：radial-gradient + blur(46px) saturate(1.45) 的 42vmax 光斑，播放时才动
-   唯一**没照搬**的是强调色：trim.music 用红 #f62c55，音枢的牌子色是翡翠绿，保留 emerald。
-
-   ⚠️ 三条禁令（用户原文）：不要用整体 transform: scale() 做响应式、不要厚阴影、
-      不要过度模糊（blur 20px 上下就够）。宽度流式、靠分级隐藏与间距自适应。
+   2026-10-19 重调：底色由「深黑紫」改成**纯中性近黑**（#1C1C1E → #0A0A0B），
+   与 Apple Music 的悬浮播放条同色系 —— 紫色底会让整个播放条显旧。
+   玻璃三条禁令不变：不用整体 scale 做响应式、不要厚阴影、blur 20px 上下就够。
    ============================================================================ */
 :root {
-  --ys-deep-top: #2d293a;
-  --ys-deep-bottom: #14121b;
+  --ys-deep-top: #1c1c1e;
+  --ys-deep-bottom: #0a0a0b;
   --ys-gradient: linear-gradient(to bottom, var(--ys-deep-top) 0%, var(--ys-deep-bottom) 100%);
-  --ys-panel: rgb(30 28 38 / 0.72);
-  --ys-panel-strong: rgb(23 21 30 / 0.86);
+  --ys-panel: rgb(26 26 28 / 0.74);
+  --ys-panel-strong: rgb(18 18 20 / 0.88);
   --ys-panel-soft: rgb(255 255 255 / 0.07);
   --ys-line: rgb(255 255 255 / 0.1);
   --ys-line-strong: rgb(255 255 255 / 0.16);
-  --ys-text: rgb(255 255 255 / 0.94);
-  --ys-text-dim: rgb(255 255 255 / 0.62);
-  --ys-text-faint: rgb(255 255 255 / 0.42);
-  --ys-accent: #10b981;
-  --ys-shadow: 0 8px 30px rgb(0 0 0 / 0.25);
+  /* ⚠️ 这里**不再**重定义 --ys-text / --ys-text-faint：
+     它们是「亮色正文色」，被亮底组件（SegmentedControl 等）引用。
+     上一版在深色皮肤里把 --ys-text 改成了白色，导致亮底 hover 文字变白看不见。
+     深色面上的文字一律用白系，请直接用 Tailwind 的 text-white/* 或下面的 -on-dark 令牌。 */
+  --ys-text-on-dark: rgb(255 255 255 / 0.94);
+  --ys-text-dim: rgb(255 255 255 / 0.6);
+  --ys-text-on-dark-faint: rgb(255 255 255 / 0.4);
+  --ys-accent-on-dark: #34c759;
+  --ys-shadow: 0 8px 30px rgb(0 0 0 / 0.28);
   --ys-shadow-soft: 0 4px 16px rgb(0 0 0 / 0.18);
   --ys-ambient-primary: #2c4a44;
   --ys-ambient-secondary: #262f4b;
@@ -422,8 +518,8 @@ html:not(.ys-ambient-anim) .ys-ambient__orb {
 /* 玻璃面板：背景半透明、**内容不透明**（不是给整块加 opacity） */
 .ys-glass {
   background: var(--ys-panel);
-  backdrop-filter: blur(20px) saturate(120%);
-  -webkit-backdrop-filter: blur(20px) saturate(120%);
+  backdrop-filter: blur(20px) saturate(140%);
+  -webkit-backdrop-filter: blur(20px) saturate(140%);
   border: 1px solid var(--ys-line);
   box-shadow: var(--ys-shadow);
 }
@@ -432,23 +528,18 @@ html:not(.ys-ambient-anim) .ys-ambient__orb {
   border: 1px solid var(--ys-line);
 }
 
-/* 播放栏 = 浮动胶囊。
-   ⚠️ 尺寸照 trim.music 的真实实现来（2026-09-28 从它的 JS 里挖到）：
-      `flex h-[72px] items-center gap-2 px-4` + `style={{ width: 576, marginInline: 'auto', borderRadius: 44 }}`
-      —— 所以是**宽 576 / 高 72 / 居中 / 圆角≈胶囊**，不是我第一版猜的 900px。 */
+/* 播放栏 = 浮动胶囊。尺寸照 trim.music 的真实实现：宽 576 / 高 72 / 居中 / 圆角≈胶囊。 */
 .ys-player {
   width: min(576px, calc(100vw - 24px));
   border-radius: 9999px;
 }
-/* trim.music 的 .music-player-glass：`backdrop-filter: blur(12px)` + 一点阴影，边框跟主题走。
-   这里保留同一个模糊量级（12px），并留一个变量便于调。 */
+/* .music-player-glass：blur(12px) + 一点阴影，边框跟主题走。变量留着便于调。 */
 .ys-player-glass {
-  backdrop-filter: var(--ys-player-glass-filter, blur(12px)) saturate(120%);
-  -webkit-backdrop-filter: var(--ys-player-glass-filter, blur(12px)) saturate(120%);
+  backdrop-filter: var(--ys-player-glass-filter, blur(12px)) saturate(140%);
+  -webkit-backdrop-filter: var(--ys-player-glass-filter, blur(12px)) saturate(140%);
 }
 
-/* ── 环境光（沉浸页背景，trim.music 的 ambient 光斑做法） ──
-   未播放时静止、播放时才动；`prefers-reduced-motion` 下全部停。 */
+/* ── 环境光（沉浸页背景） ── 未播放时静止、播放时才动；reduced-motion 下全部停。 */
 .ys-ambient {
   position: absolute;
   inset: 0;
@@ -473,7 +564,7 @@ html:not(.ys-ambient-anim) .ys-ambient__orb {
   position: absolute;
   inset: 0;
   opacity: 0;
-  transition: opacity 0.8s ease;
+  transition: opacity 0.8s var(--ys-ease);
   background-image:
     radial-gradient(150% 126% at 6% 4%, rgb(44 74 68 / 0.72) 0%, rgb(44 74 68 / 0.26) 46%, transparent 76%),
     radial-gradient(120% 120% at 90% 10%, rgb(38 47 75 / 0.55) 0%, transparent 70%);
@@ -485,7 +576,7 @@ html:not(.ys-ambient-anim) .ys-ambient__orb {
   border-radius: 9999px;
   filter: blur(46px) saturate(1.45);
   opacity: 0;
-  transition: opacity 0.8s ease;
+  transition: opacity 0.8s var(--ys-ease);
   will-change: transform, opacity;
 }
 .ys-ambient__orb--a {
@@ -567,7 +658,7 @@ html:not(.ys-ambient-anim) .ys-ambient__orb {
   display: none;
 }
 .ys-karaoke__line {
-  transition: opacity 520ms cubic-bezier(0.4, 0, 0.2, 1), filter 280ms ease, transform 280ms ease;
+  transition: opacity 520ms var(--ys-ease), filter 280ms ease, transform 280ms var(--ys-ease);
   will-change: opacity, transform;
 }
 .ys-karaoke__line--active {
@@ -608,15 +699,15 @@ html[data-swiping='1'] .ys-player-glass {
    · 展开点：右下角的搜索图标（fixed bottom-right）。框从那里**滑动放大**出来：
      transform-origin 定在图标那一角（右下），scale 0.85→1 + 少量位移 + 淡入。
    · 只碰 transform / opacity：合成器通道，不触发 layout/paint，掉不了帧。
-   · prefers-reduced-motion: reduce → transition/animation 时长 0，直接显隐（不动画）；
+   · prefers-reduced-motion: reduce → 时长 0，直接显隐（不动画）；
      组件里还有一层 .ys-barsearch--now（JS 探测到时加的类），双保险。
    ============================================================================ */
 .ys-barsearch {
   transform-origin: 100% 100%; /* 图标在右下角：缩放从那个角发生 = 「从图标位置长出来」 */
   transition:
-    transform 240ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    opacity 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
-  animation: ys-barsearch-in 240ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+    transform 240ms var(--ys-ease),
+    opacity 200ms var(--ys-ease);
+  animation: ys-barsearch-in 240ms var(--ys-ease) both;
   will-change: transform, opacity;
 }
 @keyframes ys-barsearch-in {
@@ -633,5 +724,18 @@ html[data-swiping='1'] .ys-player-glass {
   .ys-barsearch {
     transition-duration: 0ms;
     animation-duration: 0ms;
+  }
+
+  /* 动效原语一并在减弱动效下关掉：入场不位移、按压不缩放、悬停不抬升 */
+  .ys-rise,
+  .ys-stagger > * {
+    animation: none !important;
+  }
+  .ys-press:active {
+    transform: none;
+  }
+  .ys-lift:hover {
+    transform: none;
+    box-shadow: none;
   }
 }

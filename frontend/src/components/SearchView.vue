@@ -1,5 +1,5 @@
 <template>
-  <div class="h-full flex flex-col overflow-hidden select-none bg-gray-50">
+  <div class="h-full flex flex-col overflow-hidden select-none bg-[var(--ys-canvas)]">
     <!-- ── 顶部搜索与导航条 ──
          页面名「发现音乐」已搬到 App.vue 顶部那一条栏（2026-10-18 用户口径：「把发现了、
          本地曲库等页面名，移到 logo 和音源管理那行去」），这里只在**搜索结果态**出现
@@ -79,12 +79,12 @@
             榜单有自己的顶层导航段，不必在发现页再放第二个入口。
             说明性文案一律收进 title（悬浮可见），不常驻占位。
           -->
-          <div class="flex min-w-0 flex-col rounded-[18px] border border-emerald-100 bg-gradient-to-br from-emerald-50 via-white to-white px-6 py-6 sm:px-[30px] sm:py-[26px]">
+          <div class="flex min-w-0 flex-col rounded-[18px] border border-[var(--ys-border)] bg-white px-6 py-6 shadow-[0_1px_2px_rgba(0,0,0,0.03)] sm:px-[30px] sm:py-[26px]">
             <div class="flex items-start justify-between gap-3">
               <div class="min-w-0">
-                <div class="text-[12px] font-bold text-emerald-600">{{ heroEyebrow }}</div>
+                <div class="text-[12px] font-medium tracking-[0.01em] text-[var(--ys-text-faint)]">{{ heroEyebrow }}</div>
                 <h1
-                  class="my-1.5 text-[26px] font-bold tracking-tight text-gray-800 sm:text-[29px]"
+                  class="my-2 text-[26px] font-semibold tracking-[-0.02em] text-[var(--ys-text)] sm:text-[30px]"
                   title="搜索全网曲库，或浏览官方榜单与精选歌单"
                 >{{ heroGreeting }}</h1>
               </div>
@@ -96,7 +96,7 @@
                 :disabled="accountsLoading"
                 title="重新读取两个平台的连接状态"
                 aria-label="刷新连接状态"
-                class="mt-1 grid h-8 w-8 shrink-0 place-items-center rounded-lg text-gray-400 transition-colors hover:bg-white hover:text-emerald-600 disabled:opacity-50"
+                class="mt-1 grid h-8 w-8 shrink-0 place-items-center rounded-full text-[var(--ys-text-faint)] transition-colors hover:bg-black/[0.04] hover:text-[var(--ys-text)] disabled:opacity-50"
               >
                 <RefreshCw class="h-4 w-4" :class="accountsLoading ? 'animate-spin' : ''" />
               </button>
@@ -115,20 +115,19 @@
             <div class="mt-4 grid grid-cols-2 gap-3 md:gap-4">
               <div
                 v-for="p in recommendPlatforms" :key="p.id"
-                class="overflow-hidden rounded-xl border border-gray-200 bg-white"
-                :class="p.topBorder"
+                class="overflow-hidden rounded-[14px] border border-[var(--ys-border)] bg-[#FAFAFC]"
               >
                 <!-- 卡片头：平台名与说明全部收进 title，只留品牌标 + 连接状态
                      （用户 2026-10-18：「把图标从 q 改为 qq，w 改为网易，或者你改为他们的
                      官方图标。去掉 qq 音乐和网易云文字。」） -->
                 <div
-                  class="flex items-center justify-between gap-2 border-b border-gray-100 px-3 py-2.5 sm:gap-3 sm:px-4 sm:py-3"
+                  class="flex items-center justify-between gap-2 border-b border-[var(--ys-border)] px-3 py-2.5 sm:gap-3 sm:px-4 sm:py-3"
                   :title="platformCardTitle(p)"
                 >
                   <BrandMark :platform="p.id" class="h-7 w-7 sm:h-8 sm:w-8" />
                   <span
                     class="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium sm:px-2.5 sm:py-1 sm:text-[11px]"
-                    :class="p.connected ? 'bg-emerald-50 text-emerald-600' : 'bg-gray-100 text-gray-500'"
+                    :class="p.connected ? 'bg-[var(--ys-accent-soft)] text-[var(--ys-accent)]' : 'bg-black/[0.05] text-[var(--ys-text-muted)]'"
                   >{{ p.connected ? '已连接' : '未连接' }}</span>
                 </div>
 
@@ -149,10 +148,10 @@
                         {{ (p.nickname || p.name).slice(0, 1) }}
                       </div>
                       <div class="min-w-0 flex-1">
-                        <b class="block truncate text-[12px] text-gray-800 sm:text-[13px]">{{ p.nickname || '已登录' }}</b>
+                        <b class="block truncate text-[12px] font-medium text-[var(--ys-text)] sm:text-[13px]">{{ p.nickname || '已登录' }}</b>
                       </div>
                       <button
-                        class="shrink-0 rounded-lg border border-gray-200 px-2 py-1 text-[11px] font-medium text-gray-500 transition-all hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 disabled:opacity-50 sm:px-2.5 sm:py-1.5 sm:text-[12px]"
+                        class="shrink-0 rounded-full border border-[var(--ys-border)] px-2 py-1 text-[11px] font-medium text-[var(--ys-text-muted)] transition-colors hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 disabled:opacity-50 sm:px-2.5 sm:py-1.5 sm:text-[12px]"
                         :disabled="!!platformBusy"
                         @click="disconnectPlatform(p)"
                       >{{ platformBusy === p.id + ':disconnect' ? '登出中…' : '登出' }}</button>
@@ -163,32 +162,32 @@
                       @click="loadRecommend(p.id, 'daily')"
                       :disabled="!!recommendLoading"
                       :title="p.dailyHint"
-                      class="flex w-full items-center gap-2 rounded-xl border border-gray-200 px-2.5 py-2.5 text-left transition-all hover:border-emerald-300 hover:bg-emerald-50/30 disabled:opacity-60 sm:gap-3 sm:px-3.5 sm:py-3"
+                      class="ys-press flex w-full items-center gap-2 rounded-[12px] border border-[var(--ys-border)] px-2.5 py-2.5 text-left hover:border-emerald-500/30 hover:bg-[var(--ys-accent-soft)] disabled:opacity-60 sm:gap-3 sm:px-3.5 sm:py-3"
                     >
-                      <div class="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-emerald-50 text-emerald-600 sm:h-9 sm:w-9">
+                      <div class="grid h-8 w-8 shrink-0 place-items-center rounded-[10px] bg-[var(--ys-accent-soft)] text-[var(--ys-accent)] sm:h-9 sm:w-9">
                         <CalendarHeart class="w-4 h-4" />
                       </div>
                       <div class="min-w-0 flex-1">
-                        <b class="block text-[12px] text-gray-800 sm:text-[13px]">每日推荐</b>
+                        <b class="block text-[12px] font-medium text-[var(--ys-text)] sm:text-[13px]">每日推荐</b>
                       </div>
                       <Loader2 v-if="recommendLoading === p.id + ':daily'" class="w-4 h-4 shrink-0 animate-spin text-emerald-500" />
-                      <ChevronRight v-else class="w-4 h-4 shrink-0 text-gray-300" />
+                      <ChevronRight v-else class="w-4 h-4 shrink-0 text-[var(--ys-text-faint)]" />
                     </button>
 
                     <!-- 我的歌单（最多 4 个） -->
                     <div v-if="p.playlists.length" class="mt-2.5">
-                      <span class="mb-1.5 block text-[11px] text-gray-400">我的歌单</span>
+                      <span class="mb-1.5 block text-[11px] text-[var(--ys-text-faint)]">我的歌单</span>
                       <div class="flex flex-wrap gap-1.5">
                         <button
                           v-for="pl in p.playlists.slice(0, 4)" :key="pl.id"
                           @click="loadRecommend(p.id, 'playlist', pl.id)"
                           :disabled="!!recommendLoading"
-                          class="max-w-full truncate rounded-lg bg-gray-50 px-2.5 py-1.5 text-[11px] text-gray-600 ring-1 ring-gray-200 transition-colors hover:bg-emerald-50 hover:text-emerald-600 disabled:opacity-60"
+                          class="max-w-full truncate rounded-full bg-black/[0.04] px-2.5 py-1.5 text-[11px] text-[var(--ys-text-muted)] transition-colors hover:bg-[var(--ys-accent-soft)] hover:text-[var(--ys-accent)] disabled:opacity-60"
                           :title="pl.name + (pl.count ? ` · ${pl.count} 首` : '')"
                         >{{ pl.name }}</button>
                       </div>
                     </div>
-                    <p v-else-if="p.playlistsLoading" class="mt-2.5 text-[11px] text-gray-300">正在读取歌单…</p>
+                    <p v-else-if="p.playlistsLoading" class="mt-2.5 text-[11px] text-[var(--ys-text-faint)]">正在读取歌单…</p>
                   </template>
 
                   <!-- 未连接：就地扫码登录（二维码弹窗在本组件里，不再跳到「账号连接」）。
@@ -198,7 +197,7 @@
                       @click="startPlatformLogin(p)"
                       :disabled="!!platformBusy"
                       :title="p.loginHint"
-                      class="rounded-lg bg-emerald-500 px-3.5 py-1.5 text-[12px] font-semibold text-white transition-all hover:bg-emerald-600 disabled:opacity-50"
+                      class="ys-press rounded-[10px] bg-emerald-500 px-3.5 py-1.5 text-[12px] font-semibold text-white hover:bg-emerald-600 disabled:opacity-50"
                     >{{ platformBusy === p.id + ':qr' ? '正在获取二维码…' : '扫码登录' }}</button>
                   </div>
                 </div>
@@ -214,8 +213,16 @@
           <!-- 右：正在播放（深色卡，同 flow 的 .now） -->
           <!-- 深色「正在播放」卡：**移动端隐藏**（用户 2026-09-28：「发现音乐页面可以单独优化移动端：
                可以隐藏黑色卡片播放器」）。桌面端（≥768px）保持原样。 -->
-          <div class="hidden items-center gap-[15px] rounded-[18px] bg-[#172033] px-5 py-5 text-white md:flex">
-            <div class="grid h-[90px] w-[90px] shrink-0 place-items-center overflow-hidden rounded-[12px] bg-gradient-to-br from-emerald-400 to-emerald-800 text-[30px]">
+          <!--
+            深色卡重做（v2.11.0）：
+              · 底色 #172033（藏青）→ #0B0B0C（近黑）：Apple Music 的悬浮播放块是纯中性近黑，
+                藏青会让整块偏「游戏风」；配白卡片也更干净。
+              · 三个圆圈按钮里的 `‹ ▶ ❚❚ ›` 字符换成 lucide 图标 —— 字符在 macOS 上是
+                全角偏细的字形，粗细与描边对不上，是「不像原生控件」的直接原因。
+              · 主播放键反转成**白底黑图标**（Apple Music 桌面的做法），整块只有这一个高对比焦点。
+          -->
+          <div class="hidden items-center gap-4 rounded-[18px] bg-[#0B0B0C] px-5 py-5 text-white shadow-[0_18px_48px_rgba(0,0,0,0.14)] md:flex">
+            <div class="grid h-[92px] w-[92px] shrink-0 place-items-center overflow-hidden rounded-[14px] bg-white/[0.06] text-white/30">
               <img
                 v-if="currentSong?.cover"
                 :src="currentSong.cover"
@@ -223,29 +230,34 @@
                 referrerpolicy="no-referrer"
                 class="h-full w-full object-cover"
               />
-              <span v-else>♪</span>
+              <Disc3 v-else class="h-7 w-7" />
             </div>
             <div class="min-w-0 flex-1">
-              <small class="text-[11px] text-gray-400">
+              <small class="text-[11px] font-medium tracking-[0.02em] text-white/45">
                 {{ isPlaying ? '正在播放' : (currentSong ? '已暂停' : '待播放') }}
               </small>
-              <h3 class="my-1 truncate text-[17px] font-bold">{{ currentSong?.name || '还没有播放歌曲' }}</h3>
-              <small class="block truncate text-[11px] text-gray-400">
+              <h3 class="mb-0.5 mt-1 truncate text-[16px] font-semibold tracking-[-0.01em]">
+                {{ currentSong?.name || '还没有播放歌曲' }}
+              </h3>
+              <small class="block truncate text-[11px] text-white/45">
                 {{ currentSong ? (currentSong.singer || '未知歌手') : '挑一首歌开始吧' }}
               </small>
-              <div class="mt-2.5 flex items-center gap-2">
+              <div class="mt-3 flex items-center gap-1.5">
                 <button
                   @click="emit('prev')" :disabled="!currentSong" title="上一首"
-                  class="grid h-8 w-8 place-items-center rounded-full bg-white/10 text-[15px] transition-colors hover:bg-white/20 disabled:opacity-40"
-                >‹</button>
+                  class="grid h-8 w-8 place-items-center rounded-full text-white/55 transition-colors hover:bg-white/10 hover:text-white disabled:opacity-30"
+                ><SkipBack class="h-4 w-4" fill="currentColor" /></button>
                 <button
                   @click="emit('toggle-play')" :disabled="!currentSong" title="播放 / 暂停"
-                  class="grid h-9 w-9 place-items-center rounded-full bg-emerald-500 text-[12px] font-bold transition-colors hover:bg-emerald-600 disabled:opacity-40"
-                >{{ isPlaying ? '❚❚' : '▶' }}</button>
+                  class="grid h-10 w-10 place-items-center rounded-full bg-white text-black transition-transform hover:scale-[1.04] active:scale-95 disabled:bg-white/15 disabled:text-white/50 disabled:shadow-none"
+                >
+                  <Pause v-if="isPlaying" class="h-4 w-4" fill="currentColor" />
+                  <Play v-else class="ml-0.5 h-4 w-4" fill="currentColor" />
+                </button>
                 <button
                   @click="emit('next')" :disabled="!currentSong" title="下一首"
-                  class="grid h-8 w-8 place-items-center rounded-full bg-white/10 text-[15px] transition-colors hover:bg-white/20 disabled:opacity-40"
-                >›</button>
+                  class="grid h-8 w-8 place-items-center rounded-full text-white/55 transition-colors hover:bg-white/10 hover:text-white disabled:opacity-30"
+                ><SkipForward class="h-4 w-4" fill="currentColor" /></button>
               </div>
             </div>
           </div>
@@ -268,7 +280,7 @@
         v-if="currentMode === 'discover' && !isChartsSegment && sortedCategories.length > 0"
         class="max-w-[1500px] mx-auto px-5 pt-3.5 sm:px-8"
       >
-        <div class="rounded-[18px] border border-gray-200 bg-white px-4 py-3 sm:px-5 sm:py-3.5">
+        <div class="rounded-[18px] border border-[var(--ys-border)] bg-white px-2.5 py-2 shadow-[0_1px_2px_rgba(0,0,0,0.03)] sm:px-3.5 sm:py-2.5">
           <div class="flex items-start gap-1.5">
             <div
               ref="catBoxRef"
@@ -279,10 +291,10 @@
                 v-for="cat in sortedCategories" :key="cat.id"
                 @click="selectPlaylistCategory(cat.id)"
                 :class="[
-                  'px-2.5 py-1 rounded-full text-[11px] whitespace-nowrap transition-all',
+                  'px-3 py-1 rounded-full text-[11px] whitespace-nowrap transition-colors',
                   selectedCategory === cat.id
-                    ? 'bg-emerald-500 text-white font-semibold'
-                    : 'bg-gray-50 text-gray-500 ring-1 ring-gray-200/60 hover:bg-gray-100'
+                    ? 'bg-[var(--ys-text)] text-white font-medium'
+                    : 'text-[var(--ys-text-muted)] ring-1 ring-[var(--ys-border)] hover:bg-black/[0.04] hover:text-[var(--ys-text)]'
                 ]"
               >{{ cat.name }}</button>
             </div>
@@ -291,7 +303,7 @@
             <button
               v-if="hiddenCatCount > 0 || catExpanded"
               @click="catExpanded = !catExpanded"
-              class="shrink-0 rounded-full bg-gray-100 px-2.5 py-1 text-[11px] font-medium text-gray-600 transition-colors hover:bg-gray-200"
+              class="shrink-0 rounded-full bg-black/[0.05] px-2.5 py-1 text-[11px] font-medium text-[var(--ys-text-muted)] transition-colors hover:bg-black/[0.08] hover:text-[var(--ys-text)]"
               :title="catExpanded ? '收起分类' : `还有 ${hiddenCatCount} 个分类`"
             >{{ catExpanded ? '收起' : `+${hiddenCatCount}` }}</button>
           </div>
@@ -915,7 +927,8 @@ import {
 import {
   Search, Play, Loader2, Music2, Download, HardDriveDownload,
   Folder, ArrowLeft, Shuffle, Repeat, Repeat1, Check, X, Radio, BellPlus,
-  CalendarHeart, ChevronRight, Trophy, RefreshCw
+  CalendarHeart, ChevronRight, Trophy, RefreshCw,
+  Pause, SkipBack, SkipForward, Disc3,
 } from 'lucide-vue-next'
 
 const props = defineProps({

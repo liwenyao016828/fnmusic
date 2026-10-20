@@ -1,20 +1,34 @@
 <template>
+  <!--
+    下载中心（2026-10-19 渐进式披露重构）
+
+    改之前：顶部一枚「队列 · 歌单 · 自动记录」说明胶囊（分段控件就在正上方，属于重复），
+    四张指标大卡占掉首屏 1/5，自动记录卡头上三个带文字的按钮（刷新 / 清除选中 / 一键清除），
+    再加一张空态卡 + 一张表格。用户口径是「一窝蜂挤在一起」。
+
+    改之后：
+      · 说明胶囊删掉（分段控件自己会说），
+      · 四张指标大卡压成一行 StatLine（数字是背景信息，不该占版面），
+      · 刷新留在外面（高频、单动作），清除类动作按 Apple 的模式分两层：
+        勾选了就浮出底部操作条，没勾选时「一键清除」在右上角 ⋯ 里。
+  -->
   <PageShell>
-    <template #title-extra>
-      <span class="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 font-mono text-[10px] text-emerald-600">
-        队列 · 歌单 · 自动记录
-      </span>
+    <template v-if="sub === 'autodl'" #actions>
+      <button
+        @click="loadAutoDownload"
+        :disabled="autoDownloadLoading"
+        class="ys-press grid h-8 w-8 place-items-center rounded-full text-[var(--ys-text-muted)] transition-colors hover:bg-black/[0.05] hover:text-[var(--ys-text)] disabled:opacity-40"
+        title="刷新记录"
+      >
+        <RefreshCw class="h-4 w-4" :class="autoDownloadLoading ? 'animate-spin' : ''" :stroke-width="1.8" />
+      </button>
+      <OverflowMenu :items="autoMenu" @select="onAutoMenu" />
     </template>
 
-    <template #metrics>
-      <!-- 指标随分段切换（口径与旧「曲库管家·下载页」一致）；自动记录段不摆大卡（表里都有） -->
-      <div v-if="metrics.length" class="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <div v-for="m in metrics" :key="m.label" class="rounded-[18px] border border-gray-200 bg-white px-[17px] py-[15px]">
-          <b class="block text-[24px] font-bold" :class="m.color">{{ m.value }}</b>
-          <span class="text-[12px] text-gray-400">{{ m.label }}</span>
-        </div>
-      </div>
-    </template>
+    <!-- 指标：一行，不占版面；自动记录段不摆（表里都有） -->
+    <div v-if="metrics.length" class="mb-3 flex flex-wrap items-center gap-x-5 gap-y-1.5">
+      <StatLine :items="metrics" />
+    </div>
 
     <!-- 队列 / 歌单：两个子视图组件本身没动（v2.1.26 起就是同一队列的两个入口） -->
     <DownloadQueueView v-if="sub === 'queue'" embedded :active-source="activeSource" />
@@ -22,86 +36,72 @@
 
     <template v-else>
       <!-- ══ 自动下载记录 ══ -->
-        <div class="space-y-3">
-          <SectionCard
-            :icon="History"
-            title="自动下载记录"
-            title-title="飞牛页面里收藏 / 加歌单 / 点下载触发的那批。成功与失败都记。"
-            compact
-          >
-            <template #actions>
-              <button
-                @click="loadAutoDownload"
-                :disabled="autoDownloadLoading"
-                class="rounded-lg border border-gray-200 bg-white px-2.5 py-1 text-[11px] font-bold text-gray-500 transition-colors hover:border-emerald-300 hover:text-emerald-600 disabled:opacity-50"
-              >{{ autoDownloadLoading ? '读取中…' : '刷新' }}</button>
-              <button
-                @click="clearAutoDownload(selectedAutoIds)"
-                :disabled="!autoDownloadSelected.size"
-                class="rounded-lg border border-gray-200 px-2.5 py-1 text-[11px] font-bold text-gray-600 transition-colors hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 disabled:opacity-40"
-              >清除选中<template v-if="autoDownloadSelected.size">（{{ autoDownloadSelected.size }}）</template></button>
-              <button
-                @click="clearAutoDownload([])"
-                :disabled="!autoDownloadRecords.length"
-                class="rounded-lg border border-gray-200 px-2.5 py-1 text-[11px] font-bold text-gray-600 transition-colors hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 disabled:opacity-40"
-              >一键清除</button>
-            </template>
-            <!-- 「没有记录」与「功能没起来」必须分开说：界面上长得一样会让人以为功能坏了 -->
-            <p v-if="autoDownloadAvailable === false" class="rounded-xl bg-amber-50/70 px-3 py-2 text-[11px] text-amber-700">
-              记录功能本次没起来（数据目录不可写）—— 下面是空的，但不代表你没下过歌。
-            </p>
-            <p v-else-if="!autoDownloadRecords.length" class="rounded-xl border border-dashed border-gray-200 bg-gray-50/50 px-3 py-4 text-center text-[11px] text-gray-400">
-              还没有自动下载记录 —— 在飞牛音乐里收藏一首在线歌曲试试
-            </p>
-          </SectionCard>
+      <SectionCard
+        :icon="History"
+        title="自动下载记录"
+        title-title="飞牛页面里收藏 / 加歌单 / 点下载触发的那批。成功与失败都记。"
+        compact
+      >
+        <!-- 「没有记录」与「功能没起来」必须分开说：界面上长得一样会让人以为功能坏了 -->
+        <p v-if="autoDownloadAvailable === false" class="rounded-[10px] bg-amber-50/70 px-3 py-2 text-[11px] text-amber-700">
+          记录功能本次没起来（数据目录不可写）—— 下面是空的，但不代表你没下过歌。
+        </p>
+        <p v-else-if="!autoDownloadRecords.length" class="rounded-[10px] border border-dashed border-[var(--ys-border)] px-3 py-5 text-center text-[11px] text-[var(--ys-text-faint)]">
+          还没有自动下载记录 —— 在飞牛音乐里收藏一首在线歌曲试试
+        </p>
 
-          <div v-if="autoDownloadRecords.length" class="overflow-hidden rounded-[18px] border border-gray-200 bg-white">
-            <!--
-              手机上 `table-fixed`：列宽由容器决定，表格**永远等于屏宽**（与「本地音乐」那张表
-              同一个做法与理由，见 NasExplorer 里那段注释）。「触发」列窄屏直接不显示 ——
-              它是最不重要的一列，而挤掉它的代价是别的列全部截断。
-            -->
-            <table class="w-full table-fixed text-[11.5px] sm:table-auto">
-              <thead class="bg-gray-50 text-gray-400">
-                <tr>
-                  <th class="w-9 px-2 py-2">
-                    <input type="checkbox" class="align-middle" :checked="allAutoSelected" @change="toggleAllAuto" />
-                  </th>
-                  <th class="px-2 py-2 text-left font-medium">时间</th>
-                  <th class="px-2 py-2 text-left font-medium">歌曲</th>
-                  <th class="px-2 py-2 text-left font-medium">实际取音</th>
-                  <th class="hidden px-2 py-2 text-left font-medium sm:table-cell">触发</th>
-                  <th class="px-2 py-2 text-left font-medium">结果</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="r in autoDownloadRecords" :key="r.id" class="border-t border-gray-50 align-top">
-                  <td class="px-2 py-2">
-                    <input type="checkbox" class="align-middle" :checked="autoDownloadSelected.has(r.id)"
-                      @change="toggleAutoSelect(r.id)" />
-                  </td>
-                  <td class="whitespace-nowrap px-2 py-2 text-gray-400">{{ fmtAutoTime(r.at) }}</td>
-                  <td class="px-2 py-2">
-                    <div class="max-w-[240px] truncate font-medium text-gray-800" :title="r.title">{{ r.title || '（无标题）' }}</div>
-                    <div class="max-w-[240px] truncate text-[10.5px] text-gray-400">{{ r.artist }}</div>
-                  </td>
-                  <td class="px-2 py-2 text-gray-500">
-                    <template v-if="r.source">{{ platformName(r.source) }}</template>
-                    <template v-else>—</template>
-                    <span v-if="r.quality" class="ml-1 font-mono text-[10.5px] text-emerald-600">{{ r.quality }}</span>
-                  </td>
-                  <td class="hidden px-2 py-2 text-gray-500 sm:table-cell">{{ autoTriggerLabel(r.trigger) }}</td>
-                  <td class="px-2 py-2">
-                    <span v-if="r.ok" class="rounded-md bg-emerald-50 px-1.5 py-0.5 text-emerald-600">已下载</span>
-                    <span v-else class="rounded-md bg-rose-50 px-1.5 py-0.5 text-rose-600" :title="r.error">失败</span>
-                    <div v-if="!r.ok && r.error" class="mt-1 max-w-[300px] text-[10.5px] leading-snug text-rose-500">{{ r.error }}</div>
-                    <div v-if="r.path" class="mt-0.5 max-w-[300px] truncate font-mono text-[10.5px] text-gray-400" :title="r.path">{{ r.path }}</div>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
+        <div v-if="autoDownloadRecords.length" class="-mx-4 mt-1 overflow-x-auto sm:-mx-5">
+          <table class="w-full min-w-[560px] text-[11.5px]">
+            <thead class="text-[var(--ys-text-faint)]">
+              <tr>
+                <th class="w-9 px-2 py-1.5 text-left font-medium">
+                  <input type="checkbox" class="align-middle" :checked="allAutoSelected" @change="toggleAllAuto" />
+                </th>
+                <th class="px-2 py-1.5 text-left font-medium">时间</th>
+                <th class="px-2 py-1.5 text-left font-medium">歌曲</th>
+                <th class="px-2 py-1.5 text-left font-medium">实际取音</th>
+                <th class="hidden px-2 py-1.5 text-left font-medium sm:table-cell">触发</th>
+                <th class="px-2 py-1.5 text-left font-medium">结果</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="r in autoDownloadRecords" :key="r.id"
+                class="border-t border-[var(--ys-border)] align-top transition-colors hover:bg-black/[0.015]"
+              >
+                <td class="px-2 py-2">
+                  <input type="checkbox" class="align-middle" :checked="autoDownloadSelected.has(r.id)" @change="toggleAutoSelect(r.id)" />
+                </td>
+                <td class="whitespace-nowrap px-2 py-2 font-mono text-[10.5px] text-[var(--ys-text-faint)]">{{ fmtAutoTime(r.at) }}</td>
+                <td class="px-2 py-2">
+                  <div class="max-w-[240px] truncate font-medium text-[var(--ys-text)]" :title="r.title">{{ r.title || '（无标题）' }}</div>
+                  <div class="max-w-[240px] truncate text-[10.5px] text-[var(--ys-text-faint)]">{{ r.artist }}</div>
+                </td>
+                <td class="px-2 py-2 text-[var(--ys-text-muted)]">
+                  <template v-if="r.source">{{ platformName(r.source) }}</template>
+                  <template v-else>—</template>
+                  <span v-if="r.quality" class="ml-1 font-mono text-[10.5px] text-[var(--ys-text-faint)]">{{ r.quality }}</span>
+                </td>
+                <td class="hidden px-2 py-2 text-[var(--ys-text-muted)] sm:table-cell">{{ autoTriggerLabel(r.trigger) }}</td>
+                <td class="px-2 py-2">
+                  <span v-if="r.ok" class="rounded-[6px] bg-[var(--ys-accent-soft)] px-1.5 py-0.5 text-[var(--ys-accent)]">已下载</span>
+                  <span v-else class="rounded-[6px] bg-rose-50 px-1.5 py-0.5 text-rose-600" :title="r.error">失败</span>
+                  <div v-if="!r.ok && r.error" class="mt-1 max-w-[300px] text-[10.5px] leading-snug text-rose-500">{{ r.error }}</div>
+                  <div v-if="r.path" class="mt-0.5 max-w-[300px] truncate font-mono text-[10.5px] text-[var(--ys-text-faint)]" :title="r.path">{{ r.path }}</div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
         </div>
+      </SectionCard>
+
+      <!-- 勾选后才浮出的操作条（Apple 相册 / Files 的同一套模式） -->
+      <SelectionBar
+        :count="autoDownloadSelected.size"
+        :actions="[{ key: 'clear', label: '清除选中', icon: Trash2, danger: true }]"
+        @action="clearAutoDownload(selectedAutoIds)"
+        @clear="autoDownloadSelected = new Set()"
+      />
     </template>
   </PageShell>
 </template>
@@ -121,7 +121,10 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import PageShell from './PageShell.vue'
 import SectionCard from './SectionCard.vue'
-import { History } from 'lucide-vue-next'
+import OverflowMenu from './OverflowMenu.vue'
+import SelectionBar from './SelectionBar.vue'
+import StatLine from './StatLine.vue'
+import { History, RefreshCw, Trash2, Eraser } from 'lucide-vue-next'
 import DownloadQueueView from './DownloadQueueView.vue'
 import PlaylistDownload from './PlaylistDownload.vue'
 import { segmentOf } from '../services/navBus'
@@ -143,19 +146,19 @@ const metrics = computed(() => {
   if (sub.value === 'playlist') {
     const rate = downloadManager.recentSuccessRate.value
     return [
-      { label: '下载中', value: downloadManager.downloadingCount.value, color: 'text-blue-600' },
-      { label: '等待中', value: downloadManager.pendingCount.value, color: 'text-gray-800' },
-      { label: '失败待处理', value: downloadManager.failedCount.value, color: 'text-rose-600' },
+      { label: '下载中', value: downloadManager.downloadingCount.value, dot: 'bg-blue-500' },
+      { label: '等待中', value: downloadManager.pendingCount.value, dot: 'bg-[var(--ys-text-faint)]' },
+      { label: '失败待处理', value: downloadManager.failedCount.value, dot: 'bg-rose-500' },
       // 没有样本时显示「—」而不是 0%，否则会让人以为全失败了
-      { label: '近 24h 成功率', value: rate == null ? '—' : `${rate}%`, color: 'text-emerald-600' },
+      { label: '近 24h 成功率', value: rate == null ? '—' : `${rate}%`, dot: 'bg-emerald-500' },
     ]
   }
   if (sub.value === 'queue') {
     return [
-      { label: '全部任务', value: downloadManager.totalCount.value, color: 'text-gray-800' },
-      { label: '进行中', value: downloadManager.activeCount.value, color: 'text-emerald-600' },
-      { label: '已暂停', value: downloadManager.pausedCount.value, color: 'text-amber-600' },
-      { label: '失败', value: downloadManager.failedCount.value, color: 'text-rose-600' },
+      { label: '全部任务', value: downloadManager.totalCount.value, dot: 'bg-[var(--ys-text-faint)]' },
+      { label: '进行中', value: downloadManager.activeCount.value, dot: 'bg-emerald-500' },
+      { label: '已暂停', value: downloadManager.pausedCount.value, dot: 'bg-amber-500' },
+      { label: '失败', value: downloadManager.failedCount.value, dot: 'bg-rose-500' },
     ]
   }
   return []
@@ -171,6 +174,19 @@ const autoDownloadAvailable = ref(true)
 const autoDownloadLoading = ref(false)
 /** 多选用的 id 集合。用 Set 而不是数组：勾选/取消是 O(1)，且天然去重。 */
 const autoDownloadSelected = ref(new Set())
+
+/**
+ * 右上角 ⋯ 菜单（自动记录段）。
+ * 「清除选中」不在这里 —— 勾选了就浮出底部操作条（SelectionBar），
+ * 没勾选时按了也没有意义；这里只留「全部清空」这个真正的批量动作。
+ */
+const autoMenu = computed(() => [
+  { key: 'clearAll', label: '清空全部记录', icon: Eraser, danger: true, disabled: !autoDownloadRecords.value.length },
+])
+
+function onAutoMenu(key) {
+  if (key === 'clearAll') clearAutoDownload([])
+}
 
 const selectedAutoIds = computed(() => Array.from(autoDownloadSelected.value))
 const allAutoSelected = computed(() =>

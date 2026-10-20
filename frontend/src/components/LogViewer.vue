@@ -2,30 +2,32 @@
   <PageShell>
     <template #actions>
       <button
-        class="rounded-lg bg-gray-100 px-3 py-1.5 text-[12px] font-medium text-gray-600 transition-colors hover:bg-gray-200 disabled:opacity-50"
+        class="rounded-[10px] border border-[var(--ys-border)] bg-white px-3 py-1.5 text-[12px] font-medium text-[var(--ys-text-muted)] transition-colors hover:bg-black/[0.03] hover:text-[var(--ys-text)] disabled:opacity-50"
         :disabled="loading"
         @click="reload"
       >{{ loading ? '读取中…' : '刷新' }}</button>
       <button
         v-if="tab !== 'task'"
-        class="rounded-lg bg-rose-50 px-3 py-1.5 text-[12px] font-medium text-rose-600 transition-colors hover:bg-rose-100"
+        class="rounded-[10px] px-3 py-1.5 text-[12px] font-medium text-rose-600 transition-colors hover:bg-rose-50"
         @click="clearLogs"
       >清空</button>
     </template>
 
     <!-- 标签 + 过滤（2026-10-18 用户「全局卡片化」：这一排控件原来裸在页面底色上，
          现在按全站统一样式收进白底圆角卡，与下面的日志面板接成一张连贯的界面） -->
-    <div class="mb-3 flex flex-wrap items-center gap-2 rounded-[18px] border border-gray-200 bg-white px-3.5 py-2.5">
+    <div class="mb-3 flex flex-wrap items-center gap-2 rounded-[18px] border border-[var(--ys-border)] bg-white px-2.5 py-2.5 shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
       <button
         v-for="t in tabs" :key="t.id"
-        class="rounded-lg px-3.5 py-2 text-[12px] font-medium transition-all"
-        :class="tab === t.id ? 'bg-emerald-500 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'"
+        class="ys-press rounded-[9px] px-3.5 py-2 text-[12px] font-medium transition-colors"
+        :class="tab === t.id
+          ? 'bg-[var(--ys-text)] text-white'
+          : 'text-[var(--ys-text-muted)] hover:bg-black/[0.05] hover:text-[var(--ys-text)]'"
         @click="switchTab(t.id)"
       >
         {{ t.name }}<span v-if="t.count" class="ml-1.5 opacity-80">{{ t.count }}</span>
       </button>
 
-      <label v-if="tab === 'server'" class="ml-auto flex items-center gap-1.5 text-[11px] text-gray-500">
+      <label v-if="tab === 'server'" class="ml-auto flex items-center gap-1.5 text-[11px] text-[var(--ys-text-muted)]">
         <input v-model="autoRefresh" type="checkbox" class="accent-emerald-500" />
         自动刷新（5 秒）
       </label>
@@ -72,27 +74,27 @@
 
     <!-- 任务日志 -->
     <div v-else-if="tab === 'task'" class="overflow-hidden rounded-[18px] border border-gray-200 bg-white">
-      <p v-if="!visibleTaskRuns.length" class="m-3 rounded-xl border border-dashed border-gray-200 bg-gray-50/50 py-12 text-center text-[12px] text-gray-400">
+      <p v-if="!visibleTaskRuns.length" class="m-3 rounded-xl border border-dashed border-[var(--ys-border)] bg-black/[0.015] py-12 text-center text-[12px] text-[var(--ys-text-faint)]">
         {{ onlyFailed ? '没有失败的任务记录' : '还没有任务执行记录 —— 下载、整理、推送每跑一次都会记在这里' }}
       </p>
       <div v-else class="max-h-[620px] divide-y divide-gray-50 overflow-y-auto">
         <div v-for="(r, i) in visibleTaskRuns" :key="i" class="flex flex-wrap items-start gap-3 px-4 py-2.5">
           <span class="shrink-0 pt-0.5 font-mono text-[11px] text-gray-400">{{ r.at }}</span>
-          <span class="shrink-0 rounded-full bg-gray-100 px-2 py-0.5 text-[10px] text-gray-600">{{ r.kind }}</span>
+          <span class="shrink-0 rounded-full bg-black/[0.05] px-2 py-0.5 text-[10px] text-[var(--ys-text-muted)]">{{ r.kind }}</span>
           <span
             class="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium"
-            :class="r.ok ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'"
+            :class="r.ok ? 'bg-[var(--ys-accent-soft)] text-[var(--ys-accent)]' : 'bg-rose-50 text-rose-600'"
           >{{ r.ok ? '成功' : '失败' }}</span>
           <div class="min-w-0 flex-1">
-            <b class="block truncate text-[12px] text-gray-800">{{ r.name }}</b>
-            <span class="block text-[11px] leading-relaxed text-gray-500">{{ r.detail }}</span>
+            <b class="block truncate text-[12px] font-medium text-[var(--ys-text)]">{{ r.name }}</b>
+            <span class="block text-[11px] leading-relaxed text-[var(--ys-text-muted)]">{{ r.detail }}</span>
           </div>
         </div>
       </div>
     </div>
 
     <!-- 操作日志（本机留存，重启不丢） -->
-    <div v-else class="overflow-hidden rounded-[18px] border border-gray-200 bg-white">
+    <div v-else class="overflow-hidden rounded-[18px] border border-[var(--ys-border)] bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
       <p v-if="!visibleLocal.length" class="m-3 rounded-xl border border-dashed border-gray-200 bg-gray-50/50 py-12 text-center text-[12px] text-gray-400">
         {{ onlyFailed ? '没有失败的操作记录' : '还没有操作记录 —— 界面操作一旦出错，完整信息会记在这里' }}
       </p>

@@ -21,24 +21,25 @@
   <button
     type="button"
     :disabled="disabled"
-    class="group flex w-full items-start gap-2.5 rounded-xl border px-3 py-2.5 text-left transition-all"
+    class="ys-press group flex w-full items-start gap-2.5 rounded-[10px] border px-3 py-2.5 text-left"
     :class="disabled
-      ? 'cursor-not-allowed border-gray-100 bg-gray-50 opacity-60'
-      : 'border-gray-200 bg-white hover:border-emerald-300 hover:bg-emerald-50/40'"
+      ? 'cursor-not-allowed border-[var(--ys-border)] bg-black/[0.02] opacity-55'
+      : 'border-[var(--ys-border)] bg-white hover:border-emerald-500/35 hover:bg-[var(--ys-accent-soft)]'"
   >
     <component
       :is="icon"
       v-if="icon"
       class="mt-0.5 h-4 w-4 shrink-0"
-      :class="iconClass || (disabled ? 'text-gray-300' : 'text-emerald-500')"
+      :class="iconClass || (disabled ? 'text-[var(--ys-text-faint)]' : 'text-[var(--ys-accent)]')"
+      :stroke-width="1.8"
     />
     <span class="min-w-0 flex-1">
-      <b class="block text-[12.5px] font-bold" :class="disabled ? 'text-gray-400' : 'text-gray-800'">
+      <b class="block text-[12.5px] font-semibold" :class="disabled ? 'text-[var(--ys-text-faint)]' : 'text-[var(--ys-text)]'">
         {{ title }}
       </b>
-      <span v-if="hint" class="mt-0.5 block text-[11px] leading-snug text-gray-400">{{ hint }}</span>
+      <span v-if="hint" class="mt-0.5 block text-[11px] leading-snug text-[var(--ys-text-muted)]">{{ hint }}</span>
     </span>
-    <span v-if="badge" class="shrink-0 rounded-full bg-gray-100 px-1.5 py-0.5 text-[10px] font-bold text-gray-500">
+    <span v-if="badge" class="shrink-0 rounded-full bg-black/[0.05] px-1.5 py-0.5 text-[10px] font-medium text-[var(--ys-text-muted)]">
       {{ badge }}
     </span>
   </button>

@@ -6,11 +6,13 @@
       <!-- ⑤ 下载音质
            小节简介统一走 SectionCard 的 subTitle（2026-10-18 用户口径：「去掉简介」，改成悬浮可见）。
            原来那句里还写着 Markdown 的 ** 星号，页面会照原样显示 —— 顺手去掉。 -->
-      <SectionCard
+      <DisclosureSection
+        :open="openKey === 'quality'"
+        @toggle="toggleSection('quality')"
+        :summary="qualitySummary"
         :icon="AudioLines"
         title="下载音质"
-        title-title="这个开关盖住下面两个入口各自的音质设置，不是改掉它们：改回「跟随」就能复原。本应用不做转码（NAS 上没有 ffmpeg），所以是「点名要某一档」，拿不到会按原顺序兜底，不会变成下载失败。"
-        compact
+        hint="这个开关盖住下面两个入口各自的音质设置，不是改掉它们：改回「跟随」就能复原。本应用不做转码（NAS 上没有 ffmpeg），所以是「点名要某一档」，拿不到会按原顺序兜底，不会变成下载失败。"
       >
         <div class="grid gap-2 sm:grid-cols-3">
           <button
@@ -19,23 +21,25 @@
             type="button"
             class="rounded-xl border p-3 text-left transition"
             :class="qualityValue === o.value
-              ? 'border-emerald-500 bg-emerald-50'
-              : 'border-gray-200 bg-white hover:border-gray-300'"
+              ? 'border-emerald-500/40 bg-[var(--ys-accent-soft)]'
+              : 'border-[var(--ys-border)] bg-white hover:border-[var(--ys-border-strong)]'"
             :title="o.desc"
             @click="saveQuality(o.value)"
           >
-            <div class="text-[13px] font-medium text-gray-800">{{ o.label }}</div>
-            <div class="mt-1 text-[11px] leading-relaxed text-gray-500">{{ o.desc }}</div>
+            <div class="text-[13px] font-medium text-[var(--ys-text)]">{{ o.label }}</div>
+            <div class="mt-1 text-[11px] leading-relaxed text-[var(--ys-text-muted)]">{{ o.desc }}</div>
           </button>
         </div>
-      </SectionCard>
+      </DisclosureSection>
 
       <!-- ② 文件命名 -->
-      <SectionCard
+      <DisclosureSection
+        :open="openKey === 'naming'"
+        @toggle="toggleSection('naming')"
+        :summary="namingSummary"
         :icon="FileAudio"
         title="曲库文件命名"
-        title-title="影响新下载的文件名。已经躺在曲库里的文件不会被改名（改名会让飞牛当成新歌重新扫描一遍）。"
-        compact
+        hint="影响新下载的文件名。已经躺在曲库里的文件不会被改名（改名会让飞牛当成新歌重新扫描一遍）。"
       >
         <div class="grid gap-2 sm:grid-cols-2">
           <button
@@ -44,22 +48,24 @@
             type="button"
             class="rounded-xl border p-3 text-left transition"
             :class="namingValue === o.value
-              ? 'border-emerald-500 bg-emerald-50'
-              : 'border-gray-200 bg-white hover:border-gray-300'"
+              ? 'border-emerald-500/40 bg-[var(--ys-accent-soft)]'
+              : 'border-[var(--ys-border)] bg-white hover:border-[var(--ys-border-strong)]'"
             @click="saveNaming(o.value)"
           >
-            <div class="text-[13px] font-medium text-gray-800">{{ o.label }}</div>
-            <div class="mt-1 rounded-lg bg-gray-50 px-2 py-1.5 font-mono text-[11px] text-gray-600">{{ o.sample }}</div>
+            <div class="text-[13px] font-medium text-[var(--ys-text)]">{{ o.label }}</div>
+            <div class="mt-1 rounded-lg bg-[#FAFAFC] px-2 py-1.5 font-mono text-[11px] text-[var(--ys-text-muted)]">{{ o.sample }}</div>
           </button>
         </div>
-      </SectionCard>
+      </DisclosureSection>
 
       <!-- ⑧ 存储目录 -->
-      <SectionCard
+      <DisclosureSection
+        :open="openKey === 'dirs'"
+        @toggle="toggleSection('dirs')"
+        :summary="dirsSummary"
         :icon="FolderCog"
         title="存储目录"
-        title-title="缓存目录放的是「边听边存」的暂存档与试听滚动缓存，可以单独放一块盘。两个目录不得相同、也不得互为父子（清理缓存会连成品一起删掉）。"
-        compact
+        hint="缓存目录放的是「边听边存」的暂存档与试听滚动缓存，可以单独放一块盘。两个目录不得相同、也不得互为父子（清理缓存会连成品一起删掉）。"
       >
         <div class="grid gap-3 sm:grid-cols-2">
           <label class="block">
@@ -100,26 +106,28 @@
           >{{ savingDirs ? '保存中…' : '保存目录' }}</button>
           <span v-if="dirError" class="text-[12px] text-red-500">{{ dirError }}</span>
         </div>
-      </SectionCard>
+      </DisclosureSection>
 
       <!-- 下载行为（v2.5.0 从旧「曲库管家 → 下载」标签搬来；四个开关行为原样未动） -->
-      <SectionCard
+      <DisclosureSection
+        :open="openKey === 'behavior'"
+        @toggle="toggleSection('behavior')"
+        :summary="behaviorSummary"
         :icon="Download"
         title="下载行为"
-        title-title="这几个开关都真的控制行为（不放「点了没反应」的开关）：打开后对应的自动动作开始占磁盘和带宽。"
-        compact
+        hint="这几个开关都真的控制行为（不放「点了没反应」的开关）：打开后对应的自动动作开始占磁盘和带宽。"
       >
         <div class="space-y-2">
           <div class="flex items-start justify-between gap-3 rounded-xl border border-gray-100 bg-gray-50/60 px-3 py-2.5">
             <div class="min-w-0">
               <div class="flex items-center gap-2">
-                <span class="text-[13px] font-medium text-gray-800">收藏自动下载并绑定本地</span>
+                <span class="text-[13px] font-medium text-[var(--ys-text)]">收藏自动下载并绑定本地</span>
                 <span :class="['text-[10px] px-1.5 py-0.5 rounded-full border font-mono',
                                favAutoDownload ? 'border-emerald-200 bg-emerald-50 text-emerald-600' : 'border-gray-200 text-gray-400']">
                   {{ favAutoDownload ? '已开启' : '已关闭' }}
                 </span>
               </div>
-              <p class="mt-0.5 text-[11px] leading-relaxed text-gray-500">
+              <p class="mt-0.5 text-[11px] leading-relaxed text-[var(--ys-text-muted)]">
                 收藏/加歌单的在线曲目会后台下到 NAS，之后听硬盘那份。
                 <span class="text-amber-600">占磁盘和带宽（无损一首几十兆）。</span>
               </p>
@@ -130,7 +138,7 @@
               :disabled="favAutoBusy"
               @click="toggleFavAutoDownload"
               :class="['relative w-11 h-6 rounded-full transition-colors shrink-0 disabled:opacity-50',
-                       favAutoDownload ? 'bg-emerald-500' : 'bg-gray-200']">
+                       favAutoDownload ? 'bg-emerald-500' : 'bg-black/[0.12]']">
               <span :class="['absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform',
                              favAutoDownload ? 'translate-x-5' : '']" />
             </button>
@@ -139,13 +147,13 @@
           <div class="flex items-start justify-between gap-3 rounded-xl border border-gray-100 bg-gray-50/60 px-3 py-2.5">
             <div class="min-w-0">
               <div class="flex items-center gap-2">
-                <span class="text-[13px] font-medium text-gray-800">边听边下</span>
+                <span class="text-[13px] font-medium text-[var(--ys-text)]">边听边下</span>
                 <span :class="['text-[10px] px-1.5 py-0.5 rounded-full border font-mono',
                                teeEnabled ? 'border-emerald-200 bg-emerald-50 text-emerald-600' : 'border-gray-200 text-gray-400']">
                   {{ teeEnabled ? '已开启' : '已关闭' }}
                 </span>
               </div>
-              <p class="mt-0.5 text-[11px] leading-relaxed text-gray-500">
+              <p class="mt-0.5 text-[11px] leading-relaxed text-[var(--ys-text-muted)]">
                 边听边写进磁盘，整首播完提升进曲库。
                 <span class="text-gray-400">半截文件会丢弃。</span>
               </p>
@@ -156,7 +164,7 @@
               :disabled="teeBusy"
               @click="toggleTee"
               :class="['relative w-11 h-6 rounded-full transition-colors shrink-0 disabled:opacity-50',
-                       teeEnabled ? 'bg-emerald-500' : 'bg-gray-200']">
+                       teeEnabled ? 'bg-emerald-500' : 'bg-black/[0.12]']">
               <span :class="['absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform',
                              teeEnabled ? 'translate-x-5' : '']" />
             </button>
@@ -165,8 +173,8 @@
           <div class="rounded-xl border border-gray-100 bg-gray-50/60 px-3 py-2.5">
             <div class="flex items-center justify-between gap-3">
               <div class="min-w-0">
-                <span class="text-[13px] font-medium text-gray-800">下载时附带</span>
-                <p class="mt-0.5 text-[11px] leading-relaxed text-gray-500">
+                <span class="text-[13px] font-medium text-[var(--ys-text)]">下载时附带</span>
+                <p class="mt-0.5 text-[11px] leading-relaxed text-[var(--ys-text-muted)]">
                   只影响曲率触发的下载。<span class="text-amber-600">缺省都是开</span>。
                 </p>
               </div>
@@ -175,7 +183,7 @@
               <div class="flex items-start justify-between gap-3">
                 <div class="min-w-0">
                   <div class="text-xs font-medium text-gray-700">歌词</div>
-                  <p class="mt-0.5 text-[11px] leading-relaxed text-gray-500">
+                  <p class="mt-0.5 text-[11px] leading-relaxed text-[var(--ys-text-muted)]">
                     内嵌进标签，另写同名 <code class="font-mono">.lrc</code>。
                   </p>
                 </div>
@@ -185,7 +193,7 @@
                   :disabled="lyricBusy"
                   @click="toggleLyric"
                   :class="['relative w-11 h-6 rounded-full transition-colors shrink-0 disabled:opacity-50',
-                           lyricAutoDownload ? 'bg-emerald-500' : 'bg-gray-200']">
+                           lyricAutoDownload ? 'bg-emerald-500' : 'bg-black/[0.12]']">
                   <span :class="['absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform',
                                  lyricAutoDownload ? 'translate-x-5' : '']" />
                 </button>
@@ -193,7 +201,7 @@
               <div class="flex items-start justify-between gap-3">
                 <div class="min-w-0">
                   <div class="text-xs font-medium text-gray-700">封面内嵌</div>
-                  <p class="mt-0.5 text-[11px] leading-relaxed text-gray-500">
+                  <p class="mt-0.5 text-[11px] leading-relaxed text-[var(--ys-text-muted)]">
                     写进文件标签，否则飞牛里没封面。
                   </p>
                 </div>
@@ -203,7 +211,7 @@
                   :disabled="coverBusy"
                   @click="toggleCover"
                   :class="['relative w-11 h-6 rounded-full transition-colors shrink-0 disabled:opacity-50',
-                           coverEmbed ? 'bg-emerald-500' : 'bg-gray-200']">
+                           coverEmbed ? 'bg-emerald-500' : 'bg-black/[0.12]']">
                   <span :class="['absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform',
                                  coverEmbed ? 'translate-x-5' : '']" />
                 </button>
@@ -211,42 +219,44 @@
             </div>
           </div>
         </div>
-      </SectionCard>
+      </DisclosureSection>
 
-      <!-- ③ 关于 / 导出日志 -->
-      <SectionCard :icon="Info" title="关于" compact>
-        <dl class="grid gap-x-6 gap-y-1 text-[12px] text-gray-600 sm:grid-cols-2">
-          <div class="flex gap-2"><dt class="text-gray-400">版本</dt><dd>{{ version || '…' }}</dd></div>
-          <div class="flex gap-2"><dt class="text-gray-400">用途</dt><dd>自用；没有商用的取舍</dd></div>
-        </dl>
-        <div class="mt-3 flex flex-wrap items-center gap-3">
+      <!-- ③ 关于 / 导出日志：不再是一张「带图标方块」的卡（那套视觉语言属于内容分区），
+           收尾信息用一个安静的信息块：版本一行 + 两个轻按钮。 -->
+      <section class="mt-1 rounded-[var(--ys-radius-card)] border border-[var(--ys-border)] bg-[#FBFBFD] px-4 py-3.5 sm:px-5">
+        <div class="flex flex-wrap items-center gap-x-5 gap-y-1 text-[11.5px] text-[var(--ys-text-muted)]">
+          <span class="flex items-center gap-1.5">
+            <Info class="h-3.5 w-3.5 text-[var(--ys-text-faint)]" :stroke-width="1.8" />
+            曲率 <span class="font-mono">{{ version || '…' }}</span>
+          </span>
+          <span>自用；没有商用的取舍</span>
+        </div>
+        <div class="mt-2.5 flex flex-wrap items-center gap-2">
           <button
             type="button"
-            class="rounded-xl border border-gray-200 px-4 py-2 text-[13px] text-gray-700 hover:border-gray-300 disabled:opacity-50"
+            class="ys-press rounded-[9px] border border-[var(--ys-border)] bg-white px-3 py-1.5 text-[12px] font-medium text-[var(--ys-text-muted)] transition-colors hover:text-[var(--ys-text)] disabled:opacity-50"
             :disabled="exporting"
             :title="exportTitle"
             @click="exportLogs"
           >{{ exporting ? '打包中…' : '导出运行日志' }}</button>
-          <!-- 条款入口（2026-10-18）：原来那张常驻卡在「音源管理」页，用户要求撤掉。
-               条款本身不能没有入口，就挪到这里 —— 设置 → 关于，找得到但不占版面。 -->
           <button
             type="button"
-            class="rounded-xl border border-gray-200 px-4 py-2 text-[13px] text-gray-700 hover:border-gray-300"
+            class="ys-press rounded-[9px] border border-[var(--ys-border)] bg-white px-3 py-1.5 text-[12px] font-medium text-[var(--ys-text-muted)] transition-colors hover:text-[var(--ys-text)]"
             title="技术中立免责声明：纯本地技术容器，不内置在线音源；导入脚本请自负合规责任"
             @click="emit('open-disclaimer')"
           >免责声明与合规</button>
-          <span v-if="exportNote" class="text-[12px] text-gray-500">{{ exportNote }}</span>
+          <span v-if="exportNote" class="text-[12px] text-[var(--ys-text-faint)]">{{ exportNote }}</span>
         </div>
-      </SectionCard>
+      </section>
 
     </div>
   </PageShell>
 </template>
 
 <script setup>
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import PageShell from './PageShell.vue'
-import SectionCard from './SectionCard.vue'
+import DisclosureSection from './DisclosureSection.vue'
 import { AudioLines, Download, FileAudio, FolderCog, Info } from 'lucide-vue-next'
 import { ConfigAPI, DownloadAPI, LogsAPI, AppAPI } from '../api/client'
 import { QUALITY_OVERRIDE_OPTIONS } from '../services/qualityOverride'
@@ -258,6 +268,31 @@ const emit = defineEmits(['open-disclaimer'])
 
 // 成功/失败提示：沿用全局的 InlineNotice（AiSettingsPanel 同款），
 // 不是弹 toast —— 本项目提示已经够多了，能就地显示就别再弹一层。
+// 2026-10-19 渐进式披露：设置页默认全部收起，一次只展开一组 ——
+// 版面只留「5 行摘要」，用户点哪行才长出哪块表单。
+const openKey = ref('')
+function toggleSection(k) {
+  openKey.value = openKey.value === k ? '' : k
+}
+
+const qualitySummary = computed(() => {
+  const o = qualityOptions.find((x) => x.value === qualityValue.value)
+  return o ? o.label : '跟随各处设置'
+})
+const namingSummary = computed(() => {
+  const o = namingOptions.find((x) => x.value === namingValue.value)
+  return o ? o.sample || o.label : '默认命名'
+})
+const dirsSummary = computed(() => downloadDir.value || '默认位置')
+const behaviorSummary = computed(() => {
+  const on = []
+  if (favAutoDownload.value) on.push('收藏自动下载')
+  if (teeEnabled.value) on.push('边听边下')
+  if (lyricAutoDownload.value) on.push('歌词')
+  if (coverEmbed.value) on.push('封面')
+  return on.length ? on.join(' · ') : '全部关闭'
+})
+
 const notice = ref('')
 const noticeOk = ref(false)
 let noticeTimer = null

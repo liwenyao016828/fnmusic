@@ -22,22 +22,22 @@
       满屏实心绿等于没有重点。
   -->
   <section
-    class="rounded-[18px] border border-gray-200 bg-white p-4 sm:p-5"
+    class="rounded-[var(--ys-radius-card)] border border-[var(--ys-border)] bg-white p-4 shadow-[0_1px_2px_rgba(0,0,0,0.03)] sm:p-5"
     :class="flush ? '!p-0' : ''"
   >
     <div v-if="title || $slots.actions" class="flex items-center gap-2.5">
       <span
         v-if="icon"
-        class="grid h-9 w-9 shrink-0 place-items-center rounded-xl"
+        class="grid h-9 w-9 shrink-0 place-items-center rounded-[10px]"
         :class="tone === 'brand'
-          ? 'bg-emerald-500 text-white shadow-sm shadow-emerald-500/30'
-          : 'bg-gray-100 text-gray-500'"
+          ? 'bg-emerald-500 text-white shadow-[0_1px_2px_rgba(11,138,102,0.28)]'
+          : 'bg-black/[0.04] text-[var(--ys-text-muted)]'"
       >
         <component :is="icon" class="h-4 w-4" />
       </span>
       <div class="min-w-0 flex-1">
-        <h2 class="truncate text-[14px] font-bold text-gray-800" :title="titleTitle || undefined">{{ title }}</h2>
-        <p v-if="sub" class="truncate text-[11px] text-gray-400" :title="subTitle || undefined">{{ sub }}</p>
+        <h2 class="truncate text-[14px] font-semibold tracking-[-0.01em] text-[var(--ys-text)]" :title="titleTitle || undefined">{{ title }}</h2>
+        <p v-if="sub" class="mt-0.5 truncate text-[11px] text-[var(--ys-text-faint)]" :title="subTitle || undefined">{{ sub }}</p>
       </div>
       <!-- 右侧：计数徽标、次要按钮等（`shrink-0` 不能加在外层，窄屏会溢出） -->
       <div v-if="$slots.actions" class="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-2">
@@ -45,7 +45,7 @@
       </div>
     </div>
 
-    <div :class="title || $slots.actions ? (compact ? 'mt-3' : 'mt-3.5') : ''">
+    <div :class="title || $slots.actions ? (compact ? 'mt-3' : 'mt-4') : ''">
       <slot />
     </div>
   </section>
