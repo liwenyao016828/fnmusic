@@ -330,3 +330,28 @@ func TestBestQualityTrackRejectsDifferentRecording(t *testing.T) {
 		t.Fatal("候选没给时长时不该被拒（那是「没给字段」）")
 	}
 }
+
+// 「注入页面点下载」那条路（resolveForDownload）同样必须按档位阶梯取音 ——
+// 它与自动下载共用一套口径，否则又会出现「自动下载是无损、手动下载是 mp3」。
+func TestResolveForDownloadAsksHighestTierFirst(t *testing.T) {
+	h := newHarness(t)
+	res := &tierStubResolver{platform: "wy", answers: map[string]map[string]*online.Resolved{
+		"w930": {
+			online.TierLossless: {URL: "https://cdn.invalid/w930.flac", Format: "flac", Size: 30 << 20, Tier: online.TierLossless},
+			online.Tier320k:     {URL: "https://cdn.invalid/w930.mp3", Format: "mp3", Size: 9 << 20, Tier: online.Tier320k},
+		},
+	}}
+	h.setOnline(map[string]bool{"w930": true}, song("w930", "甲", "乙"))
+	h.it.pool = online.NewPool(res)
+
+	got, used, err := h.it.resolveForDownload(context.Background(), onlineTrackFor("wy", "w930", "甲", "乙"))
+	if err != nil {
+		t.Fatalf("该解析成功：%v", err)
+	}
+	if calls := res.requestedTiers(); len(calls) == 0 || calls[0] != online.TierLossless {
+		t.Fatalf("⚠️ 下载必须先问无损档，实际问的是 %v", calls)
+	}
+	if !strings.Contains(got.URL, "w930.flac") || used.Platform != "wy" {
+		t.Fatalf("该拿到自己平台的无损直链：%+v used=%+v", got, used)
+	}
+}

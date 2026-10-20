@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"fn-lx-player/pkg/config"
+	"fn-lx-player/pkg/namefmt"
 	"fn-lx-player/pkg/tags"
 )
 
@@ -770,5 +771,34 @@ func TestSongPayloadYearJSONNamesMatchSearch(t *testing.T) {
 	if p.Year != 2003 || p.Track != 3 || p.Disc != 1 {
 		t.Fatalf("year/track/disc 必须按同名 JSON 字段解出，实际 year=%d track=%d disc=%d",
 			p.Year, p.Track, p.Disc)
+	}
+}
+
+// 查重必须认「已下好的无损」—— 原先这里硬编码 `.mp3`，于是下过 .flac 的歌查不到，
+// 界面还显示「未下载」，再点一次就是重下一遍。
+func TestCheckDownloadedFindsNonMP3Audio(t *testing.T) {
+	dir := t.TempDir()
+	d := newTestDownloader(t, dir)
+
+	base := namefmt.Build("Beyond", "真的爱你")
+	flacPath := filepath.Join(dir, base+".flac")
+	if err := os.WriteFile(flacPath, make([]byte, 600*1024), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	body := `{"songs":[{"id":"346075","name":"真的爱你","singer":"Beyond"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/download/check", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	d.HandleCheckDownloaded(w, req)
+
+	var out struct {
+		Exists map[string]bool `json:"exists"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatalf("响应不是 JSON：%s", w.Body.String())
+	}
+	if !out.Exists["Beyond - 真的爱你"] || !out.Exists["346075"] {
+		t.Fatalf("无损已存在就该判为已下载：%+v", out.Exists)
 	}
 }

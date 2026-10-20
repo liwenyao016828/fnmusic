@@ -96,6 +96,31 @@ func qualityRank(q string) int {
 	}
 }
 
+// qualityTier 把「搜索结果里声明的音质」翻译成档位名（`online.Tier*`）。
+//
+// 与 qualityRank 的分工：qualityRank 是**排序**用的粗档（只按容器，0..3，不猜码率）；
+// 这里要跟「实际解析出来的档位」直接比较，所以必须落到同一套档位名上 ——
+// 否则又是「两套标度各算各的，对不上也不报错」的老问题（见 `online.TierRank` 注释）。
+//
+// 认不出的返回空串（调用方当成「不知道」，不要当成最差档）。
+func qualityTier(q string) string {
+	switch strings.ToLower(strings.TrimSpace(q)) {
+	case "无损", "flac", "flac24bit", "hires", "ape", "wav", "dsd":
+		return online.TierLossless
+	case "aac", "m4a", "320k", "320":
+		// aac/m4a 归到 320k 档：有损里的最高一档，但**不等于无损**。
+		return online.Tier320k
+	case "192k", "192":
+		return online.Tier192k
+	case "128k", "128":
+		return online.Tier128k
+	}
+	return ""
+}
+
+// qualityTierRank 是 qualityTier 的分数版：认不出返回 -1（≠ 0，0 不存在于这套标度）。
+func qualityTierRank(q string) int { return online.TierRank(qualityTier(q)) }
+
 // pickBestQuality 从候选里挑最值得下的那条。
 //
 // 规则（用户 2026-10-06 指令）：**无损优先，同档比体积**。
@@ -320,11 +345,52 @@ func (i *Interceptor) rankedSources(ctx context.Context, title, artist string, w
 // 返回的第二个值就是**实际取音**的那条（没换源时就是入参本身）—— 调用方要用它
 // 如实记录「从哪儿、什么音质下来的」，不能拿原平台糊弄界面。
 func (i *Interceptor) resolveForDownload(ctx context.Context, t online.Track) (*online.Resolved, online.Track, error) {
-	if better, ok := i.bestQualityTrack(ctx, t.Title, t.Artist(), t.Duration); ok && qualityRank(better.Quality) > qualityRank(t.Quality) {
+	tiers := i.downloadTiers()
+
+	// 1) 先把**曲目自己平台**按档位阶梯解析一次 —— 这是「不降级」的基线。
+	//
+	// ⚠️ 必须走 ResolveLadder 而不是 Resolve：网易云那条免登录接口的普通解析
+	// 固定 `br=320000`，只调 Resolve 就**永远拿不到无损**，哪怕这首歌明明有无损档
+	// （用户 2026-10-20 报的「收藏自动下载下到 mp3」的头号原因）。
+	base, baseErr := i.pool.ResolveLadder(ctx, t.Platform, t.PlatformID, tiers)
+
+	// 基线档位取「声明档位」与「实际拿到档位」里更高的那个。
+	//
+	// 只看实际档位会误判：老解析器（musicdl / 洛雪）不回读档位，落盘的是 flac
+	// 也可能报空。只看声明档位也不够：搜索结果常常不报档位。两者取高，
+	// 才能保证「池里的 320k 不会顶掉曲目自己的无损」。
+	baseScore := qualityTierRank(t.Quality)
+	if baseErr == nil && base != nil {
+		if s := online.TierRank(base.Tier); s > baseScore {
+			baseScore = s
+		}
+	}
+
+	// 2) 池里**实际比基线更好**的候选才换源（同档不换：没收益，白多一次换源）。
+	//
+	// 逐条试而不是只挑「声明最高」的那一条：某一条解析不出来 / 平台静默降级到
+	// 比基线还低，就换下一条 —— 只挑一条会在第一个源坏掉时白白丢掉这次升级。
+	for _, better := range i.downloadCandidates(ctx, t, baseScore) {
+		if better.Platform == t.Platform && better.PlatformID == t.PlatformID {
+			continue // 自己平台已经解析过了（就是上面那次基线）
+		}
+		res, err := i.pool.ResolveLadder(ctx, better.Platform, better.PlatformID, tiers)
+		if err != nil || res == nil {
+			// 换源失败（源坏了）不该让整首歌下不来 —— 继续试下一条，最后回落基线。
+			i.logf("[INTERCEPT] 换源解析失败，试下一个：%s/%s %v", better.Platform, better.PlatformID, err)
+			continue
+		}
+		// 声明比基线好、拿到手却更差（平台静默降级）→ 不换。
+		if s := online.TierRank(res.Tier); s >= 0 && s < baseScore {
+			i.logf("[INTERCEPT] 换源实际只有 %q，比基线低，不换：%s/%s", res.Tier, better.Platform, better.PlatformID)
+			continue
+		}
 		i.logf("[INTERCEPT] 下载换源取更高音质：%s/%s（%s）→ %s/%s（%s）",
 			t.Platform, t.PlatformID, t.Quality, better.Platform, better.PlatformID, better.Quality)
-		t = better
+		return res, better, nil
 	}
-	res, err := i.pool.Resolve(ctx, t.Platform, t.PlatformID)
-	return res, t, err
+	if baseErr != nil {
+		return nil, t, baseErr
+	}
+	return base, t, nil
 }

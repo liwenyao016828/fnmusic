@@ -549,3 +549,178 @@ func TestFavoriteToLocalStreamEndToEnd(t *testing.T) {
 		t.Fatalf("回的内容该是磁盘上那份：got %q want %q", got, string(onDisk[:10]))
 	}
 }
+
+// ── 下载音质：按档位阶梯取音（v2.13.0）─────────────────────────────────
+//
+// 用户 2026-10-20 报：「收藏自动下载怎么下的是 mp3，不是各途径里最高的音质」。
+// 根因是**下载这条路走的是 Pool.Resolve**，档位由平台自己定 —— 网易云那条
+// 免登录接口固定 br=320000，于是同一首歌「听是无损、下是 mp3」。
+// 下面这组用例守的就是「下载必须按 flac → 320k → 128k 去问」。
+
+// tierStubResolver 是带档位能力的假解析器：记下被问的档位，按档位给不同结果。
+type tierStubResolver struct {
+	platform string
+	mu       sync.Mutex
+	calls    []string
+	answers  map[string]map[string]*online.Resolved // platformID → tier → 结果
+}
+
+func (s *tierStubResolver) Platform() string { return s.platform }
+
+func (s *tierStubResolver) Resolve(context.Context, string) (*online.Resolved, error) {
+	return nil, online.ErrNotPlayable
+}
+
+func (s *tierStubResolver) ResolveBatch(context.Context, []string) (map[string]*online.Resolved, error) {
+	return nil, online.ErrNotPlayable
+}
+
+func (s *tierStubResolver) ResolveAtTier(_ context.Context, id, tier string) (*online.Resolved, error) {
+	s.mu.Lock()
+	s.calls = append(s.calls, tier)
+	s.mu.Unlock()
+	if byTier, ok := s.answers[id]; ok {
+		if r, ok := byTier[tier]; ok {
+			return r, nil
+		}
+	}
+	return nil, online.ErrTierUnavailable
+}
+
+func (s *tierStubResolver) requestedTiers() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.calls...)
+}
+
+// downloadTiers 的阶梯必须与试听同源：highest 走完整阶梯，
+// 点名档位时只往下退，**绝不往上问**。
+func TestDownloadTiers(t *testing.T) {
+	h := newHarness(t)
+	cases := []struct {
+		setting string
+		want    []string
+	}{
+		{"highest", []string{online.TierLossless, online.Tier320k, online.Tier128k}},
+		{"", []string{online.TierLossless, online.Tier320k, online.Tier128k}},
+		{online.TierLossless, []string{online.TierLossless, online.Tier320k, online.Tier128k}},
+		{online.Tier320k, []string{online.Tier320k, online.Tier128k}},
+		{online.Tier192k, []string{online.Tier192k, online.Tier128k}},
+		{online.Tier128k, []string{online.Tier128k}},
+	}
+	for _, c := range cases {
+		setting := c.setting
+		h.it.cfg.AutoDownloadQuality = func() string { return setting }
+		got := h.it.downloadTiers()
+		if strings.Join(got, ",") != strings.Join(c.want, ",") {
+			t.Errorf("档位偏好 %q 的阶梯该是 %v，得到 %v", setting, c.want, got)
+		}
+	}
+}
+
+// 「音质下载 = 最高」时，下载必须**先问无损档**，并如实登记实际拿到的档位。
+func TestDownloadToLibraryAsksHighestTierFirst(t *testing.T) {
+	h := newHarness(t)
+	srv, seen, _ := fakeDownloadBackend(t)
+	h.it.localAPI = srv.URL
+
+	res := &tierStubResolver{platform: "wy", answers: map[string]map[string]*online.Resolved{
+		"w920": {
+			online.TierLossless: {URL: "https://cdn.invalid/w920.flac", Format: "flac", Size: 30 << 20, Tier: online.TierLossless},
+			online.Tier320k:     {URL: "https://cdn.invalid/w920.mp3", Format: "mp3", Size: 9 << 20, Tier: online.Tier320k},
+		},
+	}}
+	fake := registerOnline(h, "w920", "甲", "乙")
+	h.it.pool = online.NewPool(res) // ⚠️ 必须在 registerOnline 之后 —— 它会重建池
+
+	item, err := h.it.downloadToLibrary(context.Background(), fake, onlineTrackForTest("w920", "甲", "乙"))
+	if err != nil {
+		t.Fatalf("该下载成功：%v", err)
+	}
+	calls := res.requestedTiers()
+	if len(calls) == 0 || calls[0] != online.TierLossless {
+		t.Fatalf("⚠️ 下载必须先从无损档开始问，实际问的是 %v", calls)
+	}
+	if len(*seen) != 1 {
+		t.Fatalf("该只调一次下载接口，实际 %d 次", len(*seen))
+	}
+	if u, _ := (*seen)[0]["url"].(string); !strings.Contains(u, "w920.flac") {
+		t.Fatalf("该下无损那条直链，实际是 %q", u)
+	}
+	// 登记表要写**实际**档位，而不是「搜索时声明的那个」
+	if item.Quality != online.TierLossless {
+		t.Fatalf("登记的音质该是实际解析到的 flac，得到 %q", item.Quality)
+	}
+}
+
+// 反过来：池里的候选**只声明 320k** 时，不能把曲目自己实际解析出来的无损顶掉。
+//
+// 收藏场景里曲目自己常常不报档位（Quality 为空），这时只看声明值就会让
+// 池里那条 320k 抢先 —— 正是用户看到「下到 mp3」的另一条路径。
+func TestDownloadToLibraryNeverDowngradesToDeclaredPoolCandidate(t *testing.T) {
+	h := newHarness(t)
+	srv, seen, _ := fakeDownloadBackend(t)
+	h.it.localAPI = srv.URL
+	h.it.cfg.DownloadSources = func() []string { return []string{"mg"} }
+	h.it.searcher = func(_ string, _ string, _, _ int) []search.UnifiedSong {
+		return []search.UnifiedSong{{ID: "mgid", Songmid: "mgid", Name: "甲", Source: "mg", Quality: "320k"}}
+	}
+
+	res := &tierStubResolver{platform: "wy", answers: map[string]map[string]*online.Resolved{
+		"w921": {online.TierLossless: {URL: "https://cdn.invalid/w921.flac", Format: "flac", Size: 30 << 20, Tier: online.TierLossless}},
+	}}
+	fake := registerOnline(h, "w921", "甲", "乙")
+	h.it.pool = online.NewPool(res)
+	h.it.pool.Register(&stubResolver{platform: "mg", answers: map[string]*online.Resolved{
+		"mgid": {URL: "https://cdn.invalid/mgid.mp3", Format: "mp3", Size: 8 << 20},
+	}})
+
+	// 曲目自己**不报档位**（收藏进来的在线歌常常如此）
+	if _, err := h.it.downloadToLibrary(context.Background(), fake, onlineTrackForTest("w921", "甲", "乙")); err != nil {
+		t.Fatalf("该下载成功：%v", err)
+	}
+	if len(*seen) != 1 {
+		t.Fatalf("该只调一次下载接口，实际 %d 次", len(*seen))
+	}
+	if u, _ := (*seen)[0]["url"].(string); !strings.Contains(u, "w921.flac") {
+		t.Fatalf("⚠️ 曲目自己实际能拿到无损，不该换成池里那条 320k：%q", u)
+	}
+}
+
+// 池里那条**真的更好**时，下载要换源 —— 并且如实登记「从哪个源、什么档位」下来的。
+//
+// 这是「各途径里最高音质」的正向路径：曲目自己只有 320k，池里（咪咕/洛雪）有无损。
+func TestDownloadToLibrarySwitchesToPoolWhenPoolIsActuallyBetter(t *testing.T) {
+	h := newHarness(t)
+	srv, seen, _ := fakeDownloadBackend(t)
+	h.it.localAPI = srv.URL
+	h.it.cfg.AutoDownloadQuality = func() string { return qualityHighest }
+	h.it.cfg.DownloadSources = func() []string { return []string{"mg"} }
+	h.it.searcher = func(_ string, _ string, _, _ int) []search.UnifiedSong {
+		return []search.UnifiedSong{{ID: "mgflac", Songmid: "mgflac", Name: "甲", Source: "mg", Quality: "flac", FileSize: 30 << 20}}
+	}
+
+	// 曲目自己（网易云）只有 320k
+	own := &tierStubResolver{platform: "wy", answers: map[string]map[string]*online.Resolved{
+		"w922": {online.Tier320k: {URL: "https://cdn.invalid/w922.mp3", Format: "mp3", Size: 9 << 20, Tier: online.Tier320k}},
+	}}
+	fake := registerOnline(h, "w922", "甲", "乙")
+	h.it.pool = online.NewPool(own)
+	h.it.pool.Register(&stubResolver{platform: "mg", answers: map[string]*online.Resolved{
+		"mgflac": {URL: "https://cdn.invalid/mgflac.flac", Format: "flac", Size: 30 << 20},
+	}})
+
+	item, err := h.it.downloadToLibrary(context.Background(), fake, onlineTrackForTest("w922", "甲", "乙"))
+	if err != nil {
+		t.Fatalf("该下载成功：%v", err)
+	}
+	if len(*seen) != 1 {
+		t.Fatalf("该只调一次下载接口，实际 %d 次", len(*seen))
+	}
+	if u, _ := (*seen)[0]["url"].(string); !strings.Contains(u, "mgflac.flac") {
+		t.Fatalf("⚠️ 池里有真无损就该换源取它，实际是 %q", u)
+	}
+	if item.Source != "mg" || item.Quality != online.TierLossless {
+		t.Fatalf("登记该如实写换源后的来源与实际档位：%+v", item)
+	}
+}

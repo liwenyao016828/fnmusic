@@ -1,3 +1,42 @@
+## 曲率 (yinshu-ai) v2.13.0
+
+**下载一律取「各音源里最高的那一档」：修掉收藏自动下载只能拿到 320k mp3**
+
+用户口径（2026-10-20）：「我测试乐于一下收藏自动下载，怎么下载的mp3的格式。不是按照各个途径里最高的音质下载的啊」
+
+### 一、根因：下载走的路和试听不是同一条
+- 试听走 `Pool.ResolveLadder`（按 flac → 320k → 128k 依次问平台），所以**听是无损**；
+- 下载走 `Pool.Resolve`（单档、让平台自己决定），而网易云那条免登录接口的普通解析固定 `br=320000` ——
+  于是**下永远是 320k mp3**。同一首歌，听是 flac、下是 mp3，用户看到的就是这个。
+- 另外两个叠加问题：① 池里候选只按「声明档位」比较，而声明值是搜索时平台报的**可用档位**，
+  不代表这次真能拿到（网易云对收费曲目会静默降到 standard 且不报错）；② 登记表记的也是声明值，
+  于是「显示无损、落盘 mp3」这种最难查的偏差也会出现。
+
+### 二、改法（`backend/pkg/intercept/`）
+1. `downloadTiers()`：下载与试听共用同一条阶梯 `online.PlaybackLadder`（flac → 320k → 128k）；
+   用户点名某一档时，只问该档**及其以下**的档 —— 选 128k 是为了省空间，往上给 flac 是违背选择。
+2. `downloadToLibrary` / `resolveForDownload` 都改成：**先解析曲目自己平台的基线**（带档位阶梯），
+   再拿池里的候选**逐条**试。换源判据从「声明更好」改成「**实际解析出来的档位**不低于基线」——
+   平台静默降级时不会为了追一个声明的无损反而把实际的 320k 换成 128k。
+3. 候选过滤门槛也从声明值换成基线实分（`downloadCandidates(ctx, t, minScore)`）：
+   声明 flac、实际 128k 的曲目，现在仍会去试池里的 320k。
+4. 登记表如实记**实际档位**（`Resolved.Tier` 优先，缺失才退回声明值）。
+5. `HandleCheckDownloaded` 的「已下载」查重改为扫**全部音频扩展名**（原来硬编码 `.mp3`）：
+
+### 三、实测到的**能力边界**（写下来免得以后当成 bug 查）
+- 咪咕（musicdl）：**有版权的歌能给 flac**（实测 `等晴天 周深` → 57 MB flac）；周杰伦 / Beyond 这类
+  版权受限的只有 mp3 320k —— 不是我们不问，是源里没有。
+- 网易云（免登录）：对收费曲目请求 `level=lossless` 会**静默降级成 standard/128k mp3**，HTTP 200、不报错。
+  现在会回读实际档位，所以不会再把 mp3 记成「无损」；也正因为如此，如果池里有 320k 的咪咕版本，
+  会正确地选 320k 而不是网易云的 128k。
+- QQ（未登录）：请求 flac 恒定 `result=104003`，且未登录常只给约 48 秒试听片段。
+- 结论：**「最高音质」= 当前已配置音源里真能拿到的最高档**，不是「一定有 flac」。
+
+### 四、新增/更新的测试
+`TestDownloadTiers`（档位表）、`TestDownloadToLibraryAsksHighestTierFirst`、`TestDownloadToLibraryNeverDowngradesToDeclaredPoolCandidate`、
+`TestDownloadToLibrarySwitchesToPoolWhenPoolIsActuallyBetter`、`TestResolveForDownloadAsksHighestTierFirst`、
+`TestCheckDownloadedFindsNonMP3Audio`；`go test ./...` 全绿。
+
 ## 曲率 (yinshu-ai) v2.12.0
 
 **信息架构重构：渐进式披露（Progressive Disclosure）**

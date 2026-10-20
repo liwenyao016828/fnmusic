@@ -984,10 +984,14 @@ func (d *Downloader) HandleCheckDownloaded(w http.ResponseWriter, r *http.Reques
 	for _, s := range req.Songs {
 		cleanSinger := sanitizeFilename(s.Singer)
 		cleanName := sanitizeFilename(s.Name)
-		filename := namefmt.Build(cleanSinger, cleanName) + ".mp3"
-		fullPath := filepath.Join(destDir, filename)
+		base := namefmt.Build(cleanSinger, cleanName)
 		key := fmt.Sprintf("%s - %s", s.Singer, s.Name)
-		if fi, err := os.Stat(fullPath); err == nil && fi.Size() > 300*1024 {
+		// ⚠️ 查重必须扫**全部音频扩展名**，不能只看 `.mp3`。
+		//
+		// 落盘扩展名由魔数嗅探决定（见 detectAudioExtByMagic），下载现在会优先取无损，
+		// 所以「已下载」的那份很可能是 .flac。硬编码 .mp3 会让已经下过的无损查不到 ——
+		// 界面照样显示「未下载」，用户再点一次就是白白重下一遍（一张专辑几百 MB）。
+		if _, ok := findExistingAudio(destDir, base); ok {
 			existsMap[key] = true
 			if s.ID != "" {
 				existsMap[s.ID] = true

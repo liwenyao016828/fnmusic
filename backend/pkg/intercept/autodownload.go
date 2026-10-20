@@ -205,15 +205,15 @@ func preferExactTier(cands []online.Track, want string) []online.Track {
 
 // downloadToLibrary 走「解析 → 调本机下载接口 → 拿回落盘路径」这一条链路。
 //
-// 与 `handleQulvDownloadOnline` 共用同一套动作，只是调用方不同（那边是注入脚本
-// 点按钮，这边是收藏后自动触发）。
 // downloadCandidates 返回「值得试的取音来源」，按优先级排好，**最后一条永远是曲目自己平台**。
 //
-// 顺序：池里同名的候选（音质高 → 低，只有**严格更好**的才排在前面）→ 曲目自己平台。
+// 顺序：池里同名的候选（音质高 → 低，只有**严格好于基线**的才排在前面）→ 曲目自己平台。
 //
-// 为什么要一整列而不是只挑一条：某一个源坏了（解析不出直链、下下来不是音频、
-// CDN 挂了）不该让整首歌失败 —— 换下一个源再试。参考实现里对应「坏档换 mp3 重试」。
-func (i *Interceptor) downloadCandidates(ctx context.Context, t online.Track) []online.Track {
+// `minScore` 是**基线**的档位分（`online.TierRank` 标度），由调用方按「曲目自己平台
+// 实际解析出来的档位」算好传进来。为什么不用 `t.Quality` 声明值：那只是搜索时平台
+// 报的**可用档位**，不是这次真能拿到的 —— 网易云对收费曲目会静默降到 standard，
+// 声明 flac 而实际 128k 是常态。按下限过滤会让池里的 320k 候选连试都试不到。
+func (i *Interceptor) downloadCandidates(ctx context.Context, t online.Track, minScore int) []online.Track {
 	out := make([]online.Track, 0, 4)
 	seen := make(map[string]bool, 4)
 	add := func(x online.Track) {
@@ -228,11 +228,42 @@ func (i *Interceptor) downloadCandidates(ctx context.Context, t online.Track) []
 		out = append(out, x)
 	}
 	for _, c := range i.rankedSources(ctx, t.Title, t.Artist(), t.Duration) {
-		if qualityRank(c.Quality) > qualityRank(t.Quality) {
+		if qualityTierRank(c.Quality) > minScore {
 			add(c)
 		}
 	}
 	add(t) // 兜底：池里没有更好的、或者全试失败了，都用它
+	return out
+}
+
+// downloadTiers 返回「下载取音」要按哪几档去问平台（高 → 低）。
+//
+// # 为什么必须按档位问
+//
+// 以前下载这条路调的是 `Pool.Resolve` —— 档位由平台自己决定。网易云那条免登录接口
+// 的普通解析固定 `br=320000`，于是**永远只能拿到 320k mp3**；而同一首歌试听时走的是
+// `ResolveLadder`，能拿到 flac。用户 2026-10-20 报的「收藏自动下载怎么下的是 mp3」
+// 就是这么来的：同一首歌，听是无损、下是 mp3。
+//
+// 现在下载与试听共用同一条阶梯（`online.PlaybackLadder`：flac → 320k → 128k）。
+//
+// # 点名某一档时
+//
+// 先问那一档，再退到它**下面**的档（下到 320k 也好过下不来），但**不会往上问**：
+// 用户选 128k 是为了省空间，给他 flac 是违背选择。
+func (i *Interceptor) downloadTiers() []string {
+	want := i.autoDownloadQuality()
+	if want == qualityHighest {
+		return online.PlaybackLadder
+	}
+	wantRank := online.TierRank(want)
+	out := make([]string, 0, len(online.PlaybackLadder))
+	out = append(out, want)
+	for _, t := range online.PlaybackLadder {
+		if online.TierRank(t) < wantRank {
+			out = append(out, t)
+		}
+	}
 	return out
 }
 
@@ -241,15 +272,54 @@ func (i *Interceptor) downloadCandidates(ctx context.Context, t online.Track) []
 // 与 `handleQulvDownloadOnline` 共用同一套动作，只是调用方不同（那边是注入脚本
 // 点按钮，这边是收藏后自动触发）。
 func (i *Interceptor) downloadToLibrary(ctx context.Context, fake string, t online.Track) (online.DownloadedItem, error) {
-	cands := i.downloadCandidates(ctx, t)
+	tiers := i.downloadTiers()
+
+	// 基线：曲目自己平台按档位阶梯解析出来的那一条。
+	//
+	// 这里只取直链、**不落盘**，作用有两个：
+	//   1. 知道「这首歌本来能拿到多好」，池里的候选只有**真的更好**才换源
+	//      （只看声明档位会在「自己平台能无损、池里那条只声明 320k」时把无损降成 320k）；
+	//   2. 候选过滤也用它当门槛 —— 声明比基线低的候选连试都不必试。
+	baseRes, baseErr := i.pool.ResolveLadder(ctx, t.Platform, t.PlatformID, tiers)
+	baseScore := qualityTierRank(t.Quality)
+	if baseErr == nil && baseRes != nil {
+		if s := online.TierRank(baseRes.Tier); s > baseScore {
+			baseScore = s
+		}
+	}
+
+	cands := i.downloadCandidates(ctx, t, baseScore)
 	// 「飞牛页面触发的下载」的音质偏好（榜单管理里的「音质下载」）：
 	// 点名要某一档时，把正好是那一档的候选提到最前（见 preferExactTier）。
 	if want := i.autoDownloadQuality(); want != qualityHighest {
 		cands = preferExactTier(cands, want)
 	}
-	var lastErr error
+
+	var lastErr error = baseErr
 	for idx, cand := range cands {
-		res, err := i.pool.Resolve(ctx, cand.Platform, cand.PlatformID)
+		if cand.Platform == t.Platform && cand.PlatformID == t.PlatformID {
+			// 曲目自己平台：复用上面那次解析，别重复问一遍平台。
+			// 基线解析不出来时这条也没法兜底，直接跳过。
+			if baseErr != nil || baseRes == nil {
+				continue
+			}
+			item, err := i.postDownload(ctx, fake, t, cand, baseRes.URL, baseRes.Tier)
+			if err != nil {
+				lastErr = err
+				if len(cands) > 1 {
+					i.logf("[INTERCEPT] 自己平台下载失败：%s/%s %v", cand.Platform, cand.PlatformID, err)
+				}
+				continue
+			}
+			return item, nil
+		}
+
+		// 池里的候选：声明档位不比基线高就不换 —— 那是**降级**。
+		// 用户要的是「各音源里最高的那一档」，不是「换个源」。
+		if qualityTierRank(cand.Quality) <= baseScore {
+			continue
+		}
+		res, err := i.pool.ResolveLadder(ctx, cand.Platform, cand.PlatformID, tiers)
 		if err != nil {
 			lastErr = err
 			// 只有多个候选时才刷日志 —— 单候选（= 曲目自己平台）失败的情况，
@@ -260,7 +330,14 @@ func (i *Interceptor) downloadToLibrary(ctx context.Context, fake string, t onli
 			}
 			continue
 		}
-		item, err := i.postDownload(ctx, fake, t, cand, res.URL)
+		// 声明归声明，实际拿到的档位才是真的 —— 拿到的比基线还差就不换，
+		// 免得「为了追一个声明的无损，把实际的无损换成 mp3」。
+		if s := online.TierRank(res.Tier); s >= 0 && s < baseScore {
+			i.logf("[INTERCEPT] 候选实际只有 %q，比基线低，不换源：%s/%s",
+				res.Tier, cand.Platform, cand.PlatformID)
+			continue
+		}
+		item, err := i.postDownload(ctx, fake, t, cand, res.URL, res.Tier)
 		if err != nil {
 			lastErr = err
 			if len(cands) > 1 {
@@ -285,7 +362,11 @@ func (i *Interceptor) downloadToLibrary(ctx context.Context, fake string, t onli
 //
 // `used` 是**实际取音**的那条（可能已被下载源池换过源），登记表要如实记它 ——
 // 界面拿它显示「从哪儿、什么音质下来的」。标签仍用**原曲目** `t` 的元数据。
-func (i *Interceptor) postDownload(ctx context.Context, fake string, t, used online.Track, url string) (online.DownloadedItem, error) {
+//
+// `actualTier` 是解析结果回读出来的**实际档位**（`Resolved.Tier`）。非空就优先用它：
+// 候选的 `Quality` 是**搜索时声明的**，平台可能静默降级（要 lossless 给 320k），
+// 拿声明当实际会在登记表里写「无损」而落盘是 mp3 —— 那是最难查的一类偏差。
+func (i *Interceptor) postDownload(ctx context.Context, fake string, t, used online.Track, url, actualTier string) (online.DownloadedItem, error) {
 	payload := map[string]any{
 		"name":     t.Title,
 		"singer":   t.Artist(),
@@ -344,8 +425,9 @@ func (i *Interceptor) postDownload(ctx context.Context, fake string, t, used onl
 		Artist: t.Artist(),
 		Size:   size,
 		At:     time.Now().Unix(),
-		// 如实记录实际取音来源（可能已被下载源池换过源）
-		Source: used.Platform, Quality: used.Quality,
+		// 如实记录实际取音来源（可能已被下载源池换过源）。
+		// 档位优先用解析回读的实际值，没有才退回候选的声明值。
+		Source: used.Platform, Quality: firstNonEmpty(actualTier, used.Quality),
 	}, nil
 }
 

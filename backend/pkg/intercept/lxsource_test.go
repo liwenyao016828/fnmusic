@@ -197,7 +197,7 @@ func TestLxCandidateWithoutQualityRanksLastAndIsNotTried(t *testing.T) {
 	// 曲目自己是 320k → 洛雪那条（档位未知）**不是严格更好**，于是不会被拿去试。
 	own := onlineTrackFor("wy", "w1", "晴天", "周杰伦")
 	own.Quality = "320k"
-	cands := h.it.downloadCandidates(context.Background(), own)
+	cands := h.it.downloadCandidates(context.Background(), own, qualityTierRank(own.Quality))
 	if len(cands) != 1 || cands[0].Platform != "wy" {
 		t.Fatalf("缺档位的洛雪候选过不了「严格更好」，该只剩曲目自己那条：%+v", cands)
 	}
@@ -234,7 +234,7 @@ func TestLxCandidateWithQualityWinsThePool(t *testing.T) {
 		t.Fatalf("给了档位就该排第一并带着档位出去：%+v", ranked)
 	}
 	// ② 下载候选该把它排在自己平台前面
-	cands := h.it.downloadCandidates(context.Background(), own)
+	cands := h.it.downloadCandidates(context.Background(), own, qualityTierRank(own.Quality))
 	if len(cands) != 2 || cands[0].Platform != "lx:qsvip" {
 		t.Fatalf("洛雪那条（无损）该排在曲目自己（320k）前面：%+v", cands)
 	}
@@ -387,7 +387,7 @@ func TestPoolUnchangedWhenLxDisabled(t *testing.T) {
 	own.Duration = 269
 	own.Quality = "320k"
 	wantCands := append(append([]online.Track(nil), wantRanked[:1]...), own)
-	gotCands := h.it.downloadCandidates(context.Background(), own)
+	gotCands := h.it.downloadCandidates(context.Background(), own, qualityTierRank(own.Quality))
 	if !reflect.DeepEqual(gotCands, wantCands) {
 		t.Fatalf("洛雪没接时 downloadCandidates 必须与改动前逐字段相同：\n got=%+v\nwant=%+v", gotCands, wantCands)
 	}
