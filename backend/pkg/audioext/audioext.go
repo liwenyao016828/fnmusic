@@ -178,34 +178,40 @@ func mp3NominalKbps(path string) int {
 		return 0
 	}
 	defer f.Close()
-	head := make([]byte, 8<<10)
+
+	// 先定位音频数据起点：**不能只看开头 8KiB 就放弃** —— 真机上的 mp3 常带
+	// 四五十 KB 的 ID3（封面、歌词），第一帧落在缓冲区之外（2026-10-21 踩到：
+	// ffmpeg 转出来的 128k 文件 ID3 有 46KB，于是被判成「读不出来」→ 回落 320k）。
+	start := int64(0)
+	var hdr [10]byte
+	if n, _ := io.ReadFull(f, hdr[:]); n >= 10 && string(hdr[:3]) == "ID3" {
+		size := 0
+		for _, b := range hdr[6:10] {
+			size = size<<7 | int(b&0x7f)
+		}
+		start = 10 + int64(size)
+		if hdr[5]&0x10 != 0 { // footer 存在
+			start += 10
+		}
+	}
+	// 无论有没有 ID3 都要 seek：上面那次探测读掉了开头 10 字节，
+	// 不回到 start 就会从第 10 字节开始找同步字（0 开头的补零区找不到）。
+	if _, err := f.Seek(start, io.SeekStart); err != nil {
+		return 0
+	}
+
+	head := make([]byte, 16<<10)
 	n, _ := io.ReadFull(f, head)
 	if n < 4 {
 		return 0
 	}
 	head = head[:n]
 
-	start := 0
-	if n >= 10 && string(head[:3]) == "ID3" {
-		// ID3v2：10 字节头 + 同步安全整数（每字节 7 位）表示的大小。
-		size := 0
-		for _, b := range head[6:10] {
-			size = size<<7 | int(b&0x7f)
-		}
-		start = 10 + size
-		if head[5]&0x10 != 0 { // footer 存在
-			start += 10
-		}
-	}
-	if start >= n {
-		return 0
-	}
-
 	// MPEG1 Layer3 与 MPEG2/2.5 Layer3 的码率表（索引 0 = free，15 = 非法）。
 	mpeg1L3 := [16]int{0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0}
 	mpeg2L3 := [16]int{0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0}
 
-	for i := start; i+3 < n; i++ {
+	for i := 0; i+3 < n; i++ {
 		if head[i] != 0xff || head[i+1]&0xe0 != 0xe0 {
 			continue
 		}
