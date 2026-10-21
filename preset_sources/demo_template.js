@@ -6,7 +6,7 @@
  */
 
 /**
- * 极光音乐 / LX Music 音源脚本接口定义
+ * 曲率 / LX Music 音源脚本接口定义
  */
 const demoSource = {
   name: "自定义测试音源",

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"fn-lx-player/pkg/config"
 	"fn-lx-player/pkg/online"
 )
 
@@ -334,22 +335,126 @@ func (i *Interceptor) shouldRetryUpgrade(item online.DownloadedItem) bool {
 	return len(tiers) > 0 && online.TierRank(tiers[0]) >= online.TierRank(online.TierLossless)
 }
 
-// downloadViaLx 用「同一个平台 id」向洛雪脚本要一条直链并直接下下来。
+// ── 渠道化的取音计划 ──────────────────────────────────────────────────────
 //
-// 返回 false = 洛雪没能给出**比基线更好**的结果（宿主没开、脚本全失败、
-// 或只给到和基线一样的档位）。调用方接着走原来的候选列表，什么都不影响。
+// 用户 2026-10-21 的两句话要合起来读才是完整要求（m02588）：
+//   · 「增加一个自动下载源（方式：lx，网易云，dl）」→ 三条路要能选、能排序；
+//   · 「收藏自动下载不是需要立刻下载的场景，优先最高音质，慢一点没关系」→ 允许慢。
 //
-// 为什么不把它做成一个普通候选：`downloadCandidates` 的语义是「按声明档位挑」，
-// 而洛雪这条路的价值恰恰是「绕开平台登录态，按 id 去问」，声明档位对它没有意义
-// （脚本能给的档位取决于它内部那一串第三方 API，跟我们的曲目元数据无关）。
-// 硬塞进去会让「声明 320k 实际能拿 flac」的候选被自己的声明挡住。
-func (i *Interceptor) downloadViaLx(ctx context.Context, fake string, t online.Track, tiers []string, baseScore int) (online.DownloadedItem, bool) {
+// 这里原来的形状是「先问原生拿基线，基线够看就不再问别人」。而免登录网易云对收费
+// 曲目恒回 320k（实测要 lossless 给 standard/128k），于是**每一条收藏都停在 320k**：
+// 洛雪那条常常真能给无损的路只被叫一次，外挂池又只收「声明比基线严格更好」的候选。
+// 现在改成按**用户给的渠道顺序**逐条探测，把每条渠道**实际**拿到的档位收进一张表，
+// 最后按实际档位排序、并列时按渠道顺序 —— 多花几秒，拿到的是各途径里真最高的那一档。
+//
+// 三条不变量一个字没改（v2.13.0 定下的口径）：
+//  1. 判断好坏只看**实际**档位（`Resolved.Tier`，落盘后再用魔数校一次），不看声明值；
+//  2. 不比已经拿到的更好就不换 —— 换源不是目的，升音质才是；
+//  3. 一次收藏**只落盘一份**：探测阶段一个字节都不写盘，赢家才开始下（失败才换下一条）。
+
+// 渠道串的取值表在 `pkg/config/channels.go`（那些串同时是配置值与接口值），
+// 这里只是起本地别名，省掉调用点上的包前缀。
+const (
+	dlChanLx      = config.DLChannelLx
+	dlChanMusicDL = config.DLChannelMusicDL
+	dlChanNative  = config.DLChannelNative
+)
+
+// dlProbePerChannel 一条渠道最多探几条候选。
+//
+// 上限存在的理由只有时间：musicdl 解析一条要 1–3 秒，洛雪一条失败的脚本能拖到
+// 8 秒 × 脚本数。收藏是后台动作、用户认了慢，但**没有上限**会把队列堵死。
+const dlProbePerChannel = 3
+
+// dlAttempt 一次取音探测的完整记录：哪条渠道、哪条候选、实际拿到什么档位。
+type dlAttempt struct {
+	Channel string
+	Cand    online.Track
+	Res     *online.Resolved
+	Score   int // 实际档位分（拿不到实际档位时才是声明分）
+	Rank    int // 该渠道在用户顺序里的位次（并列时打破平局，小的赢）
+}
+
+// Tier 这次探测实际拿到的档位；宿主没回读时是候选自己的声明值。
+func (a dlAttempt) Tier() string {
+	if a.Res != nil && strings.TrimSpace(a.Res.Tier) != "" {
+		return a.Res.Tier
+	}
+	return a.Cand.Quality
+}
+
+// dlAttemptScore 给一次探测打分：**优先用实际档位**，实际档位读不出来才退回声明值。
+//
+// 为什么两个都要：老解析器（musicdl / 洛雪）不回读档位，落盘明明可能是 flac 却报空；
+// 而搜索结果又常常只有一句「无损」当声明。只看声明会让「声明无损、实际 128k」的源
+// 插队（这正是 v2.13.0 之前那批 mp3 的来源），只看实际又会把不报档位的源一律垫底。
+func dlAttemptScore(res *online.Resolved, declared string) int {
+	if res != nil {
+		if s := online.TierRank(res.Tier); s >= 0 {
+			return s
+		}
+	}
+	return qualityTierRank(declared)
+}
+
+// dlTiebreak 同档位时谁赢：**原生 0 < 外挂池 1 < 洛雪 2**。
+//
+// 为什么不直接照用户排的渠道顺序打破平局：用户排「lx 在最前」的意图是
+// 「去别处找更高的档位」，不是「同样是 320k，我要第三方那一条」。同档位时
+// 官方平台那条更可信（封面/标签齐全、不容易死链），换源本身还是失败面 ——
+// v2.13.0 的「同档不换」口径就是为此定的，这里必须继续成立。
+func dlTiebreak(ch string) int {
+	switch ch {
+	case dlChanNative:
+		return 0
+	case dlChanMusicDL:
+		return 1
+	default:
+		return 2
+	}
+}
+
+// downloadChannels 生效的取音渠道顺序（没配 = 默认三条全开，洛雪在最前）。
+func (i *Interceptor) downloadChannels() []string {
+	if i.cfg.AutoDownloadChannels == nil {
+		return append([]string(nil), config.DefaultDownloadChannels...)
+	}
+	return config.NormalizeDownloadChannels(i.cfg.AutoDownloadChannels())
+}
+
+// channelOfCandidate 池里的一条候选属于哪条渠道。
+//
+// `lx:` 前缀是我们给「搜得到、但曲率没有自家解析器」的平台（酷狗 / 酷我）改道出来的
+// （见 lxsource.go 的 `lxSourcePrefix`），所以它算洛雪渠道，不算原生。
+// 剩下的短码里，在 `download_sources`（= musicdl 启用的那几家）里的算外挂池，
+// 其余按原生平台处理。
+func channelOfCandidate(platform string, dlSources []string) string {
+	if strings.HasPrefix(platform, lxSourcePrefix) {
+		return dlChanLx
+	}
+	p := strings.ToLower(strings.TrimSpace(platform))
+	for _, s := range dlSources {
+		if s == p {
+			return dlChanMusicDL
+		}
+	}
+	return dlChanNative
+}
+
+// lxProbe 用「同一个平台 id」向洛雪脚本要直链，**只解析不落盘**。
+//
+// 与老的 `downloadViaLx` 的区别就是这一句：老函数一边解析一边下载，于是
+// 「洛雪先给了个 320k」会当场把 320k 下完，后面那条真能出无损的外挂池再没机会。
+// 拆成纯探测之后，所有渠道的结果才排在同一张表里比高低。
+//
+// 为什么这条路值得单独存在：脚本按 `getSongId = hash ‖ songmid ‖ id` 取曲目，
+// **不需要脚本自己会搜**（实测用户装的 6 个脚本里只有 1 个声明了 musicSearch）。
+func (i *Interceptor) lxProbe(ctx context.Context, t online.Track, tiers []string) (*online.Resolved, error) {
 	plat := strings.ToLower(strings.TrimSpace(t.Platform))
 	if plat == "" || strings.HasPrefix(plat, lxSourcePrefix) || t.PlatformID == "" {
-		return online.DownloadedItem{}, false
+		return nil, online.ErrNoResolver
 	}
-	// 先把「这条曲目的 id 长什么样」交给洛雪（脚本按 hash ‖ songmid ‖ id 取，
-	// 三个都填上，不管它读哪个）。
+	// 先把「这条曲目的 id 长什么样」交给洛雪（脚本按 hash ‖ songmid ‖ id 取，三个都填）。
 	i.rememberLxItem(plat, t.PlatformID, map[string]any{
 		"id":        t.PlatformID,
 		"songmid":   t.PlatformID,
@@ -361,149 +466,210 @@ func (i *Interceptor) downloadViaLx(ctx context.Context, fake string, t online.T
 		"duration":  t.Duration,
 	})
 	i.ensureLxResolver(plat)
+	return i.pool.ResolveLadder(ctx, lxSourcePrefix+plat, t.PlatformID, tiers)
+}
 
-	res, err := i.pool.ResolveLadder(ctx, lxSourcePrefix+plat, t.PlatformID, tiers)
-	if err != nil || res == nil {
-		if err != nil && ctx.Err() == nil {
-			i.logf("[INTERCEPT] 洛雪取链失败（%s/%s）：%v", plat, t.PlatformID, err)
-		}
-		return online.DownloadedItem{}, false
-	}
-	// 只要**真的更好**才换：洛雪也常常只给 320k，那就不值得为一个同档位的文件
-	// 多走一次下载（还可能是别家 CDN 的转码）。
-	if s := online.TierRank(res.Tier); s <= baseScore {
-		i.logf("[INTERCEPT] 洛雪只给到 %q（不比基线 %d 高），不换", res.Tier, baseScore)
-		return online.DownloadedItem{}, false
-	}
-
-	used := online.Track{
-		Platform:   lxSourcePrefix + plat,
+// lxTrackOf 把「洛雪用同一个 id 解析出来的那条」表示成一个候选身份。
+//
+// 登记表要用它（`lx:wy` 这种），界面才知道这首歌其实是从洛雪脚本下来的。
+func lxTrackOf(t online.Track, tier string) online.Track {
+	return online.Track{
+		Platform:   lxSourcePrefix + strings.ToLower(strings.TrimSpace(t.Platform)),
 		PlatformID: t.PlatformID,
 		Title:      t.Title,
 		Artists:    t.Artists,
 		Album:      t.Album,
 		Duration:   t.Duration,
-		Quality:    res.Tier,
+		Quality:    tier,
 	}
-	item, err := i.postDownload(ctx, fake, t, used, res.URL, res.Tier)
-	if err != nil {
-		i.logf("[INTERCEPT] 洛雪取到 %q 但下载失败：%s/%s %v", res.Tier, plat, t.PlatformID, err)
-		return online.DownloadedItem{}, false
-	}
-	i.logf("[INTERCEPT] 洛雪补强成功：%s/%s 基线 %d → %s", plat, t.PlatformID, baseScore, res.Tier)
-	return item, true
 }
 
-// downloadToLibrary 逐个候选试下载，成功即返回。
+// collectDownloadAttempts 按渠道顺序逐条探测，返回**排好序**的取音计划（最好的在最前）。
+//
+// 排序键：实际档位降序 → 渠道位次升序（并列时用户排前的渠道赢）。
+// 探测途中一旦拿到「用户允许的顶」（`tiers[0]`，highest 就是无损）立刻收工 ——
+// 已经不可能更好了，再问别的渠道只是白等。
+func (i *Interceptor) collectDownloadAttempts(ctx context.Context, t online.Track, tiers []string) []dlAttempt {
+	channels := i.downloadChannels()
+	if len(tiers) == 0 || len(channels) == 0 {
+		return nil
+	}
+	dlSources := i.downloadSources()
+	ceiling := online.TierRank(tiers[0])
+	losslessRank := online.TierRank(online.TierLossless)
+
+	out := make([]dlAttempt, 0, 6)
+	best := -1
+	push := func(ch string, cand online.Track, res *online.Resolved) {
+		rank := config.ChannelRank(channels, ch)
+		if rank < 0 || res == nil {
+			return
+		}
+		s := dlAttemptScore(res, cand.Quality)
+		out = append(out, dlAttempt{Channel: ch, Cand: cand, Res: res, Score: s, Rank: rank})
+		if s > best {
+			best = s
+		}
+	}
+
+	// 池里的候选：**声明值只用来决定「先探谁」**，不参与最后谁赢的判断。
+	// （声明值为什么不能当判据：musicdl 的 mp3 一律被标成 320k，而洛雪脚本报的
+	// 「无损」实测有四成是 128k 的转码 —— v2.13.0 那轮就是这么定的。）
+	cands := i.rankedSources(ctx, t.Title, t.Artist(), t.Duration)
+	sort.SliceStable(cands, func(a, b int) bool {
+		return qualityTierRank(cands[a].Quality) > qualityTierRank(cands[b].Quality)
+	})
+	probePool := func(want string) {
+		n := 0
+		for _, c := range cands {
+			if n >= dlProbePerChannel {
+				return
+			}
+			if channelOfCandidate(c.Platform, dlSources) != want {
+				continue
+			}
+			n++
+			res, err := i.pool.ResolveLadder(ctx, c.Platform, c.PlatformID, tiers)
+			if err != nil {
+				i.logf("[INTERCEPT] %s 渠道候选解析失败：%s/%s %v", want, c.Platform, c.PlatformID, err)
+				continue
+			}
+			push(want, c, res)
+			if best >= ceiling {
+				return
+			}
+		}
+	}
+
+	// 原生排第一个探（即使用户把它排在后面）：一次调用就拿到「不降级」的参照，
+	// 而且**兜底候选永远在表里** —— 别的渠道给再高的档，链接也可能是死链，
+	// 下不动时还得回落曲目自己平台那条（用例 `TestDownloadToLibraryRetriesNextCandidate`
+	// 钉的就是这个形状）。用户关掉原生则不探。
+	order := make([]string, 0, len(channels))
+	if config.ChannelEnabled(channels, dlChanNative) {
+		order = append(order, dlChanNative)
+	}
+	for _, ch := range channels {
+		if ch != dlChanNative {
+			order = append(order, ch)
+		}
+	}
+
+	for _, ch := range order {
+		if ctx.Err() != nil {
+			break
+		}
+		switch ch {
+		case dlChanNative:
+			// 原生 = 曲目自己平台按档位阶梯解析（网易云 / QQ / 酷狗 …）。
+			res, err := i.pool.ResolveLadder(ctx, t.Platform, t.PlatformID, tiers)
+			if err != nil {
+				if ctx.Err() == nil {
+					i.logf("[INTERCEPT] 原生解析拿不到：%s/%s %v", t.Platform, t.PlatformID, err)
+				}
+				continue
+			}
+			push(dlChanNative, t, res)
+
+		case dlChanLx:
+			// (a) 同一个平台 id 直接问洛雪（不需要脚本会搜）。
+			//
+			// ⚠️ 只在「用户允许的顶 ≥ 无损」时问：点名 320k / 128k 是**省流量**，
+			// 为一个省流量的选择去等洛雪几十秒是违背用户意图（这条是 v2.14.0 定的，
+			// 用例 `TestDownloadToLibrarySkipsLxWhenUserAsksLowerTier` 盯着）。
+			if i.lxResolve != nil && ceiling >= losslessRank && best < losslessRank {
+				res, err := i.lxProbe(ctx, t, tiers)
+				if err != nil {
+					if ctx.Err() == nil {
+						i.logf("[INTERCEPT] 洛雪取链失败（%s/%s）：%v", t.Platform, t.PlatformID, err)
+					}
+				} else {
+					push(dlChanLx, lxTrackOf(t, res.Tier), res)
+				}
+			}
+			// (b) 洛雪搜出来的同名候选（酷狗 / 酷我改道出来的 `lx:kg` 这类）。
+			probePool(dlChanLx)
+
+		case dlChanMusicDL:
+			probePool(dlChanMusicDL)
+		}
+		if best >= ceiling {
+			break // 到顶了，别的渠道再问也不可能更好
+		}
+	}
+
+	sort.SliceStable(out, func(a, b int) bool {
+		if out[a].Score != out[b].Score {
+			return out[a].Score > out[b].Score
+		}
+		ta, tb := dlTiebreak(out[a].Channel), dlTiebreak(out[b].Channel)
+		if ta != tb {
+			return ta < tb // 同档位不换源：原生 > 外挂池 > 洛雪
+		}
+		return out[a].Rank < out[b].Rank
+	})
+	return out
+}
+
+// channelTiers 把一次探测计划摊成「每条渠道各拿到什么档位」，用于界面展示。
+//
+// 「替换音质」那一页要回答的就是用户那句「当前歌曲，哪些下载源可以用什么音质下载」
+// （m02848）—— 一张渠道 → 档位的表，比一长串候选直观点得多。
+type channelTier struct {
+	Channel string `json:"channel"`
+	Tier    string `json:"tier"`
+	Score   int    `json:"score"`
+	// Platform / PlatformID 是这条渠道实际取音用的那一条（用户想知道「咪咕那条是哪个 id」）。
+	Platform   string `json:"platform,omitempty"`
+	PlatformID string `json:"platform_id,omitempty"`
+}
+
+func channelTiersOf(attempts []dlAttempt, channels []string) []channelTier {
+	out := make([]channelTier, 0, len(channels))
+	for _, ch := range channels {
+		ct := channelTier{Channel: ch}
+		for _, a := range attempts {
+			if a.Channel != ch {
+				continue
+			}
+			if online.TierRank(a.Tier()) > online.TierRank(ct.Tier) || ct.Tier == "" {
+				ct.Tier = a.Tier()
+				ct.Score = a.Score
+				ct.Platform = a.Cand.Platform
+				ct.PlatformID = a.Cand.PlatformID
+			}
+		}
+		out = append(out, ct)
+	}
+	return out
+}
+
+// downloadToLibrary 按取音计划落盘：最好的先下，下不动才换下一条。
 //
 // 与 `handleQulvDownloadOnline` 共用同一套动作，只是调用方不同（那边是注入脚本
 // 点按钮，这边是收藏后自动触发）。
 func (i *Interceptor) downloadToLibrary(ctx context.Context, fake string, t online.Track) (online.DownloadedItem, error) {
 	tiers := i.downloadTiers()
-
-	// 基线：曲目自己平台按档位阶梯解析出来的那一条。
-	//
-	// 这里只取直链、**不落盘**，作用有两个：
-	//   1. 知道「这首歌本来能拿到多好」，池里的候选只有**真的更好**才换源
-	//      （只看声明档位会在「自己平台能无损、池里那条只声明 320k」时把无损降成 320k）；
-	//   2. 候选过滤也用它当门槛 —— 声明比基线低的候选连试都不必试。
-	baseRes, baseErr := i.pool.ResolveLadder(ctx, t.Platform, t.PlatformID, tiers)
-	baseScore := qualityTierRank(t.Quality)
-	if baseErr == nil && baseRes != nil {
-		if s := online.TierRank(baseRes.Tier); s > baseScore {
-			baseScore = s
-		}
+	tries := i.collectDownloadAttempts(ctx, t, tiers)
+	if len(tries) == 0 {
+		return online.DownloadedItem{}, online.ErrNotPlayable
 	}
 
-	// 基线**实际**档位（解析回读的那一条，没有才退回声明值）。
-	baseTier := strings.ToLower(strings.TrimSpace(t.Quality))
-	if baseErr == nil && baseRes != nil {
-		baseTier = baseRes.Tier
-	}
-
-	// ── 洛雪补强 ──────────────────────────────────────────────────────────
-	//
-	// 曲目自己平台原生解析拿不到无损时，用**同一个平台 id** 走洛雪脚本再要一次。
-	//
-	// 为什么这一条能成：洛雪脚本背后是第三方聚合 API（见 data/lx_sources/*.js
-	// 里的 gdstudio / nxinxz / haitangw 等），它们**不吃网易/QQ 的登录态限制**——
-	// 免登录网易云对收费曲目只给 standard(128k)、QQ 未登录问 flac 恒失败，
-	// 而这些聚合站往往给得出 flac。脚本的 musicUrl 也只要一个平台 id
-	// （getSongId = hash ‖ songmid ‖ id），不需要脚本自己会搜。
-	//
-	// 用户 2026-10-20 的原话：「把落雪和 musicdl 利用起来，收藏自动下载可以走它们的链接」。
-	//
-	// 只在「想要无损」时试：tiers 的最高档 ≥ 无损（highest / flac）。用户点名
-	// 320k / 128k 是省流量，这时候去要无损既费时间（洛雪单条失败要几十秒）又违背选择。
-	if i.lxResolve != nil &&
-		online.TierRank(tiers[0]) >= online.TierRank(online.TierLossless) &&
-		online.TierRank(baseTier) < online.TierRank(online.TierLossless) {
-		if item, ok := i.downloadViaLx(ctx, fake, t, tiers, baseScore); ok {
-			return item, nil
-		}
-	}
-
-	cands := i.downloadCandidates(ctx, t, baseScore)
-	// 「飞牛页面触发的下载」的音质偏好（榜单管理里的「音质下载」）：
-	// 点名要某一档时，把正好是那一档的候选提到最前（见 preferExactTier）。
-	if want := i.autoDownloadQuality(); want != qualityHighest {
-		cands = preferExactTier(cands, want)
-	}
-
-	var lastErr error = baseErr
-	for idx, cand := range cands {
-		if cand.Platform == t.Platform && cand.PlatformID == t.PlatformID {
-			// 曲目自己平台：复用上面那次解析，别重复问一遍平台。
-			// 基线解析不出来时这条也没法兜底，直接跳过。
-			if baseErr != nil || baseRes == nil {
-				continue
-			}
-			item, err := i.postDownload(ctx, fake, t, cand, baseRes.URL, baseRes.Tier)
-			if err != nil {
-				lastErr = err
-				if len(cands) > 1 {
-					i.logf("[INTERCEPT] 自己平台下载失败：%s/%s %v", cand.Platform, cand.PlatformID, err)
-				}
-				continue
-			}
-			return item, nil
-		}
-
-		// 池里的候选：声明档位不比基线高就不换 —— 那是**降级**。
-		// 用户要的是「各音源里最高的那一档」，不是「换个源」。
-		if qualityTierRank(cand.Quality) <= baseScore {
-			continue
-		}
-		res, err := i.pool.ResolveLadder(ctx, cand.Platform, cand.PlatformID, tiers)
+	var lastErr error
+	for n, a := range tries {
+		item, err := i.postDownload(ctx, fake, t, a.Cand, a.Res.URL, a.Tier())
 		if err != nil {
 			lastErr = err
-			// 只有多个候选时才刷日志 —— 单候选（= 曲目自己平台）失败的情况，
-			// 上层会把错误报给用户，这里再打一条只是噪音。
-			if len(cands) > 1 {
-				i.logf("[INTERCEPT] 取音源不可用（%d/%d）：%s/%s %v",
-					idx+1, len(cands), cand.Platform, cand.PlatformID, err)
+			// 只有多条可试时才刷日志 —— 单条失败上层会把错误报给用户，这里再打一条只是噪音。
+			if len(tries) > 1 {
+				i.logf("[INTERCEPT] 第 %d/%d 条下不来（%s 渠道 %s/%s · %s），换下一条：%v",
+					n+1, len(tries), a.Channel, a.Cand.Platform, a.Cand.PlatformID, a.Tier(), err)
 			}
 			continue
 		}
-		// 声明归声明，实际拿到的档位才是真的 —— 拿到的比基线还差就不换，
-		// 免得「为了追一个声明的无损，把实际的无损换成 mp3」。
-		if s := online.TierRank(res.Tier); s >= 0 && s < baseScore {
-			i.logf("[INTERCEPT] 候选实际只有 %q，比基线低，不换源：%s/%s",
-				res.Tier, cand.Platform, cand.PlatformID)
-			continue
-		}
-		item, err := i.postDownload(ctx, fake, t, cand, res.URL, res.Tier)
-		if err != nil {
-			lastErr = err
-			if len(cands) > 1 {
-				i.logf("[INTERCEPT] 取音源下载失败，换下一个（%d/%d）：%s/%s %v",
-					idx+1, len(cands), cand.Platform, cand.PlatformID, err)
-			}
-			continue
-		}
-		if cand.Platform != t.Platform || cand.PlatformID != t.PlatformID {
-			i.logf("[INTERCEPT] 下载换源取更高音质：%s/%s（%s）→ %s/%s（%s）",
-				t.Platform, t.PlatformID, t.Quality, cand.Platform, cand.PlatformID, cand.Quality)
+		if a.Channel != dlChanNative {
+			i.logf("[INTERCEPT] 取音走 %s 渠道：%s/%s → %s/%s（%s）",
+				a.Channel, t.Platform, t.PlatformID, a.Cand.Platform, a.Cand.PlatformID, a.Tier())
 		}
 		return item, nil
 	}

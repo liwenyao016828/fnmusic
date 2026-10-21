@@ -1,47 +1,82 @@
 <template>
   <!--
-    补全整理页（2026-10-19 渐进式披露重构）
+    补全整理页（2026-10-21 顶部分段导航重构）
 
-    用户口径：「一个页面里一样有好多功能，按钮，选项，卡片，都是一窝蜂挤在一起……
-    一些不必要的按钮和交互可以通过现代化方式实现交互显示，而不是挤在一个页面。」
+    用户口径：「这个补全整理的页面，不要再用 ⋯ 按钮了，换成顶部的导航栏，
+    一个功能页面可以常驻，归类放在一起。」
 
-    重构前的版面（一屏里同时存在的控件）：目录输入框 + 4 张动作卡（扫描缺失 / 增量扫描 /
-    体检 / 查找重复）+ 三步流程条 + 6 张字段勾选卡 + 一行选项（最多N首 / 覆盖 / AI / 4 个平台 chip）
-    + 预览表 + 结果卡 + 第二张「体检·索引·查重」空卡。
-
-    重构后的分层：
-      · 版面上常驻：曲库目录（一行可点）· 缺口数字（一行）· 已选字段（一行 chip）· 结果区；
-      · 主按钮：只放**当前这一步**该点的那个（扫描缺失 / 预览要写的内容）；
-      · 其余全部收进右上角 ⋯：增量扫描 / 体检 / 查重 / 撤销；
-      · 目录、最多 N 首、覆盖、AI、主力平台 → 右侧抽屉「补全选项」。
-    结果区（预览表 / 进度 / 卡片墙 / 失败清单）保持常驻 —— 它们只在有数据时出现。
+    重构前：一整页 + 一张「补全·索引·查重」结果卡，六个功能入口（扫描缺失 /
+    增量扫描 / 体检 / 查重 / 撤销 / 选项）全收在右上角 ⋯ 后面。
+    重构后：壳层在页面顶部给了分段导航（SegmentedControl，与发现 / 下载 /
+    系统同一套机制），五个分段各是一个常驻视图，控件归类进自己那段 ——
+      · 补全（默认段）：扫描缺失 / 增量扫描（仍在 ⋯）/ 字段 chips / 预览 / 写入进度 / 结果；
+      · 查重：查找重复 + 重复组列表 + 干跑预览 / 移入回收站；
+      · 体检：audit 四格统计（与补全的索引口径各算各的）；
+      · 记录：上次整理快照 + 撤销上一次补全的入口；
+      · 替换音质：占位段 —— 后端 /api/quality/* 开发中，这里不发任何接口调用。
+    分段切换只是 v-show：所有状态都存在本组件的 ref 里，跑完的体检 /
+    查重结果切走再切回来不丢。次要动作仍留在 ⋯（用户反对的是主功能
+    藏在 ⋯ 后面，不是反对 ⋯ 本身）。
   -->
   <PageShell>
     <template #actions>
-      <!-- 当前步骤的主按钮：第 3 步不给按钮（确认写入就在预览表里，紧挨着要确认的清单） -->
-      <button
-        v-if="completeStep === 1"
-        :disabled="gapsLoading"
-        :title="completeHint"
-        class="ys-press rounded-full bg-emerald-500 px-4 py-1.5 text-[12px] font-semibold text-white shadow-[0_1px_2px_rgba(11,138,102,0.3)] transition-colors hover:bg-emerald-600 disabled:opacity-50"
-        @click="scanGaps"
-      >{{ gapsLoading ? '统计中…' : '扫描缺失' }}</button>
-      <button
-        v-else-if="completeStep === 2"
-        :disabled="previewing || completing || !selectedFields.length"
-        :title="completeHint + (selectedFields.length ? '' : '（先在「补全选项」里勾要补的字段）')"
-        class="ys-press rounded-full bg-emerald-500 px-4 py-1.5 text-[12px] font-semibold text-white shadow-[0_1px_2px_rgba(11,138,102,0.3)] transition-colors hover:bg-emerald-600 disabled:opacity-50"
-        @click="runComplete"
-      >{{ previewing ? '匹配中…' : '预览要写的内容' }}</button>
+      <!-- 每个分段一行主操作，只显示当前段那一条；
+           补全段第 3 步不给按钮（确认写入就在预览表里，紧挨着要确认的清单） -->
+      <template v-if="sub === 'complete'">
+        <button
+          v-if="completeStep === 1"
+          :disabled="gapsLoading"
+          :title="completeHint"
+          class="ys-press rounded-full bg-emerald-500 px-4 py-1.5 text-[12px] font-semibold text-white shadow-[0_1px_2px_rgba(11,138,102,0.3)] transition-colors hover:bg-emerald-600 disabled:opacity-50"
+          @click="scanGaps"
+        >{{ gapsLoading ? '统计中…' : '扫描缺失' }}</button>
+        <button
+          v-else-if="completeStep === 2"
+          :disabled="previewing || completing || !selectedFields.length"
+          :title="completeHint + (selectedFields.length ? '' : '（先在字段里勾要补的项）')"
+          class="ys-press rounded-full bg-emerald-500 px-4 py-1.5 text-[12px] font-semibold text-white shadow-[0_1px_2px_rgba(11,138,102,0.3)] transition-colors hover:bg-emerald-600 disabled:opacity-50"
+          @click="runComplete"
+        >{{ previewing ? '匹配中…' : '预览要写的内容' }}</button>
 
-      <OverflowMenu :items="tidyMenu" @select="onTidyMenu" />
+        <!-- 次要动作保留在 ⋯：现在只剩「增量扫描」 -->
+        <OverflowMenu :items="completeMenu" @select="onCompleteMenu" />
+      </template>
+      <button
+        v-else-if="sub === 'dedupe'"
+        :disabled="deduping"
+        title="扫描曲库，找出内容相同 / 同名的重复曲目"
+        class="ys-press rounded-full bg-emerald-500 px-4 py-1.5 text-[12px] font-semibold text-white shadow-[0_1px_2px_rgba(11,138,102,0.3)] transition-colors hover:bg-emerald-600 disabled:opacity-50"
+        @click="runDedupe"
+      >{{ deduping ? '查重中…' : '查找重复' }}</button>
+      <button
+        v-else-if="sub === 'audit'"
+        :disabled="auditing"
+        title="直接扫一遍文件统计缺口（与「补全」段的索引口径各算各的）"
+        class="ys-press rounded-full bg-emerald-500 px-4 py-1.5 text-[12px] font-semibold text-white shadow-[0_1px_2px_rgba(11,138,102,0.3)] transition-colors hover:bg-emerald-600 disabled:opacity-50"
+        @click="runAudit"
+      >{{ auditing ? '体检中…' : '曲库体检' }}</button>
+      <button
+        v-else-if="sub === 'records'"
+        :disabled="reloading"
+        title="重新拉取快照与上一次补全的状态"
+        class="ys-press rounded-full border border-[var(--ys-border)] bg-white px-4 py-1.5 text-[12px] font-medium text-[var(--ys-text-muted)] transition-colors hover:bg-[var(--ys-surface-2)] disabled:opacity-50"
+        @click="onRefresh"
+      >{{ reloading ? '刷新中…' : '刷新' }}</button>
+      <button
+        v-else-if="sub === 'quality'"
+        title="扫描曲库里可以替换音质的曲目"
+        class="ys-press rounded-full bg-emerald-500 px-4 py-1.5 text-[12px] font-semibold text-white shadow-[0_1px_2px_rgba(11,138,102,0.3)] transition-colors hover:bg-emerald-600"
+        @click="scanQuality"
+      >开始扫描</button>
     </template>
 
     <div class="space-y-3.5">
+      <!-- ═════ 分段一：补全（默认段，元数据补全主流程） ═════ -->
       <SectionCard
+        v-show="sub === 'complete'"
         :icon="Sparkles"
         tone="brand"
-        title="补全整理"
+        title="元数据补全"
         sub="歌词 / 封面 / 年份，写回文件本身"
         sub-title="补全的歌曲信息一律来自搜索结果，不由 AI 猜填"
       >
@@ -113,6 +148,17 @@
             另有 {{ gaps.unsupported }} 首格式写不了标签<template v-if="unsupportedExtsText">（{{ unsupportedExtsText }}）</template>
           </span>
         </p>
+
+        <!-- ── 增量扫描结果（「补全」段 ⋯ → 增量扫描）：计数是索引口径 ── -->
+        <div v-if="indexResult" class="mt-3.5 rounded-[12px] border border-[var(--ys-border)] bg-[#FAFAFC] px-3.5 py-2.5 text-[11px] text-[var(--ys-text-muted)]">
+          增量扫描：新增 <b class="font-mono text-[var(--ys-text)]">{{ indexResult.added }}</b> ·
+          变化 <b class="font-mono text-[var(--ys-text)]">{{ indexResult.changed }}</b> ·
+          未变 <b class="font-mono text-[var(--ys-text)]">{{ indexResult.unchanged }}</b> ·
+          索引总数 <b class="font-mono text-[var(--ys-text)]">{{ indexResult.index_total }}</b>
+          <div v-if="!indexResult.complete" class="mt-1 text-amber-700">
+            本次枚举不完整，已跳过删除判定（保护索引不被误清）
+          </div>
+        </div>
 
         <!-- ── 预览表：还没写任何文件 ── -->
         <div v-if="completePlan" class="mt-3.5 space-y-2.5 rounded-[12px] border border-[var(--ys-border)] bg-[#FAFAFC] p-3.5">
@@ -220,17 +266,7 @@
             </span>
           </p>
 
-          <div
-            v-if="completeJob.undo_available && !completeJob.running"
-            class="flex flex-wrap items-center gap-2 border-t border-[var(--ys-border)] pt-2"
-          >
-            <button
-              :disabled="undoBusy"
-              class="rounded-[8px] bg-black/[0.04] px-2.5 py-1 text-[11px] text-[var(--ys-text-muted)] transition-colors hover:bg-black/[0.07] disabled:opacity-50"
-              @click="undoComplete"
-            >{{ undoBusy ? '还原中…' : '撤销上一次补全' }}</button>
-            <span class="text-[11px] text-[var(--ys-text-faint)]">还原成补全前的样子</span>
-          </div>
+          <!-- 「撤销上一次补全」不在这里了：入口归「记录」段（v-show 常驻，状态还在本组件） -->
         </div>
 
         <!-- ── 补全结果卡片墙（读自文件，不是「打算写成什么」）── -->
@@ -289,59 +325,18 @@
         </div>
       </SectionCard>
 
-      <!-- ══ 体检 / 索引 / 查重结果 ══
-           2026-10-19：**空的时候整张卡不渲染**。原来这块是一张写着「还没有体检结果」的卡，
-           占掉首屏一整块，却什么也没说。现在从 ⋯ 菜单跑完才出现。 -->
+      <!-- ═════ 分段二：查重 ═════ -->
       <SectionCard
-        v-if="audit || indexResult || dupResult || auditing"
-        :icon="FolderOpen"
-        title="体检 · 索引 · 查重"
-        sub="从右上角 ⋯ 里跑，结果落在这里"
+        v-show="sub === 'dedupe'"
+        :icon="Copy"
+        title="查重"
+        sub="内容相同 / 同名不同版的重复曲目：保留一份，其余移入回收站"
       >
-        <template v-if="audit && auditAtText" #actions>
-          <span class="text-[10.5px] text-[var(--ys-text-faint)]">体检于 {{ auditAtText }}</span>
-        </template>
-
-        <p v-if="statsLoading" class="text-[11px] text-[var(--ys-text-faint)]">正在读取上次整理快照…</p>
-        <p
-          v-else-if="indexStats"
-          class="text-[11px] leading-relaxed text-[var(--ys-text-faint)]"
-          title="下面这组数字是直接扫文件得到的（跟「扫描缺失」的索引口径各算各的），两边对不上就说明索引过期了"
-        >{{ lastScanText || '索引还没整理过' }} —— 点「增量扫描」会更新</p>
-
-        <div v-if="!audit" class="mt-3 rounded-[12px] border border-dashed border-[var(--ys-border)] px-4 py-6 text-center text-[11px] text-[var(--ys-text-faint)]">
-          {{ auditing ? '正在体检…' : '还没有体检结果' }}
-        </div>
-        <div v-else class="mt-3 grid grid-cols-2 gap-2 md:grid-cols-4">
-          <div class="rounded-[12px] border border-[var(--ys-border)] bg-[#FAFAFC] px-3 py-2.5">
-            <div class="text-[10.5px] text-[var(--ys-text-faint)]">曲目总数</div>
-            <div class="mt-0.5 font-mono text-[19px] font-semibold text-[var(--ys-text)]">{{ audit.total }}</div>
-          </div>
-          <div class="rounded-[12px] border border-[var(--ys-border)] bg-[#FAFAFC] px-3 py-2.5">
-            <div class="text-[10.5px] text-amber-600">缺歌词</div>
-            <div class="mt-0.5 font-mono text-[19px] font-semibold text-[var(--ys-text)]">{{ audit.no_lyric }}</div>
-          </div>
-          <div class="rounded-[12px] border border-[var(--ys-border)] bg-[#FAFAFC] px-3 py-2.5">
-            <div class="text-[10.5px] text-amber-600">缺封面</div>
-            <div class="mt-0.5 font-mono text-[19px] font-semibold text-[var(--ys-text)]">{{ audit.no_cover }}</div>
-          </div>
-          <div class="rounded-[12px] border border-[var(--ys-border)] bg-[#FAFAFC] px-3 py-2.5">
-            <div class="text-[10.5px] text-rose-600">两者都缺</div>
-            <div class="mt-0.5 font-mono text-[19px] font-semibold text-[var(--ys-text)]">{{ audit.both_missing }}</div>
-          </div>
+        <div v-if="!dupResult" class="rounded-[12px] border border-dashed border-[var(--ys-border)] px-4 py-6 text-center text-[11px] text-[var(--ys-text-faint)]">
+          {{ deduping ? '正在查重…' : '还没有查重结果 —— 点右上「查找重复」' }}
         </div>
 
-        <div v-if="indexResult" class="mt-2.5 rounded-[12px] border border-[var(--ys-border)] bg-[#FAFAFC] px-3.5 py-2.5 text-[11px] text-[var(--ys-text-muted)]">
-          增量扫描：新增 <b class="font-mono text-[var(--ys-text)]">{{ indexResult.added }}</b> ·
-          变化 <b class="font-mono text-[var(--ys-text)]">{{ indexResult.changed }}</b> ·
-          未变 <b class="font-mono text-[var(--ys-text)]">{{ indexResult.unchanged }}</b> ·
-          索引总数 <b class="font-mono text-[var(--ys-text)]">{{ indexResult.index_total }}</b>
-          <div v-if="!indexResult.complete" class="mt-1 text-amber-700">
-            本次枚举不完整，已跳过删除判定（保护索引不被误清）
-          </div>
-        </div>
-
-        <div v-if="dupResult" class="mt-2.5 space-y-2.5 rounded-[12px] border border-[var(--ys-border)] bg-[#FAFAFC] p-3.5">
+        <div v-if="dupResult" class="space-y-2.5 rounded-[12px] border border-[var(--ys-border)] bg-[#FAFAFC] p-3.5">
           <div class="flex flex-wrap items-center justify-between gap-2">
             <span class="text-[12px] font-semibold text-[var(--ys-text)]">
               发现 <b class="font-mono text-rose-600">{{ dupResult.group_count }}</b> 组重复
@@ -373,6 +368,90 @@
               <button class="underline decoration-dotted underline-offset-2 hover:no-underline" @click="navigateTo('logs')">查看日志</button>
             </div>
           </div>
+        </div>
+      </SectionCard>
+
+      <!-- ═════ 分段三：体检 ═════ -->
+      <SectionCard
+        v-show="sub === 'audit'"
+        :icon="ScanSearch"
+        title="曲库体检"
+        sub="直接扫文件统计缺口 —— 与「补全」段的索引口径各算各的，数字可能对不上"
+      >
+        <template v-if="audit && auditAtText" #actions>
+          <span class="text-[10.5px] text-[var(--ys-text-faint)]">体检于 {{ auditAtText }}</span>
+        </template>
+
+        <div v-if="!audit" class="rounded-[12px] border border-dashed border-[var(--ys-border)] px-4 py-6 text-center text-[11px] text-[var(--ys-text-faint)]">
+          {{ auditing ? '正在体检…' : '还没有体检结果 —— 点右上「曲库体检」' }}
+        </div>
+        <div v-else class="grid grid-cols-2 gap-2 md:grid-cols-4">
+          <div class="rounded-[12px] border border-[var(--ys-border)] bg-[#FAFAFC] px-3 py-2.5">
+            <div class="text-[10.5px] text-[var(--ys-text-faint)]">曲目总数</div>
+            <div class="mt-0.5 font-mono text-[19px] font-semibold text-[var(--ys-text)]">{{ audit.total }}</div>
+          </div>
+          <div class="rounded-[12px] border border-[var(--ys-border)] bg-[#FAFAFC] px-3 py-2.5">
+            <div class="text-[10.5px] text-amber-600">缺歌词</div>
+            <div class="mt-0.5 font-mono text-[19px] font-semibold text-[var(--ys-text)]">{{ audit.no_lyric }}</div>
+          </div>
+          <div class="rounded-[12px] border border-[var(--ys-border)] bg-[#FAFAFC] px-3 py-2.5">
+            <div class="text-[10.5px] text-amber-600">缺封面</div>
+            <div class="mt-0.5 font-mono text-[19px] font-semibold text-[var(--ys-text)]">{{ audit.no_cover }}</div>
+          </div>
+          <div class="rounded-[12px] border border-[var(--ys-border)] bg-[#FAFAFC] px-3 py-2.5">
+            <div class="text-[10.5px] text-rose-600">两者都缺</div>
+            <div class="mt-0.5 font-mono text-[19px] font-semibold text-[var(--ys-text)]">{{ audit.both_missing }}</div>
+          </div>
+        </div>
+      </SectionCard>
+
+      <!-- ═════ 分段四：记录（整理快照 + 撤销入口） ═════ -->
+      <SectionCard
+        v-show="sub === 'records'"
+        :icon="History"
+        title="整理记录"
+        sub="上次整理快照与撤销入口"
+      >
+        <p v-if="statsLoading" class="text-[11px] text-[var(--ys-text-faint)]">正在读取上次整理快照…</p>
+        <p
+          v-else-if="indexStats"
+          class="text-[11px] leading-relaxed text-[var(--ys-text-faint)]"
+          title="快照读自索引；若和「补全」段「扫描缺失」的数字对不上，说明索引过期了 —— 跑一次「补全」段 ⋯ 里的「增量扫描」即可更新"
+        >{{ lastScanText || '索引还没整理过' }} —— 跑「补全」段的「增量扫描」会更新</p>
+        <p v-else class="text-[11px] text-[var(--ys-text-faint)]">还没有索引快照 —— 点右上「刷新」再试</p>
+
+        <!-- 撤销入口：原来既在 ⋯ 里、又贴在补全进度条下；按归类放进「记录」段 -->
+        <div class="mt-3 rounded-[12px] border border-[var(--ys-border)] bg-[#FAFAFC] px-3.5 py-3">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <span class="text-[11px] font-semibold text-[var(--ys-text)]">撤销上一次补全</span>
+            <button
+              :disabled="undoBusy || !completeJob || !completeJob.undo_available || completeJob.running"
+              class="rounded-[8px] bg-black/[0.04] px-2.5 py-1 text-[11px] text-[var(--ys-text-muted)] transition-colors hover:bg-black/[0.07] disabled:opacity-50"
+              @click="undoComplete"
+            >{{ undoBusy ? '还原中…' : '还原' }}</button>
+          </div>
+          <p class="mt-1 text-[11px] leading-relaxed text-[var(--ys-text-faint)]">
+            <template v-if="completeJob && completeJob.undo_available && !completeJob.running">只把上一次补全改过的文件还原成补全前的样子，别的不碰</template>
+            <template v-else-if="completeJob && completeJob.running">补全任务还在跑 —— 结束后才能撤销</template>
+            <template v-else>目前没有可撤销的补全 —— 补全写入前会自动备份，跑完一次这里就会出现「还原」</template>
+          </p>
+        </div>
+      </SectionCard>
+
+      <!-- ═════ 分段五：替换音质（占位段 —— 后端 /api/quality/* 开发中，不发任何接口调用） ═════ -->
+      <SectionCard
+        v-show="sub === 'quality'"
+        :icon="Gauge"
+        title="替换音质"
+        sub="把库里已有曲目换成更高或更低的码率"
+      >
+        <p class="text-[11px] leading-relaxed text-[var(--ys-text-muted)]">
+          这一段是视图骨架：扫描与替换要接后端
+          <b class="font-mono text-[var(--ys-text)]">/api/quality/*</b> 接口，接口还在开发，
+          页面没有发起任何调用 —— 点右上「开始扫描」只会给一条进度提示。
+        </p>
+        <div class="mt-3 rounded-[12px] border border-dashed border-[var(--ys-border)] px-4 py-6 text-center text-[11px] text-[var(--ys-text-faint)]">
+          暂无扫描结果 —— 接口接好以后，这里会列出可以替换音质的曲目
         </div>
       </SectionCard>
     </div>
@@ -450,8 +529,8 @@
 //      模板里 `:src="c.coverUrl"` 一直是 undefined —— 卡片封面其实从来没显示过）。
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
-  Wand2, Sparkles, AlertTriangle, HardDrive, Trash2, Check, FolderOpen,
-  SlidersHorizontal, RotateCcw, ScanSearch, FolderSearch, Copy,
+  Sparkles, Check, FolderOpen, SlidersHorizontal,
+  ScanSearch, FolderSearch, Copy, History, Gauge, ImageIcon,
 } from 'lucide-vue-next'
 import PageShell from './PageShell.vue'
 import SectionCard from './SectionCard.vue'
@@ -476,8 +555,8 @@ import {
 } from '../services/libraryView'
 import { fail as failText, apiError } from '../services/userMsg'
 import { logError } from '../services/appLog'
-import { ok as notifyOk, fail as notifyFail } from '../services/feedback'
-import { navigateTo } from '../services/navBus'
+import { ok as notifyOk, fail as notifyFail, info as notifyInfo } from '../services/feedback'
+import { navigateTo, segmentOf } from '../services/navBus'
 
 /** 页面提示统一走全局 feedback（右下角浮层），不再占页面底部一条 InlineNotice */
 function flash(msg, isError = false) {
@@ -488,32 +567,33 @@ function flash(msg, isError = false) {
 // ── 目录与状态 ──
 const nasDir = computed(() => loadPref('nas_dir', ''))
 const tidyDir = ref('')
-// 2026-10-19 渐进式披露：所有「偶尔才改一次的设置」收进右侧抽屉，
-// 所有「偶尔才跑一次的动作」收进右上角 ⋯ —— 版面上只留当前这一步。
+// 2026-10-19 渐进式披露 → 2026-10-21 分段导航：「偶尔才改一次的设置」仍在右侧抽屉；
+// 主功能入口升为顶部分段，⋯ 里只留真正次要的动作（增量扫描）。
 const optionsOpen = ref(false)
 const auditing = ref(false)
 
 /**
- * 右上角 ⋯ 菜单。顺序 = 从「最常跑」到「最不常跑」。
- * 「扫描缺失」同时也可能出现在主按钮位上（第 1 步），这里保留一份是为了
- * 用户在别的步骤时也能重新统计 —— 不放到抽屉里，因为它仍然高频。
+ * 当前分段：壳层（App.vue）的顶部分段导航把选择写进 navBus，这里只读。
+ * 五个段共用本组件的同一批 ref —— 切段只是 v-show 显隐，
+ * 跑完的体检 / 查重 / 补全结果不会因为切走而被卸载丢掉。
  */
-const tidyMenu = computed(() => [
-  { key: 'gaps', label: gapsLoading.value ? '统计中…' : '扫描缺失', icon: AlertTriangle, disabled: gapsLoading.value },
+const sub = computed(() => segmentOf('tidy'))
+
+/**
+ * 补全段的 ⋯：原六项里，扫描缺失 = 本段主按钮，体检 / 查重 = 各自的分段，
+ * 撤销 = 「记录」段，补全选项 = 卡头的「选项」按钮 —— 这里只剩「增量扫描」。
+ */
+const completeMenu = computed(() => [
   { key: 'index', label: indexing.value ? '扫描中…' : '增量扫描', icon: FolderSearch, disabled: indexing.value },
-  { key: 'audit', label: auditing.value ? '体检中…' : '曲库体检', icon: ScanSearch, disabled: auditing.value },
-  { key: 'dedupe', label: deduping.value ? '查重中…' : '查找重复', icon: Copy, disabled: deduping.value },
-  { key: 'undo', label: '撤销上一次补全', icon: RotateCcw, disabled: undoBusy.value || !completeJob.value?.undo_available },
-  { key: 'options', label: '补全选项…', icon: SlidersHorizontal },
 ])
 
-function onTidyMenu(key) {
-  if (key === 'gaps') scanGaps()
-  else if (key === 'index') runIndexScan()
-  else if (key === 'audit') runAudit()
-  else if (key === 'dedupe') runDedupe()
-  else if (key === 'undo') undoComplete()
-  else if (key === 'options') optionsOpen.value = true
+function onCompleteMenu(key) {
+  if (key === 'index') runIndexScan()
+}
+
+/** 替换音质（占位段）：后端 /api/quality/* 开发中，这里不发任何接口调用 */
+function scanQuality() {
+  notifyInfo('替换音质：后端接口（/api/quality/*）还在开发，这一页目前只是占位')
 }
 const indexing = ref(false)
 const deduping = ref(false)

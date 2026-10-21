@@ -41,7 +41,7 @@ func main() {
 	// 只保留最近若干条且不落盘，重启即清空。
 	log.SetOutput(io.MultiWriter(os.Stderr, applog.Default()))
 
-	log.Printf("[INIT] Starting Aurora Music (fn-lx-player) on port %d, data directory: %s", *port, *dataDir)
+	log.Printf("[INIT] Starting 曲率 (fn-lx-player) on port %d, data directory: %s", *port, *dataDir)
 
 	// 1. Prepare frontend static FS
 	var staticFS fs.FS
@@ -167,6 +167,9 @@ func main() {
 				c := cfgMgr.Get()
 				return config.QualityOverride(c.AutoDownloadQuality, c.DownloadQualitySetting())
 			},
+			// 「自动下载源」的允许集与顺序（见 pkg/config/channels.go）。现取：
+			// 用户在界面上勾掉某条渠道，下一次收藏就不碰它，不需要重启。
+			AutoDownloadChannels: func() []string { return cfgMgr.Get().DownloadChannels() },
 			// 写回配置（同源通道的切换按钮用它）。只写这一个键 ——
 			// ConfigManager.Update 是选择性合并，空字段不会被碰，所以不会顺手动到别的设置。
 			SetPlaybackQuality: func(q string) error {
@@ -378,7 +381,7 @@ func main() {
 	case <-quit:
 	}
 
-	log.Println("[SHUTDOWN] Stopping Aurora Music...")
+	log.Println("[SHUTDOWN] Stopping 曲率...")
 
 	server.StopScheduler()
 

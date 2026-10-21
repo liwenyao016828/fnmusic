@@ -252,7 +252,21 @@
           <LibraryManager class="h-full" @play="playSong" />
         </template>
         <template #view-tidy>
-          <TidyView class="h-full" />
+          <!-- 2026-10-21 用户口径：「补全整理的功能不要再用 ⋯ 按钮了，换成顶部的导航栏，
+               一个功能页面可以常驻，归类放在一起」——补全 / 查重 / 体检 / 记录 / 替换音质
+               升为顶部分段（与发现 / 下载 / 系统同一套壳层机制）。
+               TidyView 只挂载一次、各段 v-show 常驻，段间状态不丢：
+               跑完的体检结果切走再切回来还在。 -->
+          <div class="flex h-full min-h-0 flex-col">
+            <div class="shrink-0 border-b border-[var(--ys-border)] bg-[var(--ys-surface-glass)] px-3 py-2 backdrop-blur-xl">
+              <SegmentedControl
+                :segments="decoratedSegments('tidy')"
+                :model-value="segmentOf('tidy')"
+                @update:model-value="v => setSegment('tidy', v)"
+              />
+            </div>
+            <TidyView class="min-h-0 flex-1" />
+          </div>
         </template>
         <template #view-push>
           <PushManager class="h-full" />
@@ -629,6 +643,7 @@ import {
   Compass, Trophy, Cpu, Disc, Library, UserRound, ScrollText, Settings,
   Wand2, Send, Download, ListMusic, ListOrdered, CloudDownload,
   MoreHorizontal, X, Loader2, AlertTriangle, Search, ArrowRight,
+  Sparkles, Copy, ScanSearch, History, Gauge,
 } from 'lucide-vue-next'
 import { sidebarStatusItems } from './services/libraryView'
 
@@ -775,7 +790,7 @@ function openDisclaimer(force = false) {
 // 图标按 id 在这里登记 —— navViews.js 是纯数据，不 import 组件。
 const NAV_ICONS = { search: Compass, library: Library, tidy: Wand2, push: Send, download: Download, sources: Cpu, accounts: UserRound, system: Settings }
 /** 页内分段的图标（顶层页有自己的图标，段位单独一套） */
-const SEGMENT_ICONS = { discover: Compass, charts: Trophy, queue: ListMusic, playlist: ListOrdered, autodl: CloudDownload, logs: ScrollText, settings: Settings }
+const SEGMENT_ICONS = { discover: Compass, charts: Trophy, queue: ListMusic, playlist: ListOrdered, autodl: CloudDownload, logs: ScrollText, settings: Settings, complete: Sparkles, dedupe: Copy, audit: ScanSearch, records: History, quality: Gauge }
 
 const navItems = VIEWS.map((v) => ({ ...v, icon: NAV_ICONS[v.id] }))
 

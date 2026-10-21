@@ -1,7 +1,7 @@
 {
   ".url": {
     "yinshu-ai.main": {
-      "title": "音枢 AI",
+      "title": "曲率",
       "icon": "images/icon_{0}.png",
       "type": "iframe",
       "protocol": "http",

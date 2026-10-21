@@ -88,6 +88,11 @@ test('辅助函数与注册表一致', () => {
   assert.equal(defaultSegment('library'), '')
   assert.deepEqual(segmentsOf('search').map((s) => s.id), ['discover', 'charts'])
   assert.deepEqual(segmentsOf('library'), [])
+  // 补全整理的顶部分段（2026-10-21 用户口径：功能从右上角 ⋯ 升为常驻分段）
+  assert.deepEqual(segmentsOf('tidy').map((s) => s.id), ['complete', 'dedupe', 'audit', 'records', 'quality'])
+  assert.equal(defaultSegment('tidy'), 'complete')
+  assert.equal(resolveRoute('complete').view, 'tidy')
+  assert.equal(resolveRoute('complete').segment, 'complete')
   assert.equal(isView('sources'), true)
   assert.equal(isView('charts'), false) // 榜单已不是顶层页
 })

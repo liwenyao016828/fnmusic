@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-#  fnOS (飞牛 NAS) 极光音乐 / fnmusic —— Linux / macOS 一键构建打包脚本
+#  fnOS (飞牛 NAS) 曲率 / yinshu-ai —— Linux / macOS 一键构建打包脚本
 #
 #  流程：前端构建(npm run build) → Go 交叉编译 linux/amd64 →
 #        组装 app.tgz → 组装外层 .fpk → 打包后自检

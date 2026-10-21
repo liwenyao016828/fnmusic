@@ -143,6 +143,15 @@ type Config struct {
 	// 与 PreferQuality（网页端下载队列的默认音质）分开：那两个入口的用户意图不同 ——
 	// 网页端点下载的人看着进度条，官方页面点红心的人只想「这首歌归我」。
 	AutoDownloadQuality func() string
+	// AutoDownloadChannels 返回「允许哪些取音渠道、按什么顺序试」，现取。
+	//
+	// 用户 2026-10-21 的要求（m02588）：「增加一个自动下载源（方式：lx，网易云，dl）
+	// 设置」—— 这三条路以前是写死的，用户既关不掉一条，也没法让洛雪排前面。
+	//
+	// 取值 `lx` / `dl` / `native`（见 pkg/config/channels.go）；nil / 空 = 默认全开。
+	// 注意语义：**列表本身是允许集 + 顺序**。没列出的渠道 = 不碰；
+	// 顺序只决定「并列时谁赢、先问谁」，不推翻「不比基线差才换源」那条音质口径。
+	AutoDownloadChannels func() []string
 	// SetPlaybackQuality 把试听音质偏好写回配置（注入页面上的切换按钮用它）。
 	//
 	// nil = 这次运行不允许改（例如单测里的最小构造）：切换按钮会明确回一句

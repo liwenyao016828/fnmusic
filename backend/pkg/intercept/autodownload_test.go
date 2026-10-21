@@ -876,8 +876,13 @@ func TestDownloadToLibrarySkipsLxWhenUserAsksLowerTier(t *testing.T) {
 	}
 }
 
-// 洛雪给的结果**不比基线高**时不换：白换一次下载没有意义（还可能是别家转码）。
-func TestDownloadViaLxSkipsWhenNotBetter(t *testing.T) {
+// 洛雪给的结果**不比原生更好**时不采用：白换一次下载没有意义（还可能是别家转码）。
+//
+// v2.16 之前这是 `downloadViaLx` 的一个 baseScore 入参；渠道化（v2.17）之后它变成
+// 「所有渠道进同一张表、按实际档位排序 + 同档位不换源」的自然结果 —— 断言跟着挪到
+// 这个结果上：原生如实回读 320k，洛雪的直链露馅是 mp3（`lxURLLooksLossy` 降回 320k）
+// → 同档，赢家必须是原生，而且**只下一次**。
+func TestDownloadToLibraryKeepsNativeWhenLxIsNotBetter(t *testing.T) {
 	h := newHarness(t)
 	srv, seen, _ := fakeDownloadBackend(t)
 	h.it.localAPI = srv.URL
@@ -885,15 +890,28 @@ func TestDownloadViaLxSkipsWhenNotBetter(t *testing.T) {
 		return "https://cdn.example/x.mp3", nil
 	}
 	fake := registerOnline(h, "w932", "甲", "乙")
+	// ⚠️ 必须在 `registerOnline` **之后**换池：`registerOnline → setOnline` 会用
+	// `poolFrom(playable)` 覆盖 `h.it.pool`，先设就被冲掉（那个替身只回 `Format: mp3`、
+	// 不回读档位，于是原生算 -1 分，测试就变成「比的是假池而不是比的是判据」）。
+	// 原生解析器这里**如实回读**档位（真网易云就是这么干的），两条才真的同档可比。
+	h.it.pool = online.NewPool(&tierStubResolver{platform: "wy", answers: map[string]map[string]*online.Resolved{
+		"w932": {online.Tier320k: {URL: "https://cdn.invalid/w932.mp3", Format: "mp3", Size: 9 << 20, Tier: online.Tier320k}},
+	}})
 	track := online.Track{
 		Platform: "wy", PlatformID: "w932", Title: "甲", Artists: []string{"乙"}, Duration: 245,
 	}
-	// 基线已经是 320k（告诉它基线分是 3），洛雪回的 .mp3 → 也只能算 320k
-	if item, ok := h.it.downloadViaLx(context.Background(), fake, track, online.PlaybackLadder, 3); ok {
-		t.Fatalf("不更高的结果不该被采用，得到 %+v", item)
+	item, err := h.it.downloadToLibrary(context.Background(), fake, track)
+	if err != nil {
+		t.Fatalf("该用原生那条下成功：%v", err)
 	}
-	if len(*seen) != 0 {
-		t.Fatalf("不该发生下载，实际 %d 次", len(*seen))
+	if len(*seen) != 1 {
+		t.Fatalf("该只下一次，实际 %d 次", len(*seen))
+	}
+	if url, _ := (*seen)[0]["url"].(string); strings.Contains(url, "cdn.example") {
+		t.Fatalf("同档位不该换成洛雪的链接：%q", url)
+	}
+	if item.Source == "lx:wy" {
+		t.Fatalf("登记的实际来源该还是原生 wy，得到 %q", item.Source)
 	}
 }
 

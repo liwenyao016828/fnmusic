@@ -28,7 +28,6 @@ type bitReader struct {
 
 	// mode 决定下一个从底层读进来的字节参与哪份 CRC
 	mode byte
-
 }
 
 const (

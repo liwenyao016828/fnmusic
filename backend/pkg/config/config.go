@@ -71,6 +71,22 @@ type AppConfig struct {
 	//
 	// 空串视为 highest（老配置里没有这个键）。
 	AutoDownloadQuality string `json:"auto_download_quality,omitempty"`
+	// AutoDownloadChannels 是收藏 / 加歌单自动下载**允许哪些取音渠道、按什么顺序试**。
+	//
+	// 用户 2026-10-21 的要求（m02588）：「增加一个自动下载源（方式：lx，网易云，dl）」
+	// —— 这三条路以前是写死的顺序（原生 → 洛雪 → 外挂池），用户既关不掉一条，
+	// 也没法让洛雪排前面。而他收藏《不再犹豫》那次恰恰就是被这个顺序坑的：
+	// 免登录网易云只给 320k，代码拿到「够用的基线」后就没再给别的渠道机会。
+	//
+	//	"native" = 曲目自己平台的原生解析（网易云 / QQ / 酷狗 …）
+	//	"lx"     = 洛雪音源脚本（经 sidecar/lx_host 执行）
+	//	"dl"     = musicdl 外挂池（咪咕 / 千千 / B 站 …，取 musicdl_sources）
+	//
+	// 约定（见 NormalizeDownloadChannels）：**这个列表本身就是允许集 + 顺序**，
+	// 没列出的渠道 = 关掉；空 = 默认三档全开 `["lx","dl","native"]`。
+	// 顺序只决定「先问谁」，**不承诺音质** —— 换源判据仍然是实际解析出的档位，
+	// 不比基线好的候选一律不换（v2.13.0 定下的口径，不许用顺序去推翻它）。
+	AutoDownloadChannels []string `json:"auto_download_channels,omitempty"`
 	// DownloadQualityOverride 是**全局**「下载音质」开关（照参考实现的
 	// FNMUSIC_DL_QUALITY）。它不改上面那两个字段，而是**盖住**它们 ——
 	// 「跟着各自设置」和「这次我想都用某档」是两件事，混进一个字段就再也回不去了。
@@ -653,6 +669,9 @@ func (cm *ConfigManager) load() {
 		if c.AutoDownloadQuality != "" {
 			cm.config.AutoDownloadQuality = c.AutoDownloadQuality
 		}
+		if c.AutoDownloadChannels != nil {
+			cm.config.AutoDownloadChannels = NormalizeDownloadChannels(c.AutoDownloadChannels)
+		}
 		if c.DownloadQualityOverride != nil {
 			v := strings.TrimSpace(*c.DownloadQualityOverride)
 			cm.config.DownloadQualityOverride = &v
@@ -823,6 +842,9 @@ func (cm *ConfigManager) Update(c AppConfig) error {
 	}
 	if c.AutoDownloadQuality != "" {
 		cm.config.AutoDownloadQuality = c.AutoDownloadQuality
+	}
+	if c.AutoDownloadChannels != nil {
+		cm.config.AutoDownloadChannels = NormalizeDownloadChannels(c.AutoDownloadChannels)
 	}
 	if c.DownloadQualityOverride != nil {
 		v := strings.TrimSpace(*c.DownloadQualityOverride)

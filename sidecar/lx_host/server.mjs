@@ -627,6 +627,94 @@ function topQualityFromTypes(item) {
   return '';
 }
 
+// ── 直链活性校验 ──────────────────────────────────────────────────────────
+//
+// ⚠️ 2026-10-21 加。在此之前 `/resolve` 是「第一个吐出 http(s) 字符串的脚本就赢」，
+// 而**脚本并不保证那条链还下得动**：实测用户收藏《不再犹豫》时，脚本 `全豆要`
+// 内部回退链的最后一步给了 `http://music.nxinxz.com/wy.php?...`，宿主原样透传，
+// 曲率拿到的就是 `{"code":500,"message":"HTTP 错误: 404"}`，日志里明明白白写着
+// 「洛雪取到 "flac" 但下载失败」—— 用户看到的现象就是「我明明配了 lx，为什么还是 mp3」。
+// 死链不是偶发：这类第三方 API 的域名说没就没，而脚本自己**不做可达性校验**，
+// 它只保证「拼出一条 URL」。
+//
+// 所以在把直链交出去之前，先真的咬一口：Range GET 头 2KB。
+//   · 200/206 且前缀是音频魔数（fLaC / ID3 / OggS / RIFF…WAVE / ftyp…）→ 通过；
+//   · 200/206 但内容是 HTML / JSON 错误页 → 判死（这类接口挂了最常见的外观就是这两样）；
+//   · 总长度 < 20KB → 判死（没有正常的歌曲文件这么小）；
+//   · 3xx → 跟着跳（最多 3 跳，CDN 重定向很普遍）；
+//   · 其余状态码 / 超时 / 连接错误 → 判死。
+// 判死就记进 `tried` 并**继续问下一个脚本**，绝不把死链交给调用方。
+//
+// 为什么用 Range GET 而不是 HEAD：不少 `*.php?types=url` 这种接口根本没实现 HEAD，
+// HEAD 回 405 或空 body，拿它当存活判据会**误杀好链**。
+const AUDIO_MAGIC = /^fLaC|^ID3|^\xFF[\xE0\xE1\xF2\xF3]|^OggS|^RIFF.{4}WAVE|^ftyp|^\x0B\x77|^MAC |^DSD |^FORM.{4}FLAC|^CYR4|\x41\x56\x521/i;
+const MIN_AUDIO_BYTES = 20000;
+
+const looksLikeAudio = (head) => AUDIO_MAGIC.test(head.toString('latin1').slice(0, 64));
+const looksLikeErrorPage = (head) => {
+  const s = head.toString('latin1').slice(0, 512).toLowerCase();
+  if (/^\s*(\xef\xbb\xbf)?\s*(<!doctype\s+html|<html|<head|<\?xml)/.test(s)) return true;
+  if (s.trimStart().startsWith('{') && /"(code|error|msg|message|status)"\s*:/.test(s)) return true;
+  return false;
+};
+
+// probeAudioUrl → {ok, status, bytes, why}
+function probeAudioUrl(raw, hops = 0, budgetMs = 7000) {
+  return new Promise((resolve) => {
+    let u;
+    try { u = new URL(raw); } catch { return resolve({ ok: false, why: '不是合法 URL' }); }
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return resolve({ ok: false, why: '只支持 http/https' });
+    const lib = u.protocol === 'https:' ? nodeHttps : http;
+    let settled = false;
+    let req;
+    const fin = (r) => { if (settled) return; settled = true; resolve(r); try { req.destroy(); } catch {} };
+    try {
+      req = lib.request(u, {
+        method: 'GET',
+        headers: { Range: 'bytes=0-2047', 'User-Agent': 'Mozilla/5.0', 'Icy-MetaData': '0' },
+        timeout: budgetMs,
+        rejectUnauthorized: false,
+      }, (res) => {
+        const code = res.statusCode || 0;
+        if (code >= 300 && code < 400 && res.headers.location) {
+          res.resume();
+          if (hops >= 3) return fin({ ok: false, status: code, why: '重定向超过 3 跳' });
+          let next;
+          try { next = new URL(res.headers.location, u).href; } catch { return fin({ ok: false, status: code, why: '重定向地址无效' }); }
+          probeAudioUrl(next, hops + 1, budgetMs).then((r) => { if (!settled) { settled = true; resolve(r); } });
+          return;
+        }
+        if (code !== 200 && code !== 206) { res.resume(); return fin({ ok: false, status: code, why: 'HTTP ' + code }); }
+        const chunks = [];
+        let got = 0;
+        let ended = false;
+        const finish = () => {
+          if (ended || settled) return; ended = true;
+          const head = nodeBuffer.Buffer.concat(chunks);
+          const ct = String(res.headers['content-type'] || '').toLowerCase();
+          // 总长度：Range 响应的 content-range 尾数优先，其次 content-length。
+          let total = 0;
+          const cr = /\/(\d+)\s*$/.exec(String(res.headers['content-range'] || ''));
+          if (cr) total = Number(cr[1]); else if (res.headers['content-length']) total = Number(res.headers['content-length']);
+          if (!head.length) return fin({ ok: false, status: code, why: '空响应体' });
+          if (looksLikeErrorPage(head)) return fin({ ok: false, status: code, why: '返回的不是音频（' + (ct || 'HTML/JSON 错误页') + '）' });
+          if (ct.startsWith('text/') || ct.includes('json') || ct.includes('html')) return fin({ ok: false, status: code, why: 'Content-Type 是 ' + ct });
+          if (looksLikeAudio(head)) return fin({ ok: true, status: code, bytes: total });
+          if (total > 0 && total < MIN_AUDIO_BYTES) return fin({ ok: false, status: code, bytes: total, why: '只有 ' + total + ' 字节，不像完整音频' });
+          if (total === 0 && head.length < 512) return fin({ ok: false, status: code, why: '拿到的字节太少' });
+          return fin({ ok: true, status: code, bytes: total }); // 裸 MPEG 流首块没有可辨魔数：长度够且不是错误页就认
+        };
+        res.on('data', (c) => { chunks.push(c); got += c.length; if (got >= 2048) finish(); });
+        res.on('end', finish);
+        res.on('error', () => fin({ ok: false, status: code, why: '读取中断' }));
+      });
+      req.on('timeout', () => fin({ ok: false, why: '探测超时 ' + budgetMs + 'ms' }));
+      req.on('error', (e) => fin({ ok: false, why: String((e && e.message) || e).slice(0, 120) }));
+      req.end();
+    } catch (e) { fin({ ok: false, why: String((e && e.message) || e).slice(0, 120) }); }
+  });
+}
+
 http.createServer(async (req, res) => {
   const send = (code, obj) => { const s = JSON.stringify(obj); res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': Buffer.byteLength(s) }); res.end(s); };
   if (req.url === '/health') {
@@ -636,6 +724,8 @@ http.createServer(async (req, res) => {
     let payload = {};
     try { payload = JSON.parse((await readBody(req)) || '{}'); } catch { return send(400, { error: 'bad json' }); }
     const tried = [];
+    // `validate:false` 只给单测/调试用：跳过活性校验，回到旧的「第一条像 URL 的就返回」。
+    const validate = payload.validate !== false;
     for (const l of loaded) {
       if (!l.handler) continue;
       try {
@@ -643,11 +733,22 @@ http.createServer(async (req, res) => {
           Promise.resolve(l.handler({ source: payload.source, action: 'musicUrl', info: payload.info || {}, quality: payload.quality || '320k' })),
           new Promise((_, rej) => setTimeout(() => rej(new Error('timeout 8s')), 8000)),
         ]);
-        if (typeof url === 'string' && /^https?:\/\//i.test(url)) return send(200, { url, script: l.meta.file, tried });
-        tried.push({ script: l.meta.file, got: String(url).slice(0, 120) });
+        if (typeof url !== 'string' || !/^https?:\/\//i.test(url)) {
+          tried.push({ script: l.meta.file, got: String(url).slice(0, 120) });
+          continue;
+        }
+        if (!validate) return send(200, { url, script: l.meta.file, tried });
+        // ⚠️ 探测单独 try：探测自身出问题（网络栈异常等）不能记成「这个脚本失败」，
+        // 那样会把好脚本的返回值冤枉掉 —— 记成探测失败，并**照常返回**这条链，
+        // 让调用方自己去试（下不动还有 Go 侧的换候选兜底）。
+        let p;
+        try { p = await probeAudioUrl(url); } catch (e) { tried.push({ script: l.meta.file, probe_error: String((e && e.message) || e).slice(0, 120) }); return send(200, { url, script: l.meta.file, tried }); }
+        if (p.ok) return send(200, { url, script: l.meta.file, probed: { status: p.status, bytes: p.bytes }, tried });
+        // 死链：记一笔原因，继续问下一个脚本 —— 这正是本次修复的全部意义。
+        tried.push({ script: l.meta.file, dead: true, url: url.slice(0, 140), why: p.why, status: p.status || null });
       } catch (e) { tried.push({ script: l.meta.file, error: String(e.message).slice(0, 160) }); }
     }
-    return send(502, { error: '没有脚本能解析出直链', tried });
+    return send(502, { error: validate ? '没有脚本能解析出**还能下得动**的直链' : '没有脚本能解析出直链', tried });
   }
   // ── POST /search：让「声明了 musicSearch 的源」把搜索结果交出来 ──────
   //

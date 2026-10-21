@@ -124,15 +124,28 @@ test('推送同步历史：多选与一键清除都在，且后端真的支持�
   }
 })
 
-// 用户 2026-10-07 点名要改的四处里，有两处原先在曲库管家（推送订阅行的两个能力位、
-// 补全整理的四个动作按钮）。导航框架重做后这两处分别搬到了 PushManager（能力位）
-// 与 TidyView（补全动作）。它们必须真的用上 ActionCard —— 这一条是补的：
-// 第一遍实现时漏了这两处，而变更记录里却写着改完了。
-test('补全整理的四个动作都是卡片（TidyView）', () => {
-  assert.ok(tidyViewVue.includes("import ActionCard from './ActionCard.vue'"),
-    'TidyView 应 import ActionCard')
-  const uses = (tidyViewVue.match(/<ActionCard/g) || []).length
-  assert.ok(uses >= 4, `补全整理那四个动作应是卡片，实际只找到 ${uses} 个 ActionCard`)
+// 2026-10-21：用户点名「不要再用 ⋯ 按钮了，换成顶部的导航栏，一个功能页面可以常驻」——
+// 补全整理从「四个 ActionCard」→「渐进式披露 + ⋯」→「顶部分段导航」。
+// 原来钉 ActionCard 的断言在 10-19 那轮重构后就已经是红的（HEAD 里 TidyView 也没有
+// ActionCard 了），这里按新契约重钉：主功能入口必须是分段，⋯ 不许再当主入口。
+test('补全整理是顶部分段导航（TidyView）', () => {
+  assert.ok(tidyViewVue.includes("import { navigateTo, segmentOf } from '../services/navBus'"),
+    'TidyView 应从 navBus 读当前分段')
+  assert.match(tidyViewVue, /const sub = computed\(\(\) => segmentOf\('tidy'\)\)/,
+    '分段状态必须来自 navBus（壳层分段条与页面读同一个 source of truth）')
+  for (const seg of ['complete', 'dedupe', 'audit', 'records', 'quality']) {
+    assert.ok(tidyViewVue.includes(`v-show="sub === '${seg}'"`),
+      `「${seg}」段必须用 v-show 常驻（不能用 v-if，否则切走丢结果）`)
+  }
+  assert.ok(!tidyViewVue.includes('tidyMenu'),
+    '旧的 ⋯ 主菜单 tidyMenu 必须删掉 —— 主功能入口不能再藏在 ⋯ 后面')
+  assert.ok(tidyViewVue.includes('completeMenu'),
+    '补全段应只保留一个次要动作的 ⋯（增量扫描）')
+  // 替换音质是占位段：不许提前接线（用户明确「不要自己编造接口调用」）
+  const qualityToast = tidyViewVue.match(/function scanQuality\(\)\s*\{[\s\S]*?\n\}/)
+  assert.ok(qualityToast, '占位段应有 scanQuality')
+  assert.ok(!/\w+API\./.test(qualityToast[0]),
+    'scanQuality 只能提示「接口开发中」，不能真的发起接口调用')
 })
 
 test('推送能力位是并排的卡片（PushManager）', () => {
