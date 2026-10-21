@@ -220,7 +220,7 @@ func TestProcessExitMarksFailed(t *testing.T) {
 // 宿主不可用时 Resolve 必须**只返回错误**（调用方回落），不能 panic、不能挂住。
 func TestResolveUnavailableReturnsError(t *testing.T) {
 	m := New()
-	if _, err := m.Resolve(context.Background(), "wy", map[string]any{"name": "x"}, "320k"); err == nil {
+	if _, _, err := m.Resolve(context.Background(), "wy", map[string]any{"name": "x"}, "320k"); err == nil {
 		t.Fatal("没起来时 Resolve 该报错")
 	}
 }
@@ -284,7 +284,7 @@ lx.on('request', async () => {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	got, err := m.Resolve(ctx, "wy", map[string]any{"name": "晴天"}, "flac")
+	got, _, err := m.Resolve(ctx, "wy", map[string]any{"name": "晴天"}, "flac")
 	if err != nil {
 		t.Fatalf("该解析出直链（body 没解析成对象时这里会报「上游炸了」）：%v", err)
 	}
@@ -325,7 +325,7 @@ lx.on('request', async ({ info }) => 'https://cdn.example.invalid/' + encodeURIC
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	url, err := m.Resolve(ctx, "wy", map[string]any{"name": "晴天"}, "320k")
+	url, _, err := m.Resolve(ctx, "wy", map[string]any{"name": "晴天"}, "320k")
 	if err != nil {
 		t.Fatalf("该解析出直链：%v", err)
 	}
@@ -646,7 +646,7 @@ func TestSearchNotRunningReturnsErrNotRunning(t *testing.T) {
 		t.Fatalf("SearchAll 同样该是 ErrNotRunning，得到 %v", err)
 	}
 	// Resolve 的「没起来」也走同一个哨兵（字符串没变，只是可 errors.Is 了）
-	if _, err := m.Resolve(ctx, "wy", map[string]any{"name": "x"}, "320k"); !errors.Is(err, ErrNotRunning) {
+	if _, _, err := m.Resolve(ctx, "wy", map[string]any{"name": "x"}, "320k"); !errors.Is(err, ErrNotRunning) {
 		t.Fatalf("Resolve 没起来时也该 errors.Is 到 ErrNotRunning，得到 %v", err)
 	}
 }

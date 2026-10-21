@@ -760,11 +760,11 @@ func TestRankedSourcesBridgesKugouToLx(t *testing.T) {
 		}}
 	}
 	// 洛雪取链那一半（宿主）
-	h.it.lxResolve = func(_ context.Context, source string, info map[string]any, quality string) (string, error) {
+	h.it.lxResolve = func(_ context.Context, source string, info map[string]any, quality string) (string, int64, error) {
 		if source != "kg" || info["id"] != "HASH1" {
-			return "", online.ErrNotPlayable
+			return "", 0, online.ErrNotPlayable
 		}
-		return "https://cdn.example/HASH1.flac", nil
+		return "https://cdn.example/HASH1.flac", 0, nil
 	}
 
 	list := h.it.rankedSources(context.Background(), "甲", "乙", 245)
@@ -809,12 +809,12 @@ func TestDownloadToLibraryUsesLxWhenNativeIsLossy(t *testing.T) {
 	}})
 	// 洛雪：同一个网易 id → 无损
 	var lxSource string
-	h.it.lxResolve = func(_ context.Context, source string, info map[string]any, quality string) (string, error) {
+	h.it.lxResolve = func(_ context.Context, source string, info map[string]any, quality string) (string, int64, error) {
 		lxSource = source
 		if info["id"] != "w930" {
-			return "", online.ErrNotPlayable
+			return "", 0, online.ErrNotPlayable
 		}
-		return "https://cdn.example/w930.flac", nil
+		return "https://cdn.example/w930.flac", 0, nil
 	}
 
 	fake := registerOnline(h, "w930", "甲", "乙")
@@ -852,9 +852,9 @@ func TestDownloadToLibrarySkipsLxWhenUserAsksLowerTier(t *testing.T) {
 	h.it.cfg.AutoDownloadQuality = func() string { return online.Tier320k }
 
 	asked := false
-	h.it.lxResolve = func(context.Context, string, map[string]any, string) (string, error) {
+	h.it.lxResolve = func(context.Context, string, map[string]any, string) (string, int64, error) {
 		asked = true
-		return "https://cdn.example/x.flac", nil
+		return "https://cdn.example/x.flac", 0, nil
 	}
 	h.it.pool = online.NewPool(&tierStubResolver{platform: "wy", answers: map[string]map[string]*online.Resolved{
 		"w931": {online.Tier320k: {URL: "https://cdn.invalid/w931.mp3", Format: "mp3", Size: 9 << 20, Tier: online.Tier320k}},
@@ -886,8 +886,8 @@ func TestDownloadToLibraryKeepsNativeWhenLxIsNotBetter(t *testing.T) {
 	h := newHarness(t)
 	srv, seen, _ := fakeDownloadBackend(t)
 	h.it.localAPI = srv.URL
-	h.it.lxResolve = func(context.Context, string, map[string]any, string) (string, error) {
-		return "https://cdn.example/x.mp3", nil
+	h.it.lxResolve = func(context.Context, string, map[string]any, string) (string, int64, error) {
+		return "https://cdn.example/x.mp3", 0, nil
 	}
 	fake := registerOnline(h, "w932", "甲", "乙")
 	// ⚠️ 必须在 `registerOnline` **之后**换池：`registerOnline → setOnline` 会用

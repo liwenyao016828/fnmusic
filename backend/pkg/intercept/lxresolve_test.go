@@ -17,7 +17,7 @@ import (
 // 而日志里只有一句「换下一个候选」，看不出是这里断的。
 
 // lxHarness 造一个只带洛雪那套东西的拦截层。
-func lxHarness(t *testing.T, resolve func(ctx context.Context, source string, info map[string]any, quality string) (string, error),
+func lxHarness(t *testing.T, resolve func(ctx context.Context, source string, info map[string]any, quality string) (string, int64, error),
 	search func(ctx context.Context, keyword string, limit int) ([]lxnode.Song, error)) *Interceptor {
 	t.Helper()
 	i := New(Config{
@@ -44,9 +44,9 @@ func TestLxCandidatesRegistersResolverAndKeepsRaw(t *testing.T) {
 	var gotInfo map[string]any
 	var gotTier string
 	i := lxHarness(t,
-		func(ctx context.Context, source string, info map[string]any, quality string) (string, error) {
+		func(ctx context.Context, source string, info map[string]any, quality string) (string, int64, error) {
 			gotInfo, gotTier = info, quality
-			return "https://cdn.example/x.flac", nil
+			return "https://cdn.example/x.flac", 0, nil
 		},
 		func(ctx context.Context, keyword string, limit int) ([]lxnode.Song, error) {
 			return []lxnode.Song{{
@@ -99,10 +99,10 @@ func TestLxResolverWithoutRawFallsBackToMinimalInfo(t *testing.T) {
 	var gotInfo map[string]any
 	var gotQuality string
 	i := lxHarness(t,
-		func(ctx context.Context, source string, info map[string]any, quality string) (string, error) {
+		func(ctx context.Context, source string, info map[string]any, quality string) (string, int64, error) {
 			gotInfo = info
 			gotQuality = quality
-			return "https://cdn.example/x.mp3", nil
+			return "https://cdn.example/x.mp3", 0, nil
 		},
 		func(ctx context.Context, keyword string, limit int) ([]lxnode.Song, error) { return nil, nil })
 
@@ -130,7 +130,7 @@ func TestLxResolverWithoutRawFallsBackToMinimalInfo(t *testing.T) {
 // 宿主没开（lxnode.ErrNotRunning）时：**不报错、返回 nil**，池里少一条来源而已。
 func TestLxCandidatesSilentWhenHostDown(t *testing.T) {
 	i := lxHarness(t,
-		func(context.Context, string, map[string]any, string) (string, error) { return "", nil },
+		func(context.Context, string, map[string]any, string) (string, int64, error) { return "", 0, nil },
 		func(context.Context, string, int) ([]lxnode.Song, error) {
 			return nil, errors.New("宿主没开")
 		})
@@ -171,3 +171,65 @@ func TestLxFormatFromTier(t *testing.T) {
 }
 
 var _ = online.ErrNoResolver
+
+// 档位按实测字节数校正：第三方站「点无损、给 128k」时不许把它记成无损。
+func TestLxTierFromSize(t *testing.T) {
+	cases := []struct {
+		name    string
+		size    int64
+		dur     int
+		claimed string
+		want    string
+	}{
+		// 真机实测形状：Beyond《不再犹豫》点 flac，脚本回话 flac，实测 4,186,741 字节 / 295 秒 ≈ 113k
+		{"真机那条伪无损", 4186741, 295, online.TierLossless, online.Tier128k},
+		// 4MB 的 mp3 声明成 320k 时同样要如实降下来（只降不升，不看声明面子）
+		{"声明320k实际128k", 4186741, 295, online.Tier320k, online.Tier128k},
+		// 11.8MB / 295s ≈ 320k：CBR 320 正常区间（阈值 260 起算），不该误降
+		{"CBR320k不误降", 11800000, 295, online.TierLossless, online.Tier320k},
+		// 59MB / 275s ≈ 1737k：这就是真无损（v2.16 修 FLAC 校验器时用的那个文件）
+		{"真无损保持", 59811934, 275, online.TierLossless, online.TierLossless},
+		// 只降不升：字节数说不清 flac 与 flac24bit 的差别，别拿它把 320k 吹成无损
+		{"小文件不吹高", 59811934, 275, online.Tier320k, online.Tier320k},
+		{"没长度不判", 0, 295, online.TierLossless, online.TierLossless},
+		{"没时长不判", 4186741, 0, online.TierLossless, online.TierLossless},
+		{"空声明不动", 4186741, 295, "", ""},
+	}
+	for _, c := range cases {
+		got, why := lxTierFromSize(c.size, c.dur, c.claimed)
+		if got != c.want {
+			t.Errorf("%s: lxTierFromSize(%d, %d, %q) = %q（%s），期望 %q", c.name, c.size, c.dur, c.claimed, got, why, c.want)
+		}
+		if got != c.claimed && why == "" {
+			t.Errorf("%s: 降档了却没给出依据说明，排障时这句话是唯一的线索", c.name)
+		}
+	}
+}
+
+// 整条链上的证据衔接：URL 没有后缀（上面那道 lxURLLooksLossy 拦不住）时，
+// 靠宿主回报的字节数 + 记录里的时长把档位压回真实值。
+func TestLxResolverDowngradesByMeasuredSize(t *testing.T) {
+	i := lxHarness(t,
+		func(context.Context, string, map[string]any, string) (string, int64, error) {
+			// 无扩展名的直链：形态上看不出色，只有「多大」能说话
+			return "https://c.example/stream?sign=abc", 4186741, nil
+		},
+		func(context.Context, string, int) ([]lxnode.Song, error) { return nil, nil })
+
+	i.rememberLxItem("wy", "2063748306", map[string]any{
+		"songmid": "2063748306", "id": "2063748306",
+		"name": "不再犹豫", "singer": "Beyond", "duration": 295,
+	})
+	r := lxResolver{i: i, src: "wy"}
+	res, err := r.Resolve(context.Background(), "2063748306")
+	if err != nil {
+		t.Fatalf("解析该成功：%v", err)
+	}
+	if res.Tier != online.Tier128k {
+		t.Fatalf("4.1MB/295s ≈ 113k，档位该如实记 128k，得到 %q", res.Tier)
+	}
+	// 容器也跟着档位走：记 flac 而盘上是 mp3，就是用户骂的那个「说好的无损」
+	if res.Format != "mp3" {
+		t.Fatalf("降档后 Format 该跟着变 mp3，得到 %q", res.Format)
+	}
+}

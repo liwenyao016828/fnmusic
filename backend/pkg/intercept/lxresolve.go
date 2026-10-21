@@ -2,6 +2,7 @@ package intercept
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"fn-lx-player/pkg/online"
@@ -212,7 +213,7 @@ func (r lxResolver) resolveOne(ctx context.Context, id, title, artist, tier stri
 		// （mapQuality clamp），所以「问高一点」不会失败，只会得到它给得起的档位。
 		tier = online.TierLossless
 	}
-	url, err := r.i.lxResolve(ctx, r.src, info, tier)
+	url, size, err := r.i.lxResolve(ctx, r.src, info, tier)
 	if err != nil {
 		return nil, err
 	}
@@ -225,12 +226,70 @@ func (r lxResolver) resolveOne(ctx context.Context, id, title, artist, tier stri
 	if online.TierRank(actual) >= online.TierRank(online.TierLossless) && lxURLLooksLossy(url) {
 		actual = online.Tier320k
 	}
+	// 第二道诚实：字节数 + 时长反推真实码率。URL 没有扩展名时上面那条放行不了，
+	// 而「3 分钟 4MB」无论叫什么名字都不是无损。
+	if fixed, why := lxTierFromSize(size, lxDurationOf(info), actual); fixed != actual {
+		r.i.logf("[INTERCEPT] 洛雪档位按实测校正：%s/%s 声明 %s → 按 %s（%s）", r.src, id, actual, fixed, why)
+		actual = fixed
+	}
 	return &online.Resolved{
 		URL:    url,
 		Format: lxFormatFromTier(actual),
 		// 档位是「我们点的那一档」或脚本声明的档位，不是随手猜的。
 		Tier: actual,
 	}, nil
+}
+
+// lxDurationOf 从喂回脚本的那条记录里取时长（秒）。
+//
+// 时长是「按字节数反推码率」的分母，拿不到就整个判据作废（宁可不判，也不要瞎降档）。
+// 洛雪的记录里这个键各处不一：`duration`（qsvip 搜索）/`interval`（部分平台原始字段），
+// 所以两个都读，谁先用谁。
+func lxDurationOf(info map[string]any) int {
+	if info == nil {
+		return 0
+	}
+	for _, k := range []string{"duration", "interval"} {
+		if d := asInt(info[k]); d > 0 {
+			return d
+		}
+	}
+	return 0
+}
+
+// lxTierFromSize 用**实测字节数 + 时长**反推真实档位，只降不升。
+//
+// 洛雪背后那些第三方站最常见的偏差不是报错，而是「你点无损，它给一条 128k 的 mp3，
+// 然后按无损的名义回话」。光看 URL 后缀拦不住它（很多直链没有后缀，或者后缀与容器
+// 无关），但「这首歌 295 秒只给了 4.1MB」骗不了人 —— 约 113kbps，就是 128k。
+//
+// 真机实测到的例子（2026-10-21，Beyond《不再犹豫》wy/2063748306，点 flac）：
+// 宿主活性校验探到 content-range 总长 4,186,741 字节、时长 295 秒 → 113kbps，
+// 而脚本回话的档位是 flac。不校正的话登记表演出来是「无损」、盘上是个 128k 的 mp3，
+// 用户看到的还是「说好的无损呢」。
+//
+// 返回 (档位, 依据说明)。size/duration 缺任一 → 原样返回 claimed、说明为空：
+// **没有证据就不能假装知道**，此时上层还有落盘扩展名那道校正（tierFromLandedFile）。
+func lxTierFromSize(size int64, durationS int, claimed string) (string, string) {
+	if size <= 0 || durationS <= 0 || claimed == "" {
+		return claimed, ""
+	}
+	kbps := float64(size) * 8 / float64(durationS) / 1000
+	// 分档用中点：flac 至少 500kbps（16/44 的成曲常在 700–1000，24bit 更高）；
+	// 320k CBR 实测 315–330，留到 260 起算，免得把 VBR 的 320k 误降成 192k。
+	observed := online.Tier128k
+	switch {
+	case kbps >= 500:
+		observed = online.TierLossless
+	case kbps >= 260:
+		observed = online.Tier320k
+	case kbps >= 160:
+		observed = online.Tier192k
+	}
+	if online.TierRank(observed) >= online.TierRank(claimed) {
+		return claimed, "" // 只降不升：字节数说不清无损内部的分层，别拿它吹高
+	}
+	return observed, fmt.Sprintf("%.1fMB/%ds ≈ %.0fk", float64(size)/1048576, durationS, kbps)
 }
 
 // lxURLLooksLossy 判断直链看起来是不是有损（按路径扩展名，不看 query）。

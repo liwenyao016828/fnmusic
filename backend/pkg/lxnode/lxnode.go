@@ -228,14 +228,19 @@ type resolveRequest struct {
 }
 
 // Resolve 让宿主解析一条直链。**任何失败都只返回 error**，调用方照常回落。
-func (m *Manager) Resolve(ctx context.Context, source string, info map[string]any, quality string) (string, error) {
+//
+// 第二个返回值是宿主**实测**到的文件总字节数（它发过 Range 请求，从 content-range
+// 读到的尾数），拿不到时为 0。它不是用来显示的：洛雪背后那些第三方站会把点名的
+// 无损压成 128k mp3 而**不写在应答里**，字节数 + 时长是唯一能把这件事戳穿的证据
+// （见 pkg/intercept/lxresolve.go 的 lxTierFromSize）。
+func (m *Manager) Resolve(ctx context.Context, source string, info map[string]any, quality string) (string, int64, error) {
 	m.mu.Lock()
 	if m.state != StateReady || m.proc == nil {
 		st := m.state
 		m.mu.Unlock()
 		// 包一层哨兵错误：字符串与以前一致，但调用方能 errors.Is 出「宿主没开」
 		// （池里要静默跳过，见 pkg/intercept/lxsource.go）
-		return "", fmt.Errorf("%w（%s）", ErrNotRunning, st)
+		return "", 0, fmt.Errorf("%w（%s）", ErrNotRunning, st)
 	}
 	base := m.cfg.base()
 	m.mu.Unlock()
@@ -267,27 +272,40 @@ func (m *Manager) Resolve(ctx context.Context, source string, info map[string]an
 	})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/resolve", bytes.NewReader(body))
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	defer resp.Body.Close()
 
 	var out struct {
 		URL   string `json:"url"`
 		Error string `json:"error"`
+		Bytes int64  `json:"bytes"`
 		// 宿主会把「每个脚本为什么不行」放在这里。带上它，排障时不用再去翻宿主日志。
 		Tried []struct {
 			Script string `json:"script"`
 			Error  string `json:"error"`
 			Got    string `json:"got"`
+			// 2026-10-21 起宿主加了「直链活性校验」，失败原因改放在 `why` 里
+			// （`dead` = 有状态码/内容不对，证明是死链；`unproven` = 探测本身没结论）。
+			// 以前只读 error/got 的话，报错会退化成「返回了非直链：」这种没用的话。
+			Why string `json:"why"`
 		} `json:"tried"`
+		Probed struct {
+			Status int   `json:"status"`
+			Bytes  int64 `json:"bytes"`
+		} `json:"probed"`
 	}
 	_ = json.NewDecoder(resp.Body).Decode(&out)
+	size := out.Probed.Bytes
+	if size == 0 {
+		size = out.Bytes // 老宿主/别的实现可能平铺给 bytes
+	}
 	if resp.StatusCode != http.StatusOK || out.URL == "" {
 		msg := out.Error
 		if msg == "" {
@@ -297,6 +315,9 @@ func (m *Manager) Resolve(ctx context.Context, source string, info map[string]an
 		for _, tr := range out.Tried {
 			detail := tr.Error
 			if detail == "" {
+				detail = tr.Why
+			}
+			if detail == "" {
 				detail = "返回了非直链：" + tr.Got
 			}
 			parts = append(parts, tr.Script+" → "+detail)
@@ -304,12 +325,12 @@ func (m *Manager) Resolve(ctx context.Context, source string, info map[string]an
 		if len(parts) > 0 {
 			msg += "（" + strings.Join(parts, "；") + "）"
 		}
-		return "", errors.New(msg)
+		return "", 0, errors.New(msg)
 	}
 	if !strings.HasPrefix(out.URL, "http") {
-		return "", fmt.Errorf("宿主返回的不是直链：%q", out.URL)
+		return "", 0, fmt.Errorf("宿主返回的不是直链：%q", out.URL)
 	}
-	return out.URL, nil
+	return out.URL, size, nil
 }
 
 // ── 搜索 ─────────────────────────────────────────────────────────────────

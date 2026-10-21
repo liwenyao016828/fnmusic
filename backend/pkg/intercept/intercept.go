@@ -161,7 +161,10 @@ type Config struct {
 	//
 	// 传的是宿主的方法值；宿主没起来时它返回 lxnode.ErrNotRunning，池里当成
 	// 「这个源现在用不了」——与 LxSearch 同一个口径，不在这里判开关。
-	LxResolve func(ctx context.Context, source string, info map[string]any, quality string) (string, error)
+	//
+	// 第二个返回值是宿主实测的总字节数（0 = 没探到）。档位靠它校正：第三方站会把
+	// 点名的无损压成 128k mp3 而不在应答里说，只有「多大」这件事骗不了人。
+	LxResolve func(ctx context.Context, source string, info map[string]any, quality string) (string, int64, error)
 	// PlatformsFunc 返回「参与在线搜索合并」的平台，**现取**；nil 时用 Platforms
 	// （或内置默认：网易 + QQ）。
 	//
@@ -366,7 +369,7 @@ type Interceptor struct {
 
 	searcher  func(keyword, platform string, page, size int) []search.UnifiedSong
 	lxSearch  func(ctx context.Context, keyword string, limit int) ([]lxnode.Song, error)
-	lxResolve func(ctx context.Context, source string, info map[string]any, quality string) (string, error)
+	lxResolve func(ctx context.Context, source string, info map[string]any, quality string) (string, int64, error)
 
 	// lxMu/lxItems 是「洛雪搜索结果 → 取链时要喂回去的那条记录」的暂存。
 	//
