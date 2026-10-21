@@ -55,6 +55,13 @@
                     v-if="c.checked"
                     class="ys-num rounded-[6px] bg-[var(--ys-surface-sunken)] px-1.5 py-0.5 text-[10px] text-[var(--ys-text-muted)]"
                   >{{ c.rank }}</span>
+                  <!-- 当前选中的洛雪音源：多选=轮询 / 单选=简称 / 未选=未选择（需求 m04229） -->
+                  <span
+                    v-if="c.id === 'lx'"
+                    class="shrink-0 rounded-[6px] bg-[var(--ys-surface-sunken)] px-1.5 py-0.5 text-[10px] text-[var(--ys-text-muted)]"
+                    :class="{ 'text-[var(--ys-accent)]': lxScripts.length > 0 }"
+                    :title="lxSourceTitle"
+                  >{{ lxSourceLabel }}</span>
                 </div>
                 <div class="mt-0.5 text-[11px] leading-relaxed text-[var(--ys-text-muted)]">{{ c.desc }}</div>
               </div>
@@ -316,7 +323,7 @@ import { computed, onMounted, ref } from 'vue'
 import PageShell from './PageShell.vue'
 import DisclosureSection from './DisclosureSection.vue'
 import { AudioLines, ChevronDown, ChevronUp, Download, FileAudio, FolderCog, Info, Route } from 'lucide-vue-next'
-import { ConfigAPI, DownloadAPI, LogsAPI, AppAPI, ChartInjectAPI, DEFAULT_AUTO_DOWNLOAD_CHANNELS } from '../api/client'
+import { ConfigAPI, DownloadAPI, LogsAPI, AppAPI, ChartInjectAPI, SourcesAPI, DEFAULT_AUTO_DOWNLOAD_CHANNELS } from '../api/client'
 import { QUALITY_OVERRIDE_OPTIONS } from '../services/qualityOverride'
 import { fail, apiError } from '../services/userMsg'
 import InlineNotice from './InlineNotice.vue'
@@ -466,6 +473,30 @@ async function load() {
     flash(fail('读取设置', e), true)
   }
   try {
+    // 洛雪音源列表：只要「启用中的」与它们的顺序（active_source_ids 就是轮询顺序）
+    const res = await SourcesAPI.list()
+    const data = res?.data || res || {}
+    const list = Array.isArray(data.sources) ? data.sources : []
+    const ids = Array.isArray(data.active_source_ids) ? data.active_source_ids : []
+    const byId = new Map(list.map((x) => [x.id, x]))
+    // 按名字去重：两个源同名会落成同一个脚本文件（真机上就有两个都叫
+    // 「全豆要[聚合音源]」），实际只轮询一份 —— 数出来 6 个会是假的多。
+    const seen = new Set()
+    const names = []
+    for (const id of ids) {
+      const src = byId.get(id)
+      if (!src || typeof src.name !== 'string') continue
+      const name = src.name.trim()
+      if (!name || seen.has(name)) continue
+      seen.add(name)
+      names.push(shortLxName(name))
+    }
+    lxScripts.value = names
+  } catch (_) {
+    // 音源列表读不到不该挡住整页设置：显示「未选择」比整页报错有用
+    lxScripts.value = []
+  }
+  try {
     const res = await AppAPI.getVersion()
     version.value = res?.data?.version || ''
   } catch (_) {
@@ -502,14 +533,46 @@ async function saveQuality(v) {
 // pkg/config/channels.go 同一口径）。勾选/排序都**立刻保存**（交互对齐 saveQuality）。
 // 关键约束：空数组后端会回落默认 lx→dl→native，用户「以为留了一条」是错觉 ——
 // 所以剩最后一条被取消时拦住并说明，而不是发一个空数组出去。
+// shortLxName 把脚本名压成一个能塞进标签里的简称。
+//
+// 用户导入的脚本名五花八门（`全豆要_聚合音源_.js` / `念心音源.js` / `长青SVIP音源.js`），
+// 原样显示又长又闹；但**不能乱改**——它得和用户在音源页看到的名字对得上。
+// 所以只做「去 .js / 去尾部括注 / 去音源这类通用后缀 / 去首尾分隔符」。
+function shortLxName(name) {
+  let s = String(name || '').replace(/\.js$/i, '').trim()
+  s = s.replace(/[（(][^（()）]*[）)]$/, '').trim()
+  s = s.replace(/[_·\-\s]*(音源脚本|音乐源|音源)[_·\-\s]*$/,'').trim()
+  s = s.replace(/^[_·\-\s]+|[_·\-\s]+$/g, '')
+  return s || String(name || '').replace(/\.js$/i, '')
+}
+
 const CHANNEL_META = {
   lx: { short: '洛雪', name: '洛雪音源脚本', desc: '第三方聚合，常是唯一能真给无损的一条' },
   dl: { short: 'musicdl', name: 'musicdl 外挂池', desc: '咪咕/千千/B站等，配置里勾的那几家' },
   native: { short: '原生', name: '曲目原生解析', desc: '曲目自己平台的原生解析（网易云/QQ 等；免登录对收费曲目会静默降档）' },
 }
 const channels = ref([...DEFAULT_AUTO_DOWNLOAD_CHANNELS])
+// 当前选中的洛雪音源脚本（简称，按用户排的轮询顺序）。
+//
+// 为什么设置页要自己读一次：这是**另一个维度**的选择 —— `channels` 决定「先问哪条渠道」，
+// 而这里决定「洛雪这条渠道内部问哪几个脚本、按什么顺序」。用户改完音源页的勾选，
+// 回到这里应当立刻看到「轮询」，而不是等重启（后端每次取链都现取名单，同一个口径）。
+const lxScripts = ref([])
+const lxSourceLabel = computed(() => {
+  const n = lxScripts.value.length
+  if (n === 0) return '未选择'
+  if (n === 1) return lxScripts.value[1 - 1]
+  return `轮询 ${n} 个`
+})
+const lxSourceTitle = computed(() => (lxScripts.value.length
+  ? `洛雪按这个顺序挨个问、取实际档位最高的一条：${lxScripts.value.join(' → ')}`
+  : '还没选洛雪音源：先去「音源」页勾选'))
 const channelsSummary = computed(() =>
-  channels.value.map((id) => CHANNEL_META[id]?.short || id).join(' → '))
+  channels.value.map((id) => {
+    const short = CHANNEL_META[id]?.short || id
+    // 洛雪那条把「内部怎么走」也带上：用户一眼能看到是轮询还是只问一个。
+    return id === 'lx' ? `${short}·${lxSourceLabel.value}` : short
+  }).join(' → '))
 // 行列表 = 已勾选的按优先级在前，未勾选的按默认顺序排在后面（灰显、不可排序）
 const channelRows = computed(() => {
   const meta = (id) => CHANNEL_META[id] || { short: id, name: id, desc: '' }

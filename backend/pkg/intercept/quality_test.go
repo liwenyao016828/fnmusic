@@ -2,6 +2,7 @@ package intercept
 
 import (
 	"context"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -319,5 +320,55 @@ func TestAudioextTierAgreesWithOnline(t *testing.T) {
 		if got, ok := audioext.TierRank(q), online.TierRank(q); ok >= 0 && got < ok {
 			t.Errorf("TierRank(%q)：文件侧 %d 比平台侧 %d 更保守", q, got, ok)
 		}
+	}
+}
+
+// ── 替换记录（需求 m04229：「替换音质，怎么看不到记录」）────────────────────
+
+// 记录必须**落盘**：应用每次装机/升级都会重启，内存版本等于「一升级记录就没了」。
+func TestQualityRecordsPersistAcrossInstances(t *testing.T) {
+	dir := t.TempDir()
+	i := New(Config{
+		DataDir:  dir,
+		Upstream: &fakeUpstream{fn: func(*http.Request, []byte) *http.Response { return nil }},
+		Logf:     func(string, ...any) {},
+	})
+	if i == nil {
+		t.Fatalf("New 返回 nil")
+	}
+	i.appendQualityRecord(QualityRecord{Path: "/x/a.mp3", Title: "a", From: "128k", To: "320k", Channel: "dl", OK: true})
+	i.appendQualityRecord(QualityRecord{Path: "/x/b.mp3", Title: "b", From: "320k", OK: false, Note: "各渠道都没有更高的档位"})
+
+	// 模拟重启：同一目录重新构造一个拦截层
+	j := New(Config{
+		DataDir:  dir,
+		Upstream: &fakeUpstream{fn: func(*http.Request, []byte) *http.Response { return nil }},
+		Logf:     func(string, ...any) {},
+	})
+	got := j.QualityRecords()
+	if len(got) != 2 {
+		t.Fatalf("重启后应读到 2 条记录，得到 %d", len(got))
+	}
+	// 最新在前
+	if got[0].Title != "b" || got[1].Title != "a" {
+		t.Fatalf("记录顺序应最新在前，得到 %q, %q", got[0].Title, got[1].Title)
+	}
+	if got[0].OK || got[0].Note == "" {
+		t.Fatalf("失败记录应保留原因：%+v", got[0])
+	}
+}
+
+// 上限截断：记录是「最近做了什么」，不能无限长成存档。
+func TestQualityRecordsCap(t *testing.T) {
+	i := New(Config{
+		DataDir:  t.TempDir(),
+		Upstream: &fakeUpstream{fn: func(*http.Request, []byte) *http.Response { return nil }},
+		Logf:     func(string, ...any) {},
+	})
+	for n := 0; n < qualityRecordLimit+20; n++ {
+		i.appendQualityRecord(QualityRecord{Path: "/x/a.mp3", OK: true})
+	}
+	if got := len(i.QualityRecords()); got != qualityRecordLimit {
+		t.Fatalf("应截断到 %d 条，得到 %d", qualityRecordLimit, got)
 	}
 }

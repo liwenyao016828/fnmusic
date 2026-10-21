@@ -217,7 +217,43 @@ func main() {
 			// 取链那一半（2026-10-08 补）：池里 `lx:<src>` 的解析器调它。
 			// 在这之前只注了 SearchAll —— 洛雪候选能进池、却取不到直链。
 			LxResolve: lxn.Resolve,
-			Pool:      pool,
+			// 轮询那一半（2026-10-21 加）：用户勾了好几个洛雪音源时，
+			// 「挨个问、谁给的高用谁」——候选整批交回来，由拦截层按实测档位挑。
+			LxResolveAll: lxn.ResolveCandidates,
+			// 选中的洛雪音源脚本名（顺序 = 用户排的轮询顺序）。
+			//
+			// 是函数不是切片：用户在设置页改完勾选，下一次取链就该按新名单走。
+			// 名字要与 pkg/lxnode/sync.go 落盘时用的键一致（`<Name>.js`），
+			// 否则宿主匹配不到，会直接回「选中的音源在宿主里不存在」。
+			LxSourceNames: func() []string {
+				c := cfgMgr.Get()
+				active := map[string]bool{}
+				for _, id := range c.ActiveIDs() {
+					active[id] = true
+				}
+				out := make([]string, 0, len(c.CustomSources))
+				seen := map[string]bool{}
+				for _, cs := range c.CustomSources {
+					// 与落盘同一口径：active 为空（老配置）时全算选中。
+					if len(active) > 0 && !active[cs.ID] {
+						continue
+					}
+					if strings.TrimSpace(cs.Script) == "" || strings.TrimSpace(cs.Name) == "" {
+						continue
+					}
+					// 文件名必须用**落盘那套**转换（lxnode.ScriptFileName）：
+					// 同名脚本会落成同一个文件（真机上就有两个都叫「全豆要[聚合音源]」），
+					// 所以顺手去重 —— 重复问同一个文件没有意义，只是多等一轮。
+					file := lxnode.ScriptFileName(cs.Name)
+					if seen[file] {
+						continue
+					}
+					seen[file] = true
+					out = append(out, file)
+				}
+				return out
+			},
+			Pool: pool,
 			// 参与「官方页面搜索合并」的平台 = 内置默认（网易 + QQ）
 			// ∪ 当前启用的外挂平台。
 			//

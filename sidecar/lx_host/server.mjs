@@ -735,7 +735,30 @@ http.createServer(async (req, res) => {
     let fallback = null;
     // `validate:false` 只给单测/调试用：跳过活性校验，回到旧的「第一条像 URL 的就返回」。
     const validate = payload.validate !== false;
-    for (const l of loaded) {
+    // ── 轮询模式（2026-10-21 加）──
+    //
+    // 用户在界面上选中的洛雪音源可能有好几个，语义是「按我的顺序挨个问，谁给的档位高用谁」。
+    // 默认（collect 未开）仍是「第一个能下得动的就赢」——那是给「能用就行」的调用方。
+    //
+    //   scripts: ['全豆要.js', '念心音源.js']   ← 允许清单 + **轮询顺序**（就是数组顺序）
+    //   collect: true                          ← 把所有能下得动的候选都交回去，由调用方挑
+    //
+    // 为什么挑的活交给调用方：档位高不高只有它知道（要拿时长按字节数反推码率，
+    // 宿主手上没有时长）。宿主只负责「哪些是真能下的」这件网络事实。
+    const wantScripts = Array.isArray(payload.scripts)
+      ? payload.scripts.map((x) => String(x).trim()).filter(Boolean)
+      : null;
+    const collect = payload.collect === true;
+    const candidates = [];
+    const scriptPool = (wantScripts && wantScripts.length)
+      ? wantScripts.map((n) => loaded.find((l) => l.meta.file === n || l.meta.name === n)).filter(Boolean)
+      : loaded;
+    if (wantScripts && wantScripts.length && scriptPool.length === 0) {
+      // 一个都没匹配上：如实说，而不是静默退化成「问全部脚本」——
+      // 那等于用户的选择被无视，而他以为自己在用某个源。
+      return send(502, { error: '选中的洛雪音源在宿主里不存在', wanted: wantScripts, have: loaded.map((l) => l.meta.file) });
+    }
+    for (const l of scriptPool) {
       if (!l.handler) continue;
       try {
         const url = await Promise.race([
@@ -752,7 +775,11 @@ http.createServer(async (req, res) => {
         // 让调用方自己去试（下不动还有 Go 侧的换候选兜底）。
         let p;
         try { p = await probeAudioUrl(url); } catch (e) { tried.push({ script: l.meta.file, probe_error: String((e && e.message) || e).slice(0, 120) }); return send(200, { url, script: l.meta.file, tried }); }
-        if (p.ok) return send(200, { url, script: l.meta.file, probed: { status: p.status, bytes: p.bytes }, tried });
+        if (p.ok) {
+          if (!collect) return send(200, { url, script: l.meta.file, probed: { status: p.status, bytes: p.bytes }, tried });
+          candidates.push({ url, script: l.meta.file, status: p.status || 0, bytes: p.bytes || 0 });
+          continue;
+        }
         if (!p.status) {
           // 探测没结论（超时/DNS/连接重置）：**不判死**，记下来继续问别的脚本；
           // 但它是本次的兜底 —— 全部脚本都没能「证明能下」时用它，而不是回 502。
@@ -765,6 +792,13 @@ http.createServer(async (req, res) => {
         // 明确的死链（有状态码 / 内容不对）：记一笔原因，换下一个脚本 —— 这正是本次修复的全部意义。
         tried.push({ script: l.meta.file, dead: true, url: url.slice(0, 140), why: p.why, status: p.status || null });
       } catch (e) { tried.push({ script: l.meta.file, error: String(e.message).slice(0, 160) }); }
+    }
+    if (collect) {
+      // 一个候选都没有：把「没结论」的兜底链也交回去（标记 unproven），
+      // 调用方自己决定要不要用它 —— 与单条模式同一个口径。
+      if (fallback) candidates.push({ url: fallback.url, script: fallback.script, status: 0, bytes: 0, unproven: fallback.why });
+      if (candidates.length) return send(200, { candidates, tried });
+      return send(502, { error: '选中的洛雪音源都没给出能下得动的直链', tried });
     }
     // 一条「证明能下」的都没有，但存在探测没结论的链 → 交出去（带 unproven 标记，便于日志追查）。
     if (fallback) {

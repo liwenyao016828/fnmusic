@@ -23,6 +23,7 @@ package intercept
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
@@ -91,7 +92,33 @@ type QualityStatus struct {
 	Upgradeable int            `json:"upgradeable"`
 	Error       string         `json:"error"`
 	Entries     []QualityEntry `json:"entries"`
+	// Records 是「替换音质」的**历史记录**（最近 N 条，落盘，重启还在）。
+	//
+	// 为什么必须落盘：替换是**原地覆盖**，用户在文件管理器里看不出任何变化，
+	// 界面一刷新更是「做过什么」全没了 —— 用户第一句反馈就是「怎么看不到记录」。
+	// 它也是这一功能唯一的凭据：某首歌哪天从 128k 换成了 320k、走的哪条渠道。
+	Records []QualityRecord `json:"records"`
 }
+
+// QualityRecord 是一条「替换音质」的历史记录。
+//
+// 成功与失败都记（失败的 Note 里是原因）：只记成功的话，「我以为换了其实没换」
+// 这种情况永远查不出来。
+type QualityRecord struct {
+	At      int64  `json:"at"` // Unix 秒
+	Path    string `json:"path"`
+	Title   string `json:"title"`
+	Artist  string `json:"artist"`
+	From    string `json:"from"` // 替换前盘上的实际档位
+	To      string `json:"to"`   // 替换后的实际档位（失败时为空）
+	Channel string `json:"channel"`
+	OK      bool   `json:"ok"`
+	Note    string `json:"note,omitempty"`
+}
+
+// qualityRecordLimit 是历史记录上限。替换是人工批量动作，100 条≈几十次操作，
+// 再多就是存档而不是「最近做了什么」。
+const qualityRecordLimit = 100
 
 type qualityScanState struct {
 	mu      sync.Mutex
@@ -279,6 +306,12 @@ func (i *Interceptor) QualityScanStatus() QualityStatus {
 	if st.Entries == nil {
 		st.Entries = []QualityEntry{}
 	}
+	if recs := i.QualityRecords(); len(recs) > 0 {
+		st.Records = recs
+	} else {
+		// 空也要给空数组：JSON 里 null 会让前端多写一层兜底（真机见过）
+		st.Records = []QualityRecord{}
+	}
 	return st
 }
 
@@ -441,6 +474,11 @@ type QualityReplaceDone struct {
 	NewPath string `json:"new_path,omitempty"`
 	Tier    string `json:"tier,omitempty"`
 	Channel string `json:"channel,omitempty"`
+	// From/Title/Artist 是给「替换记录」用的：没有它们，记录里只剩一个路径，
+	// 用户看不出「这首原来是什么档位」。
+	From   string `json:"from,omitempty"`
+	Title  string `json:"title,omitempty"`
+	Artist string `json:"artist,omitempty"`
 	// Note 是「这条为什么不算成功」的人话（例如平档不换）。界面直接显示它。
 	Note string `json:"note,omitempty"`
 }
@@ -469,9 +507,18 @@ func (i *Interceptor) ReplaceQuality(ctx context.Context, paths []string) ([]Qua
 		item, err := i.replaceOneQuality(ctx, raw)
 		if err != nil {
 			failed = append(failed, QualityReplaceFailed{Path: raw, Error: err.Error()})
+			// 失败也记一笔（Note 是原因）：只记成功的话，「我以为换了其实没换」
+			// 这种情况永远查不出来。
+			i.appendQualityRecord(QualityRecord{
+				Path: raw, From: audioext.TierOfFile(raw), OK: false, Note: err.Error(),
+			})
 			continue
 		}
 		done = append(done, item)
+		i.appendQualityRecord(QualityRecord{
+			Path: item.Path, Title: item.Title, Artist: item.Artist,
+			From: item.From, To: item.Tier, Channel: item.Channel, OK: item.OK, Note: item.Note,
+		})
 	}
 	return done, failed, nil
 }
@@ -536,12 +583,14 @@ func (i *Interceptor) replaceOneQuality(ctx context.Context, raw string) (Qualit
 	if audioext.TierRank(after) <= audioext.TierRank(before) {
 		return QualityReplaceDone{
 			Path: path, OK: false, NewPath: item.Path, Tier: after, Channel: pick.Channel,
+			From: before, Title: entry.Title, Artist: entry.Artist,
 			Note: fmt.Sprintf("文件还是 %s：这次从 %s 渠道拿到的也是 %s（旧的保留）", before, pick.Channel, after),
 		}, nil
 	}
 	i.logf("[INTERCEPT] 替换音质：%s → %s（%s 渠道 %s）", filepath.Base(path), filepath.Base(item.Path), pick.Channel, pick.Tier())
 	return QualityReplaceDone{
 		Path: path, OK: true, NewPath: item.Path, Tier: item.Quality, Channel: pick.Channel,
+		From: before, Title: entry.Title, Artist: entry.Artist,
 	}, nil
 }
 
@@ -559,4 +608,85 @@ func bestTierText(e QualityEntry) string {
 		return "没探到"
 	}
 	return best
+}
+
+// ── 替换记录（需求 m04229：「替换音质，怎么看不到记录」）──────────────────
+//
+// 存 <DataDir>/quality_records.json，最多 qualityRecordLimit 条，最新的在前。
+// 为什么不用内存环形缓冲：替换是**低频、人工触发、事后要查**的动作，
+// 而应用会重启（每次装机/升级都重启一次），内存版本等于「一升级记录就没了」。
+
+// QualityRecords 返回近期的替换记录（最新在前）。
+func (i *Interceptor) QualityRecords() []QualityRecord {
+	i.qrMu.Lock()
+	defer i.qrMu.Unlock()
+	if i.qrLoaded {
+		return append([]QualityRecord(nil), i.qrList...)
+	}
+	i.qrLoaded = true
+	i.qrList = loadQualityRecords(i.cfg.DataDir)
+	return append([]QualityRecord(nil), i.qrList...)
+}
+
+// appendQualityRecord 追加一条记录并落盘。落盘失败只打日志：
+// 「记录没写下去」不该让替换本身失败（文件已经换好了，那是既成事实）。
+func (i *Interceptor) appendQualityRecord(rec QualityRecord) {
+	if rec.At == 0 {
+		rec.At = time.Now().Unix()
+	}
+	i.qrMu.Lock()
+	if !i.qrLoaded {
+		i.qrLoaded = true
+		i.qrList = loadQualityRecords(i.cfg.DataDir)
+	}
+	// 最新在前
+	i.qrList = append([]QualityRecord{rec}, i.qrList...)
+	if len(i.qrList) > qualityRecordLimit {
+		i.qrList = i.qrList[:qualityRecordLimit]
+	}
+	list := append([]QualityRecord(nil), i.qrList...)
+	i.qrMu.Unlock()
+	if err := saveQualityRecords(i.cfg.DataDir, list); err != nil {
+		i.logf("[INTERCEPT] 替换记录落盘失败（不影响替换本身）：%v", err)
+	}
+}
+
+func qualityRecordsPath(dir string) string {
+	if strings.TrimSpace(dir) == "" {
+		return ""
+	}
+	return filepath.Join(dir, "quality_records.json")
+}
+
+func loadQualityRecords(dir string) []QualityRecord {
+	p := qualityRecordsPath(dir)
+	if p == "" {
+		return nil
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return nil
+	}
+	var out []QualityRecord
+	if err := json.Unmarshal(b, &out); err != nil {
+		// 坏文件不阻塞：当作没有记录（替换功能本身不受影响）
+		return nil
+	}
+	return out
+}
+
+func saveQualityRecords(dir string, list []QualityRecord) error {
+	p := qualityRecordsPath(dir)
+	if p == "" {
+		return nil
+	}
+	b, err := json.MarshalIndent(list, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := p + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, p)
 }

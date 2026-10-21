@@ -165,6 +165,20 @@ type Config struct {
 	// 第二个返回值是宿主实测的总字节数（0 = 没探到）。档位靠它校正：第三方站会把
 	// 点名的无损压成 128k mp3 而不在应答里说，只有「多大」这件事骗不了人。
 	LxResolve func(ctx context.Context, source string, info map[string]any, quality string) (string, int64, error)
+	// LxResolveAll 是「轮询模式」的取链：按 scripts 的顺序问宿主，把**所有**
+	// 能下得动的候选一次交回来（见 lxnode.ResolveCandidates）。
+	//
+	// 为什么还需要第二个钩子：单条模式是「第一个能下的就赢」，而用户选了好几个
+	// 洛雪音源时他要的是「挨个问，谁的档位高用谁」——档位高不高只有这一侧知道
+	// （要拿时长按字节数反推码率，宿主手上没有时长），所以候选得整批交回来。
+	// nil = 宿主不支持（老版本/单测替身），此时退回 LxResolve，行为与以前一致。
+	LxResolveAll func(ctx context.Context, source string, info map[string]any, quality string, scripts []string) ([]lxnode.Candidate, error)
+	// LxSourceNames 返回**用户选中且在排序里的**洛雪音源脚本名（如 `全豆要.js`），
+	// 顺序就是用户排的轮询顺序；空 = 没选（宿主按自己加载的全部脚本来）。
+	//
+	// 注意它是**现取**的：用户在设置页改完勾选，下一次取链就该按新名单走，
+	// 不该等重启。
+	LxSourceNames func() []string
 	// PlatformsFunc 返回「参与在线搜索合并」的平台，**现取**；nil 时用 Platforms
 	// （或内置默认：网易 + QQ）。
 	//
@@ -367,13 +381,21 @@ type Interceptor struct {
 	// 它在 New() 里建好（内置 mutex，零值不可用）。
 	quality *qualityScanState
 
+	// qrMu/qrList/qrLoaded 是「替换音质」的历史记录（见 quality.go 的
+	// QualityRecords）：懒加载 + 内存副本，落盘失败不影响替换本身。
+	qrMu     sync.Mutex
+	qrList   []QualityRecord
+	qrLoaded bool
+
 	// tee 是「边听边下」被客户端打断之后的后台续传任务簿（见 tee.go 的 teePool）。
 	// 零值可用 —— 只有真的起过一次续传才会建父 ctx 与登记表。
 	tee teePool
 
-	searcher  func(keyword, platform string, page, size int) []search.UnifiedSong
-	lxSearch  func(ctx context.Context, keyword string, limit int) ([]lxnode.Song, error)
-	lxResolve func(ctx context.Context, source string, info map[string]any, quality string) (string, int64, error)
+	searcher      func(keyword, platform string, page, size int) []search.UnifiedSong
+	lxSearch      func(ctx context.Context, keyword string, limit int) ([]lxnode.Song, error)
+	lxResolve     func(ctx context.Context, source string, info map[string]any, quality string) (string, int64, error)
+	lxResolveAll  func(ctx context.Context, source string, info map[string]any, quality string, scripts []string) ([]lxnode.Candidate, error)
+	lxSourceNames func() []string
 
 	// lxMu/lxItems 是「洛雪搜索结果 → 取链时要喂回去的那条记录」的暂存。
 	//
@@ -455,6 +477,8 @@ func New(cfg Config) *Interceptor {
 		searcher:        searcher,
 		lxSearch:        cfg.LxSearch,
 		lxResolve:       cfg.LxResolve,
+		lxResolveAll:    cfg.LxResolveAll,
+		lxSourceNames:   cfg.LxSourceNames,
 		lyricFetch:      lyricFetcher,
 		store:           store,
 		userCache:       make(map[string]userEntry, 16),

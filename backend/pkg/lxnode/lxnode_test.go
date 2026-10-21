@@ -717,3 +717,20 @@ func TestSearchRealQsvipScriptCallsOnlyDeclaringSource(t *testing.T) {
 		}
 	}
 }
+
+// 取链时要按名字告诉宿主「只用这几个脚本」，而宿主只认**落盘后的文件名**。
+// 两边各写一遍转换规则就会像真机那样对不上（`全豆要[聚合音源]` vs `全豆要_聚合音源_.js`），
+// 所以落盘与取链必须共用 ScriptFileName 这一处口径。
+func TestScriptFileNameMatchesSyncNaming(t *testing.T) {
+	cases := map[string]string{
+		"全豆要":       "全豆要.js",
+		"全豆要[聚合音源]": "全豆要_聚合音源_.js",
+		"念心/音源":     "念心_音源.js",
+		"a b":       "a_b.js",
+	}
+	for in, want := range cases {
+		if got := ScriptFileName(in); got != want {
+			t.Errorf("ScriptFileName(%q) = %q，想要 %q", in, got, want)
+		}
+	}
+}

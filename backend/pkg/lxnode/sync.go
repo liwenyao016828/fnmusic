@@ -71,6 +71,16 @@ func SyncScripts(dir string, scripts map[string]string) error {
 	return nil
 }
 
+// ScriptFileName 是脚本名 → 落盘文件名的**唯一**口径（对外导出）。
+//
+// 为什么必须对外导出：取链时要按名字告诉宿主「只用这几个脚本」，
+// 而宿主只认落盘后的文件名。两边各写一遍转换规则，迟早不一致 ——
+// 真机就撞上过：配置里叫 `全豆要[聚合音源]`，盘上是 `全豆要_聚合音源_.js`，
+// 拼出来的 `全豆要[聚合音源].js` 在宿主里根本不存在。
+func ScriptFileName(name string) string {
+	return safeScriptName(name)
+}
+
 // safeScriptName 把脚本名变成安全的文件名。
 //
 // 脚本名是用户可编辑的（导入时能从脚本元信息里取到），里面可能有 `/`、`..`、

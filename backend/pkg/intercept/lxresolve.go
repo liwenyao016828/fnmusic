@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"fn-lx-player/pkg/lxnode"
 	"fn-lx-player/pkg/online"
 )
 
@@ -188,7 +189,9 @@ func (r lxResolver) ResolveQueries(ctx context.Context, queries []online.Query) 
 
 // resolveOne 解析一条。tier 为空 = 用脚本声明的最高档（再没有就交给宿主默认）。
 func (r lxResolver) resolveOne(ctx context.Context, id, title, artist, tier string) (*online.Resolved, error) {
-	if r.i == nil || r.i.lxResolve == nil {
+	// 只有「单条」与「轮询」两个钩子**都没有**时才算没有解析器 ——
+	// 轮询模式自己就能拿链，不需要 lxResolve 存在（单测/新宿主都走这条）。
+	if r.i == nil || (r.i.lxResolve == nil && r.i.lxResolveAll == nil) {
 		return nil, online.ErrNoResolver
 	}
 	id = strings.TrimSpace(id)
@@ -213,6 +216,25 @@ func (r lxResolver) resolveOne(ctx context.Context, id, title, artist, tier stri
 		// （mapQuality clamp），所以「问高一点」不会失败，只会得到它给得起的档位。
 		tier = online.TierLossless
 	}
+	// ── 选链：多选洛雪音源时按用户排的顺序**轮询**，取实际档位最高的那条 ──
+	//
+	// 2026-10-21 用户要求：「多选显示轮询，实际功能也是多选轮询最高音质」。
+	// 在此之前宿主是「第一个吐出直链的脚本就赢」——顺序还是目录顺序，不是用户排的，
+	// 而且第一个给 128k 就再无机会拿到第二个能给的无损。
+	if r.i.lxResolveAll != nil {
+		scripts := r.i.lxScriptNames()
+		cands, err := r.i.lxResolveAll(ctx, r.src, info, tier, scripts)
+		if err == nil {
+			return r.i.pickLxCandidate(r.src, id, info, tier, scripts, cands)
+		}
+		// 轮询整体失败不直接放弃：宿主可能是老版本（不认 collect，回 502），
+		// 而单条那条路以前就是能用的 —— 不能因为升级了取链方式就把它弄坏。
+		if r.i.lxResolve == nil {
+			return nil, err
+		}
+		r.i.logf("[INTERCEPT] 洛雪轮询取链失败，退回单条问一次：%s/%s %v", r.src, id, err)
+	}
+
 	url, size, err := r.i.lxResolve(ctx, r.src, info, tier)
 	if err != nil {
 		return nil, err
@@ -220,23 +242,108 @@ func (r lxResolver) resolveOne(ctx context.Context, id, title, artist, tier stri
 	if strings.TrimSpace(url) == "" {
 		return nil, online.ErrNotPlayable
 	}
-	actual := tier
-	// 诚实：脚本可能把无损请求压成有损（mapQuality clamp），而直链会露馅。
-	// 声明「无损」却落一个 mp3 是最难查的一类偏差 —— 宁可当场降档。
-	if online.TierRank(actual) >= online.TierRank(online.TierLossless) && lxURLLooksLossy(url) {
-		actual = online.Tier320k
-	}
-	// 第二道诚实：字节数 + 时长反推真实码率。URL 没有扩展名时上面那条放行不了，
-	// 而「3 分钟 4MB」无论叫什么名字都不是无损。
-	if fixed, why := lxTierFromSize(size, lxDurationOf(info), actual); fixed != actual {
-		r.i.logf("[INTERCEPT] 洛雪档位按实测校正：%s/%s 声明 %s → 按 %s（%s）", r.src, id, actual, fixed, why)
-		actual = fixed
-	}
+	actual := r.i.lxHonestTier(r.src, id, info, tier, url, size)
 	return &online.Resolved{
 		URL:    url,
 		Format: lxFormatFromTier(actual),
 		// 档位是「我们点的那一档」或脚本声明的档位，不是随手猜的。
 		Tier: actual,
+	}, nil
+}
+
+// lxScriptNames 取用户选中且在排序里的洛雪音源脚本名（nil = 没接这条线）。
+func (i *Interceptor) lxScriptNames() []string {
+	if i == nil || i.lxSourceNames == nil {
+		return nil
+	}
+	names := i.lxSourceNames()
+	// 拷贝一份：调用方（配置管理器）给回来的切片不该被我们改，
+	// 而这里后面会按用户顺序排序。
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		if strings.TrimSpace(n) != "" {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// lxHonestTier 把「脚本声称的档位」校正成**实际**档位（两道诚实判据）。
+//
+// 第一道看直链后缀（脚本可能把无损请求压成有损），第二道用字节数 + 时长反推码率
+// ——「3 分钟 4MB」无论叫什么名字都不是无损。抽成函数是因为轮询模式下每条候选
+// 都要走同一套校正，各写一遍迟早两套口径。
+func (i *Interceptor) lxHonestTier(src, id string, info map[string]any, tier, url string, size int64) string {
+	actual := tier
+	if online.TierRank(actual) >= online.TierRank(online.TierLossless) && lxURLLooksLossy(url) {
+		actual = online.Tier320k
+	}
+	if fixed, why := lxTierFromSize(size, lxDurationOf(info), actual); fixed != actual {
+		i.logf("[INTERCEPT] 洛雪档位按实测校正：%s/%s 声明 %s → 按 %s（%s）", src, id, actual, fixed, why)
+		actual = fixed
+	}
+	return actual
+}
+
+// pickLxCandidate 从轮询交回来的候选里挑一条：**实际档位最高的**，同档取顺序靠前的。
+//
+// 顺序就是用户在设置页排的顺序（传给宿主的 scripts 数组顺序）——「轮询」落在两处：
+// 宿主按这个顺序挨个问，同档位时先问到的赢（稳定、可预期，不会每次换一条）。
+// 探测「没结论」的候选（Unproven）排在最后：它们既没被证明能下、也没被证明死了，
+// 只在别的候选都不行时才用。
+func (i *Interceptor) pickLxCandidate(src, id string, info map[string]any, tier string, scripts []string, cands []lxnode.Candidate) (*online.Resolved, error) {
+	order := map[string]int{}
+	for n, name := range scripts {
+		order[name] = n
+	}
+	type scored struct {
+		cand     lxnode.Candidate
+		actual   string
+		rank     int
+		pos      int
+		unproven bool
+	}
+	var best *scored
+	// better 判断「a 是否该顶掉当前最优 b」，三档优先级（顺序即语义）：
+	//   1. **证明了能下**的永远优先于「探测没结论」的，哪怕档位低一点
+	//      （没结论 = 连 2KB 都没读到，拿它当主力是在赌网络）；
+	//   2. 档位高的优先（这就是「轮询最高音质」的本体）；
+	//   3. 同档位时**用户排在前面的**优先（数组顺序 = 轮询顺序，稳定可预期，
+	//      不会每次换一条 —— 用户选了「全豆要」在前，就别偷偷换别的源）。
+	better := func(a, b scored) bool {
+		if a.unproven != b.unproven {
+			return b.unproven
+		}
+		if a.rank != b.rank {
+			return a.rank > b.rank
+		}
+		return a.pos < b.pos
+	}
+	for _, c := range cands {
+		if strings.TrimSpace(c.URL) == "" || !strings.HasPrefix(c.URL, "http") {
+			continue
+		}
+		actual := i.lxHonestTier(src, id, info, tier, c.URL, c.Bytes)
+		pos, ok := order[c.Script]
+		if !ok {
+			pos = len(order) // 不在名单里（不该发生）排最后，但仍是候选
+		}
+		s := scored{cand: c, actual: actual, rank: online.TierRank(actual), pos: pos, unproven: c.Unproven != ""}
+		if best == nil || better(s, *best) {
+			sb := s
+			best = &sb
+		}
+	}
+	if best == nil {
+		return nil, online.ErrNotPlayable
+	}
+	if len(cands) > 1 {
+		i.logf("[INTERCEPT] 洛雪轮询选中 %s（%s，档位 %s，共 %d 个候选）", best.cand.Script, src+"/"+id, best.actual, len(cands))
+	}
+	return &online.Resolved{
+		URL:    best.cand.URL,
+		Format: lxFormatFromTier(best.actual),
+		Tier:   best.actual,
 	}, nil
 }
 

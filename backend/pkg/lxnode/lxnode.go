@@ -225,6 +225,26 @@ type resolveRequest struct {
 	Source  string         `json:"source"`
 	Info    map[string]any `json:"info"`
 	Quality string         `json:"quality"`
+	// Scripts / Collect 是「轮询模式」的两个开关，2026-10-21 加。
+	//
+	// 用户在界面上选中的洛雪音源可能有好几个，语义是「按我的顺序挨个问，
+	// 谁给的档位高用谁」。只给 Scripts 不给 Collect 时宿主仍只交回第一条能下的；
+	// 两者都给，宿主把所有能下得动的候选都交回来，挑哪条由调用方定 ——
+	// **档位高不高只有 Go 侧知道**（要拿时长按字节数反推码率，宿主没有时长）。
+	Scripts []string `json:"scripts,omitempty"`
+	Collect bool     `json:"collect,omitempty"`
+}
+
+// Candidate 是宿主在轮询模式下交回来的一个候选直链。
+type Candidate struct {
+	URL    string `json:"url"`
+	Script string `json:"script"`
+	// Status / Bytes 是宿主的实测结果（它发过 Range 请求）。
+	Status int   `json:"status,omitempty"`
+	Bytes  int64 `json:"bytes,omitempty"`
+	// Unproven 非空 = 探测本身没结论（超时/DNS/连接重置），**不是死链**。
+	// 这种候选排在最后，只在别的都不行时才用（口径与宿主单条模式一致）。
+	Unproven string `json:"unproven,omitempty"`
 }
 
 // Resolve 让宿主解析一条直链。**任何失败都只返回 error**，调用方照常回落。
@@ -331,6 +351,94 @@ func (m *Manager) Resolve(ctx context.Context, source string, info map[string]an
 		return "", 0, fmt.Errorf("宿主返回的不是直链：%q", out.URL)
 	}
 	return out.URL, size, nil
+}
+
+// ResolveCandidates 按 scripts 的顺序（= 用户排的轮询顺序）问宿主，
+// 把所有**能下得动**的候选交回来。挑哪条由调用方决定（见 resolveRequest.Scripts）。
+//
+// scripts 为空 = 不限制（宿主用它自己加载的全部脚本）。
+func (m *Manager) ResolveCandidates(ctx context.Context, source string, info map[string]any, quality string, scripts []string) ([]Candidate, error) {
+	m.mu.Lock()
+	if m.state != StateReady || m.proc == nil {
+		st := m.state
+		m.mu.Unlock()
+		return nil, fmt.Errorf("%w（%s）", ErrNotRunning, st)
+	}
+	base := m.cfg.base()
+	m.mu.Unlock()
+
+	tier := strings.ToLower(strings.TrimSpace(quality))
+	if tier == "" {
+		tier = "flac"
+	}
+	body, _ := json.Marshal(resolveRequest{
+		Source:  source,
+		Info:    map[string]any{"musicInfo": info, "type": tier},
+		Quality: tier,
+		Scripts: scripts,
+		Collect: true,
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/resolve", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var out struct {
+		Candidates []Candidate `json:"candidates"`
+		Error      string      `json:"error"`
+		Tried      []struct {
+			Script string `json:"script"`
+			Error  string `json:"error"`
+			Got    string `json:"got"`
+			Why    string `json:"why"`
+		} `json:"tried"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	if resp.StatusCode != http.StatusOK {
+		return nil, errors.New(describeLxFailure(out.Error, resp.Status, out.Tried))
+	}
+	if len(out.Candidates) == 0 {
+		// 200 但一条候选都没有：宿主不该这么回，但真发生了也要给出可读的原因。
+		return nil, errors.New(describeLxFailure("宿主没有交回任何候选", resp.Status, out.Tried))
+	}
+	return out.Candidates, nil
+}
+
+// describeLxFailure 把「这次为什么没拿到」拼成人能读的一句话。
+//
+// 抽出来是因为 /resolve 的单条模式与轮询模式要用**同一份文案**：
+// 两边各写一遍，排障时同一件事会有两种说法（真机查日志时最烦这个）。
+func describeLxFailure(msg, status string, tried []struct {
+	Script string `json:"script"`
+	Error  string `json:"error"`
+	Got    string `json:"got"`
+	Why    string `json:"why"`
+}) string {
+	if msg == "" {
+		msg = status
+	}
+	parts := make([]string, 0, len(tried))
+	for _, tr := range tried {
+		detail := tr.Error
+		if detail == "" {
+			detail = tr.Why
+		}
+		if detail == "" {
+			detail = "返回了非直链：" + tr.Got
+		}
+		parts = append(parts, tr.Script+" → "+detail)
+	}
+	if len(parts) > 0 {
+		msg += "（" + strings.Join(parts, "；") + "）"
+	}
+	return msg
 }
 
 // ── 搜索 ─────────────────────────────────────────────────────────────────

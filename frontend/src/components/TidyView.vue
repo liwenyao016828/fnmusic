@@ -554,6 +554,33 @@
           还没有扫描结果 —— 点「开始扫描」，让洛雪 / musicdl / 原生三条渠道逐条对比
         </div>
 
+        <!-- 最近替换记录：原地覆盖看不出变化，它是唯一凭据（需求 m04229） -->
+        <div v-if="qRecords.length" class="mt-3">
+          <div class="flex items-center gap-2">
+            <span class="text-[11px] font-medium text-[var(--ys-text-muted)]">最近替换</span>
+            <span class="text-[10px] text-[var(--ys-text-faint)]">共 {{ qScan?.records?.length || 0 }} 条</span>
+          </div>
+          <div class="mt-1.5 overflow-hidden rounded-[12px] border border-[var(--ys-border)] bg-white">
+            <div
+              v-for="(r, i) in qRecords"
+              :key="i"
+              class="flex items-center gap-2 border-b border-[var(--ys-border)] px-3 py-2 last:border-b-0"
+            >
+              <span
+                class="h-1.5 w-1.5 shrink-0 rounded-full"
+                :class="r.ok ? 'bg-emerald-500' : 'bg-[var(--ys-text-faint)]'"
+              ></span>
+              <div class="min-w-0 flex-1">
+                <div class="truncate text-[12px] text-[var(--ys-text)]">{{ r.label }}</div>
+                <div class="mt-0.5 truncate text-[10.5px] text-[var(--ys-text-muted)]">
+                  {{ r.tierText }}<span v-if="r.channel"> · {{ Q_CHANNEL_LABELS[r.channel] || r.channel }}</span>
+                </div>
+              </div>
+              <span class="ys-num shrink-0 text-[10px] text-[var(--ys-text-faint)]">{{ r.when }}</span>
+            </div>
+          </div>
+        </div>
+
         <!-- 勾选浮出批量条（底部深色玻璃，项目已有组件） -->
         <SelectionBar
           :count="qSelectedCount"
@@ -773,6 +800,27 @@ function qChannelCells(e) {
   })
 }
 
+// 最近的替换记录（最新在前）。后端已按时间倒序并截断到 100 条，
+// 这里只取前 8 条摆出来 —— 它是「刚发生了什么」的凭据，不是存档页。
+const qRecords = computed(() => {
+  const list = Array.isArray(qScan.value?.records) ? qScan.value.records : []
+  return list.slice(0, 8).map((r) => ({
+    ...r,
+    when: r?.at ? formatRecordTime(r.at) : '',
+    label: (r?.title || baseName(r?.path || '')) + (r?.artist ? ` · ${r.artist}` : ''),
+    tierText: r?.ok
+      ? `${r.from || '?'} → ${r.to || '?'}`
+      : (r?.note || '没换成'),
+  }))
+})
+
+function formatRecordTime(at) {
+  const d = new Date(Number(at) * 1000)
+  if (Number.isNaN(d.getTime())) return ''
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
 function normalizeScan(j) {
   const d = j && typeof j === 'object' ? j : {}
   return {
@@ -784,6 +832,9 @@ function normalizeScan(j) {
     upgradeable: Number(d.upgradeable) || 0,
     error: d.error || '',
     entries: Array.isArray(d.entries) ? d.entries : [],
+    // 替换记录（后端落盘的最近 100 条，重启还在）——
+    // 替换是原地覆盖，不看这份记录用户根本无从知道「昨天到底换过什么」。
+    records: Array.isArray(d.records) ? d.records : [],
   }
 }
 
@@ -807,6 +858,17 @@ async function startQualityScan() {
   } catch (e) {
     // 后端接口还没上线 / 网络失败：横幅说清即可，不白屏、不抛未捕获错误
     qErrorText.value = failText('发起音质扫描', e)
+  }
+}
+
+// 进页先读一次状态：替换记录是**历史**，不该只有「刚扫过」才看得见
+// （用户 m04229 的原话就是「替换音质，怎么看不到记录」）。
+async function loadQualityStatus() {
+  try {
+    const res = await QualityAPI.scan('status', qMode.value, clampQLimit(qLimit.value))
+    if (res.code === 200 && res.data) qScan.value = normalizeScan(res.data)
+  } catch (_) {
+    // 读不到就当没有历史：不该因为一条记录挡住整页
   }
 }
 
@@ -1516,6 +1578,8 @@ onMounted(() => {
   loadPreferred()
   // 补全任务是后端在跑的，刷新页面不该让进度凭空消失
   loadCompleteStatus()
+  // 替换记录同理：上次替换过什么，进页就该看得到
+  loadQualityStatus()
 })
 
 onUnmounted(() => {
