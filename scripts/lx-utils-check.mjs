@@ -533,6 +533,43 @@ test('[9] require 白名单', async (t) => {
 // ─────────────────────────────────────────────────────────────
 // [10] 真宿主端到端：/health + POST /resolve
 // ─────────────────────────────────────────────────────────────
+/**
+ * 本地假 CDN：给活性校验用例提供「能下动的链 / 404 死链 / 错误页」三种响应。
+ *
+ * 关键细节：**必须支持 Range**（探测发的是 `bytes=0-2047`），并且头部给
+ * `content-range: bytes 0-2047/<total>` —— 探测函数就是从这里读总长度的。
+ * `total` 故意给到 6MB：低于 `MIN_AUDIO_BYTES` 会被判「不像完整音频」，
+ * 那样就分不清「因为 404 死」还是「因为太小死」了。
+ */
+function stubAudioServer(opts = {}) {
+  return new Promise((resolve) => {
+    const total = 6 * 1024 * 1024;
+    // ⚠️ 这里必须用 http.createServer，不是文件里那个 `createNetServer`（node:net 的裸 TCP，
+    // 只用来挑空闲端口）—— 裸 socket 上没有 req.headers / res.writeHead，探测请求打进来直接
+    // TypeError，而且是在 server 回调里抛，测试表现为「uncaughtException」看着像宿主挂了。
+    const srv = http.createServer((req, res) => {
+      if (opts.notFound) { res.writeHead(404, { 'Content-Type': 'text/plain' }); return res.end('not found'); }
+      if (opts.errorPage) {
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        return res.end('<html><body>链接已失效，请重新获取</body></html>');
+      }
+      const range = /bytes=(\d+)-(\d+)/.exec(req.headers.range || '');
+      const from = range ? Number(range[1]) : 0;
+      const to = range ? Number(range[2]) : 2047;
+      const body = Buffer.alloc(to - from + 1);
+      // fLaC 魔数开头：探测据此确认「这真是音频」，而不是只靠 Content-Type（假 CDN 常乱标）
+      if (from === 0) body.write('fLaC', 0, 'latin1');
+      res.writeHead(range ? 206 : 200, {
+        'Content-Type': 'audio/flac',
+        'Content-Length': String(body.length),
+        'Content-Range': range ? `bytes ${from}-${to}/${total}` : undefined,
+      });
+      res.end(body);
+    });
+    srv.listen(0, '127.0.0.1', () => resolve({ port: srv.address().port, close: () => srv.close() }));
+  });
+}
+
 test('[10] 真宿主（sidecar/lx_host/server.mjs）端到端', { timeout: 60_000 }, async (t) => {
   // 挑一个空闲端口（不写死，避免与别的东西撞）
   const port = await new Promise((res, rej) => {
@@ -546,7 +583,7 @@ test('[10] 真宿主（sidecar/lx_host/server.mjs）端到端', { timeout: 60_00
 
   // 宿主会加载目录里**所有** .js —— 所以在一个临时目录里只放要验的那三个
   const dir = mkdtempSync(path.join(os.tmpdir(), 'lx-utils-check-'));
-  for (const f of ['utils-guard.js', 'require-denied-fs.js', 'require-denied-childprocess.js']) {
+  for (const f of ['utils-guard.js', 'require-denied-fs.js', 'require-denied-childprocess.js', 'probe-url.js']) {
     cpSync(path.join(FIXTURES, f), path.join(dir, f));
   }
 
@@ -614,10 +651,14 @@ test('[10] 真宿主（sidecar/lx_host/server.mjs）端到端', { timeout: 60_00
     }
   });
   await t.test('POST /resolve 拿到真直链（契约：info.musicInfo + info.type）', async () => {
+    // validate:false —— 本条验的是「宿主把 utils 算对了、契约参数传对了」，
+    // 而 utils-guard 吐的是 example.com 的**假地址**，活性校验必然判它死。
+    // 假地址要过探测就只能是关掉探测，所以这里显式关掉（探测本身在下面三条里单独验）。
     const r = await request('POST', '/resolve', {
       source: 'wy',
       action: 'musicUrl',
       quality: '320k',
+      validate: false,
       info: {
         type: '320k',
         musicInfo: { source: 'wy', id: '1', songmid: '1', name: 'probe', singer: 'probe', album: 'probe' },
@@ -628,5 +669,69 @@ test('[10] 真宿主（sidecar/lx_host/server.mjs）端到端', { timeout: 60_00
     assert.equal(body.script, 'utils-guard.js');
     assert.match(body.url, /^https:\/\/example\.com\/utils-guard-ok-[0-9a-f]{8}-[0-9a-f]{8}$/,
       '拿到的不是 utils-guard 的直链 —— 说明宿主那份 utils 有某项没算对（uuid 里含 md5 与 AES 密文前 8 位）');
+  });
+
+  // ── 直链活性校验（v2.17 新增）───────────────────────────────
+  //
+  // 为什么值得单列一组用例：这条改动的全部意义就是「别把 404 死链当赢」。
+  // 真机实测过：全豆要脚本内部回退到最后一家 nxinxz，整站 404 —— 旧宿主把那条
+  // 死链直接返回给 Go，Go 下载 404 → 自动降档 → 用户看到「还是 mp3」，而且日志里
+  // 看起来「洛雪用过了」。没有这三条用例，这个 bug 会以同样的方式再回来一次。
+  const probeResolve = (url) => request('POST', '/resolve', {
+    source: 'wy',
+    action: 'musicUrl',
+    quality: 'flac',
+    info: { type: 'flac', musicInfo: { source: 'wy', id: '2', songmid: '2', name: url, singer: 'probe', album: 'probe' } },
+  });
+  const resolveProbe = (r) => JSON.parse(r.text);
+
+  await t.test('活性校验：能下得动的链照常返回，并带上 probed 实测结果', async () => {
+    const { port: ap, close } = await stubAudioServer();
+    try {
+      const r = await probeResolve(`http://127.0.0.1:${ap}/real.flac`);
+      assert.equal(r.status, 200, `返回 ${r.status}：${r.text}`);
+      const body = resolveProbe(r);
+      assert.equal(body.script, 'probe-url.js');
+      assert.ok(body.probed, `没有 probed 字段：${r.text}`);
+      assert.ok(body.probed.status === 200 || body.probed.status === 206, `probed=${JSON.stringify(body.probed)}`);
+      assert.ok(body.probed.bytes > 0, '总长度没读出来（content-range / content-length 都没命中）');
+    } finally { close(); }
+  });
+
+  await t.test('活性校验：404 死链判死、换下一个脚本，全死才 502 且 tried 里写明原因', async () => {
+    const { port: ap, close } = await stubAudioServer({ notFound: true });
+    try {
+      const r = await probeResolve(`http://127.0.0.1:${ap}/dead.mp3`);
+      assert.equal(r.status, 502, `死链该 502，实际 ${r.status}：${r.text}`);
+      const body = resolveProbe(r);
+      const hit = body.tried.find((x) => x.script === 'probe-url.js');
+      assert.ok(hit && hit.dead === true, `tried 里没记成死链：${JSON.stringify(body.tried)}`);
+      assert.equal(hit.status, 404, `该带上状态码：${JSON.stringify(hit)}`);
+      assert.match(hit.why, /404/, `原因没写清：${hit.why}`);
+    } finally { close(); }
+  });
+
+  await t.test('活性校验：探测本身没结论（TCP 连不上）时**不判死**，兜底交出这条链', async () => {
+    // 挑一个确定没人听的端口：这是「无状态码」的传输层失败，不是「对方说这文件没了」。
+    // 真机网易 CDN 首字节常超 5 秒 —— 把这种一律判死会冤掉好链，所以它必须走兜底。
+    const r = await probeResolve('http://127.0.0.1:1/never-listening.flac');
+    assert.equal(r.status, 200, `没结论的链该兜底返回，实际 ${r.status}：${r.text}`);
+    const body = resolveProbe(r);
+    assert.equal(body.script, 'probe-url.js');
+    assert.ok(body.unproven, `响应里没有 unproven 标记：${r.text}`);
+    assert.ok(!body.probed, '没探测成功却带了 probed 字段');
+    const hit = body.tried.find((x) => x.script === 'probe-url.js');
+    assert.ok(hit && hit.unproven === true && !hit.dead, `tried 该记 unproven 而不是 dead：${JSON.stringify(hit)}`);
+  });
+
+  await t.test('活性校验：HTML/JSON 错误页判死（有些死链是 200 + 一句话）', async () => {
+    const { port: ap, close } = await stubAudioServer({ errorPage: true });
+    try {
+      const r = await probeResolve(`http://127.0.0.1:${ap}/notice`);
+      assert.equal(r.status, 502, `错误页该判死，实际 ${r.status}：${r.text}`);
+      const body = resolveProbe(r);
+      const hit = body.tried.find((x) => x.script === 'probe-url.js');
+      assert.ok(hit && hit.dead === true, `没记成死链：${JSON.stringify(body.tried)}`);
+    } finally { close(); }
   });
 });

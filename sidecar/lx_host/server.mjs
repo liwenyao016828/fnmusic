@@ -659,6 +659,12 @@ const looksLikeErrorPage = (head) => {
 };
 
 // probeAudioUrl → {ok, status, bytes, why}
+// 探测结论分两类，这个区分是本函数的全部难点：
+//   · proven-dead —— 拿到了 HTTP 状态码或拿到了内容且内容不对（4xx/5xx、HTML/JSON 错误页、
+//     字节数明显不够）。这种链交给 Go 也一定是 404/坏流，**该换下一个脚本**。
+//   · inconclusive —— 连上传输层就没结论（超时、DNS、连接重置、TLS），**没有状态码**。
+//     这种不能算死：网易 m701 这类 CDN 首字节慢很常见，判死会把好链冤枉掉。
+// 调用方据此决定「换下一个」还是「留着当兜底」。
 function probeAudioUrl(raw, hops = 0, budgetMs = 7000) {
   return new Promise((resolve) => {
     let u;
@@ -708,6 +714,7 @@ function probeAudioUrl(raw, hops = 0, budgetMs = 7000) {
         res.on('end', finish);
         res.on('error', () => fin({ ok: false, status: code, why: '读取中断' }));
       });
+      // 下面三类都**没有 status**：传输层就没结论，不是「这链是死的」证据。
       req.on('timeout', () => fin({ ok: false, why: '探测超时 ' + budgetMs + 'ms' }));
       req.on('error', (e) => fin({ ok: false, why: String((e && e.message) || e).slice(0, 120) }));
       req.end();
@@ -724,6 +731,8 @@ http.createServer(async (req, res) => {
     let payload = {};
     try { payload = JSON.parse((await readBody(req)) || '{}'); } catch { return send(400, { error: 'bad json' }); }
     const tried = [];
+    // 探测「没结论」的链留作兜底（见 probeAudioUrl 上方那段两类结论的说明）。
+    let fallback = null;
     // `validate:false` 只给单测/调试用：跳过活性校验，回到旧的「第一条像 URL 的就返回」。
     const validate = payload.validate !== false;
     for (const l of loaded) {
@@ -744,9 +753,22 @@ http.createServer(async (req, res) => {
         let p;
         try { p = await probeAudioUrl(url); } catch (e) { tried.push({ script: l.meta.file, probe_error: String((e && e.message) || e).slice(0, 120) }); return send(200, { url, script: l.meta.file, tried }); }
         if (p.ok) return send(200, { url, script: l.meta.file, probed: { status: p.status, bytes: p.bytes }, tried });
-        // 死链：记一笔原因，继续问下一个脚本 —— 这正是本次修复的全部意义。
+        if (!p.status) {
+          // 探测没结论（超时/DNS/连接重置）：**不判死**，记下来继续问别的脚本；
+          // 但它是本次的兜底 —— 全部脚本都没能「证明能下」时用它，而不是回 502。
+          // 为什么值得留：Go 侧拿到链后自己下得动就赢了，下不动还有换候选的兜底；
+          // 而我们凭一次 7 秒超时扔掉一条可能好好的无损链，是净损失（真机网易 CDN 首字节常超 5 秒）。
+          if (!fallback) fallback = { url, script: l.meta.file, why: p.why };
+          tried.push({ script: l.meta.file, unproven: true, url: url.slice(0, 140), why: p.why });
+          continue;
+        }
+        // 明确的死链（有状态码 / 内容不对）：记一笔原因，换下一个脚本 —— 这正是本次修复的全部意义。
         tried.push({ script: l.meta.file, dead: true, url: url.slice(0, 140), why: p.why, status: p.status || null });
       } catch (e) { tried.push({ script: l.meta.file, error: String(e.message).slice(0, 160) }); }
+    }
+    // 一条「证明能下」的都没有，但存在探测没结论的链 → 交出去（带 unproven 标记，便于日志追查）。
+    if (fallback) {
+      return send(200, { url: fallback.url, script: fallback.script, unproven: fallback.why, tried });
     }
     return send(502, { error: validate ? '没有脚本能解析出**还能下得动**的直链' : '没有脚本能解析出直链', tried });
   }
