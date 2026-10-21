@@ -241,7 +241,7 @@ func (i *Interceptor) StartQualityScan(mode string, limit int) (QualityStatus, e
 		i.quality.mu.Unlock()
 		return st, nil
 	}
-	paths, truncated, err := qualityListLibraryFiles(mode, limit)
+	paths, truncated, err := i.qualityListLibraryFiles(mode, limit)
 	if err != nil {
 		i.quality.mu.Unlock()
 		return QualityStatus{State: QualityStateFailed, Error: err.Error()}, nil
@@ -356,14 +356,30 @@ func (i *Interceptor) runQualityScan(paths []string) {
 	i.quality.mu.Unlock()
 }
 
+// qualityLibraryRoots 返回「扫哪些目录」。
+//
+// ⚠️ 用**曲库目录**（设置里的 download_dir），**不是** `nas.AllowedRoots()`。
+// 后者是「允许访问哪些路径」的**安全边界**（真机上是 `/vol1` `/vol2` `/vol3`
+// 三个整卷），拿它当扫描根目录会去遍历整个卷 —— 2026-10-21 真机实测：扫出来的
+// 40 条里全是应用自己数据目录下的 `tts_*` / uuid 命名的中间产物，一首真歌都没进
+// 结果（而且那 40 条已经把 limit 的名额占满了）。安全边界与「音乐在哪」是两件事。
+func (i *Interceptor) qualityLibraryRoots() []string {
+	if i.cfg.DownloadDir != nil {
+		if dir := strings.TrimSpace(i.cfg.DownloadDir()); dir != "" {
+			return []string{dir}
+		}
+	}
+	return nil
+}
+
 // qualityListLibraryFiles 列出曲库里要扫描的文件。
 //
 // mode=lossy（默认）只列**有损**文件：无损的没什么可换的，扫它纯属浪费外呼。
 // mode=all 全列（用户想看看「我这库到底什么水平」）。
-func qualityListLibraryFiles(mode string, limit int) ([]string, bool, error) {
-	roots := nas.AllowedRoots()
+func (i *Interceptor) qualityListLibraryFiles(mode string, limit int) ([]string, bool, error) {
+	roots := i.qualityLibraryRoots()
 	if len(roots) == 0 {
-		return nil, false, fmt.Errorf("没拿到曲库根目录，先在设置里配好存储目录")
+		return nil, false, fmt.Errorf("没拿到曲库目录，先在设置里配好存储目录")
 	}
 	out := make([]string, 0, limit)
 	truncated := false

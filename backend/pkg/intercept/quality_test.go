@@ -58,7 +58,8 @@ func TestQualityNameKey(t *testing.T) {
 
 func TestQualityListLibraryFilesFiltersAndLimits(t *testing.T) {
 	root := t.TempDir()
-	t.Setenv("FN_ALLOWED_ROOTS", root)
+	h := newHarness(t)
+	h.it.cfg.DownloadDir = func() string { return root }
 	write := func(rel string) {
 		p := filepath.Join(root, rel)
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
@@ -75,7 +76,7 @@ func TestQualityListLibraryFilesFiltersAndLimits(t *testing.T) {
 	write(".trash/e.mp3") // 隐藏目录不进扫描
 
 	// 默认 mode=lossy：只列有损，且隐藏目录被跳过。
-	got, truncated, err := qualityListLibraryFiles("lossy", 100)
+	got, truncated, err := h.it.qualityListLibraryFiles("lossy", 100)
 	if err != nil {
 		t.Fatalf("列文件失败：%v", err)
 	}
@@ -87,7 +88,7 @@ func TestQualityListLibraryFilesFiltersAndLimits(t *testing.T) {
 	}
 
 	// mode=all：无损也进来，但隐藏目录里的仍然不算（3 个：a.mp3 / b.flac / sub/d.m4a）。
-	all, _, err := qualityListLibraryFiles("all", 100)
+	all, _, err := h.it.qualityListLibraryFiles("all", 100)
 	if err != nil {
 		t.Fatalf("列文件失败：%v", err)
 	}
@@ -96,7 +97,7 @@ func TestQualityListLibraryFilesFiltersAndLimits(t *testing.T) {
 	}
 
 	// 到上限：只给一份、并置 truncated（不是错误）。
-	one, truncated, err := qualityListLibraryFiles("all", 1)
+	one, truncated, err := h.it.qualityListLibraryFiles("all", 1)
 	if err != nil {
 		t.Fatalf("列文件失败：%v", err)
 	}
@@ -105,11 +106,27 @@ func TestQualityListLibraryFilesFiltersAndLimits(t *testing.T) {
 	}
 }
 
-// 没配曲库根目录时 fail closed（不是「什么都没扫到」——那是两种完全不同的结论）。
+// 没配曲库目录时 fail closed（不是「什么都没扫到」——那是两种完全不同的结论）。
 func TestQualityListLibraryFilesFailClosedWithoutRoots(t *testing.T) {
-	t.Setenv("FN_ALLOWED_ROOTS", "")
-	if _, _, err := qualityListLibraryFiles("lossy", 10); err == nil {
-		t.Fatal("没有曲库根目录时该报错，而不是回一份空列表")
+	h := newHarness(t)
+	if _, _, err := h.it.qualityListLibraryFiles("lossy", 10); err == nil {
+		t.Fatal("没有曲库目录时该报错，而不是回一份空列表")
+	}
+}
+
+// 扫描根目录必须是**曲库目录**，不是「允许访问的根」（真机上是 /vol1 /vol2 /vol3 整卷）。
+// 2026-10-21 真机踩过：拿安全边界当扫描根，整卷遍历把应用自己的数据目录扫了进来，
+// 40 条结果全是 tts_*/uuid 中间产物，一首真歌都没进结果。
+func TestQualityLibraryRootsUseDownloadDirNotAllowedRoots(t *testing.T) {
+	lib := t.TempDir()
+	t.Setenv("FN_ALLOWED_ROOTS", "/")
+	h := newHarness(t)
+	if got := h.it.qualityLibraryRoots(); len(got) != 0 {
+		t.Fatalf("没配 download_dir 时该没有扫描根，得到 %v", got)
+	}
+	h.it.cfg.DownloadDir = func() string { return lib }
+	if got := h.it.qualityLibraryRoots(); len(got) != 1 || got[0] != lib {
+		t.Fatalf("扫描根该是曲库目录 %q，得到 %v", lib, got)
 	}
 }
 
@@ -117,6 +134,7 @@ func TestQualityReplaceRejectsBadInput(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("FN_ALLOWED_ROOTS", root)
 	h := newHarness(t)
+	h.it.cfg.DownloadDir = func() string { return root }
 
 	flac := filepath.Join(root, "x.flac")
 	if err := os.WriteFile(flac, []byte("fLaC"), 0o644); err != nil {
@@ -167,8 +185,8 @@ func TestProbeQualityReportsNothingWhenNoChannelAnswers(t *testing.T) {
 // 扫描任务：空曲库也要走完并落到 done（不是一个永远 running 的僵尸状态）。
 func TestQualityScanEmptyLibraryGoesDone(t *testing.T) {
 	root := t.TempDir()
-	t.Setenv("FN_ALLOWED_ROOTS", root)
 	h := newHarness(t)
+	h.it.cfg.DownloadDir = func() string { return root }
 
 	st, err := h.it.StartQualityScan("lossy", 50)
 	if err != nil {
@@ -192,8 +210,8 @@ func TestQualityScanEmptyLibraryGoesDone(t *testing.T) {
 // 已有任务在跑时再点一次「开始」不该并起第二个（扫描是外呼重活，两份并行只是互相拖慢）。
 func TestQualityScanDoesNotStartTwice(t *testing.T) {
 	root := t.TempDir()
-	t.Setenv("FN_ALLOWED_ROOTS", root)
 	h := newHarness(t)
+	h.it.cfg.DownloadDir = func() string { return root }
 
 	h.it.quality.mu.Lock()
 	h.it.quality.running = true
