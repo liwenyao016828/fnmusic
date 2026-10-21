@@ -834,3 +834,38 @@ func TestShouldUpgradeOver(t *testing.T) {
 		}
 	}
 }
+
+// 低码率 mp3 → 320k 必须能升（v2.17.2）。
+//
+// 真机踩到：此前只认「有损 → 无损」，于是界面判出「这条能升到 320k」、
+// 下载器却回 already_exists —— 用户真正需要升的那批（早年存的 128k mp3）换不了。
+func TestShouldUpgradeOverLowBitrateMP3(t *testing.T) {
+	dir := t.TempDir()
+	mkMP3 := func(name string, brIdx byte) string {
+		p := filepath.Join(dir, name)
+		b := []byte{0xff, 0xfb, brIdx << 4, 0x00}
+		b = append(b, make([]byte, 2000)...)
+		if err := os.WriteFile(p, b, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	low := mkMP3("low.mp3", 9)    // MPEG1 L3 索引 9 = 128kbps
+	high := mkMP3("high.mp3", 14) // 索引 14 = 320kbps
+
+	up := func(q, existing string) bool {
+		return SongPayload{Name: "甲", Singer: "乙", Quality: q, UpgradeIfBetter: true}.shouldUpgradeOver(existing)
+	}
+	if !up("320k", low) {
+		t.Error("盘上是 128k mp3、这次 320k：该覆盖")
+	}
+	if !up("flac", low) {
+		t.Error("盘上是 128k mp3、这次无损：该覆盖")
+	}
+	if up("320k", high) {
+		t.Error("盘上已是 320k mp3、这次也是 320k：不该覆盖")
+	}
+	if up("flac", filepath.Join(dir, "nope.mp3")) != true {
+		t.Error("文件读不出来时按 320k 兜底：无损仍该覆盖（保守方向是「不升」，不是「不敢升」）")
+	}
+}

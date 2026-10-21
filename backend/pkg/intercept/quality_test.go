@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"fn-lx-player/pkg/audioext"
 	"fn-lx-player/pkg/online"
 )
 
@@ -224,5 +225,99 @@ func TestQualityScanDoesNotStartTwice(t *testing.T) {
 	}
 	if st.Total != 7 || st.Scanned != 3 {
 		t.Fatalf("重复 start 该回当前状态，得到 %+v", st)
+	}
+}
+
+// 读盘上真实码率：早年存的低码率 mp3 必须能被判成「可替换」。
+//
+// 2026-10-21 真机踩到：按容器一律算 320k，于是 ffmpeg 转出来的 128k mp3 被判成
+// 「已是各渠道最高音质」，用户真正需要升的那批反而换不了。
+func TestQualityCurrentTierOfFileReadsMP3Bitrate(t *testing.T) {
+	dir := t.TempDir()
+	// 一个小工具：拼一个合法的 MPEG1 Layer3 帧头 + 静音数据。
+	mkMP3 := func(name string, brIdx byte, withID3 bool) string {
+		p := filepath.Join(dir, name)
+		var b []byte
+		if withID3 {
+			// ID3v2.3，大小 100（同步安全整数字节：0,0,0,100）
+			b = append(b, 'I', 'D', '3', 3, 0, 0, 0, 0, 0, 100)
+			b = append(b, make([]byte, 100)...)
+		}
+		// 0xFF 0xFB = MPEG1 Layer3 无 CRC；第二字节高 4 位是码率索引
+		b = append(b, 0xff, 0xfb|(brIdx>>4), (brIdx&0x0f)<<4|0x00, 0x00)
+		b = append(b, make([]byte, 2000)...)
+		if err := os.WriteFile(p, b, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	// MPEG1 Layer3 码率表：索引 5 = 64kbps，11 = 192kbps，14 = 320kbps
+	cases := []struct {
+		name string
+		br   byte
+		id3  bool
+		want string
+	}{
+		{"low.mp3", 5, false, online.Tier128k},
+		{"mid.mp3", 11, false, online.Tier192k},
+		{"high.mp3", 14, false, online.Tier320k},
+		{"tagged-low.mp3", 5, true, online.Tier128k},
+	}
+	for _, c := range cases {
+		p := mkMP3(c.name, c.br, c.id3)
+		if got := qualityCurrentTierOfFile(p, ".mp3"); got != c.want {
+			t.Errorf("%s：该判 %s，得到 %s", c.name, c.want, got)
+		}
+	}
+	// 无损容器不受码率探测影响
+	p := filepath.Join(dir, "x.flac")
+	if err := os.WriteFile(p, []byte("fLaC"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := qualityCurrentTierOfFile(p, ".flac"); got != online.TierLossless {
+		t.Errorf("flac 该判无损，得到 %s", got)
+	}
+	// 解不出来（不是合法 mp3）回落成 320k：宁可不升，也不拿猜的档位去覆盖
+	bad := filepath.Join(dir, "bad.mp3")
+	if err := os.WriteFile(bad, []byte("not an mp3 at all"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := qualityCurrentTierOfFile(bad, ".mp3"); got != online.Tier320k {
+		t.Errorf("解不出来时该回落 320k，得到 %s", got)
+	}
+}
+
+// 交叉校验：audioext（文件侧判据）与 online（平台侧判据）对档位的认识必须一致。
+// 两边各写一份常量是有意的（audioext 要当叶子包，不 import 平台包），但一旦漂移，
+// 「界面说能升、下载器说已存在」那类互相打脸就会回来 —— 用这个用例钉住。
+func TestAudioextTierAgreesWithOnline(t *testing.T) {
+	pairs := []struct{ ext, online string }{
+		{audioext.TierLossless, online.TierLossless},
+		{audioext.Tier320k, online.Tier320k},
+		{audioext.Tier192k, online.Tier192k},
+		{audioext.Tier128k, online.Tier128k},
+	}
+	for _, p := range pairs {
+		if p.ext != p.online {
+			t.Errorf("取值不一致：audioext %q vs online %q", p.ext, p.online)
+		}
+		if audioext.TierRank(p.ext) != online.TierRank(p.online) {
+			t.Errorf("排名不一致：%q → audioext %d / online %d",
+				p.ext, audioext.TierRank(p.ext), online.TierRank(p.online))
+		}
+	}
+	// 平台侧认识的写法两边必须一致。
+	for _, q := range []string{"flac24bit", "hires", "ape", "wav", "dsd", "320k", "128k", ""} {
+		if audioext.TierRank(q) != online.TierRank(q) {
+			t.Errorf("TierRank(%q)：audioext %d / online %d", q, audioext.TierRank(q), online.TierRank(q))
+		}
+	}
+	// 文件侧还多认几种人写出来的写法（`无损`/`SQ`/`standard` 等）—— 那是下载接口
+	// 收到的档位字符串可能来自前端或用户，必须比平台侧宽；但**不许**比平台侧更松地
+	// 把某个已知档位判低，否则「要不要覆盖」的判断就会走偏。
+	for _, q := range []string{"无损", "SQ", "lossless", "hi-res", "exhigh", "standard", "aac", "m4a"} {
+		if got, ok := audioext.TierRank(q), online.TierRank(q); ok >= 0 && got < ok {
+			t.Errorf("TierRank(%q)：文件侧 %d 比平台侧 %d 更保守", q, got, ok)
+		}
 	}
 }

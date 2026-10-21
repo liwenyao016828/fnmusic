@@ -761,6 +761,9 @@ func (i *Interceptor) postDownload(ctx context.Context, fake string, t, used onl
 		"songmid":  t.PlatformID,
 		"url":      url,
 		"duration": t.Duration,
+		// 档位：下载器拿它跟盘上那份比，决定要不要覆盖（pkg/audioext.TierOfFile
+		// 与这里必须同一套判据）。传的是**实际**档位，不是搜索时的声明值。
+		"quality": firstNonEmpty(actualTier, used.Quality),
 		// 自动下载的语义是「按最高音质入库」：库里已经有一份 320k mp3 时，
 		// 这次拿到无损就该把它换掉，而不是回一句「已存在」把无损挡在门外。
 		"upgrade_if_better": true,

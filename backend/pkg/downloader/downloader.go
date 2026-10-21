@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"fn-lx-player/pkg/applog"
+	"fn-lx-player/pkg/audioext"
 	"fn-lx-player/pkg/config"
 	"fn-lx-player/pkg/flacok"
 	"fn-lx-player/pkg/fnos"
@@ -989,16 +990,24 @@ func isLosslessQuality(q string) bool {
 
 // shouldUpgradeOver 判断「已有文件 existing 该不该被本次请求覆盖」。
 //
-// 只有一种情况该覆盖：现有文件是**有损**容器，而本次请求的是**无损**档位。
-// 其余全部保持原行为（已存在即复用）——尤其是「已有无损、这次 320k」绝不能降级。
+// 判据只有一条：**本次请求的档位严格高于盘上那份**（用同一套实际档位判据，
+// 见 pkg/audioext.TierOfFile）。于是：
+//
+//   - 已有无损 → 永远不覆盖（没有比它更高的档位，也就绝不会降级）；
+//   - 已有 128k mp3、这次 320k → **覆盖**（v2.17.2 起；此前只认「有损→无损」，
+//     结果是界面说这条能升、下载器回一句「已存在」——用户真正需要升的那批换不了）；
+//   - 同档位 → 不覆盖（换个来源的同档文件没有意义，还要重下一遍）；
+//   - 档位认不出来 → 不覆盖（「不知道」不能当成「更高」）。
 func (s SongPayload) shouldUpgradeOver(existing string) bool {
 	if !s.UpgradeIfBetter {
 		return false
 	}
-	if isLosslessContainer(filepath.Ext(existing)) {
+	cur := audioext.TierOfFile(existing)
+	want := audioext.TierRank(s.Quality)
+	if want < 0 {
 		return false
 	}
-	return isLosslessQuality(s.Quality)
+	return want > audioext.TierRank(cur)
 }
 
 func findExistingAudio(destDir, base string) (string, bool) {

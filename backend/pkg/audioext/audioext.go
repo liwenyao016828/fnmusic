@@ -16,6 +16,8 @@
 package audioext
 
 import (
+	"io"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -92,4 +94,138 @@ func WritableFormats() []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// ── 档位（音质）判定 ──
+//
+// 为什么放在这个包：`pkg/intercept`（扫描/替换音质）与 `pkg/downloader`（决定要不要
+// 覆盖已有文件）**必须用同一套判据**，否则会出现「界面说这条能升到 320k」而下载器
+// 回一句「已存在」的互相打脸。这里只依赖容器与帧头，不依赖任何平台包。
+//
+// 取值与 pkg/online 的 Tier* 完全一致（有交叉用例钉住，见 intercept/quality_test.go）。
+
+// 档位常量（与 pkg/online 的 TierLossless/Tier320k/Tier192k/Tier128k 同值）。
+const (
+	TierLossless = "flac"
+	Tier320k     = "320k"
+	Tier192k     = "192k"
+	Tier128k     = "128k"
+)
+
+// TierRank 档位的高低（越大越好）。认不出的档位返回 -1：
+// 「不知道」必须与「128k」分开，否则未知档位会被当成「可以升」的来源。
+func TierRank(tier string) int {
+	switch strings.ToLower(strings.TrimSpace(tier)) {
+	case "flac", "flac24bit", "hires", "hi-res", "ape", "wav", "dsd", "dsf", "dff", "lossless", "sq", "无损":
+		return 4
+	case Tier320k, "320", "exhigh", "hq":
+		return 3
+	case Tier192k, "192", "higher":
+		return 2
+	case Tier128k, "128", "standard":
+		return 1
+	}
+	return -1
+}
+
+// LosslessContainer 判断扩展名是不是无损容器（只按容器，不看码率）。
+func LosslessContainer(ext string) bool {
+	switch strings.ToLower(strings.TrimSpace(ext)) {
+	case ".flac", ".ape", ".wav", ".dsf", ".dff":
+		return true
+	}
+	return false
+}
+
+// TierOfFile 读盘上这个文件**实际**的档位。
+//
+//   - 无损容器 → 无损。
+//   - mp3 → 解第一帧的 MPEG 头拿标称码率（≥256k 算 320k、≥160k 算 192k、其余 128k）。
+//   - 其它容器（m4a/aac/ogg…）→ 320k 兜底。
+//
+// 读不出来时也回落 320k：**宁可不升，也不拿猜出来的档位去覆盖用户的文件**。
+//
+// 这条口径是 2026-10-21 真机踩出来的：只看容器的话，一个 128k 的 mp3 会被判成
+// 「已是各渠道最高音质」，用户真正需要升的那批反而换不了。
+func TierOfFile(path string) string {
+	ext := strings.ToLower(filepath.Ext(path))
+	if LosslessContainer(ext) {
+		return TierLossless
+	}
+	if ext == ".mp3" {
+		if kbps := mp3NominalKbps(path); kbps > 0 {
+			switch {
+			case kbps >= 256:
+				return Tier320k
+			case kbps >= 160:
+				return Tier192k
+			default:
+				return Tier128k
+			}
+		}
+	}
+	return Tier320k
+}
+
+// mp3NominalKbps 解出 mp3 第一帧的标称码率（kbps）。失败返回 0。
+//
+// 只读文件开头 8KiB：跳过可能的 ID3v2 头，再在开头找帧同步字。
+// VBR 文件第一帧常是 Xing/Info 帧（那个码率字段不代表整首），所以这个值对 VBR
+// 只能算「不低于」——而调用方要回答的是「够不够高、要不要升」，取到偏低的值只会更保守。
+func mp3NominalKbps(path string) int {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0
+	}
+	defer f.Close()
+	head := make([]byte, 8<<10)
+	n, _ := io.ReadFull(f, head)
+	if n < 4 {
+		return 0
+	}
+	head = head[:n]
+
+	start := 0
+	if n >= 10 && string(head[:3]) == "ID3" {
+		// ID3v2：10 字节头 + 同步安全整数（每字节 7 位）表示的大小。
+		size := 0
+		for _, b := range head[6:10] {
+			size = size<<7 | int(b&0x7f)
+		}
+		start = 10 + size
+		if head[5]&0x10 != 0 { // footer 存在
+			start += 10
+		}
+	}
+	if start >= n {
+		return 0
+	}
+
+	// MPEG1 Layer3 与 MPEG2/2.5 Layer3 的码率表（索引 0 = free，15 = 非法）。
+	mpeg1L3 := [16]int{0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0}
+	mpeg2L3 := [16]int{0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0}
+
+	for i := start; i+3 < n; i++ {
+		if head[i] != 0xff || head[i+1]&0xe0 != 0xe0 {
+			continue
+		}
+		version := (head[i+1] >> 3) & 0x03 // 3=MPEG1，2=MPEG2，0=MPEG2.5，1=保留
+		if version == 1 {
+			continue
+		}
+		layer := (head[i+1] >> 1) & 0x03 // 1=Layer3
+		if layer != 1 {
+			continue
+		}
+		brIdx := int(head[i+2] >> 4)
+		srIdx := int((head[i+2] >> 2) & 0x03)
+		if srIdx == 3 || brIdx == 0 || brIdx == 15 {
+			continue
+		}
+		if version == 3 {
+			return mpeg1L3[brIdx]
+		}
+		return mpeg2L3[brIdx]
+	}
+	return 0
 }

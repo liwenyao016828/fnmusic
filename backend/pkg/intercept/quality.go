@@ -32,6 +32,7 @@ import (
 	"sync"
 	"time"
 
+	"fn-lx-player/pkg/audioext"
 	"fn-lx-player/pkg/namefmt"
 	"fn-lx-player/pkg/nas"
 	"fn-lx-player/pkg/online"
@@ -99,15 +100,22 @@ type qualityScanState struct {
 	running bool
 }
 
-// qualityCurrentTier 曲库里这首歌「现在的档位」。**只能按容器判**：文件名与标签都
-// 可能骗人（`无损.flac.mp3`），而读码率要解一整个文件头，扫描阶段不值得为它加一层。
-// 代价是「320k 与 128k 的 mp3 都算 320k」—— 所以这里只用来回答「值不值得换」，
-// 不用来向用户承诺精确码率。
+// qualityCurrentTier 按**容器**判档位（无损容器 = 无损，其余 = 320k）。
+//
+// 名字与标签都可能骗人（真机见过 `xxx 无损.flac.mp3`），所以不看名字。
 func qualityCurrentTier(ext string) string {
 	if qualityLosslessExts[strings.ToLower(ext)] {
 		return online.TierLossless
 	}
 	return online.Tier320k
+}
+
+// qualityCurrentTierOfFile 读盘上这个文件**实际**的档位。
+//
+// 判据在 `pkg/audioext.TierOfFile`：那里与下载器共用同一套 —— 两边各判一次的话，
+// 会出现「界面说这条能升到 320k」而下载器回一句「已存在」的互相打脸（v2.17.2 修）。
+func qualityCurrentTierOfFile(path, ext string) string {
+	return audioext.TierOfFile(path)
 }
 
 // qualityNameKey 归一化歌名/歌手，用于「搜出来的这条是不是这首歌」的判断。
@@ -172,7 +180,7 @@ func (i *Interceptor) probeQuality(ctx context.Context, path string) QualityEntr
 	}
 	entry := QualityEntry{
 		Path: path, Title: strings.TrimSpace(title), Artist: strings.TrimSpace(artist),
-		Ext: ext, CurrentTier: qualityCurrentTier(ext),
+		Ext: ext, CurrentTier: qualityCurrentTierOfFile(path, ext),
 	}
 
 	track := i.nativeTrackFor(entry.Title, entry.Artist)
