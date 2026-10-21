@@ -55,6 +55,11 @@ const (
 	TriggerPlaylist = "playlist"
 	// TriggerPageClick：在飞牛页面里点了「下载到曲率」。
 	TriggerPageClick = "page"
+	// TriggerUpgrade：后台「音质补强」轮重下（不是用户动作，见 pkg/intercept/upgrade_sweeper.go）。
+	//
+	// 为什么单独一个来源：补强失败与收藏失败在用户眼里是两件事 —— 前者不该让他以为
+	// 「我收藏了却没下下来」，它只是「这首的无损版还没搞到」。记录里分得开，界面才说得出话。
+	TriggerUpgrade = "upgrade"
 )
 
 // AutoLogEntry 是一条自动下载记录。

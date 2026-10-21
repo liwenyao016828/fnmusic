@@ -357,6 +357,16 @@ func main() {
 		}
 	}
 
+	// 后台「音质补强」轮：把「收藏时各渠道都没给无损」的那批歌，隔天再试一遍。
+	//
+	// ⚠️ 必须放在 `httpServer.Serve` **之后**启动（虽然它第一轮要等 20 分钟才动手）：
+	// 补强最终会走 autoDownload → postDownload，那是**从进程里打回自己 HTTP 接口**的
+	// 一条路（`localAPI`）。服务还没 listen 就起循环，第一轮的自调用会全部连不上，
+	// 而这些失败是记冷却位的 —— 等于白等一天。
+	if ic != nil {
+		ic.StartUpgradeSweeper()
+	}
+
 	serveErr := make(chan error, 1)
 	go func() {
 		log.Printf("[READY] Server running and listening on http://0.0.0.0:%d", *port)
@@ -390,6 +400,8 @@ func main() {
 	// 清扫而且只在超过 1 小时之后才会被清 —— 见 pkg/intercept/tee.go 的 CloseTee。
 	// 放在还 socket 之前：它是纯本地动作，不依赖官方 daemon 还在不在。
 	if ic != nil {
+		// 先停补强轮：它会在途起 goroutine 打自己的接口，服务已经开始收尾时别再加活。
+		ic.CloseUpgradeSweeper()
 		ic.CloseTee()
 	}
 

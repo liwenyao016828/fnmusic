@@ -53,12 +53,21 @@ type DownloadedItem struct {
 	Size int64 `json:"size,omitempty"`
 	// At 是登记时间（Unix 秒）。
 	At int64 `json:"at"`
-	// UpgradeTried 表示「已经为这条曲目尝试过一次音质升级」。
+	// UpgradeTried / UpgradeTries / UpgradeNext 一起描述「音质升级的尝试账本」。
 	//
-	// 为什么需要这个标记：2.14.0 起自动下载会在「库里是有损、这次能拿无损」时
-	// 重下一次覆盖旧文件。但如果平台就是不给无损（很常见），每次收藏都重下一遍
-	// 就是纯粹浪费流量。所以只试一次，失败后如实留在 320k，不再重试。
-	UpgradeTried bool `json:"upgrade_tried,omitempty"`
+	// 为什么需要这组标记：2.14.0 起自动下载会在「库里是有损、这次能拿无损」时重下一次
+	// 把它换掉。但如果平台就是不给无损（很常见），每次收藏都重下一遍就是纯粹浪费流量。
+	// 2.15.0 的解法是「只试一次」，而它把问题换成了另一个：**永久放弃** —— 第三方站
+	// 今天 404 的链明天常常就通了。2.17.0 改成**冷却重试**：
+	//   · UpgradeTries 累计试过几回（上限见 intercept 的 upgradeMaxTries）；
+	//   · UpgradeNext 是「下一次最早允许尝试的时间」（Unix 秒），失败后往后推一天；
+	//   · UpgradeTried 保留（v2.15 之前只有这个布尔位，老数据与界面还在用它）。
+	//
+	// ⚠️ 老记录里只有 UpgradeTried=true 而没有 UpgradeNext：读回来 UpgradeNext=0，
+	// 判据把它当「早就可以再试了」，正好把当年被误判成永久放弃的那批救回来。
+	UpgradeTried bool  `json:"upgrade_tried,omitempty"`
+	UpgradeTries int   `json:"upgrade_tries,omitempty"`
+	UpgradeNext  int64 `json:"upgrade_next,omitempty"`
 }
 
 // NewDownloaded 打开（或新建）一张已下载登记表。dir 不存在会创建。

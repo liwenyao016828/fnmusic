@@ -934,8 +934,23 @@ func TestShouldRetryUpgrade(t *testing.T) {
 	if !h.it.shouldRetryUpgrade(online.DownloadedItem{Path: mp3, Quality: "320k"}) {
 		t.Fatal("有损文件 + 想要无损 → 应该允许升级重下")
 	}
-	if h.it.shouldRetryUpgrade(online.DownloadedItem{Path: mp3, Quality: "320k", UpgradeTried: true}) {
-		t.Fatal("已经试过升级的不该再试（否则每次收藏都白下一遍）")
+	// v2.17 起「试过一回」不再等于「永久放弃」：真正拦住重复下载的是冷却位。
+	// 只钉 UpgradeTried 而没有 UpgradeNext（= 老版本写下的记录）→ 可以再试，
+	// 这批欠账正是这次改动要救回来的（第三方站今天 404 明天可能就好了）。
+	if !h.it.shouldRetryUpgrade(online.DownloadedItem{Path: mp3, Quality: "320k", UpgradeTried: true}) {
+		t.Fatal("老记录只有 UpgradeTried → 按新口径应该允许再试一次")
+	}
+	if h.it.shouldRetryUpgrade(online.DownloadedItem{Path: mp3, Quality: "320k",
+		UpgradeTried: true, UpgradeTries: 1, UpgradeNext: time.Now().Add(time.Hour).Unix()}) {
+		t.Fatal("冷却没到就该拦住（否则每次收藏都白下一遍）")
+	}
+	if !h.it.shouldRetryUpgrade(online.DownloadedItem{Path: mp3, Quality: "320k",
+		UpgradeTried: true, UpgradeTries: 1, UpgradeNext: time.Now().Add(-time.Minute).Unix()}) {
+		t.Fatal("冷却过了应该放行")
+	}
+	if h.it.shouldRetryUpgrade(online.DownloadedItem{Path: mp3, Quality: "320k",
+		UpgradeTries: upgradeMaxTries, UpgradeNext: time.Now().Add(-time.Hour).Unix()}) {
+		t.Fatalf("试满 %d 回就该收手，剩下的交给「替换音质」页", upgradeMaxTries)
 	}
 	if h.it.shouldRetryUpgrade(online.DownloadedItem{Path: flac, Quality: "flac"}) {
 		t.Fatal("已经是无损的不该重下")

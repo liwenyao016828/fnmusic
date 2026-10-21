@@ -68,6 +68,7 @@ const (
 	TriggerFavorite  = online.TriggerFavorite  // 在飞牛音乐里点了收藏
 	TriggerPlaylist  = online.TriggerPlaylist  // 在飞牛音乐里加进了歌单
 	TriggerPageClick = online.TriggerPageClick // 在飞牛页面里点了「下载到曲率」
+	TriggerUpgrade   = online.TriggerUpgrade   // 后台音质补强轮（不是用户动作）
 )
 
 // autoDownload 后台把一首在线曲目整轨下到本地并登记。
@@ -84,14 +85,22 @@ func (i *Interceptor) autoDownload(fake string, t online.Track, trigger string) 
 	if i.downloaded == nil || i.localAPI == "" {
 		return
 	}
+	// 升级账本的快照（goroutine 里落盘之后要把它带回新记录，见下面「账本要跟着新记录走」）。
+	var scheduled online.DownloadedItem
 	if item, ok := i.downloaded.Get(fake); ok {
 		// 已经在本地了 —— 但如果本地那份是**有损**、而这次能拿无损，允许重下一次
 		// 把它换掉（见 shouldRetryUpgrade）。只试一次，失败就不再纠缠。
 		if !i.shouldRetryUpgrade(item) {
 			return
 		}
+		// 先把账记上再动手：一次收藏会同时来两个触发（收藏 + 加歌单），
+		// 冷却位不在这里推后，第二次触发就会又下一次。
+		now := time.Now()
 		item.UpgradeTried = true
-		item.At = time.Now().Unix()
+		item.UpgradeTries++
+		item.UpgradeNext = now.Add(upgradeRetryCooldown).Unix()
+		item.At = now.Unix()
+		scheduled = item
 		if err := i.downloaded.Put(item); err != nil {
 			i.logf("[INTERCEPT] 标记音质升级尝试失败 %s：%v", fake, err)
 		}
@@ -117,6 +126,18 @@ func (i *Interceptor) autoDownload(fake string, t online.Track, trigger string) 
 				OK: false, Error: err.Error(),
 			})
 			return
+		}
+		// 账本要跟着新记录走 —— `downloadToLibrary` 造的是全新的一条，不带这些位。
+		// 漏了这一处就会出现最坏的那种结果：**拿到了无损却把冷却清掉**是好的，
+		// 但**还是有损时把账清成「没试过」**，等于每次收藏都白下一遍（v2.15 原本要避免的）。
+		if i.landedLossless(item) {
+			item.UpgradeTried = false
+			item.UpgradeTries = 0
+			item.UpgradeNext = 0
+		} else {
+			item.UpgradeTried = scheduled.UpgradeTried
+			item.UpgradeTries = scheduled.UpgradeTries
+			item.UpgradeNext = scheduled.UpgradeNext
 		}
 		if err := i.downloaded.Put(item); err != nil {
 			i.logf("[INTERCEPT] 已下载但登记失败 %s（%s）：%v", fake, item.Path, err)
@@ -148,6 +169,8 @@ func triggerLabel(trigger string) string {
 		return "加歌单"
 	case TriggerPageClick:
 		return "页面下载"
+	case TriggerUpgrade:
+		return "音质补强"
 	}
 	return "自动"
 }
@@ -307,23 +330,53 @@ func tierFromLandedFile(path, claimed string) string {
 	return claimed
 }
 
+// 音质升级的重试节奏（用户 2026-10-21 的口径：「优先最高音质，慢一点没关系」m02588）。
+const (
+	// upgradeRetryCooldown 一次失败的升级之后，至少隔这么久才再试。
+	//
+	// 为什么是一天：这条链的失败原因绝大多数是「第三方站此刻不给」—— 脚本换池、
+	// CDN 恢复、会员状态变化都是天级的。隔一小时试一次只会白跑探测（洛雪一次探测
+	// 本身要几十秒），隔一年则等于不回应用户的要求。
+	upgradeRetryCooldown = 24 * time.Hour
+	// upgradeMaxTries 累计试这么多回就算了，不再自动纠缠。
+	//
+	// 为什么还要有上限而不是无限重试：确实有一批歌在任何渠道都只有有损档（比如
+	// 某些只发行过 128k 现场版的歌）。5 回跨 5 天还没拿到，基本可以确定不是「暂时拿不到」。
+	// 曲库里躺着 mp3 这件事由「替换音质」页如实列出来给用户自己决定，不靠后台硬试。
+	upgradeMaxTries = 5
+)
+
+// landedLossless 判断「这次落盘的那份算不算无损」。
+//
+// 两个判据取或：登记表里的实际档位（解析回读 + 魔数校正过），以及落盘文件的容器扩展名。
+// 为什么要两个都看：登记档位有历史脏数据（v2.13 之前记的是声明值），而扩展名是磁盘事实。
+func (i *Interceptor) landedLossless(item online.DownloadedItem) bool {
+	if online.TierRank(item.Quality) >= online.TierRank(online.TierLossless) {
+		return true
+	}
+	switch strings.ToLower(filepath.Ext(item.Path)) {
+	case ".flac", ".ape", ".wav", ".dsf", ".dff":
+		return true
+	}
+	return false
+}
+
 // shouldRetryUpgrade 判断「已经下载过的这条曲目」要不要为了音质再下一次。
 //
 // 只有同时满足下面几条才会重下（任何一条不满足都保持「已下载」不动）：
 //
-//  1. 还没试过升级（UpgradeTried=false）—— 平台不给无损时别每次都白下一遍；
+//  1. 没到尝试上限，且现在过了上一次失败后记的冷却时间（从没试过 = 立刻可以试）；
 //  2. 记录里的档位不是无损；
 //  3. 盘上那份文件还在，且不是无损容器（用户可能已经手动换成 flac 了）；
 //  4. 当前的下载档位偏好确实想要无损（用户点名 320k 时别逆着他的选择）。
 func (i *Interceptor) shouldRetryUpgrade(item online.DownloadedItem) bool {
-	if item.UpgradeTried || item.Path == "" {
+	if item.Path == "" {
 		return false
 	}
-	if online.TierRank(item.Quality) >= online.TierRank(online.TierLossless) {
+	if !upgradeSlotOpen(item, time.Now()) {
 		return false
 	}
-	switch strings.ToLower(filepath.Ext(item.Path)) {
-	case ".flac", ".ape", ".wav", ".dsf", ".dff":
+	if i.landedLossless(item) {
 		return false
 	}
 	if _, err := os.Stat(item.Path); err != nil {
@@ -333,6 +386,17 @@ func (i *Interceptor) shouldRetryUpgrade(item online.DownloadedItem) bool {
 	}
 	tiers := i.downloadTiers()
 	return len(tiers) > 0 && online.TierRank(tiers[0]) >= online.TierRank(online.TierLossless)
+}
+
+// upgradeSlotOpen 纯时间/次数判据（不做 IO），单测直接钉它。
+//
+// 老数据（只有 UpgradeTried=true、没有 UpgradeNext）在这里等价于「早就该可以再试」——
+// 这是有意的：v2.15/v2.16 把「只试一次」执行成了永久放弃，那批歌该被救回来。
+func upgradeSlotOpen(item online.DownloadedItem, now time.Time) bool {
+	if item.UpgradeTries >= upgradeMaxTries {
+		return false
+	}
+	return now.Unix() >= item.UpgradeNext
 }
 
 // ── 渠道化的取音计划 ──────────────────────────────────────────────────────

@@ -355,6 +355,10 @@ type Interceptor struct {
 	// dlMu/dlSet 保证「同一首歌只下一次」：收藏与加入歌单可能几乎同时触发。
 	dlMu  sync.Mutex
 	dlSet map[string]bool
+	// upgradeMu/upgradeStop 管后台「音质补强」轮（见 upgrade_sweeper.go）。
+	// nil = 没起过；只有 main.go 显式 StartUpgradeSweeper 才会非 nil。
+	upgradeMu   sync.Mutex
+	upgradeStop chan struct{}
 
 	// tee 是「边听边下」被客户端打断之后的后台续传任务簿（见 tee.go 的 teePool）。
 	// 零值可用 —— 只有真的起过一次续传才会建父 ctx 与登记表。
