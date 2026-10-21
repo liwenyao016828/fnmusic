@@ -515,6 +515,10 @@ func (i *Interceptor) replaceOneQuality(ctx context.Context, raw string) (Qualit
 		return QualityReplaceDone{}, fmt.Errorf("%s 渠道刚才还能给 %s，这次没解析出直链，稍后再试", best.Channel, best.Tier)
 	}
 
+	// 下载会**原地覆盖**这个文件，所以「改之前是什么档位」必须现在读 ——
+	// 等下载完再读，读到的就是新档位，前后比较永远相等（这个坑当天就踩了一次）。
+	before := audioext.TierOfFile(path)
+
 	fake := "quality:" + fmt.Sprint(time.Now().UnixNano())
 	// 落到**盘上那份文件本身**：目录与原文件名都按它来。按候选歌名落盘的话，
 	// 真机实测会在曲库根目录多出一份新文件、旧的 128k 还赖在原地（2026-10-21）。
@@ -522,12 +526,17 @@ func (i *Interceptor) replaceOneQuality(ctx context.Context, raw string) (Qualit
 	if err != nil {
 		return QualityReplaceDone{}, err
 	}
-	// 下载接口拿到无损时会**替换**旧文件（upgrade_if_better），拿到同档会回原路径。
-	// 所以「路径没变」= 其实没换成功 —— 不能报成功，否则用户以为换了、盘上还是 mp3。
-	if filepath.Clean(item.Path) == filepath.Clean(path) {
+	// 成不成，看**盘上这份文件的档位有没有真的变高**，而不是看路径有没有变。
+	//
+	// 踩过的坑（2026-10-21 真机）：替换是**原地**做的（见 downloader 的 dest_dir/dest_base），
+	// 所以成功时路径压根不变 —— 早先「路径没变 = 没换成」的判据会把成功的替换报成失败。
+	// 反过来只信下载接口的应答也不行：它回 already_exists 时同样给回原路径。
+	// 于是用磁盘事实说话：前后各读一次实际档位，没升就是没换。
+	after := audioext.TierOfFile(item.Path)
+	if audioext.TierRank(after) <= audioext.TierRank(before) {
 		return QualityReplaceDone{
-			Path: path, OK: false, NewPath: item.Path, Tier: item.Quality, Channel: pick.Channel,
-			Note: "拿到的是同档位文件，没有覆盖（旧的保留）",
+			Path: path, OK: false, NewPath: item.Path, Tier: after, Channel: pick.Channel,
+			Note: fmt.Sprintf("文件还是 %s：这次从 %s 渠道拿到的也是 %s（旧的保留）", before, pick.Channel, after),
 		}, nil
 	}
 	i.logf("[INTERCEPT] 替换音质：%s → %s（%s 渠道 %s）", filepath.Base(path), filepath.Base(item.Path), pick.Channel, pick.Tier())
