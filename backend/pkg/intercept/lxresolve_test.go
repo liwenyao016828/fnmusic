@@ -97,9 +97,11 @@ func TestLxCandidatesRegistersResolverAndKeepsRaw(t *testing.T) {
 
 func TestLxResolverWithoutRawFallsBackToMinimalInfo(t *testing.T) {
 	var gotInfo map[string]any
+	var gotQuality string
 	i := lxHarness(t,
 		func(ctx context.Context, source string, info map[string]any, quality string) (string, error) {
 			gotInfo = info
+			gotQuality = quality
 			return "https://cdn.example/x.mp3", nil
 		},
 		func(ctx context.Context, keyword string, limit int) ([]lxnode.Song, error) { return nil, nil })
@@ -113,9 +115,15 @@ func TestLxResolverWithoutRawFallsBackToMinimalInfo(t *testing.T) {
 	if gotInfo["songmid"] != "999" {
 		t.Fatalf("最小 info 里应带 songmid，得到 %v", gotInfo)
 	}
-	// 没有 _types → 档位留空，交给宿主用它自己的默认值（不替脚本编一个）
-	if res.Tier != "" {
-		t.Fatalf("没有档位声明时不该编一个，得到 %q", res.Tier)
+	// 没有 _types（也就没有任何档位声明）→ 直接问无损：脚本会按它声明的
+	// qualitys 自己往下压（mapQuality clamp），所以「问高一点」是安全的。
+	if gotQuality != online.TierLossless {
+		t.Fatalf("没有档位声明时该直接问无损，实际问了 %q", gotQuality)
+	}
+	// 但**结果**必须诚实：脚本回的是 .mp3 直链 → 档位当场降成 320k，
+	// 不能把「问了 flac」当成「拿到了 flac」（这是最难查的一类偏差）。
+	if res.Tier != online.Tier320k {
+		t.Fatalf("直链是 .mp3 时档位应如实降为 320k，得到 %q", res.Tier)
 	}
 }
 

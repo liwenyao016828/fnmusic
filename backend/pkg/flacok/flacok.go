@@ -431,14 +431,15 @@ func skipSubframe(br *bitReader, blockSize, bitsPerSample int) error {
 	}
 	wasted := 0
 	if wastedFlag == 1 {
-		// 一元编码：前面 n 个 1 再一个 0，wasted = n+1
+		// 一元编码，与 Rice 商同一个约定：n 个 0 再一个 1，值 = n。
+		// 字段里存的是「浪费位数 - 1」，所以 wasted = n+1。
 		n := 0
 		for {
 			v, err := br.readBits(1)
 			if err != nil {
 				return fmt.Errorf("%w：子帧被截断", ErrFrameCorrupt)
 			}
-			if v == 0 {
+			if v == 1 {
 				break
 			}
 			n++
@@ -459,24 +460,38 @@ func skipSubframe(br *bitReader, blockSize, bitsPerSample int) error {
 	case typeBits == 1: // VERBATIM：每个采样原样存放
 		return readExactly(br, width*blockSize)
 	case typeBits >= 8 && typeBits <= 12: // FIXED，order = typeBits-8
-		return skipResidual(br, blockSize, int(typeBits-8))
+		// FIXED 子帧也要先读 order 个「预热采样」，然后才是残差。
+		// 漏掉这一步会让整帧从残差开始就错位（以前的实现就漏了）。
+		order := int(typeBits - 8)
+		if err := readExactly(br, width*order); err != nil {
+			return err
+		}
+		return skipResidual(br, blockSize, order)
 	case typeBits >= 32: // LPC，order = typeBits-31
 		order := int(typeBits - 31)
 		if err := readExactly(br, width*order); err != nil {
 			return err
 		}
-		precision, err := br.readBits(5)
+		// QLP 系数精度：**4 位**，存的是「精度 - 1」，0b1111 非法。
+		//
+		// 这里原来读成 5 位 + 后面 3 位移位 —— 与规范（4 位精度 + 5 位移位）
+		// 错开 1 位，导致所有 LPC 子帧的比特流从残差开始就错位，合法文件被
+		// 判成「残差编码方式非法」或「CRC-16 不符」。绝大多数真实无损文件都用
+		// LPC 编码，所以这个 bug 的实际后果是**无损文件几乎全部被拒**、下载侧
+		// 一路降档成 mp3。fixtures: testdata/lpc16.flac、testdata/lpc24.flac。
+		precMinus1, err := br.readBits(4)
 		if err != nil {
 			return fmt.Errorf("%w：LPC 系数被截断", ErrFrameCorrupt)
 		}
-		if precision == 31 {
+		if precMinus1 == 15 {
 			return fmt.Errorf("%w：LPC 精度非法", ErrFrameCorrupt)
 		}
-		if _, err := br.readBits(3); err != nil { // 量化移位（有符号，不影响长度）
+		precision := int(precMinus1) + 1
+		// 量化移位：有符号 5 位（只影响数值，不影响长度，跳过即可）
+		if _, err := br.readBits(5); err != nil {
 			return fmt.Errorf("%w：LPC 系数被截断", ErrFrameCorrupt)
 		}
-		// 每个系数量化后占 precision+1 位
-		if err := readExactly(br, int(precision+1)*order); err != nil {
+		if err := readExactly(br, precision*order); err != nil {
 			return err
 		}
 		return skipResidual(br, blockSize, order)
@@ -542,7 +557,7 @@ func skipResidual(br *bitReader, blockSize, predictorOrder int) error {
 				if err != nil {
 					return fmt.Errorf("%w：残差被截断", ErrFrameCorrupt)
 				}
-				if v == 0 {
+				if v == 1 {
 					break
 				}
 			}

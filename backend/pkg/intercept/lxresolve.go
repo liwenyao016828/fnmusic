@@ -122,7 +122,33 @@ func (r lxResolver) Platform() string { return lxSourcePrefix + r.src }
 
 // Resolve 实现 online.Resolver。
 func (r lxResolver) Resolve(ctx context.Context, platformID string) (*online.Resolved, error) {
-	return r.resolveOne(ctx, platformID, "", "")
+	return r.resolveOne(ctx, platformID, "", "", "")
+}
+
+// ResolveAtTier 实现 online.TierResolver。
+//
+// # 为什么洛雪也要能按档位问
+//
+// 脚本的 `musicUrl` 接受档位参数（宿主放在 `info.type` 上，见 lxnode.Resolve），
+// 而且脚本内部会按它声明的 `qualitys` 往下压（`mapQuality` clamp）——
+// 也就是说「问 flac」在脚本不支持无损时**不会失败，只会给低一档**。
+// 那就没有理由不按阶梯问：问一次 flac，脚本给不出无损自己就降级了，
+// 比我们先问 320k 再猜要好。
+//
+// # 失败一律当「这条候选取不到」
+//
+// 洛雪宿主的 /resolve 会**逐个脚本**试（每个最多 8s），一条候选失败就要几十秒。
+// 报 ErrTierUnavailable 会让阶梯把同一批脚本再问三遍（×3 的等待，拿到的还是同样的结论）。
+// 所以这里把错误统一成 ErrNotPlayable —— 池立刻换下一个候选，不再无效重试。
+func (r lxResolver) ResolveAtTier(ctx context.Context, platformID, tier string) (*online.Resolved, error) {
+	res, err := r.resolveOne(ctx, platformID, "", "", tier)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, online.ErrNotPlayable
+	}
+	return res, nil
 }
 
 // ResolveBatch 实现 online.Resolver：**逐条**解析。
@@ -133,7 +159,7 @@ func (r lxResolver) ResolveBatch(ctx context.Context, platformIDs []string) (map
 	out := make(map[string]*online.Resolved, len(platformIDs))
 	var lastErr error
 	for _, id := range platformIDs {
-		res, err := r.resolveOne(ctx, id, "", "")
+		res, err := r.resolveOne(ctx, id, "", "", "")
 		if err != nil {
 			lastErr = err
 			continue
@@ -149,7 +175,7 @@ func (r lxResolver) ResolveQueries(ctx context.Context, queries []online.Query) 
 	out := make(map[string]*online.Resolved, len(queries))
 	var lastErr error
 	for _, q := range queries {
-		res, err := r.resolveOne(ctx, q.ID, q.Title, q.Artist)
+		res, err := r.resolveOne(ctx, q.ID, q.Title, q.Artist, "")
 		if err != nil {
 			lastErr = err
 			continue
@@ -159,8 +185,8 @@ func (r lxResolver) ResolveQueries(ctx context.Context, queries []online.Query) 
 	return out, lastErr
 }
 
-// resolveOne 解析一条。
-func (r lxResolver) resolveOne(ctx context.Context, id, title, artist string) (*online.Resolved, error) {
+// resolveOne 解析一条。tier 为空 = 用脚本声明的最高档（再没有就交给宿主默认）。
+func (r lxResolver) resolveOne(ctx context.Context, id, title, artist, tier string) (*online.Resolved, error) {
 	if r.i == nil || r.i.lxResolve == nil {
 		return nil, online.ErrNoResolver
 	}
@@ -177,7 +203,15 @@ func (r lxResolver) resolveOne(ctx context.Context, id, title, artist string) (*
 		info = map[string]any{"songmid": id, "id": id, "name": title, "singer": artist}
 	}
 
-	tier := lxBestTier(info)
+	if tier == "" {
+		// 没点名档位：用脚本**自己声明**的最高档（`_types` 的键）。
+		tier = lxBestTier(info)
+	}
+	if tier == "" {
+		// 连声明都没有：问无损。脚本自己会按它声明的 qualitys 往下压
+		// （mapQuality clamp），所以「问高一点」不会失败，只会得到它给得起的档位。
+		tier = online.TierLossless
+	}
 	url, err := r.i.lxResolve(ctx, r.src, info, tier)
 	if err != nil {
 		return nil, err
@@ -185,10 +219,29 @@ func (r lxResolver) resolveOne(ctx context.Context, id, title, artist string) (*
 	if strings.TrimSpace(url) == "" {
 		return nil, online.ErrNotPlayable
 	}
+	actual := tier
+	// 诚实：脚本可能把无损请求压成有损（mapQuality clamp），而直链会露馅。
+	// 声明「无损」却落一个 mp3 是最难查的一类偏差 —— 宁可当场降档。
+	if online.TierRank(actual) >= online.TierRank(online.TierLossless) && lxURLLooksLossy(url) {
+		actual = online.Tier320k
+	}
 	return &online.Resolved{
 		URL:    url,
-		Format: lxFormatFromTier(tier),
-		// 档位是脚本自己声明的（`_types` 的键），不是我们猜的。
-		Tier: tier,
+		Format: lxFormatFromTier(actual),
+		// 档位是「我们点的那一档」或脚本声明的档位，不是随手猜的。
+		Tier: actual,
 	}, nil
+}
+
+// lxURLLooksLossy 判断直链看起来是不是有损（按路径扩展名，不看 query）。
+//
+// 判不出来（没有扩展名 / 认不出）就返回 false —— 那是「不知道」，不是「有损」；
+// 反正脚本自己也会拦「无损请求给有损流」。
+func lxURLLooksLossy(raw string) bool {
+	u := strings.ToLower(strings.TrimSpace(raw))
+	if i := strings.IndexAny(u, "?#"); i >= 0 {
+		u = u[:i]
+	}
+	return strings.HasSuffix(u, ".mp3") || strings.HasSuffix(u, ".m4a") ||
+		strings.HasSuffix(u, ".aac") || strings.HasSuffix(u, ".wma")
 }

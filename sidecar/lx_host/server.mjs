@@ -419,6 +419,7 @@ function makeLx(meta, onRequestDone) {
     on(ev, fn) { handlers.set(ev, fn); },
     send(ev, data) { if (ev === 'inited') meta.inited = data; },
     request(url, options, callback) {
+      const opts = typeof options === 'function' || !options ? {} : options;
       const cb = typeof options === 'function' ? options : callback;
       const u = String(url);
       if (!/^https?:\/\//i.test(u)) { if (cb) cb(new Error('只允许 http/https'), null); return; }
@@ -429,11 +430,46 @@ function makeLx(meta, onRequestDone) {
       // 函数、ESM 里并没有 `require` 绑定 → 真脚本一旦调 lx.request 就 100% 抛
       // `require is not defined`（probe 里有模块级 `const require`，所以只在宿主上暴露）。
       const mod = u.startsWith('https:') ? nodeHttps : http;
-      mod.get(u, (res) => {
+      const headers = { ...(opts.headers || {}) };
+      let bodyData = opts.body ?? opts.form ?? opts.formData ?? null;
+      if (opts.json != null) {
+        headers['Content-Type'] = headers['Content-Type'] || 'application/json; charset=utf-8';
+        if (typeof opts.json === 'object') bodyData = JSON.stringify(opts.json);
+        else bodyData = opts.json;
+      }
+      const req = mod.request(u, { method: String(opts.method || 'GET').toUpperCase(), headers }, (res) => {
         const chunks = [];
         res.on('data', (c) => chunks.push(c));
-        res.on('end', () => cb && cb(null, { statusCode: res.statusCode, headers: res.headers, body: Buffer.concat(chunks), raw: Buffer.concat(chunks).toString('utf8') }));
-      }).on('error', (e) => cb && cb(e, null));
+        res.on('end', () => {
+          const buf = Buffer.concat(chunks);
+          const raw = buf.toString('utf8');
+          let body = raw;
+          if (opts.responseType === 'arraybuffer') {
+            body = buf;
+          } else {
+            // ⚠️ 2026-10-21 真机踩坑：真洛雪脚本的 `body` **已经是解析好的对象**
+            // （`response.body.url` 这种用法到处都是）。这里原来直接给 Buffer/字符串，
+            // 于是 `typeof body !== 'object'` 或 `body.url` undefined → 全部靠
+            // HTTP 取直链的 provider（星海 gdstudio / Huibq / 聆川 / 溯音）**静默失败**，
+            // 脚本的 fallback 链只会掉到「纯模板拼 URL」的念心/长青那几家 —— 而它们
+            // 给的直链是 404 死链。表现就是：洛雪「解析成功」但下不动。
+            // 浏览器侧 lx-runtime.js 一直是解析好的，只有服务端宿主漏了这一步。
+            const ct = String(res.headers['content-type'] || '');
+            if (/json/i.test(ct) || /^\s*[[{]/.test(raw)) {
+              try { body = JSON.parse(raw); } catch (_) {}
+            }
+          }
+          cb && cb(null, { statusCode: res.statusCode, statusMessage: res.statusMessage, headers: res.headers, body, raw });
+        });
+      });
+      req.setTimeout(20000, () => { try { req.destroy(new Error('lx.request 超时')) } catch (_) {} });
+      req.on('error', (e) => cb && cb(e, null));
+      if (bodyData != null) {
+        req.write(typeof bodyData === 'object' && !Buffer.isBuffer(bodyData) ? JSON.stringify(bodyData) : bodyData);
+      }
+      req.end();
+      // 官方签名返回一个 abort 函数（脚本可能不调用）
+      return () => { try { req.destroy(); } catch (_) {} };
     },
     utils: createLxUtils(record),
   };

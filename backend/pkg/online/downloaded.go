@@ -53,6 +53,12 @@ type DownloadedItem struct {
 	Size int64 `json:"size,omitempty"`
 	// At 是登记时间（Unix 秒）。
 	At int64 `json:"at"`
+	// UpgradeTried 表示「已经为这条曲目尝试过一次音质升级」。
+	//
+	// 为什么需要这个标记：2.14.0 起自动下载会在「库里是有损、这次能拿无损」时
+	// 重下一次覆盖旧文件。但如果平台就是不给无损（很常见），每次收藏都重下一遍
+	// 就是纯粹浪费流量。所以只试一次，失败后如实留在 320k，不再重试。
+	UpgradeTried bool `json:"upgrade_tried,omitempty"`
 }
 
 // NewDownloaded 打开（或新建）一张已下载登记表。dir 不存在会创建。

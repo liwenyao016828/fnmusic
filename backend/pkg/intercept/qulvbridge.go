@@ -277,6 +277,8 @@ func (i *Interceptor) handleQulvDownloadOnline(w http.ResponseWriter, r *http.Re
 		"songmid":  track.PlatformID,
 		"url":      res.URL,
 		"duration": track.Duration,
+		// 与自动下载同一条口径：注入页点「下载」也允许用无损覆盖已有的有损文件。
+		"upgrade_if_better": true,
 	}
 	for k, v := range i.downloadPrefs() {
 		payload[k] = v

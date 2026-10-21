@@ -802,3 +802,35 @@ func TestCheckDownloadedFindsNonMP3Audio(t *testing.T) {
 		t.Fatalf("无损已存在就该判为已下载：%+v", out.Exists)
 	}
 }
+
+// 「已存在」与「升级」的边界。
+//
+// 这是用户 2026-10-20 报的那个问题的最后一环：库里已经躺着一份 320k mp3 时，
+// 再下同名的无损以前会被 `already_exists` 直接挡掉 —— 用户重收藏一遍，看到
+// 「下载成功」，磁盘上还是那个 mp3。升级语义只在**调用方明确要求**且**确实更高**
+// 时生效，其余一律保持「已存在就复用」。
+func TestShouldUpgradeOver(t *testing.T) {
+	f := func(q string, upgrade bool) SongPayload {
+		return SongPayload{Name: "甲", Singer: "乙", Quality: q, UpgradeIfBetter: upgrade}
+	}
+	cases := []struct {
+		name     string
+		song     SongPayload
+		existing string
+		want     bool
+	}{
+		{"没打开升级开关 → 不动", f("flac", false), "/m/甲 - 乙.mp3", false},
+		{"已有 mp3、要无损、开关开 → 升级", f("flac", true), "/m/甲 - 乙.mp3", true},
+		{"已有 mp3、要无损（中文档位）→ 升级", f("无损", true), "/m/甲 - 乙.mp3", true},
+		{"已有 mp3、要 320k → 不动（不是更高）", f("320k", true), "/m/甲 - 乙.mp3", false},
+		{"已有 flac、要无损 → 不动", f("flac", true), "/m/甲 - 乙.flac", false},
+		{"已有 flac、要 320k → 不动（绝不降级）", f("320k", true), "/m/甲 - 乙.flac", false},
+		{"已有 m4a、要无损 → 升级", f("flac", true), "/m/甲 - 乙.m4a", true},
+		{"已有 ape（无损容器）→ 不动", f("flac", true), "/m/甲 - 乙.ape", false},
+	}
+	for _, c := range cases {
+		if got := c.song.shouldUpgradeOver(c.existing); got != c.want {
+			t.Errorf("%s：得到 %v，期望 %v", c.name, got, c.want)
+		}
+	}
+}

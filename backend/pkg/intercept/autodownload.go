@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -82,8 +83,17 @@ func (i *Interceptor) autoDownload(fake string, t online.Track, trigger string) 
 	if i.downloaded == nil || i.localAPI == "" {
 		return
 	}
-	if _, ok := i.downloaded.Get(fake); ok {
-		return // 已经在本地了
+	if item, ok := i.downloaded.Get(fake); ok {
+		// 已经在本地了 —— 但如果本地那份是**有损**、而这次能拿无损，允许重下一次
+		// 把它换掉（见 shouldRetryUpgrade）。只试一次，失败就不再纠缠。
+		if !i.shouldRetryUpgrade(item) {
+			return
+		}
+		item.UpgradeTried = true
+		item.At = time.Now().Unix()
+		if err := i.downloaded.Put(item); err != nil {
+			i.logf("[INTERCEPT] 标记音质升级尝试失败 %s：%v", fake, err)
+		}
 	}
 	if !i.markDownloading(fake) {
 		return
@@ -267,6 +277,123 @@ func (i *Interceptor) downloadTiers() []string {
 	return out
 }
 
+// tierFromLandedFile 用落盘文件的扩展名校正档位。
+//
+// 落盘时扩展名是**魔数嗅探**出来的（见 pkg/downloader 的 detectAudioExtByMagic），
+// 所以它比「平台声明」「脚本承诺」都硬。两个方向都要校：
+//
+//   - 声明无损、落成 mp3 → 就是有损（第三方 API 把 flac 请求压成了 320k，很常见）；
+//   - 声明 320k、落成 flac → 就是无损（别把好东西记成坏的，用户会以为没生效）。
+//
+// 认不出的扩展名（空 / 无扩展名）一律不动：那是「不知道」，不是「有损」。
+func tierFromLandedFile(path, claimed string) string {
+	if strings.TrimSpace(path) == "" {
+		return claimed
+	}
+	ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(path), "."))
+	lossless := online.TierRank(claimed) >= online.TierRank(online.TierLossless)
+	switch ext {
+	case "flac", "ape", "wav", "dsf", "dff":
+		if !lossless {
+			return online.TierLossless
+		}
+		return claimed
+	case "mp3", "m4a", "aac", "ogg", "wma":
+		if lossless {
+			return online.Tier320k
+		}
+	}
+	return claimed
+}
+
+// shouldRetryUpgrade 判断「已经下载过的这条曲目」要不要为了音质再下一次。
+//
+// 只有同时满足下面几条才会重下（任何一条不满足都保持「已下载」不动）：
+//
+//  1. 还没试过升级（UpgradeTried=false）—— 平台不给无损时别每次都白下一遍；
+//  2. 记录里的档位不是无损；
+//  3. 盘上那份文件还在，且不是无损容器（用户可能已经手动换成 flac 了）；
+//  4. 当前的下载档位偏好确实想要无损（用户点名 320k 时别逆着他的选择）。
+func (i *Interceptor) shouldRetryUpgrade(item online.DownloadedItem) bool {
+	if item.UpgradeTried || item.Path == "" {
+		return false
+	}
+	if online.TierRank(item.Quality) >= online.TierRank(online.TierLossless) {
+		return false
+	}
+	switch strings.ToLower(filepath.Ext(item.Path)) {
+	case ".flac", ".ape", ".wav", ".dsf", ".dff":
+		return false
+	}
+	if _, err := os.Stat(item.Path); err != nil {
+		// 文件没了（用户删了/移走了）——那不是「升级」，是「重新下载」，
+		// 但记录还在会让取流指向不存在的文件。这一条留给上层处理，这里不动。
+		return false
+	}
+	tiers := i.downloadTiers()
+	return len(tiers) > 0 && online.TierRank(tiers[0]) >= online.TierRank(online.TierLossless)
+}
+
+// downloadViaLx 用「同一个平台 id」向洛雪脚本要一条直链并直接下下来。
+//
+// 返回 false = 洛雪没能给出**比基线更好**的结果（宿主没开、脚本全失败、
+// 或只给到和基线一样的档位）。调用方接着走原来的候选列表，什么都不影响。
+//
+// 为什么不把它做成一个普通候选：`downloadCandidates` 的语义是「按声明档位挑」，
+// 而洛雪这条路的价值恰恰是「绕开平台登录态，按 id 去问」，声明档位对它没有意义
+// （脚本能给的档位取决于它内部那一串第三方 API，跟我们的曲目元数据无关）。
+// 硬塞进去会让「声明 320k 实际能拿 flac」的候选被自己的声明挡住。
+func (i *Interceptor) downloadViaLx(ctx context.Context, fake string, t online.Track, tiers []string, baseScore int) (online.DownloadedItem, bool) {
+	plat := strings.ToLower(strings.TrimSpace(t.Platform))
+	if plat == "" || strings.HasPrefix(plat, lxSourcePrefix) || t.PlatformID == "" {
+		return online.DownloadedItem{}, false
+	}
+	// 先把「这条曲目的 id 长什么样」交给洛雪（脚本按 hash ‖ songmid ‖ id 取，
+	// 三个都填上，不管它读哪个）。
+	i.rememberLxItem(plat, t.PlatformID, map[string]any{
+		"id":        t.PlatformID,
+		"songmid":   t.PlatformID,
+		"hash":      t.PlatformID,
+		"name":      t.Title,
+		"singer":    t.Artist(),
+		"albumName": t.Album,
+		"album":     t.Album,
+		"duration":  t.Duration,
+	})
+	i.ensureLxResolver(plat)
+
+	res, err := i.pool.ResolveLadder(ctx, lxSourcePrefix+plat, t.PlatformID, tiers)
+	if err != nil || res == nil {
+		if err != nil && ctx.Err() == nil {
+			i.logf("[INTERCEPT] 洛雪取链失败（%s/%s）：%v", plat, t.PlatformID, err)
+		}
+		return online.DownloadedItem{}, false
+	}
+	// 只要**真的更好**才换：洛雪也常常只给 320k，那就不值得为一个同档位的文件
+	// 多走一次下载（还可能是别家 CDN 的转码）。
+	if s := online.TierRank(res.Tier); s <= baseScore {
+		i.logf("[INTERCEPT] 洛雪只给到 %q（不比基线 %d 高），不换", res.Tier, baseScore)
+		return online.DownloadedItem{}, false
+	}
+
+	used := online.Track{
+		Platform:   lxSourcePrefix + plat,
+		PlatformID: t.PlatformID,
+		Title:      t.Title,
+		Artists:    t.Artists,
+		Album:      t.Album,
+		Duration:   t.Duration,
+		Quality:    res.Tier,
+	}
+	item, err := i.postDownload(ctx, fake, t, used, res.URL, res.Tier)
+	if err != nil {
+		i.logf("[INTERCEPT] 洛雪取到 %q 但下载失败：%s/%s %v", res.Tier, plat, t.PlatformID, err)
+		return online.DownloadedItem{}, false
+	}
+	i.logf("[INTERCEPT] 洛雪补强成功：%s/%s 基线 %d → %s", plat, t.PlatformID, baseScore, res.Tier)
+	return item, true
+}
+
 // downloadToLibrary 逐个候选试下载，成功即返回。
 //
 // 与 `handleQulvDownloadOnline` 共用同一套动作，只是调用方不同（那边是注入脚本
@@ -285,6 +412,34 @@ func (i *Interceptor) downloadToLibrary(ctx context.Context, fake string, t onli
 	if baseErr == nil && baseRes != nil {
 		if s := online.TierRank(baseRes.Tier); s > baseScore {
 			baseScore = s
+		}
+	}
+
+	// 基线**实际**档位（解析回读的那一条，没有才退回声明值）。
+	baseTier := strings.ToLower(strings.TrimSpace(t.Quality))
+	if baseErr == nil && baseRes != nil {
+		baseTier = baseRes.Tier
+	}
+
+	// ── 洛雪补强 ──────────────────────────────────────────────────────────
+	//
+	// 曲目自己平台原生解析拿不到无损时，用**同一个平台 id** 走洛雪脚本再要一次。
+	//
+	// 为什么这一条能成：洛雪脚本背后是第三方聚合 API（见 data/lx_sources/*.js
+	// 里的 gdstudio / nxinxz / haitangw 等），它们**不吃网易/QQ 的登录态限制**——
+	// 免登录网易云对收费曲目只给 standard(128k)、QQ 未登录问 flac 恒失败，
+	// 而这些聚合站往往给得出 flac。脚本的 musicUrl 也只要一个平台 id
+	// （getSongId = hash ‖ songmid ‖ id），不需要脚本自己会搜。
+	//
+	// 用户 2026-10-20 的原话：「把落雪和 musicdl 利用起来，收藏自动下载可以走它们的链接」。
+	//
+	// 只在「想要无损」时试：tiers 的最高档 ≥ 无损（highest / flac）。用户点名
+	// 320k / 128k 是省流量，这时候去要无损既费时间（洛雪单条失败要几十秒）又违背选择。
+	if i.lxResolve != nil &&
+		online.TierRank(tiers[0]) >= online.TierRank(online.TierLossless) &&
+		online.TierRank(baseTier) < online.TierRank(online.TierLossless) {
+		if item, ok := i.downloadViaLx(ctx, fake, t, tiers, baseScore); ok {
+			return item, nil
 		}
 	}
 
@@ -376,6 +531,9 @@ func (i *Interceptor) postDownload(ctx context.Context, fake string, t, used onl
 		"songmid":  t.PlatformID,
 		"url":      url,
 		"duration": t.Duration,
+		// 自动下载的语义是「按最高音质入库」：库里已经有一份 320k mp3 时，
+		// 这次拿到无损就该把它换掉，而不是回一句「已存在」把无损挡在门外。
+		"upgrade_if_better": true,
 	}
 	for k, v := range i.downloadPrefs() {
 		payload[k] = v
@@ -426,8 +584,9 @@ func (i *Interceptor) postDownload(ctx context.Context, fake string, t, used onl
 		Size:   size,
 		At:     time.Now().Unix(),
 		// 如实记录实际取音来源（可能已被下载源池换过源）。
-		// 档位优先用解析回读的实际值，没有才退回候选的声明值。
-		Source: used.Platform, Quality: firstNonEmpty(actualTier, used.Quality),
+		// 档位优先用解析回读的实际值，没有才退回候选的声明值；再用**落盘文件的
+		// 扩展名**校正一次 —— 扩展名是魔数嗅探出来的，比任何声明都硬。
+		Source: used.Platform, Quality: tierFromLandedFile(body.Data.Path, firstNonEmpty(actualTier, used.Quality)),
 	}, nil
 }
 

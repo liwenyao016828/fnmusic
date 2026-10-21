@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -225,6 +226,72 @@ func TestResolveUnavailableReturnsError(t *testing.T) {
 }
 
 // ── 真集成：起真的 node + 真的 sidecar/lx_host/server.mjs ────────────────
+
+// lx.request 的 `body` 必须是**解析好的对象**，不是字符串/Buffer。
+//
+// 2026-10-21 真机踩坑：宿主原来把响应原样塞进 `body`（Buffer），而真洛雪脚本到处写
+// `response.body.url` —— `typeof body !== 'object'` 或 `body.url === undefined`，
+// 于是所有靠 HTTP 取直链的 provider（星海 gdstudio / Huibq / 聆川 / 溯音）**静默失败**，
+// fallback 链只会掉到「纯模板拼 URL」的那几家，而它们给的直链是 404。
+// 用户看到的现象是：洛雪「解析成功」，但下不动（下到的是平台原生的 mp3）。
+//
+// 这个 bug 之所以能活很久：**没有任何报错**，`/resolve` 照样 200、照样返回字符串，
+// 只是那个字符串来自链尾的死站。浏览器侧 lx-runtime.js 一直是解析好的，
+// 所以「网页里能播、收藏下载不行」——两条路的分叉点就在这里。
+func TestLxRequestParsesJSONBody(t *testing.T) {
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("没有 node，跳过集成用例")
+	}
+	root, err := filepath.Abs("../../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := filepath.Join(root, "sidecar", "lx_host", "server.mjs")
+	if _, err := os.Stat(host); err != nil {
+		t.Skipf("宿主脚本不在：%v", err)
+	}
+
+	want := "https://cdn.example/real-lossless.flac"
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_, _ = w.Write([]byte(`{"url":"` + want + `","br":1737}`))
+	}))
+	defer upstream.Close()
+
+	dir := t.TempDir()
+	// 脚本按真洛雪的写法取 `response.body.url`。
+	script := fmt.Sprintf(`
+lx.send('inited', { sources: { wy: { name: '取链合成' } } })
+lx.on('request', async () => {
+  const resp = await new Promise((ok, no) => {
+    lx.request(%q, { method: 'GET' }, (err, r) => (err ? no(err) : ok(r)))
+  })
+  if (!resp || typeof resp.body !== 'object' || resp.body === null) {
+    throw new Error('body 不是对象：' + typeof resp.body)
+  }
+  if (!resp.body.url) throw new Error('body.url 丢了：' + JSON.stringify(resp.body))
+  return resp.body.url
+})
+`, upstream.URL+"/api.php")
+
+	if err := os.WriteFile(filepath.Join(dir, "json.js"), []byte(script), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	m := New()
+	m.Apply(Config{Enabled: true, NodeBin: "node", Script: host, Dir: dir, Port: 18922})
+	defer m.Stop()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	got, err := m.Resolve(ctx, "wy", map[string]any{"name": "晴天"}, "flac")
+	if err != nil {
+		t.Fatalf("该解析出直链（body 没解析成对象时这里会报「上游炸了」）：%v", err)
+	}
+	if got != want {
+		t.Fatalf("该拿到上游 JSON 里的 url，得到 %q", got)
+	}
+}
 
 func TestRealHostStartsAndReports(t *testing.T) {
 	if _, err := exec.LookPath("node"); err != nil {

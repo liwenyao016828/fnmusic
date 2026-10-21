@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"fn-lx-player/pkg/namefmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -94,6 +95,16 @@ type SongPayload struct {
 	// 字段（前端是 `{...song}` 展开），而「下载下来的歌没封面」是明显的退步，
 	// 所以缺省必须是开。要关它的只有曲率的设置项。
 	EmbedCover *bool `json:"embed_cover"`
+	// UpgradeIfBetter 允许「用更高音质覆盖已有的低音质文件」。
+	//
+	// 默认**关**：`/api/download/song` 是开放接口，外部调用方传同一首歌时
+	// 「已存在就复用」是它们预期的行为（重下一遍几十兆很浪费）。只有曲率自己的
+	// 自动下载/注入页下载会打开它——因为那两条路的语义就是「按最高音质入库」。
+	//
+	// 打开后：命中已存在但**容器有损**（mp3/m4a/aac/ogg）而本次想要无损时，
+	// 不再直接返回 already_exists，而是照常下载，成功后把旧的有损文件删掉。
+	// 反过来（已有无损、本次 320k）永远不降级。
+	UpgradeIfBetter bool `json:"upgrade_if_better,omitempty"`
 }
 
 // GetStreamReferer determines the appropriate Referer header for music streaming and downloading
@@ -390,16 +401,21 @@ func (d *Downloader) downloadSingleSong(song SongPayload) (*SongResult, error) {
 	// 两边写死两份必然有一天读反（不报错，只是歌手歌名对调）。
 	base := namefmt.Build(cleanSinger, cleanName)
 
-	// 已存在（任意受支持扩展名且体积达标）→ 直接复用，避免重复下载
+	// 已存在（任意受支持扩展名且体积达标）→ 直接复用，避免重复下载。
+	// 例外：调用方明确要「升级」且现有文件是有损、本次要无损（见 UpgradeIfBetter）。
+	var replacePath string
 	if existing, ok := findExistingAudio(destDir, base); ok {
-		return &SongResult{
-			SongName:     song.Name,
-			Singer:       song.Singer,
-			Status:       "already_exists",
-			Path:         filepath.ToSlash(existing),
-			Quality:      song.Quality,
-			ActualFormat: strings.TrimPrefix(strings.ToLower(filepath.Ext(existing)), "."),
-		}, nil
+		if !song.shouldUpgradeOver(existing) {
+			return &SongResult{
+				SongName:     song.Name,
+				Singer:       song.Singer,
+				Status:       "already_exists",
+				Path:         filepath.ToSlash(existing),
+				Quality:      song.Quality,
+				ActualFormat: strings.TrimPrefix(strings.ToLower(filepath.Ext(existing)), "."),
+			}, nil
+		}
+		replacePath = existing
 	}
 
 	// Resolve download audio URL
@@ -625,6 +641,19 @@ func (d *Downloader) downloadSingleSong(song SongPayload) (*SongResult, error) {
 	if err := os.Rename(tmpPath, finalPath); err != nil {
 		_ = os.Remove(tmpPath)
 		return nil, fmt.Errorf("保存最终文件失败: %w", err)
+	}
+
+	// 升级路径：新文件已就位，删掉那份旧的有损文件。
+	//
+	// 放在 rename **之后**：新文件没落稳就把旧的删了，一次网络抖动就能让用户
+	// 既没无损也没 320k。删除失败也不该让整次下载失败（新文件已经在），只记日志。
+	if replacePath != "" && !strings.EqualFold(filepath.ToSlash(replacePath), filepath.ToSlash(finalPath)) {
+		if rerr := os.Remove(replacePath); rerr != nil {
+			log.Printf("[DOWNLOAD] 升级后删除旧文件失败（新的已就位）：%s %v", replacePath, rerr)
+		} else {
+			log.Printf("[DOWNLOAD] 音质升级：%s → %s", filepath.ToSlash(replacePath), filepath.ToSlash(finalPath))
+			nas.InvalidateScanCacheFile(replacePath)
+		}
 	}
 
 	// 下载成功 → 使所在目录的扫描缓存失效，下次 NAS 页打开时自动重扫拿到新文件。
@@ -938,6 +967,40 @@ func fileExists(path string) bool {
 }
 
 // findExistingAudio 查找同名且体积达标的既有音频文件
+// isLosslessContainer 判断扩展名是不是无损容器（只按容器，不管码率）。
+func isLosslessContainer(ext string) bool {
+	switch strings.ToLower(strings.TrimPrefix(ext, ".")) {
+	case "flac", "ape", "wav", "dsf", "dff":
+		return true
+	}
+	return false
+}
+
+// isLosslessQuality 判断**请求的档位**是不是无损（档位字符串来自平台/前端，写法很杂）。
+func isLosslessQuality(q string) bool {
+	q = strings.ToLower(strings.TrimSpace(q))
+	switch q {
+	case "flac", "flac24bit", "hires", "hi-res", "ape", "wav", "dsd", "dsf", "dff", "lossless", "sq":
+		return true
+	}
+	// 中文「无损」不能小写化，单独判。
+	return strings.Contains(q, "无损")
+}
+
+// shouldUpgradeOver 判断「已有文件 existing 该不该被本次请求覆盖」。
+//
+// 只有一种情况该覆盖：现有文件是**有损**容器，而本次请求的是**无损**档位。
+// 其余全部保持原行为（已存在即复用）——尤其是「已有无损、这次 320k」绝不能降级。
+func (s SongPayload) shouldUpgradeOver(existing string) bool {
+	if !s.UpgradeIfBetter {
+		return false
+	}
+	if isLosslessContainer(filepath.Ext(existing)) {
+		return false
+	}
+	return isLosslessQuality(s.Quality)
+}
+
 func findExistingAudio(destDir, base string) (string, bool) {
 	for _, ext := range audioExtensions {
 		p := filepath.Join(destDir, base+"."+ext)

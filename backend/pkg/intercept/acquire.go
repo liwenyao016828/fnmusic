@@ -212,6 +212,61 @@ func sameTitle(a, b string) bool {
 	return na != "" && na == nb
 }
 
+// lxOnlyPlatforms 是「曲率搜得到、但自己没有解析器」的平台：酷狗 / 酷我。
+//
+// 这两个平台的搜索走曲率原生实现（`pkg/search` 覆盖 wy/tx/kg/kw），但取直链
+// 曲率做不了（原生解析器只实现了网易与 QQ）。而**洛雪脚本本来就能按平台 id
+// 拿直链** —— 脚本的 musicUrl 只要一个 id（getSongId = hash ‖ songmid ‖ id），
+// 根本不需要它自己的 musicSearch。
+//
+// 所以这里把「原生搜到的酷狗/酷我」交给洛雪取链（见 linkLxOnly）。用户报的
+// 「洛雪没参与下载」有两个来源，这是第二个：① 脚本没声明 musicSearch，洛雪
+// 自己搜不出候选；② 就算搜出来，`downloadCandidates` 的「严格更好」筛也会把
+// 无档位的洛雪候选挡掉。现在 ① 绕过去（用原生搜索的 id），② 由候选档位如实
+// 声明解决（原生结果带 quality）。
+var lxOnlyPlatforms = []string{"kg", "kw"}
+
+// isLxOnlyPlatform 判断这个平台是不是「只能靠洛雪取链」的那两个。
+func isLxOnlyPlatform(platform string) bool {
+	p := strings.ToLower(strings.TrimSpace(platform))
+	for _, x := range lxOnlyPlatforms {
+		if p == x {
+			return true
+		}
+	}
+	return false
+}
+
+// songPlatformID 取平台内 id（与 trackFromSong 同一口径：Songmid 优先）。
+func songPlatformID(s search.UnifiedSong) string {
+	if id := strings.TrimSpace(s.Songmid); id != "" {
+		return id
+	}
+	return strings.TrimSpace(s.ID)
+}
+
+// lxInfoFromSong 把一条原生搜索结果拼成洛雪脚本要的 `musicInfo`。
+//
+// 字段名按 LX 契约（脚本读 `musicInfo.name / singer / albumName / duration`），
+// id 三种写法都填上：`getSongId` 依次取 hash → songmid → id，不同脚本取的不一样。
+// 酷狗的原生 id 就是 file hash，所以 hash 与 songmid 同值是对的。
+func lxInfoFromSong(s search.UnifiedSong) map[string]any {
+	id := songPlatformID(s)
+	if id == "" {
+		return nil
+	}
+	return map[string]any{
+		"id":        id,
+		"songmid":   id,
+		"hash":      id,
+		"name":      strings.TrimSpace(s.Name),
+		"singer":    strings.TrimSpace(s.Singer),
+		"albumName": strings.TrimSpace(s.Album),
+		"album":     strings.TrimSpace(s.Album),
+		"duration":  durationSeconds(s),
+	}
+}
+
 // downloadSources 返回「下载源池」的平台列表（现取，见 Config.DownloadSources）。
 func (i *Interceptor) downloadSources() []string {
 	if i.cfg.DownloadSources == nil {
@@ -250,6 +305,22 @@ func (i *Interceptor) bestQualityTrack(ctx context.Context, title, artist string
 // 返回空 = 池里没有同名同版录音（或池是空的）→ 调用方回落到曲目自己平台。
 func (i *Interceptor) rankedSources(ctx context.Context, title, artist string, wantSec int) []online.Track {
 	plats := i.downloadSources()
+	// 洛雪能取链时，把「搜得到、放不出」的平台（酷狗/酷我）也纳入搜索：
+	// 它们的候选会改道 `lx:kg` / `lx:kw` 去取直链（见 linkLxOnly）。
+	if i.lxResolve != nil {
+		for _, p := range lxOnlyPlatforms {
+			dup := false
+			for _, have := range plats {
+				if have == p {
+					dup = true
+					break
+				}
+			}
+			if !dup {
+				plats = append(plats, p)
+			}
+		}
+	}
 	keyword := strings.TrimSpace(title + " " + artist)
 	// 池空 = musicdl 那批平台一个都没有、**而且**洛雪源也没接 —— 那就一次搜索都不发。
 	// （洛雪没接时这个条件与改动前完全一致：len(plats)==0 就直接返回。）
@@ -315,6 +386,19 @@ func (i *Interceptor) rankedSources(ctx context.Context, title, artist string, w
 	out := make([]online.Track, 0, len(ranked))
 	seen := make(map[string]bool, len(ranked))
 	for _, pick := range ranked {
+		// 酷狗/酷我：曲率只搜得到、取不到直链 —— 交给洛雪脚本按 id 取链。
+		// 必须在这里改道（而不是在解析时兜底）：池里「哪个源能解析」是
+		// `lx:<src>` 这个 key 决定的，候选身份不换成 lx:kg，池就只会回 ErrNoResolver。
+		if i.lxResolve != nil && isLxOnlyPlatform(pick.Source) {
+			src := strings.ToLower(strings.TrimSpace(pick.Source))
+			info := lxInfoFromSong(pick)
+			if info == nil {
+				continue
+			}
+			i.rememberLxItem(src, songPlatformID(pick), info)
+			i.ensureLxResolver(src)
+			pick.Source = lxSourcePrefix + src
+		}
 		t, ok := trackFromSong(pick.Source, pick)
 		if !ok {
 			continue

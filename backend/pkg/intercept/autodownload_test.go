@@ -30,15 +30,14 @@ import (
 // 为什么真写文件：`Downloaded.Put` 只登记**文件真的存在**的记录（登记一个不存在的
 // 路径 = 收藏里那首歌直接 404），所以这里必须造一个真实存在的文件，否则用例测的是
 // 一条永远走不通的路径。
-func fakeDownloadBackend(t *testing.T) (*httptest.Server, *[]map[string]any, string) {
+func fakeDownloadBackend(t *testing.T) (*httptest.Server, *[]map[string]any, func() string) {
 	t.Helper()
 	dir := t.TempDir()
-	dst := filepath.Join(dir, "甲 - 乙.mp3")
-	if err := os.WriteFile(dst, []byte("ID3\x03\x00\x00\x00FAKEAUDIO"), 0o644); err != nil {
-		t.Fatal(err)
-	}
 	seen := &[]map[string]any{}
-	var mu sync.Mutex
+	var (
+		mu       sync.Mutex
+		lastPath string
+	)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/download/song" {
 			w.WriteHeader(http.StatusNotFound)
@@ -47,8 +46,21 @@ func fakeDownloadBackend(t *testing.T) (*httptest.Server, *[]map[string]any, str
 		raw, _ := io.ReadAll(r.Body)
 		var m map[string]any
 		_ = json.Unmarshal(raw, &m)
+		// ⚠️ 落盘文件的扩展名要跟着**直链**走：真实下载器是按魔数嗅探决定扩展名的
+		// （pkg/downloader 的 detectAudioExtByMagic），而 `tierFromLandedFile` 会拿
+		// 这个扩展名校正登记表里的档位。假后端恒写 .mp3 的话，「下了无损」的用例
+		// 会被如实校正成 320k —— 假的是后端，不是被测逻辑。
+		ext, head := ".mp3", "ID3\x03\x00\x00\x00FAKEAUDIO"
+		if u, _ := m["url"].(string); strings.Contains(strings.ToLower(u), ".flac") {
+			ext, head = ".flac", "fLaC\x00\x00\x00\x22FAKEFLAC"
+		}
+		dst := filepath.Join(dir, "甲 - 乙"+ext)
+		if err := os.WriteFile(dst, []byte(head), 0o644); err != nil {
+			t.Error(err)
+		}
 		mu.Lock()
 		*seen = append(*seen, m)
+		lastPath = dst
 		mu.Unlock()
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"code": 200, "message": "success",
@@ -56,7 +68,11 @@ func fakeDownloadBackend(t *testing.T) (*httptest.Server, *[]map[string]any, str
 		})
 	}))
 	t.Cleanup(srv.Close)
-	return srv, seen, dst
+	return srv, seen, func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		return lastPath
+	}
 }
 
 // downloadedItemFor 造一条登记记录。
@@ -84,7 +100,7 @@ func waitDownloaded(t *testing.T, h *harness, guid string) bool {
 
 func TestFavoriteCreateTriggersBackgroundDownload(t *testing.T) {
 	h := newHarness(t)
-	srv, seen, dst := fakeDownloadBackend(t)
+	srv, seen, dstOf := fakeDownloadBackend(t)
 	h.it.localAPI = srv.URL
 	h.it.favAutoDownload = func() bool { return true }
 
@@ -100,6 +116,7 @@ func TestFavoriteCreateTriggersBackgroundDownload(t *testing.T) {
 		t.Fatal("开关打开时，收藏该触发后台下载并登记")
 	}
 	item, _ := h.it.downloaded.Get(fake)
+	dst := dstOf()
 	if item.Path != dst {
 		t.Fatalf("登记的路径该是下载接口回报的那个：%q", item.Path)
 	}
@@ -512,7 +529,7 @@ func TestPlaylistAddTrackSkipsDownloadWhenSwitchOff(t *testing.T) {
 // 下载接口的应答形状），分段用例都可能各自仍然绿，而整条路已经断了。
 func TestFavoriteToLocalStreamEndToEnd(t *testing.T) {
 	h := newHarness(t)
-	srv, seen, dst := fakeDownloadBackend(t)
+	srv, seen, dstOf := fakeDownloadBackend(t)
 	h.it.localAPI = srv.URL
 	h.it.favAutoDownload = func() bool { return true }
 
@@ -538,7 +555,7 @@ func TestFavoriteToLocalStreamEndToEnd(t *testing.T) {
 	if w2.Code != http.StatusPartialContent {
 		t.Fatalf("该回 206（本地文件 + Range），得到 %d：%s", w2.Code, w2.Body.String())
 	}
-	onDisk, err := os.ReadFile(dst)
+	onDisk, err := os.ReadFile(dstOf())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -722,5 +739,198 @@ func TestDownloadToLibrarySwitchesToPoolWhenPoolIsActuallyBetter(t *testing.T) {
 	}
 	if item.Source != "mg" || item.Quality != online.TierLossless {
 		t.Fatalf("登记该如实写换源后的来源与实际档位：%+v", item)
+	}
+}
+
+// 酷狗/酷我：曲率原生搜得到、但没有自己的解析器 —— 候选必须改道 `lx:<平台>`。
+//
+// 用户 2026-10-20 的原话：「把落雪和 musicdl 利用起来，收藏自动下载可以走它们的链接」。
+// 这条用例守的是「改道」这一步：候选身份不换成 lx:kg，池只会回 ErrNoResolver，
+// 于是搜到的无损候选永远参与不了下载。
+func TestRankedSourcesBridgesKugouToLx(t *testing.T) {
+	h := newHarness(t)
+	// 原生搜索：酷狗能给出无损（曲率自己的 search 覆盖 kg/kw）
+	h.it.searcher = func(_ string, platform string, _, _ int) []search.UnifiedSong {
+		if platform != "kg" {
+			return nil
+		}
+		return []search.UnifiedSong{{
+			ID: "HASH1", Songmid: "HASH1", Name: "甲", Singer: "乙", Album: "专辑",
+			Duration: 245000, Quality: "flac24bit", Source: "kg",
+		}}
+	}
+	// 洛雪取链那一半（宿主）
+	h.it.lxResolve = func(_ context.Context, source string, info map[string]any, quality string) (string, error) {
+		if source != "kg" || info["id"] != "HASH1" {
+			return "", online.ErrNotPlayable
+		}
+		return "https://cdn.example/HASH1.flac", nil
+	}
+
+	list := h.it.rankedSources(context.Background(), "甲", "乙", 245)
+	if len(list) == 0 {
+		t.Fatal("酷狗那条无损候选该进池")
+	}
+	got := list[0]
+	if got.Platform != "lx:kg" {
+		t.Fatalf("酷狗候选该改道洛雪取链（lx:kg），得到 %q", got.Platform)
+	}
+	if got.PlatformID != "HASH1" {
+		t.Fatalf("改道后 id 必须还是酷狗那条（脚本按它取链），得到 %q", got.PlatformID)
+	}
+	if online.TierRank(got.Quality) < online.TierRank(online.TierLossless) {
+		t.Fatalf("声明档位该跟着候选走（否则它会被『严格更好』那道筛挡掉），得到 %q", got.Quality)
+	}
+
+	// 暂存里必须有脚本取链要的那份 info（歌名/歌手/时长），否则脚本拒绝
+	info := h.it.lxItem("kg", "HASH1")
+	if info == nil {
+		t.Fatal("改道时必须把这条曲目的 info 交给洛雪")
+	}
+	if info["name"] != "甲" || info["singer"] != "乙" {
+		t.Fatalf("info 该带歌名与歌手（脚本要按它匹配），得到 %v", info)
+	}
+	if d, _ := info["duration"].(int); d != 245 {
+		t.Fatalf("info 里的时长该是秒（245），得到 %v", info["duration"])
+	}
+}
+
+// 曲目自己平台只能拿到 320k 时，洛雪能用**同一个平台 id** 拿到无损 —— 就该用它。
+//
+// 这是「免登录网易云只给 128k/320k」的正解：第三方聚合站不吃登录态。
+func TestDownloadToLibraryUsesLxWhenNativeIsLossy(t *testing.T) {
+	h := newHarness(t)
+	srv, seen, _ := fakeDownloadBackend(t)
+	h.it.localAPI = srv.URL
+
+	// 原生解析（网易）：按阶梯只能到 320k
+	h.it.pool = online.NewPool(&tierStubResolver{platform: "wy", answers: map[string]map[string]*online.Resolved{
+		"w930": {online.Tier320k: {URL: "https://cdn.invalid/w930.mp3", Format: "mp3", Size: 9 << 20, Tier: online.Tier320k}},
+	}})
+	// 洛雪：同一个网易 id → 无损
+	var lxSource string
+	h.it.lxResolve = func(_ context.Context, source string, info map[string]any, quality string) (string, error) {
+		lxSource = source
+		if info["id"] != "w930" {
+			return "", online.ErrNotPlayable
+		}
+		return "https://cdn.example/w930.flac", nil
+	}
+
+	fake := registerOnline(h, "w930", "甲", "乙")
+	track := online.Track{
+		Platform: "wy", PlatformID: "w930", Title: "甲", Artists: []string{"乙"},
+		Album: "专辑", Duration: 245,
+	}
+	item, err := h.it.downloadToLibrary(context.Background(), fake, track)
+	if err != nil {
+		t.Fatalf("洛雪补强该成功：%v", err)
+	}
+	if lxSource != "wy" {
+		t.Fatalf("补强该用曲目自己平台的 id 去问洛雪（source=wy），得到 %q", lxSource)
+	}
+	if len(*seen) != 1 {
+		t.Fatalf("该只调一次下载接口，实际 %d 次", len(*seen))
+	}
+	url, _ := (*seen)[0]["url"].(string)
+	if !strings.Contains(url, "w930.flac") {
+		t.Fatalf("该下洛雪给的无损直链，实际下了 %q", url)
+	}
+	if item.Source != "lx:wy" {
+		t.Fatalf("登记的实际来源该是洛雪，得到 %q", item.Source)
+	}
+	if online.TierRank(item.Quality) < online.TierRank(online.TierLossless) {
+		t.Fatalf("登记的实际档位该是无损，得到 %q", item.Quality)
+	}
+}
+
+// 用户点名 320k/128k 时**不许**去问洛雪要无损：那是省流量，不是没本事。
+func TestDownloadToLibrarySkipsLxWhenUserAsksLowerTier(t *testing.T) {
+	h := newHarness(t)
+	srv, seen, _ := fakeDownloadBackend(t)
+	h.it.localAPI = srv.URL
+	h.it.cfg.AutoDownloadQuality = func() string { return online.Tier320k }
+
+	asked := false
+	h.it.lxResolve = func(context.Context, string, map[string]any, string) (string, error) {
+		asked = true
+		return "https://cdn.example/x.flac", nil
+	}
+	h.it.pool = online.NewPool(&tierStubResolver{platform: "wy", answers: map[string]map[string]*online.Resolved{
+		"w931": {online.Tier320k: {URL: "https://cdn.invalid/w931.mp3", Format: "mp3", Size: 9 << 20, Tier: online.Tier320k}},
+	}})
+
+	fake := registerOnline(h, "w931", "甲", "乙")
+	track := online.Track{
+		Platform: "wy", PlatformID: "w931", Title: "甲", Artists: []string{"乙"},
+		Album: "专辑", Duration: 245,
+	}
+	if _, err := h.it.downloadToLibrary(context.Background(), fake, track); err != nil {
+		t.Fatalf("该照常下 320k：%v", err)
+	}
+	if asked {
+		t.Fatal("点名 320k 时不该去问洛雪要无损（违背用户选择、还白等几十秒）")
+	}
+	if len(*seen) != 1 {
+		t.Fatalf("该只下 320k 那一份，实际 %d 次", len(*seen))
+	}
+}
+
+// 洛雪给的结果**不比基线高**时不换：白换一次下载没有意义（还可能是别家转码）。
+func TestDownloadViaLxSkipsWhenNotBetter(t *testing.T) {
+	h := newHarness(t)
+	srv, seen, _ := fakeDownloadBackend(t)
+	h.it.localAPI = srv.URL
+	h.it.lxResolve = func(context.Context, string, map[string]any, string) (string, error) {
+		return "https://cdn.example/x.mp3", nil
+	}
+	fake := registerOnline(h, "w932", "甲", "乙")
+	track := online.Track{
+		Platform: "wy", PlatformID: "w932", Title: "甲", Artists: []string{"乙"}, Duration: 245,
+	}
+	// 基线已经是 320k（告诉它基线分是 3），洛雪回的 .mp3 → 也只能算 320k
+	if item, ok := h.it.downloadViaLx(context.Background(), fake, track, online.PlaybackLadder, 3); ok {
+		t.Fatalf("不更高的结果不该被采用，得到 %+v", item)
+	}
+	if len(*seen) != 0 {
+		t.Fatalf("不该发生下载，实际 %d 次", len(*seen))
+	}
+}
+
+// 「已下载过」不等于「永远不再下载」：库里是有损、这次能拿无损时，允许重下一次。
+//
+// 边界必须钉死，否则会退化成「每次收藏都重下一遍」（平台就是不给无损时纯浪费流量）。
+func TestShouldRetryUpgrade(t *testing.T) {
+	h := newHarness(t)
+	dir := t.TempDir()
+	mp3 := filepath.Join(dir, "甲 - 乙.mp3")
+	if err := os.WriteFile(mp3, []byte("ID3\x03\x00\x00"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	flac := filepath.Join(dir, "甲 - 乙.flac")
+	if err := os.WriteFile(flac, []byte("fLaC"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	h.it.cfg.AutoDownloadQuality = func() string { return "highest" }
+	if !h.it.shouldRetryUpgrade(online.DownloadedItem{Path: mp3, Quality: "320k"}) {
+		t.Fatal("有损文件 + 想要无损 → 应该允许升级重下")
+	}
+	if h.it.shouldRetryUpgrade(online.DownloadedItem{Path: mp3, Quality: "320k", UpgradeTried: true}) {
+		t.Fatal("已经试过升级的不该再试（否则每次收藏都白下一遍）")
+	}
+	if h.it.shouldRetryUpgrade(online.DownloadedItem{Path: flac, Quality: "flac"}) {
+		t.Fatal("已经是无损的不该重下")
+	}
+	if h.it.shouldRetryUpgrade(online.DownloadedItem{Path: mp3, Quality: "flac"}) {
+		t.Fatal("记录说无损就不该按有损处理")
+	}
+	if h.it.shouldRetryUpgrade(online.DownloadedItem{Path: filepath.Join(dir, "missing.mp3"), Quality: "320k"}) {
+		t.Fatal("文件已不在了 → 不是升级场景")
+	}
+
+	h.it.cfg.AutoDownloadQuality = func() string { return "320k" }
+	if h.it.shouldRetryUpgrade(online.DownloadedItem{Path: mp3, Quality: "320k"}) {
+		t.Fatal("用户点名 320k 时不该去要无损")
 	}
 }

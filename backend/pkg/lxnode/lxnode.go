@@ -246,10 +246,24 @@ func (m *Manager) Resolve(ctx context.Context, source string, info map[string]an
 	//   if (!info?.musicInfo) reject('请求参数不完整')
 	// 直接短路 —— 真机实测过，表现为 502 且 tried 里全是「请求参数不完整」。
 	// 这里替调用方嵌好，免得每个调用点都要记得。
+	//
+	// ⚠️⚠️ `type` 是**档位**，不是动作名。LX 契约里 musicUrl 的档位就放在
+	// `info.type` 上（形如 '320k' / 'flac'），`action` 另外单独传。
+	//
+	// 2026-10-21 修：这里以前写死 `"type": "musicUrl"`，脚本拿到的是
+	// `mapQuality('musicUrl')` —— 认不出这个值，按脚本的兜底规则**降到最低档**
+	// （真机读 全豆要.js：idx=-1 → 从 128k 起找 → 只要 128k）。结果就是：
+	// 哪怕池里点名要无损，洛雪这条路也一直只要到 128k，而且不报错、看不出来。
+	// 现在把调用方点的档位原样放进 `type`；空档位时给 "flac" —— 脚本自己会按
+	// 它声明的 qualitys 往下压（mapQuality clamp），所以「问高一点」永远安全。
+	tier := strings.ToLower(strings.TrimSpace(quality))
+	if tier == "" {
+		tier = "flac"
+	}
 	body, _ := json.Marshal(resolveRequest{
 		Source:  source,
-		Info:    map[string]any{"musicInfo": info, "type": "musicUrl"},
-		Quality: quality,
+		Info:    map[string]any{"musicInfo": info, "type": tier},
+		Quality: tier,
 	})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/resolve", bytes.NewReader(body))
 	if err != nil {
