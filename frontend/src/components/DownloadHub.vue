@@ -195,7 +195,10 @@ const allAutoSelected = computed(() =>
 
 /** 触发来源翻人话。与 pkg/online 的 Trigger* 常量一一对应。 */
 function autoTriggerLabel(t) {
-  return { fav: '收藏', playlist: '加歌单', page: '页面点下载' }[t] || t || '自动'
+  // `upgrade` = 后台音质补强轮（`pkg/intercept/upgrade_sweeper.go`）。它必须和「收藏失败」
+  // 分开显示：同一行里「收藏 · 失败」是「你要的歌没下下来」，
+  // 「音质补强 · 失败」只是「这首的无损版还没搞到，mp3 好好地在盘上」。
+  return { fav: '收藏', playlist: '加歌单', page: '页面点下载', upgrade: '音质补强' }[t] || t || '自动'
 }
 
 /** 记录时间：今天的只给时分秒，更早的带上月日 —— 一屏里最常看的是「刚刚那几次」。 */

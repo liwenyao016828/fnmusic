@@ -31,10 +31,12 @@ import (
 	"fn-lx-player/pkg/security"
 	"fn-lx-player/pkg/sources"
 	"fn-lx-player/pkg/takeover"
+
+	"fn-lx-player/pkg/intercept"
 )
 
 // CurrentVersion 应用版本号。发布新版本时与 fpk-package/manifest 的 version 同步修改。
-const CurrentVersion = "2.16.0"
+const CurrentVersion = "2.17.0"
 
 // CurrentAppName 对外暴露的应用标识，必须与 fpk-package/manifest 的 appname 一致。
 //
@@ -116,6 +118,14 @@ type Server struct {
 	musicdlPreviewStart  func(source string) (map[string]any, error)
 	musicdlPreviewStatus func() map[string]any
 	musicdlPreviewStop   func() map[string]any
+
+	// 「替换音质」的四个动作（见 pkg/api/quality.go）。四个都要传：
+	// 起任务/看状态/收回/执行替换是一件事的四个面，分开注册只会出现
+	// 「能扫不能换」这种半截能力。
+	qualityStart   func(mode string, limit int) (intercept.QualityStatus, error)
+	qualityStatus  func() intercept.QualityStatus
+	qualityStop    func() intercept.QualityStatus
+	qualityReplace func(r *http.Request, paths []string) (any, error)
 
 	apiToken string
 	// authMode 生效的鉴权模式（none / lan / token），由 FN_AUTH_MODE + FN_API_TOKEN 解析

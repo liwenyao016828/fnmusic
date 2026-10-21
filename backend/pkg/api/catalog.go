@@ -1197,6 +1197,34 @@ func APICatalog(baseURL string) []Endpoint {
 			Notes:   "记录每次执行的状态、耗时、匹配与写入数量，便于排查。最多保留 200 条。",
 		},
 
+		// ── 替换音质（v2.17）──
+		{
+			Method: http.MethodPost, Path: "/api/quality/scan",
+			Summary: "扫描曲库：逐首列出各取音渠道**实际**能拿到的音质档位", Category: catDownload,
+			Params: []Param{
+				{Name: "action", In: "body", Desc: "start（缺省）/ status / stop"},
+				{Name: "mode", In: "body", Desc: "lossy（缺省，只扫有损）/ all"},
+				{Name: "limit", In: "body", Desc: "最多扫几首，缺省 200、上限 2000"},
+			},
+			Example: "curl -X POST " + baseURL + "/api/quality/scan -H 'Content-Type: application/json' -d '{\"action\":\"start\",\"mode\":\"lossy\",\"limit\":200}'",
+			Notes: "异步任务：起一次后用 `{\"action\":\"status\"}` 轮询。" +
+				"`entries[].channels[]` 是各渠道**实际**可得档位，`best` 是最高那条，" +
+				"`upgradeable` = 严格高于当前文件（按容器判无损）。`truncated` = 曲库比 limit 大。",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/quality/replace",
+			Summary: "把选中的文件按各渠道实际可得最高档位重新取音并覆盖", Category: catDownload,
+			Params: []Param{
+				{Name: "paths", In: "body", Desc: "曲库内文件路径，数组，一次最多 50 条"},
+			},
+			Example: "curl -X POST " + baseURL + "/api/quality/replace -H 'Content-Type: application/json' -d '{\"paths\":[\"/vol3/1000/音乐/测试下载/Beyond - 真的爱你.mp3\"]}'",
+			Notes: "走的是与自动下载同一条取音链（同渠道顺序、同档位判据），落盘时带上" +
+				"`upgrade_if_better` —— 只有拿到**更高**档位才会覆盖旧文件，绝不降级。" +
+				"`done[].ok=false` 配 `note` 表示「拿到的是同档位文件，没有覆盖」（不是失败）；" +
+				"真正的失败在 `failed[]` 里。逐条独立，一条失败不影响后续。" +
+				"**注意**：这会在磁盘上产生新文件并删掉旧文件，属于写操作。",
+		},
+
 		// ── 网络代理 ──
 		{
 			Method: http.MethodPost, Path: "/api/proxy/http", Summary: "服务端 HTTP 代理（供音源脚本跨域取数）", Category: catProxy,

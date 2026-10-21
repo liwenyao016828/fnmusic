@@ -363,6 +363,10 @@ type Interceptor struct {
 	upgradeMu   sync.Mutex
 	upgradeStop chan struct{}
 
+	// quality 管「替换音质」的扫描任务（见 quality.go）。
+	// 它在 New() 里建好（内置 mutex，零值不可用）。
+	quality *qualityScanState
+
 	// tee 是「边听边下」被客户端打断之后的后台续传任务簿（见 tee.go 的 teePool）。
 	// 零值可用 —— 只有真的起过一次续传才会建父 ctx 与登记表。
 	tee teePool
@@ -461,6 +465,7 @@ func New(cfg Config) *Interceptor {
 		albumCache:      make(map[string]albumEntry, 8),
 		albumLogged:     map[string]bool{},
 		stats:           make(map[string]int, 32),
+		quality:         &qualityScanState{status: QualityStatus{State: QualityStateIdle, Entries: []QualityEntry{}}},
 	}
 	i.platformsStatic = platforms
 

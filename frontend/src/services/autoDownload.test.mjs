@@ -141,11 +141,25 @@ test('补全整理是顶部分段导航（TidyView）', () => {
     '旧的 ⋯ 主菜单 tidyMenu 必须删掉 —— 主功能入口不能再藏在 ⋯ 后面')
   assert.ok(tidyViewVue.includes('completeMenu'),
     '补全段应只保留一个次要动作的 ⋯（增量扫描）')
-  // 替换音质是占位段：不许提前接线（用户明确「不要自己编造接口调用」）
-  const qualityToast = tidyViewVue.match(/function scanQuality\(\)\s*\{[\s\S]*?\n\}/)
-  assert.ok(qualityToast, '占位段应有 scanQuality')
-  assert.ok(!/\w+API\./.test(qualityToast[0]),
-    'scanQuality 只能提示「接口开发中」，不能真的发起接口调用')
+  // 2026-10-21（需求 m02757/m02848）：「替换音质」从占位段接成真契约 ——
+  // 原来钉「占位不得发调用」的断言作废，改钉**接线形状**（契约见 client.js QualityAPI 注释）：
+  assert.ok(clientJs.includes("api.post('/quality/scan'"), 'client.js 应有 QualityAPI.scan（POST /quality/scan）')
+  assert.ok(clientJs.includes("api.post('/quality/replace'"), 'client.js 应有 QualityAPI.replace（POST /quality/replace）')
+  assert.match(tidyViewVue, /import \{[^}]*QualityAPI[^}]*\} from '\.\.\/api\/client'/,
+    'TidyView 应 import QualityAPI')
+  assert.ok(tidyViewVue.includes("QualityAPI.scan('start'"), '「开始扫描」应真的发起扫描任务')
+  assert.ok(tidyViewVue.includes("QualityAPI.scan('status'"), 'running 时应轮询 status 拿进度')
+  assert.ok(tidyViewVue.includes('开始扫描'), '应有「开始扫描」主按钮')
+  assert.ok(tidyViewVue.includes('扫描中…'), 'running 时按钮应变成「扫描中…」并禁用')
+  assert.ok(tidyViewVue.includes('已中断'), '停止只停前端轮询 —— 状态必须诚实显示「已中断」')
+  for (const label of ['洛雪', 'musicdl', '原生']) {
+    assert.ok(tidyViewVue.includes(label), `渠道三格应显示「${label}」`)
+  }
+  assert.ok(tidyViewVue.includes('拿不到'), '渠道拿不到应显示灰的「拿不到」')
+  assert.ok(tidyViewVue.includes(':disabled="!e.upgradeable || e.replaced"'),
+    '勾选框必须只对 upgradeable 且未替换的行开放')
+  assert.ok(tidyViewVue.includes('用最高音质替换'), 'SelectionBar 主按钮应是「用最高音质替换」')
+  assert.ok(tidyViewVue.includes('QualityAPI.replace('), '替换应真发 POST /quality/replace')
 })
 
 test('推送能力位是并排的卡片（PushManager）', () => {

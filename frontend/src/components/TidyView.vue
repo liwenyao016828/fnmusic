@@ -62,12 +62,6 @@
         class="ys-press rounded-full border border-[var(--ys-border)] bg-white px-4 py-1.5 text-[12px] font-medium text-[var(--ys-text-muted)] transition-colors hover:bg-[var(--ys-surface-2)] disabled:opacity-50"
         @click="onRefresh"
       >{{ reloading ? '刷新中…' : '刷新' }}</button>
-      <button
-        v-else-if="sub === 'quality'"
-        title="扫描曲库里可以替换音质的曲目"
-        class="ys-press rounded-full bg-emerald-500 px-4 py-1.5 text-[12px] font-semibold text-white shadow-[0_1px_2px_rgba(11,138,102,0.3)] transition-colors hover:bg-emerald-600"
-        @click="scanQuality"
-      >开始扫描</button>
     </template>
 
     <div class="space-y-3.5">
@@ -438,21 +432,135 @@
         </div>
       </SectionCard>
 
-      <!-- ═════ 分段五：替换音质（占位段 —— 后端 /api/quality/* 开发中，不发任何接口调用） ═════ -->
+      <!-- ═════ 分段五：替换音质（真接口 /api/quality/scan|replace，后端 pkg/intercept/quality.go） ═════ -->
       <SectionCard
         v-show="sub === 'quality'"
         :icon="Gauge"
         title="替换音质"
-        sub="把库里已有曲目换成更高或更低的码率"
+        sub="对比三条渠道能拿到的最高档位，勾选后替换本地文件"
       >
-        <p class="text-[11px] leading-relaxed text-[var(--ys-text-muted)]">
-          这一段是视图骨架：扫描与替换要接后端
-          <b class="font-mono text-[var(--ys-text)]">/api/quality/*</b> 接口，接口还在开发，
-          页面没有发起任何调用 —— 点右上「开始扫描」只会给一条进度提示。
-        </p>
-        <div class="mt-3 rounded-[12px] border border-dashed border-[var(--ys-border)] px-4 py-6 text-center text-[11px] text-[var(--ys-text-faint)]">
-          暂无扫描结果 —— 接口接好以后，这里会列出可以替换音质的曲目
+        <!-- 控制行：范围 / 开始（running 就地变进度形态） / 停止 / 数量上限 -->
+        <div class="flex flex-wrap items-center gap-2">
+          <SegmentedControl
+            :model-value="qMode"
+            :segments="[{ id: 'lossy', name: '仅看有损' }, { id: 'all', name: '全部曲库' }]"
+            @update:model-value="setQMode"
+          />
+          <button
+            type="button"
+            class="ys-press rounded-full bg-emerald-500 px-4 py-1.5 text-[12px] font-semibold text-white shadow-[0_1px_2px_rgba(11,138,102,0.3)] transition-colors hover:bg-emerald-600 disabled:opacity-50"
+            :disabled="qRunning || qBusy"
+            :title="qRunning ? '扫描进行中 —— 用右边的停止按钮中断查看' : '让三条渠道逐条对比曲库能拿到的最高音质'"
+            @click="startQualityScan"
+          >{{ qRunning ? '扫描中…' : '开始扫描' }}</button>
+          <button
+            v-if="qRunning"
+            type="button"
+            class="ys-press grid h-8 w-8 shrink-0 place-items-center rounded-[10px] border border-[var(--ys-border)] bg-white text-[var(--ys-text-muted)] transition-colors hover:border-[var(--ys-border-strong)]"
+            title="停止（只停止本页查看进度，后端扫描可能仍在继续）"
+            @click="stopQualityScan"
+          >
+            <Square class="h-3.5 w-3.5" :stroke-width="2" />
+          </button>
+          <label class="ml-auto flex items-center gap-1.5 text-[11px] text-[var(--ys-text-muted)]">
+            上限
+            <input
+              v-model.number="qLimit"
+              type="number"
+              min="1"
+              max="500"
+              class="ys-num w-16 rounded-[10px] border border-[var(--ys-border)] bg-[#FAFAFC] px-2 py-1.5 text-center font-mono text-[12px] text-[var(--ys-text)] focus:border-[var(--ys-accent)] focus:bg-white focus:outline-none disabled:opacity-50"
+              :disabled="qRunning || qBusy"
+            />
+            条
+          </label>
         </div>
+
+        <!-- running：scanned/total + 细进度条（数字一律 .ys-num） -->
+        <div v-if="qRunning" class="mt-3">
+          <div class="flex items-center justify-between text-[11px] text-[var(--ys-text-muted)]">
+            <span>已扫描 <b class="ys-num text-[var(--ys-text)]">{{ qScan?.scanned || 0 }}</b> / <b class="ys-num text-[var(--ys-text)]">{{ qScan?.total || 0 }}</b> 条</span>
+            <span>已发现可替换 <b class="ys-num text-[var(--ys-text)]">{{ qScan?.upgradeable || 0 }}</b> 条</span>
+          </div>
+          <div class="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-black/[0.06]">
+            <div class="h-full rounded-full bg-emerald-500 transition-all duration-300" :style="{ width: qPercent + '%' }"></div>
+          </div>
+        </div>
+
+        <!-- 状态行：running / 已中断（诚实文案） / truncated -->
+        <p v-if="qStatusText" class="mt-2.5 text-[11px] leading-relaxed text-[var(--ys-text-muted)]">{{ qStatusText }}</p>
+
+        <!-- 失败态：state=failed 或后端给了 error，或请求层失败（接口未上线时走这里，不白屏） -->
+        <InlineNotice
+          v-if="qScan && (qScan.state === 'failed' || qScan.error)"
+          class="mt-2.5"
+          :text="'扫描失败：' + (qScan.error || '后端没有给出原因，详情见日志')"
+        />
+        <InlineNotice v-if="qErrorText" class="mt-2.5" :text="qErrorText" />
+
+        <!-- 结果表：列表 + 发丝线（不做卡片套卡片）。只有可替换且未替换的行才能勾选 -->
+        <div v-if="qRows.length" class="mt-3 overflow-hidden rounded-[12px] border border-[var(--ys-border)] bg-white">
+          <div class="overflow-y-auto" :style="{ maxHeight: '440px' }">
+            <div
+              v-for="e in qRows"
+              :key="e.path"
+              class="flex flex-wrap items-center gap-x-2.5 gap-y-1.5 border-b border-[var(--ys-border)] px-3 py-2.5 last:border-b-0"
+              :class="e.replaced ? 'bg-[var(--ys-surface-2)]' : ''"
+            >
+              <input
+                type="checkbox"
+                class="h-4 w-4 shrink-0 accent-[var(--ys-accent)]"
+                :checked="qSelected.has(e.path)"
+                :disabled="!e.upgradeable || e.replaced"
+                :title="e.replaced ? '已替换' : (e.upgradeable ? '勾选后可用最高音质替换' : '已是各渠道最高音质，无需替换')"
+                @change="toggleQSelect(e)"
+              />
+              <div class="min-w-0 flex-1 basis-[180px]">
+                <div class="truncate text-[12.5px] font-medium text-[var(--ys-text)]">
+                  {{ e.title || baseName(e.path) }}
+                  <span v-if="e.ext" class="ml-1 text-[10px] uppercase text-[var(--ys-text-faint)]">.{{ String(e.ext).replace(/^\./, '') }}</span>
+                </div>
+                <div class="mt-0.5 truncate text-[11px] text-[var(--ys-text-muted)]">{{ e.artist || '未知歌手' }}</div>
+                <div v-if="e.rowError" class="mt-0.5 text-[10.5px] leading-relaxed text-red-500">替换失败：{{ e.rowError }}</div>
+              </div>
+              <span
+                class="shrink-0 rounded-full bg-[var(--ys-surface-sunken)] px-2 py-0.5 text-[10.5px] text-[var(--ys-text-muted)]"
+                title="当前本地文件的档位"
+              >{{ e.current_tier || '—' }}</span>
+              <div class="flex shrink-0 gap-1.5">
+                <div
+                  v-for="cell in qChannelCells(e)"
+                  :key="cell.ch"
+                  class="w-[52px] rounded-[6px] border border-[var(--ys-border)] px-1 py-0.5 text-center"
+                  :title="cell.hint"
+                >
+                  <div class="text-[9px] leading-tight text-[var(--ys-text-faint)]">{{ cell.label }}</div>
+                  <div
+                    class="truncate text-[10px] leading-tight"
+                    :class="cell.tier ? 'ys-num text-[var(--ys-text-muted)]' : 'text-[var(--ys-text-faint)]'"
+                  >{{ cell.tier || '拿不到' }}</div>
+                </div>
+              </div>
+              <span v-if="e.replaced" class="shrink-0 text-[10.5px] text-[var(--ys-text-muted)]">已替换为 {{ e.newTier || '更高档位' }}</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 空态（需求 m02848：一条都没有时不留白） -->
+        <div v-else-if="qState === 'done'" class="mt-3 rounded-[12px] border border-dashed border-[var(--ys-border)] px-4 py-6 text-center text-[11px] leading-relaxed text-[var(--ys-text-faint)]">
+          曲库里的歌已经是各渠道能拿到的最高音质了
+        </div>
+        <div v-else-if="qState === 'idle' && !qRunning && !qErrorText" class="mt-3 rounded-[12px] border border-dashed border-[var(--ys-border)] px-4 py-6 text-center text-[11px] leading-relaxed text-[var(--ys-text-faint)]">
+          还没有扫描结果 —— 点「开始扫描」，让洛雪 / musicdl / 原生三条渠道逐条对比
+        </div>
+
+        <!-- 勾选浮出批量条（底部深色玻璃，项目已有组件） -->
+        <SelectionBar
+          :count="qSelectedCount"
+          :actions="[{ key: 'replace', label: '用最高音质替换', icon: Replace, disabled: qBusy }]"
+          @action="onQAction"
+          @clear="qClearSelection"
+        />
       </SectionCard>
     </div>
 
@@ -530,7 +638,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
   Sparkles, Check, FolderOpen, SlidersHorizontal,
-  ScanSearch, FolderSearch, Copy, History, Gauge, ImageIcon,
+  ScanSearch, FolderSearch, Copy, History, Gauge, ImageIcon, Replace, Square,
 } from 'lucide-vue-next'
 import PageShell from './PageShell.vue'
 import SectionCard from './SectionCard.vue'
@@ -538,7 +646,9 @@ import InlineNotice from './InlineNotice.vue'
 import OverflowMenu from './OverflowMenu.vue'
 import SideSheet from './SideSheet.vue'
 import StatLine from './StatLine.vue'
-import { TidyAPI, TagsAPI, NasAPI, ConfigAPI } from '../api/client'
+import SegmentedControl from './SegmentedControl.vue'
+import SelectionBar from './SelectionBar.vue'
+import { TidyAPI, TagsAPI, NasAPI, ConfigAPI, QualityAPI, DEFAULT_AUTO_DOWNLOAD_CHANNELS } from '../api/client'
 import { loadPref, savePref, loadBool, loadCache, saveCache } from '../services/prefs'
 import {
   FIELD_DEFS, DEFAULT_FIELDS, parseFields, toggleFieldKey, platformName, planCells,
@@ -555,7 +665,7 @@ import {
 } from '../services/libraryView'
 import { fail as failText, apiError } from '../services/userMsg'
 import { logError } from '../services/appLog'
-import { ok as notifyOk, fail as notifyFail, info as notifyInfo } from '../services/feedback'
+import { ok as notifyOk, fail as notifyFail } from '../services/feedback'
 import { navigateTo, segmentOf } from '../services/navBus'
 
 /** 页面提示统一走全局 feedback（右下角浮层），不再占页面底部一条 InlineNotice */
@@ -592,8 +702,237 @@ function onCompleteMenu(key) {
 }
 
 /** 替换音质（占位段）：后端 /api/quality/* 开发中，这里不发任何接口调用 */
-function scanQuality() {
-  notifyInfo('替换音质：后端接口（/api/quality/*）还在开发，这一页目前只是占位')
+// ── 分段五：替换音质（需求 m02757/m02848）──
+//
+// 接后端 /api/quality/scan|replace（pkg/intercept/quality.go，契约见 api/client.js 的 QualityAPI 注释）。
+// 几个刻意的口径，改之前先读：
+//  · scan 是**异步任务**：start 只是启动，进度靠轮询 status（2s 一次，对齐补全轮询）。
+//    视图 v-show 常驻，切走再切回状态不丢；
+//  · 「停止」只停本页轮询 —— 后端并不知道，状态文案必须诚实「已中断」，不许假装任务停了；
+//  · 只有 upgradeable 的行可勾选；替换一次最多 50 条，超出前端分批顺序发；
+//  · 成功只把对应行标成已替换（**不整表刷新**，用户的滚动位置/勾选视角保持连续），
+//    失败把后端 error 写回该行。
+const Q_CHANNEL_LABELS = { lx: '洛雪', dl: 'musicdl', native: '原生' }
+const qMode = ref('lossy')
+const qLimit = ref(clampQLimit(Number(loadPref('quality_limit', 200))))
+const qScan = ref(null)      // 最近一次 scan 返回的 data（state/total/scanned/entries…）
+const qStopped = ref(false)  // true = 本页已停止查看进度（不等于后端停了）
+const qErrorText = ref('')   // 请求层失败（接口没上线/断网）的横幅，别白屏也别抛错
+const qSelected = ref(new Set())
+const qBusy = ref(false)     // 替换批次进行中
+let qTimer = null
+
+function clampQLimit(n) {
+  const v = Math.floor(Number(n))
+  if (!Number.isFinite(v) || v < 1) return 200
+  return Math.min(500, v)
+}
+
+const qState = computed(() => qScan.value?.state || 'idle')
+const qRunning = computed(() => qState.value === 'running')
+const qPercent = computed(() => {
+  const t = Number(qScan.value?.total) || 0
+  if (!t) return 0
+  return Math.min(100, Math.round(((Number(qScan.value?.scanned) || 0) * 100) / t))
+})
+const qSelectedCount = computed(() => qSelected.value.size)
+const qRows = computed(() => {
+  const es = qScan.value?.entries || []
+  // 扫完且一条都不可替换（也还没替换过任何东西）→ 让位给空态文案，不刷一屏灰勾
+  if (qScan.value?.state === 'done' && !es.some((e) => e.upgradeable || e.replaced)) return []
+  return es
+})
+const qStatusText = computed(() => {
+  const parts = []
+  if (qStopped.value && qState.value !== 'running') {
+    parts.push('已中断 —— 只是本页不再读取进度（后端扫描可能仍在继续），点「开始扫描」可重新接上')
+  } else if (qState.value === 'running') {
+    parts.push('扫描中…')
+  } else if (qState.value === 'done') {
+    parts.push(`扫描完成 —— 共扫 ${qScan.value?.scanned ?? 0} 条，可替换 ${qScan.value?.upgradeable ?? 0} 条`)
+  } else if (qState.value === 'failed') {
+    parts.push('扫描失败')
+  }
+  if (qScan.value?.truncated) parts.push('已达数量上限，曲库后面部分没扫')
+  return parts.join(' · ')
+})
+
+// 渠道三格：洛雪 / musicdl / 原生，拿到显示档位、拿不到显示灰的「拿不到」
+function qChannelCells(e) {
+  return DEFAULT_AUTO_DOWNLOAD_CHANNELS.map((ch) => {
+    const hit = (e.channels || []).find((c) => c.channel === ch)
+    const label = Q_CHANNEL_LABELS[ch] || ch
+    return {
+      ch,
+      label,
+      tier: hit && hit.tier ? hit.tier : '',
+      hint: hit && hit.tier
+        ? `${label}：${hit.tier}${hit.platform ? `（来自${hit.platform}）` : ''}`
+        : `${label}：这条在该渠道拿不到`,
+    }
+  })
+}
+
+function normalizeScan(j) {
+  const d = j && typeof j === 'object' ? j : {}
+  return {
+    state: d.state || 'running',
+    mode: d.mode || qMode.value,
+    total: Number(d.total) || 0,
+    scanned: Number(d.scanned) || 0,
+    truncated: !!d.truncated,
+    upgradeable: Number(d.upgradeable) || 0,
+    error: d.error || '',
+    entries: Array.isArray(d.entries) ? d.entries : [],
+  }
+}
+
+async function startQualityScan() {
+  if (qRunning.value || qBusy.value) return
+  const limit = clampQLimit(qLimit.value)
+  qLimit.value = limit
+  savePref('quality_limit', limit)
+  qErrorText.value = ''
+  try {
+    const res = await QualityAPI.scan('start', qMode.value, limit)
+    if (res.code === 200) {
+      qStopped.value = false
+      qScan.value = normalizeScan(res.data)
+      if (qRunning.value) startQualityPolling()
+      else stopQualityPolling()
+      pruneQSelection()
+    } else {
+      qErrorText.value = apiError(res, '发起音质扫描')
+    }
+  } catch (e) {
+    // 后端接口还没上线 / 网络失败：横幅说清即可，不白屏、不抛未捕获错误
+    qErrorText.value = failText('发起音质扫描', e)
+  }
+}
+
+function startQualityPolling() {
+  stopQualityPolling()
+  qTimer = setInterval(async () => {
+    try {
+      const res = await QualityAPI.scan('status', qMode.value, clampQLimit(qLimit.value))
+      if (res.code !== 200 || !res.data) return // 单次查询失败不打断轮询（对齐补全轮询口径）
+      qScan.value = normalizeScan(res.data)
+      if (qState.value === 'done' || qState.value === 'failed') {
+        stopQualityPolling()
+        pruneQSelection()
+      }
+    } catch (_) {
+      // 轮询失败静默：后端重启/网络抖一下不该刷屏
+    }
+  }, 2000)
+}
+
+function stopQualityPolling() {
+  if (qTimer) {
+    clearInterval(qTimer)
+    qTimer = null
+  }
+}
+
+function stopQualityScan() {
+  stopQualityPolling()
+  qStopped.value = true
+}
+
+function setQMode(v) {
+  if (v === qMode.value) return
+  if (qRunning.value) return flash('扫描进行中 —— 先按停止再换范围', true)
+  qMode.value = v
+}
+
+function toggleQSelect(e) {
+  if (!e.upgradeable || e.replaced) return
+  const sel = new Set(qSelected.value)
+  if (sel.has(e.path)) sel.delete(e.path)
+  else sel.add(e.path)
+  qSelected.value = sel
+}
+
+function qClearSelection() {
+  qSelected.value = new Set()
+}
+
+// 新一轮扫描/替换之后，把已不存在或已不可替换的勾选剔掉
+function pruneQSelection() {
+  const valid = new Set((qScan.value?.entries || []).filter((e) => e.upgradeable && !e.replaced).map((e) => e.path))
+  let changed = false
+  const sel = new Set(qSelected.value)
+  for (const path of sel) {
+    if (!valid.has(path)) {
+      sel.delete(path)
+      changed = true
+    }
+  }
+  if (changed) qSelected.value = sel
+}
+
+function onQAction(key) {
+  if (key === 'replace') replaceWithBest()
+}
+
+async function replaceWithBest() {
+  if (qBusy.value || !qSelected.value.size) return
+  const paths = [...qSelected.value]
+  qBusy.value = true
+  qErrorText.value = ''
+  let doneCount = 0
+  let failCount = 0
+  try {
+    // 契约：一次最多 50 条 —— 超出由前端分批，顺序发（一批一落，失败行当场标注）
+    for (let i = 0; i < paths.length; i += 50) {
+      const batch = paths.slice(i, i + 50)
+      const res = await QualityAPI.replace(batch)
+      if (res.code !== 200) {
+        failCount += batch.length
+        qErrorText.value = apiError(res, '替换音质')
+        continue
+      }
+      const d = res.data || {}
+      const doneMap = new Map()
+      const failMap = new Map()
+      for (const it of d.done || []) {
+        // ok:false 配的是 `note`（例如「拿到的是同档位文件，没有覆盖」）——
+        // 与 failed[] 那种真失败不同，但要照实说，不能显示成成功。
+        if (it && it.ok === false) failMap.set(it.path, (it && (it.note || it.error)) || '这条没有替换成功')
+        else if (it) doneMap.set(it.path, it)
+      }
+      for (const it of d.failed || []) failMap.set(it.path, it.error || '替换失败')
+      doneCount += doneMap.size
+      failCount += failMap.size
+      applyQReplace(doneMap, failMap)
+    }
+    if (doneCount) flash(`已用最高音质替换 ${doneCount} 首`)
+    if (failCount) flash(`${failCount} 条替换失败，原因写在对应行`, true)
+  } catch (e) {
+    // 某批直接抛错：后面的批次不再发（不假装成功），已勾选未处理的留在条上可重试
+    flash(failText('替换音质', e), true)
+  } finally {
+    qBusy.value = false
+  }
+}
+
+// 只改对应行的数据（done → replaced + 新档位；failed → rowError），
+// 行按 path 做 key，Vue 就地更新，不整表重绘 —— 用户视角连续。
+function applyQReplace(doneMap, failMap) {
+  const j = qScan.value
+  if (!j) return
+  j.entries = (j.entries || []).map((x) => {
+    const d = doneMap.get(x.path)
+    if (d) return { ...x, replaced: true, upgradeable: false, newTier: d.tier || '', newChannel: d.channel || '', rowError: '' }
+    const err = failMap.get(x.path)
+    if (err !== undefined) return { ...x, rowError: err }
+    return x
+  })
+  const sel = new Set(qSelected.value)
+  for (const path of [...sel]) {
+    if (doneMap.has(path) || failMap.has(path)) sel.delete(path)
+  }
+  qSelected.value = sel
 }
 const indexing = ref(false)
 const deduping = ref(false)
@@ -1181,5 +1520,6 @@ onMounted(() => {
 
 onUnmounted(() => {
   stopCompletePolling()
+  stopQualityPolling()
 })
 </script>

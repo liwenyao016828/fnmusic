@@ -68,7 +68,7 @@ export const VIEWS = [
       { id: 'dedupe', name: '查重', desc: '内容相同 / 同名不同版的重复曲目：保留一份，其余移入回收站' },
       { id: 'audit', name: '体检', desc: '直接扫文件统计缺口：缺歌词、缺封面、两者都缺' },
       { id: 'records', name: '记录', desc: '上次整理快照与撤销入口；撤销只还原上一次补全改过的文件' },
-      { id: 'quality', name: '替换音质', desc: '把库里已有曲目换成更高或更低码率 —— 后端接口开发中，此段先占位' },
+      { id: 'quality', name: '替换音质', desc: '逐条对比洛雪 / musicdl / 原生能拿到的最高档位，勾选后替换本地文件' },
     ],
   },
   {

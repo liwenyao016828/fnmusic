@@ -32,6 +32,64 @@
         </div>
       </DisclosureSection>
 
+      <!-- ⑥ 取音渠道（需求 m02588）：数组顺序=优先级，改动即存 -->
+      <DisclosureSection
+        :open="openKey === 'channels'"
+        @toggle="toggleSection('channels')"
+        :summary="channelsSummary"
+        :icon="Route"
+        title="取音渠道"
+        hint="同档位不换源：三条渠道拿到的实际音质相同时，用原生那条（更稳、封面标签更全）。这里的顺序决定的是『谁先去拿到更高音质』，不是『一定要用第三方链接』。洛雪一次探测可能要几十秒，慢是正常的。"
+      >
+        <div class="overflow-hidden rounded-[var(--ys-radius-control)] border border-[var(--ys-border)] bg-white">
+          <TransitionGroup tag="div" name="chan">
+            <div
+              v-for="c in channelRows"
+              :key="c.id"
+              class="flex items-center gap-2.5 border-b border-[var(--ys-border)] px-3 py-2.5 last:border-b-0"
+            >
+              <div class="min-w-0 flex-1" :class="c.checked ? '' : 'opacity-55'">
+                <div class="flex items-center gap-1.5">
+                  <span class="text-[13px] font-medium text-[var(--ys-text)]">{{ c.name }}</span>
+                  <span
+                    v-if="c.checked"
+                    class="ys-num rounded-[6px] bg-[var(--ys-surface-sunken)] px-1.5 py-0.5 text-[10px] text-[var(--ys-text-muted)]"
+                  >{{ c.rank }}</span>
+                </div>
+                <div class="mt-0.5 text-[11px] leading-relaxed text-[var(--ys-text-muted)]">{{ c.desc }}</div>
+              </div>
+              <div class="flex shrink-0 items-center gap-1">
+                <button
+                  type="button"
+                  class="ys-press grid h-6 w-6 place-items-center rounded-[7px] border border-[var(--ys-border)] text-[var(--ys-text-muted)] transition-colors hover:border-[var(--ys-border-strong)] disabled:pointer-events-none disabled:opacity-30"
+                  :disabled="!c.checked || c.rank <= 1"
+                  title="上移（提高优先级）"
+                  @click="moveChannel(c.id, -1)"
+                >
+                  <ChevronUp class="h-3.5 w-3.5" :stroke-width="2" />
+                </button>
+                <button
+                  type="button"
+                  class="ys-press grid h-6 w-6 place-items-center rounded-[7px] border border-[var(--ys-border)] text-[var(--ys-text-muted)] transition-colors hover:border-[var(--ys-border-strong)] disabled:pointer-events-none disabled:opacity-30"
+                  :disabled="!c.checked || c.rank >= channels.length"
+                  title="下移（降低优先级）"
+                  @click="moveChannel(c.id, 1)"
+                >
+                  <ChevronDown class="h-3.5 w-3.5" :stroke-width="2" />
+                </button>
+                <input
+                  type="checkbox"
+                  class="ml-1 h-4 w-4 shrink-0 accent-[var(--ys-accent)]"
+                  :checked="c.checked"
+                  title="是否参与取音"
+                  @change="toggleChannel(c.id)"
+                />
+              </div>
+            </div>
+          </TransitionGroup>
+        </div>
+      </DisclosureSection>
+
       <!-- ② 文件命名 -->
       <DisclosureSection
         :open="openKey === 'naming'"
@@ -257,8 +315,8 @@
 import { computed, onMounted, ref } from 'vue'
 import PageShell from './PageShell.vue'
 import DisclosureSection from './DisclosureSection.vue'
-import { AudioLines, Download, FileAudio, FolderCog, Info } from 'lucide-vue-next'
-import { ConfigAPI, DownloadAPI, LogsAPI, AppAPI } from '../api/client'
+import { AudioLines, ChevronDown, ChevronUp, Download, FileAudio, FolderCog, Info, Route } from 'lucide-vue-next'
+import { ConfigAPI, DownloadAPI, LogsAPI, AppAPI, ChartInjectAPI, DEFAULT_AUTO_DOWNLOAD_CHANNELS } from '../api/client'
 import { QUALITY_OVERRIDE_OPTIONS } from '../services/qualityOverride'
 import { fail, apiError } from '../services/userMsg'
 import InlineNotice from './InlineNotice.vue'
@@ -399,6 +457,10 @@ async function load() {
       teeEnabled.value = !!cfg.tee_enabled
       lyricAutoDownload.value = asDefaultOn(cfg.lyric_auto_download)
       coverEmbed.value = asDefaultOn(cfg.cover_embed)
+      // 取音渠道：没配/空数组都按后端默认显示（client.js DEFAULT_AUTO_DOWNLOAD_CHANNELS 同口径）
+      channels.value = Array.isArray(cfg.auto_download_channels) && cfg.auto_download_channels.length
+        ? [...cfg.auto_download_channels]
+        : [...DEFAULT_AUTO_DOWNLOAD_CHANNELS]
     }
   } catch (e) {
     flash(fail('读取设置', e), true)
@@ -431,6 +493,71 @@ async function saveQuality(v) {
   } catch (e) {
     qualityValue.value = prev
     flash(fail('保存下载音质', e), true)
+  }
+}
+
+// ── 取音渠道（需求 m02588）──
+//
+// `channels` 是**有序数组**，顺序=收藏自动下载的取音优先级（与后端
+// pkg/config/channels.go 同一口径）。勾选/排序都**立刻保存**（交互对齐 saveQuality）。
+// 关键约束：空数组后端会回落默认 lx→dl→native，用户「以为留了一条」是错觉 ——
+// 所以剩最后一条被取消时拦住并说明，而不是发一个空数组出去。
+const CHANNEL_META = {
+  lx: { short: '洛雪', name: '洛雪音源脚本', desc: '第三方聚合，常是唯一能真给无损的一条' },
+  dl: { short: 'musicdl', name: 'musicdl 外挂池', desc: '咪咕/千千/B站等，配置里勾的那几家' },
+  native: { short: '原生', name: '曲目原生解析', desc: '曲目自己平台的原生解析（网易云/QQ 等；免登录对收费曲目会静默降档）' },
+}
+const channels = ref([...DEFAULT_AUTO_DOWNLOAD_CHANNELS])
+const channelsSummary = computed(() =>
+  channels.value.map((id) => CHANNEL_META[id]?.short || id).join(' → '))
+// 行列表 = 已勾选的按优先级在前，未勾选的按默认顺序排在后面（灰显、不可排序）
+const channelRows = computed(() => {
+  const meta = (id) => CHANNEL_META[id] || { short: id, name: id, desc: '' }
+  const rows = channels.value.map((id, i) => ({ id, ...meta(id), checked: true, rank: i + 1 }))
+  for (const id of DEFAULT_AUTO_DOWNLOAD_CHANNELS) {
+    if (!channels.value.includes(id)) rows.push({ id, ...meta(id), checked: false, rank: 0 })
+  }
+  return rows
+})
+
+function toggleChannel(id) {
+  const cur = channels.value
+  if (cur.includes(id)) {
+    if (cur.length === 1) {
+      // 不发送空数组：清空=回落默认，得让用户知道
+      return flash('至少留一条，否则回到默认 lx→dl→native', true)
+    }
+    return saveChannels(cur.filter((x) => x !== id))
+  }
+  saveChannels([...cur, id]) // 新勾选的排最后（优先级最低，别悄悄抢首位）
+}
+
+function moveChannel(id, dir) {
+  const cur = channels.value
+  const i = cur.indexOf(id)
+  const j = i + dir
+  if (i < 0 || j < 0 || j >= cur.length) return
+  const next = [...cur]
+  next.splice(i, 1)
+  next.splice(j, 0, id)
+  saveChannels(next)
+}
+
+async function saveChannels(next) {
+  const prev = channels.value
+  channels.value = next // 乐观更新：顺序/勾选先落在界面上，失败再回滚
+  try {
+    const res = await ChartInjectAPI.saveAutoDownloadChannels(next)
+    const bad = apiError(res)
+    if (bad) {
+      channels.value = prev
+      return flash(fail('保存取音渠道', new Error(bad)), true)
+    }
+    cfgRaw.value = res?.data || cfgRaw.value
+    flash('取音渠道已更新')
+  } catch (e) {
+    channels.value = prev
+    flash(fail('保存取音渠道', e), true)
   }
 }
 
@@ -503,3 +630,11 @@ function fmtStamp() {
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`
 }
 </script>
+
+<style scoped>
+/* 渠道行「上移/下移」的换位过渡：transform 一次，走全局 --ys-ease/--ys-dur-2；
+   列表恒为三条（只有换位没有增删），所以只需要 move 过渡，无 enter/leave。 */
+.chan-move {
+  transition: transform var(--ys-dur-2) var(--ys-ease);
+}
+</style>

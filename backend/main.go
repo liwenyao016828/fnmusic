@@ -274,6 +274,28 @@ func main() {
 	// TTL 到点自动回收），见 musicdl_wiring.go 的 StartPreview。
 	server.SetMusicDLPreview(mdl.StartPreview, mdl.PreviewStatus, mdl.StopPreview)
 
+	// 「替换音质」：扫曲库 → 逐首探各取音渠道实际可得档位 → 用最高档位覆盖旧文件。
+	// 四个动作都接在拦截层上（取音计划与自动下载共用同一套，见 pkg/intercept/quality.go）。
+	//
+	// ⚠️ 必须判 `ic != nil`：拦截层只在**接管生效**时才建（见上面的
+	// `if takeover.Enabled()`）—— 没接管时 ic 是 nil，直接取方法值会拿到
+	// 「nil 接收者」的方法，一调用就 panic（2026-10-21 真机踩过：
+	// dev 后端没开接管，点一下扫描接口就是 500 + 一段 nil dereference）。
+	if ic != nil {
+		server.SetQuality(
+			ic.StartQualityScan,
+			ic.QualityScanStatus,
+			ic.StopQualityScan,
+			func(r *http.Request, paths []string) (any, error) {
+				done, failed, err := ic.ReplaceQuality(r.Context(), paths)
+				if err != nil {
+					return nil, err
+				}
+				return map[string]any{"done": done, "failed": failed}, nil
+			},
+		)
+	}
+
 	// 服务端洛雪宿主（goal-a5eb2a23 ⑤ 方案 b）—— 缺省关。
 	// 它与 musicdl 的 sidecar 是两回事：那个跑的是 Python 音乐平台客户端，
 	// 这个跑的是用户自己的洛雪音源脚本。同样是「挂了不影响曲率」：Resolve 只返回错误。

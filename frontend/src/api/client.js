@@ -73,6 +73,14 @@ export const ChartsAPI = {
     api.get('/charts/playlist/categories', { params: { source } }).then(res => res.data),
 }
 
+// ── 取音渠道 ──
+//
+// `auto_download_channels` 是**有序数组**：顺序就是收藏自动下载先去哪条渠道取音的
+// 优先级（lx=洛雪音源脚本 / dl=musicdl 外挂池 / native=平台原生解析）。
+// 没配、或配了空数组 = 后端回落默认 lx→dl→native（见 pkg/config/channels.go），
+// 界面按同一口径显示，别自己再造一份默认。
+export const DEFAULT_AUTO_DOWNLOAD_CHANNELS = ['lx', 'dl', 'native']
+
 // ── 榜单注入（把榜单挂成飞牛音乐里的在线歌单）──
 //
 // 这些键都存在整份配置里（`chart_playlists` / `chart_playlists_enabled` /
@@ -92,6 +100,9 @@ export const ChartInjectAPI = {
       // 「音质下载」：飞牛页面里收藏 / 加歌单 / 点下载时取什么音质。
       // 空 = 后端按 highest（能无损就无损）走，界面显示也按这个口径。
       autoDownloadQuality: cfg.auto_download_quality || 'highest',
+      // 「取音渠道」：顺序=优先级。缺省/空数组都按后端默认 lx→dl→native 显示。
+      autoDownloadChannels: Array.isArray(cfg.auto_download_channels) && cfg.auto_download_channels.length
+        ? cfg.auto_download_channels : [...DEFAULT_AUTO_DOWNLOAD_CHANNELS],
     }
   },
   saveIds: (ids) => api.post('/config', { chart_playlists: ids }).then(res => res.data),
@@ -101,6 +112,27 @@ export const ChartInjectAPI = {
   // 「音质下载」：飞牛页面里收藏 / 加歌单 / 点下载触发的那批下载要什么音质
   // （见 pkg/intercept/autodownload.go 的 autoDownloadQuality）。
   saveAutoDownloadQuality: (q) => api.post('/config', { auto_download_quality: q }).then(res => res.data),
+  // 「取音渠道」：这个**数组顺序**决定收藏自动下载先去哪条渠道取音（见 pkg/config/channels.go）。
+  // 传空数组 = 后端回落默认 lx→dl→native，所以界面要在剩最后一条被取消时拦住并说清楚。
+  saveAutoDownloadChannels: (list) => api.post('/config', { auto_download_channels: list }).then(res => res.data),
+}
+
+// ── 替换音质（后端 pkg/intercept/quality.go，需求 m02757/m02848）──
+//
+// 契约（后端已定死，改字段先过后端）：
+// · `scan` 是**异步任务**：action:'start' 开扫、'status' 查进度（界面靠轮询 status）。
+//   data: {state:'idle'|'running'|'done'|'failed', mode, total, scanned, truncated,
+//   upgradeable, error, entries:[{path, title, artist, ext, current_tier,
+//   channels:[{channel:'lx'|'dl'|'native', tier, score, platform, platform_id}],
+//   best:{channel,tier,score,platform,platform_id}|null, upgradeable:boolean}]}
+// · `replace` **同步**返回 {done:[{path,ok,new_path,tier,channel}], failed:[{path,error}]}，
+//   一次最多 50 条路径，超出由调用方分批。
+export const QualityAPI = {
+  scan: (action, mode = 'lossy', limit = 200) =>
+    api.post('/quality/scan', { action, mode, limit }).then(res => res.data),
+  // 替换 = 逐条走外网重新取更高音质的文件再落盘，一批 50 条轻松超过默认 30s，
+  // 长超时必须放宽（对齐 PushAPI.run 的长任务口径）。
+  replace: (paths) => api.post('/quality/replace', { paths }, { timeout: 600000 }).then(res => res.data),
 }
 
 export const DownloadAPI = {

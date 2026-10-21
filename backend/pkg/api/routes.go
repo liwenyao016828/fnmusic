@@ -209,6 +209,11 @@ var routeTable = []routeSpec{
 	// 所以这里只登记一次（路由表不记录方法集，见本文件顶部说明）。
 	{Path: "/api/auto-download/records", Handler: func(s *Server) http.HandlerFunc { return s.handleAutoDownloadRecords }},
 
+	// 2.14 「替换音质」：扫曲库 → 逐首探各取音渠道实际可得档位 → 用最高档位覆盖。
+	// 一个路径吃掉 start/status/stop 三个动作（它们是同一件事的三个面）。
+	{Path: "/api/quality/scan", Handler: func(s *Server) http.HandlerFunc { return s.handleQualityScan }},
+	{Path: "/api/quality/replace", Handler: func(s *Server) http.HandlerFunc { return s.handleQualityReplace }},
+
 	// 3. NAS Local Music
 	{Path: "/api/nas/folders", Handler: func(s *Server) http.HandlerFunc { return nas.ListFolders }},
 	{Path: "/api/nas/directories", Handler: func(s *Server) http.HandlerFunc { return nas.ListFolders }},
