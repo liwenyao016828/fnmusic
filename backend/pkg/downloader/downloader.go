@@ -106,6 +106,17 @@ type SongPayload struct {
 	// 不再直接返回 already_exists，而是照常下载，成功后把旧的有损文件删掉。
 	// 反过来（已有无损、本次 320k）永远不降级。
 	UpgradeIfBetter bool `json:"upgrade_if_better,omitempty"`
+	// DestDir / DestBase 指定**落盘位置**，给「替换音质」用。
+	//
+	// 为什么需要：替换的对象是用户盘上那份文件，而候选曲目的歌名常常与它不一样
+	// （真机：本地叫《喜欢你》，咪咕给的叫《喜欢你 (电影《澳门风云3》插曲)》）。
+	// 按候选名落盘就会在曲库根目录多出一份新文件、旧的 128k 还躺在原地 ——
+	// 2026-10-21 真机实测就是这么「换」的。带上这两个字段后，下载器在**原目录、
+	// 原文件名**上做覆盖（扩展名变了则先落新的、再删旧的）。
+	//
+	// 只有曲率自己的替换流程会传；外部调用方不传，行为不变。
+	DestDir  string `json:"dest_dir,omitempty"`
+	DestBase string `json:"dest_base,omitempty"`
 }
 
 // GetStreamReferer determines the appropriate Referer header for music streaming and downloading
@@ -401,6 +412,21 @@ func (d *Downloader) downloadSingleSong(song SongPayload) (*SongResult, error) {
 	// 千万不要在这里自己拼分隔符：读取侧（扫描/去重/找歌词）按同一份约定反解，
 	// 两边写死两份必然有一天读反（不报错，只是歌手歌名对调）。
 	base := namefmt.Build(cleanSinger, cleanName)
+	// 替换音质：落到调用方指定的目录与文件名（就是盘上那份文件本身）。
+	if d := strings.TrimSpace(song.DestBase); d != "" {
+		base = d
+	}
+	if dd := strings.TrimSpace(song.DestDir); dd != "" {
+		destDir = dd
+		if err := os.MkdirAll(destDir, 0755); err != nil {
+			return &SongResult{
+				SongName: song.Name,
+				Singer:   song.Singer,
+				Status:   "failed",
+				Error:    "创建目标目录失败: " + err.Error(),
+			}, err
+		}
+	}
 
 	// 已存在（任意受支持扩展名且体积达标）→ 直接复用，避免重复下载。
 	// 例外：调用方明确要「升级」且现有文件是有损、本次要无损（见 UpgradeIfBetter）。
@@ -639,6 +665,18 @@ func (d *Downloader) downloadSingleSong(song SongPayload) (*SongResult, error) {
 	}
 
 	finalPath := allocateUniquePath(destDir, base, ext)
+	// 替换场景要「接管」目标名，而不是在旁边生成 `xxx (1).flac`：
+	//   - 扩展名没变（128k mp3 → 320k mp3）→ 直接覆盖原文件（rename 原子替换）；
+	//   - 扩展名变了（mp3 → flac）→ 用同名换扩展名，随后删掉旧的（下面 replacePath 那段）；
+	//   - 目标名被别人占着（极少）→ 退回 allocateUniquePath 的结果，宁可有影子文件也不覆盖别人的。
+	if replacePath != "" {
+		want := filepath.Join(destDir, base+"."+ext)
+		if strings.EqualFold(filepath.ToSlash(want), filepath.ToSlash(replacePath)) {
+			finalPath = want
+		} else if _, serr := os.Stat(want); serr != nil {
+			finalPath = want
+		}
+	}
 	if err := os.Rename(tmpPath, finalPath); err != nil {
 		_ = os.Remove(tmpPath)
 		return nil, fmt.Errorf("保存最终文件失败: %w", err)

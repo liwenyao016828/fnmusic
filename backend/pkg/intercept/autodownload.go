@@ -721,7 +721,7 @@ func (i *Interceptor) downloadToLibrary(ctx context.Context, fake string, t onli
 
 	var lastErr error
 	for n, a := range tries {
-		item, err := i.postDownload(ctx, fake, t, a.Cand, a.Res.URL, a.Tier())
+		item, err := i.postDownload(ctx, fake, t, a.Cand, a.Res.URL, a.Tier(), "")
 		if err != nil {
 			lastErr = err
 			// 只有多条可试时才刷日志 —— 单条失败上层会把错误报给用户，这里再打一条只是噪音。
@@ -751,7 +751,10 @@ func (i *Interceptor) downloadToLibrary(ctx context.Context, fake string, t onli
 // `actualTier` 是解析结果回读出来的**实际档位**（`Resolved.Tier`）。非空就优先用它：
 // 候选的 `Quality` 是**搜索时声明的**，平台可能静默降级（要 lossless 给 320k），
 // 拿声明当实际会在登记表里写「无损」而落盘是 mp3 —— 那是最难查的一类偏差。
-func (i *Interceptor) postDownload(ctx context.Context, fake string, t, used online.Track, url, actualTier string) (online.DownloadedItem, error) {
+// targetPath 非空时**落到这个文件上**（替换音质用）：目录与原文件名都按它来，
+// 而不是按候选曲目的名字。理由见 downloader.SongPayload.DestDir 的注释：
+// 候选歌名常与本地那份不一样，按候选名落盘会在别处多出一份、旧的还留着。
+func (i *Interceptor) postDownload(ctx context.Context, fake string, t, used online.Track, url, actualTier, targetPath string) (online.DownloadedItem, error) {
 	payload := map[string]any{
 		"name":     t.Title,
 		"singer":   t.Artist(),
@@ -767,6 +770,10 @@ func (i *Interceptor) postDownload(ctx context.Context, fake string, t, used onl
 		// 自动下载的语义是「按最高音质入库」：库里已经有一份 320k mp3 时，
 		// 这次拿到无损就该把它换掉，而不是回一句「已存在」把无损挡在门外。
 		"upgrade_if_better": true,
+	}
+	if tp := strings.TrimSpace(targetPath); tp != "" {
+		payload["dest_dir"] = filepath.Dir(tp)
+		payload["dest_base"] = strings.TrimSuffix(filepath.Base(tp), filepath.Ext(tp))
 	}
 	for k, v := range i.downloadPrefs() {
 		payload[k] = v

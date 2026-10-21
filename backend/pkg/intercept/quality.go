@@ -516,7 +516,9 @@ func (i *Interceptor) replaceOneQuality(ctx context.Context, raw string) (Qualit
 	}
 
 	fake := "quality:" + fmt.Sprint(time.Now().UnixNano())
-	item, err := i.postDownload(ctx, fake, pick.Cand, pick.Cand, pick.Res.URL, pick.Tier())
+	// 落到**盘上那份文件本身**：目录与原文件名都按它来。按候选歌名落盘的话，
+	// 真机实测会在曲库根目录多出一份新文件、旧的 128k 还赖在原地（2026-10-21）。
+	item, err := i.postDownload(ctx, fake, pick.Cand, pick.Cand, pick.Res.URL, pick.Tier(), path)
 	if err != nil {
 		return QualityReplaceDone{}, err
 	}

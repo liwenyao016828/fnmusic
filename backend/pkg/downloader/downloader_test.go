@@ -869,3 +869,79 @@ func TestShouldUpgradeOverLowBitrateMP3(t *testing.T) {
 		t.Error("文件读不出来时按 320k 兜底：无损仍该覆盖（保守方向是「不升」，不是「不敢升」）")
 	}
 }
+
+// 替换音质：落到**盘上那份文件本身**，并把它原地换掉。
+//
+// 2026-10-21 真机踩到：候选曲目的歌名常与本地那份不一样（本地《喜欢你》、
+// 咪咕给的《喜欢你 (电影《澳门风云3》插曲)》），按候选名落盘的结果是
+// 「曲库根目录多出一份新文件、旧的 128k 还赖在原地」，用户看到的就是没换。
+func TestDownloadReplaceInPlace(t *testing.T) {
+	flac := downloadFixtureFLAC()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "audio/flac")
+		_, _ = w.Write(flac)
+	}))
+	defer srv.Close()
+
+	outDir := t.TempDir()
+	// 盘上的旧文件：128k mp3，名字与候选歌名不同
+	old := filepath.Join(outDir, "Beyond - 喜欢你.mp3")
+	if err := os.WriteFile(old, append([]byte{0xff, 0xfb, 0x90, 0x00}, make([]byte, 600*1024)...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	d := newTestDownloader(t, outDir)
+
+	res, err := d.downloadSingleSong(SongPayload{
+		// 候选的歌名故意带后缀，模拟真机上「同一个歌、名字不一样」
+		Name: "喜欢你 (电影《澳门风云3》插曲)", Singer: "Beyond",
+		URL: srv.URL + "/a.flac", Quality: "flac", UpgradeIfBetter: true,
+		DestDir: outDir, DestBase: "Beyond - 喜欢你",
+	})
+	if err != nil {
+		t.Fatalf("替换应当成功: %v", err)
+	}
+	if got := filepath.ToSlash(res.Path); got != filepath.ToSlash(filepath.Join(outDir, "Beyond - 喜欢你.flac")) {
+		t.Errorf("该落在原目录的原文件名上（换扩展名），得到 %q", got)
+	}
+	if _, err := os.Stat(old); !os.IsNotExist(err) {
+		t.Errorf("旧的 mp3 该被删掉，stat 结果 %v", err)
+	}
+	if n := countAudioFiles(t, outDir); n != 1 {
+		t.Errorf("该只剩 1 个音频文件，实际 %d 个", n)
+	}
+	if _, err := os.Stat(filepath.Join(outDir, "喜欢你 (电影《澳门风云3》插曲).flac")); !os.IsNotExist(err) {
+		t.Error("不该按候选歌名另落一份")
+	}
+}
+
+// 同扩展名的替换：直接覆盖原文件，不生成 `xxx (1).mp3`。
+func TestDownloadReplaceInPlaceSameExt(t *testing.T) {
+	// 32kbps×… 用真 mp3 帧头当内容，容器仍是 mp3
+	payload := append([]byte("ID3"), make([]byte, 600*1024)...)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "audio/mpeg")
+		_, _ = w.Write(payload)
+	}))
+	defer srv.Close()
+
+	outDir := t.TempDir()
+	old := filepath.Join(outDir, "甲 - 乙.mp3")
+	if err := os.WriteFile(old, append([]byte{0xff, 0xfb, 0x90, 0x00}, make([]byte, 600*1024)...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	d := newTestDownloader(t, outDir)
+
+	res, err := d.downloadSingleSong(SongPayload{
+		Name: "乙", Singer: "甲", URL: srv.URL + "/a.mp3", Quality: "320k",
+		UpgradeIfBetter: true, DestDir: outDir, DestBase: "甲 - 乙",
+	})
+	if err != nil {
+		t.Fatalf("同扩展名替换应当成功: %v", err)
+	}
+	if got := filepath.ToSlash(res.Path); got != filepath.ToSlash(old) {
+		t.Errorf("该覆盖原路径 %q，得到 %q", filepath.ToSlash(old), got)
+	}
+	if n := countAudioFiles(t, outDir); n != 1 {
+		t.Errorf("该只剩 1 个音频文件（不留 (1) 影子），实际 %d 个", n)
+	}
+}
