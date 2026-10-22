@@ -8,8 +8,10 @@
 [![Platform](https://img.shields.io/badge/Platform-fnOS%20%28x86__64%29-3b82f6?logo=linux)](https://developer.fnnas.com/)
 [![Vue 3](https://img.shields.io/badge/Frontend-Vue%203%20%2B%20Vite-42b883?logo=vuedotjs)](https://vuejs.org/)
 [![Go](https://img.shields.io/badge/Backend-Go%201.22+-00add8?logo=go)](https://go.dev/)
-[![Version](https://img.shields.io/badge/Version-2.17.11-0b8a66)](RELEASE_NOTES.md)
+[![Version](https://img.shields.io/badge/Version-2.17.12-0b8a66)](RELEASE_NOTES.md)
 [![License](https://img.shields.io/badge/License-MIT-amber.svg)](LICENSE)
+
+个人项目 · 作者 [@liwenyao016828](https://github.com/liwenyao016828) · 代码由作者主导、AI 协作完成
 
 [📦 下载最新版](https://github.com/liwenyao016828/fnmusic/releases/latest) · [✨ 功能](#-功能) · [📥 安装](#-安装) · [🙏 致谢](#-致谢) · [🧭 架构](#-架构一页话) · [🛠️ 开发](#️-开发) · [🔌 开放接口](#-开放接口供-ai-与外部程序调用)
 
@@ -21,7 +23,7 @@
 > `appname` 不同，飞牛会把它当成**另一个应用**，**不覆盖**旧版，两者可并存（新 8898 / 旧 8899）。
 > 数据目录独立，历史数据不会自动迁移。
 >
-> 本 README 里所有数字都是现场数出来的（复现命令见 [开发](#️-开发) 一节）；逐版变更见
+> 本 README 里的数字都可由 [开发](#️-开发) 一节的命令复现；逐版变更见
 > [`RELEASE_NOTES.md`](RELEASE_NOTES.md)，架构与踩坑见 [`HANDOVER.md`](HANDOVER.md)。
 
 ## ✨ 功能
@@ -213,11 +215,11 @@ node --test scripts/lx-utils-check.mjs                 # 洛雪宿主单测（14
 
 ## 📚 版本与发版
 
-- 当前版本 **2.17.11**，四处手工同步：`backend/pkg/api/server.go` 的 `CurrentVersion`、
+- 当前版本 **2.17.12**，四处手工同步：`backend/pkg/api/server.go` 的 `CurrentVersion`、
   `fpk-package/manifest` 的 `version`、`RELEASE_NOTES.md` 顶部、`HANDOVER.md` §0。
 - 升哪一位：**x.0.0** 架构级 / 破坏性变更；**2.x.0** 新增能力（新功能 / 新页面 / 新链路）；
   **2.x.y** 修 bug、UI 微调、文档。
-- **自动发布**：功能完成并验证后，由 DSH 提交并推送 `main`。GitHub Actions 自动校验四处版本、运行测试、构建并自检 FPK，再创建 [Release](https://github.com/liwenyao016828/fnmusic/releases)（安装包 + SHA256 + 本版说明）。已有版本不覆盖；同版本文档提交只检查。PR 和其他分支只检查，不发布，也不自动部署 NAS。
+- **自动发布**：功能完成并验证后提交并推送 `main`。GitHub Actions 自动校验四处版本、运行测试、构建并自检 FPK，再创建 [Release](https://github.com/liwenyao016828/fnmusic/releases)（安装包 + SHA256 + 本版说明）。已有版本不覆盖；同版本文档提交只检查。PR 和其他分支只检查，不发布，也不自动部署 NAS。
 - **失败重跑**：在 Actions 页面重跑，或执行 `bash scripts/release.sh`（需要已登录的 GitHub CLI）。不需要手动打 tag 或另配个人 Token。
 - 仓库里**只保留最新一个** `.fpk`（历史包在 Releases，不在 git 历史里 —— 否则仓库没法克隆）。
   本仓库根目录的 `yinshu-ai-2.17.8.fpk` 就是最新一版（sha256
@@ -227,51 +229,51 @@ node --test scripts/lx-utils-check.mjs                 # 洛雪宿主单测（14
 
 ## 🙏 致谢
 
-这个项目的骨架不是凭空长出来的。下面这些**开源项目与作者**的实现、文档或踩坑记录，
-在关键处决定了我们怎么做、以及**不怎么做**。借出去的都是设计思路与协议细节，
-代码是我们自己的（未引入任何上游源码，`go.mod` 只有工作区内的模块）：
+这个项目从零写成，但设计上有明确的来处。下面这些开源项目、应用与作者，
+它们的实现、文档或踩坑记录在关键处决定了**怎么做、以及不怎么做**。
+本项目没有引入任何上游源码（`go.mod` 只有工作区内的模块），借的都是思路与协议细节：
 
 ### 取音与音源
 
-| 项目 | 我们借了什么 |
+| 项目 | 借鉴的 |
 |---|---|
-| [CharlesPikachu/musicdl](https://github.com/CharlesPikachu/musicdl) | 咪咕 / 汽水等平台的取链能力。以**独立 Python 进程**接入（`sidecar/musicdl_service/`，Go 侧只通过回环 HTTP 说话），刻意不把它的实现搬进 Go —— 许可与升级边界都更清楚 |
-| [guohuiyuan/go-music-dl](https://github.com/guohuiyuan/go-music-dl) · [guohuiyuan/music-lib](https://github.com/guohuiyuan/music-lib) | 多平台能力矩阵、歌曲/歌单/专辑链接解析。它的底层库 `music-lib` 实测能在我们的 Go 版本下编译，但**许可证是 AGPL-3.0、本项目是 MIT**，所以我们只学设计、没有引入 |
-| [qwex888/miyin](https://github.com/qwex888/miyin) | 音源熔断（连续失败冷却）、音质阶梯、下载队列、歌词内嵌、音源批量导入的交互形态。飞牛官方开放 API（`trim_open_gateway_apiscope` + 自动注入的 `TRIM_API_TOKEN`）这条重要发现也是从它这里看到的 |
-| [pdone/lx-music-source](https://github.com/pdone/lx-music-source) 等洛雪音源脚本作者 | 洛雪（LX Music）脚本协议本身。我们的取链链路是按这套协议对接的，脚本由使用者自行导入 |
+| [CharlesPikachu/musicdl](https://github.com/CharlesPikachu/musicdl) | 咪咕 / 汽水等平台的取链能力。以**独立 Python 进程**接入（`sidecar/musicdl_service/`，Go 侧只通过回环 HTTP 通信），而不把实现搬进 Go —— 许可与升级边界都更清楚 |
+| [guohuiyuan/go-music-dl](https://github.com/guohuiyuan/go-music-dl) · [guohuiyuan/music-lib](https://github.com/guohuiyuan/music-lib) | 多平台能力矩阵、歌曲 / 歌单 / 专辑链接解析。它的底层库 `music-lib` 实测能在本项目的 Go 版本下编译，但许可证是 **AGPL-3.0**、本项目是 **MIT**，因此只参考设计，没有引入 |
+| [qwex888/miyin](https://github.com/qwex888/miyin) | 音源熔断（连续失败冷却）、音质阶梯、下载队列、歌词内嵌、音源批量导入的交互形态。飞牛官方开放 API（`trim_open_gateway_apiscope` + 自动注入的 `TRIM_API_TOKEN`）这条重要线索也来自它 |
+| [pdone/lx-music-source](https://github.com/pdone/lx-music-source) 等洛雪音源脚本作者 | 洛雪（LX Music）脚本协议本身。取链链路是按这套协议对接的，脚本由使用者自行导入 |
 
 ### 飞牛（fnOS）应用集成
 
-| 项目 | 我们借了什么 |
+| 项目 | 借鉴的 |
 |---|---|
-| [javycoder/fnos_music_ext](https://github.com/javycoder/fnos_music_ext)（fnmusic-ext，原作者 zouclang） | **产品形态的起点**：无侵入接管官方音乐应用的思路、排行榜单注入、在线歌单与「收藏自动绑定本地」的组织方式。我们换掉了它的两处实现（榜单改调实时接口、收藏绑定改在拦截层做），但「该做成什么样」是它教的 |
-| [Baey666/music-monitor](https://github.com/Baey666/music-monitor) | 榜单/歌单监控的**版本过滤词表**（Live / 现场 / 伴奏 / Remix 的剔除规则）、匹配打分、时长校验、干跑预览 |
-| 轻乐集 `music-tidy` v1.12 / v1.14（作者 拾壹，[11.qlj.ink](https://11.qlj.ink)） | 整理引擎的设计：三阶段扫描、枚举完整性安全门、去重优先级，以及**最有价值的一条**——「结果必须来自输入」的防幻觉约束、「让 AI 生成规则而不是让 AI 做判断」。我们据此写了 `pkg/nameparse` 与 `pkg/ai`。⚠️ 原包未附 LICENSE，**源码未进入本仓库**，只保留我们自己写的精读报告（见 [`docs/参考项目/`](docs/参考项目/README.md)） |
-| `fnmusic-flow` v1.0.4 | QQ 扫码登录的**原始移植来源**（推送模型与音源健康度也参考了它）。也正因为它，我们学会了「参考实现不等于参考实现是对的」—— 它的 QQ 流程漏了 `check_sig`，照抄会卡死 |
+| [javycoder/fnos_music_ext](https://github.com/javycoder/fnos_music_ext)（fnmusic-ext，早期由 zouclang 维护） | **产品形态的起点**：无侵入接管官方音乐应用的思路、排行榜单注入、在线歌单与「收藏自动绑定本地」的组织方式。其中两处按本项目的情况重写了（榜单改调实时接口、收藏绑定改在拦截层做），但「该做成什么样」是从它这里学到的 |
+| [Baey666/music-monitor](https://github.com/Baey666/music-monitor) | 榜单 / 歌单监控的**版本过滤词表**（Live / 现场 / 伴奏 / Remix 的剔除规则）、匹配打分、时长校验、干跑预览 |
+| 轻乐集 `music-tidy` v1.12 / v1.14（作者 拾壹，[11.qlj.ink](https://11.qlj.ink)） | 整理引擎的设计：三阶段扫描、枚举完整性安全门、去重优先级，以及最有价值的一条 ——「结果必须来自输入」的防幻觉约束、「让 AI 生成规则而不是让 AI 做判断」。`pkg/nameparse` 与 `pkg/ai` 的思路来源于此。⚠️ 原包未附 LICENSE，**源码未进入本仓库**，只保留自己写的精读报告（见 [`docs/参考项目/`](docs/参考项目/README.md)） |
+| `fnmusic-flow` v1.0.4 | QQ 扫码登录的**原始移植来源**（推送模型与音源健康度也参考了它）。也正因为它，有了「参考实现不等于参考实现是对的」这条教训 —— 它的 QQ 流程漏了 `check_sig`，照抄会卡死 |
 
 ### 登录与平台协议
 
-| 项目 | 我们借了什么 |
+| 项目 | 借鉴的 |
 |---|---|
 | [L-1124/QQMusicApi](https://github.com/L-1124/QQMusicApi) | QQ 扫码登录的**正确**流程：`check_sig` 换 `p_skey` 的做法，以及 `pt_login_type` 等全部参数表（逐项核对，一项都不能省） |
 | [NeteaseCloudMusicApiEnhanced/api-enhanced](https://github.com/NeteaseCloudMusicApiEnhanced/api-enhanced) | 网易云登录的关键参数（`login_qr_key` 的 `type: 3`、`login_qr_create` 的 `chainId`）。没有它，网易云扫码会一直卡在「已扫码未确认」 |
-| `leelaa.playlist` v1.1.1（AI 歌单） | 推理模型的错误处理：`content \|\| reasoning` 回退与 `finish_reason=length` 的识别。它无源码（Rust 二进制），纯靠行为学到的 |
+| `leelaa.playlist` v1.1.1（AI 歌单） | 推理模型的错误处理：`content \|\| reasoning` 回退与 `finish_reason=length` 的识别。它无源码（Rust 二进制），靠行为反推 |
 | `zouclang/fnos_music_ext` v2.8.0 | 榜单注入的产品形态（`proxy/charts.py`），以及官方 socket 拓扑的实测线索 |
 
 ### 前端与工程
 
-| 项目 | 我们借了什么 |
+| 项目 | 借鉴的 |
 |---|---|
-| [Vue 3](https://github.com/vuejs/core) · [Vite](https://github.com/vitejs/vite) · [Tailwind CSS](https://github.com/tailwindlabs/tailwindcss) · [lucide](https://github.com/lucide-icons/lucide) | 界面底座。v2.11 起的「安静玻璃」视觉重构全部建立在这几件工具之上 |
-| [modernc.org/sqlite](https://gitlab.com/cznic/sqlite) · [coder/websocket](https://github.com/coder/websocket) | 唯一两个 Go 依赖：纯 Go 的 SQLite（免 cgo）与 WebSocket |
-| [GitHub Actions](https://github.com/features/actions) 生态（`setup-go` / `setup-node` / `action-gh-release` …） | 自动检查、打包与发布 |
+| [Vue 3](https://github.com/vuejs/core) · [Vite](https://github.com/vitejs/vite) · [Tailwind CSS](https://github.com/tailwindlabs/tailwindcss) · [lucide](https://github.com/lucide-icons/lucide) | 界面底座。v2.11 起的「安静玻璃」视觉重构建立在这几件工具之上 |
+| [modernc.org/sqlite](https://gitlab.com/cznic/sqlite) · [coder/websocket](https://github.com/coder/websocket) | 仅有的两个 Go 依赖：纯 Go 的 SQLite（免 cgo）与 WebSocket |
+| [GitHub Actions](https://github.com/features/actions) 生态（`setup-go` / `setup-node` / `action-gh-release` 等） | 自动检查、打包与发布 |
 
-> **没有列出的**：任何一个具体音源脚本的作者与使用条款 —— 脚本由使用者自行导入并自负其责。
-> 如果你认为某个项目在这里被遗漏，或不希望被这样致谢，开个 issue，我们改。
+> 具体音源脚本的作者与使用条款不在此列 —— 脚本由使用者自行导入并自负其责。
+> 若某个项目被遗漏，或不希望被这样致谢，开个 issue。
 
 ## ⚖️ 免责声明
 
-本项目为开源的**个人本地私有云音频播放器与文件管理器**，不提供、不聚合、不分发、
+本软件为**个人本地私有云音频播放器与文件管理器**，不提供、不聚合、不分发、
 不存储任何受版权保护的音频、歌词或图片资源；全部网络曲库能力依赖使用者**自主导入**的
 第三方音源脚本或自行配置的外部服务。用户须自行确保遵守所在地区法律与第三方服务条款，
 严禁用于商业营利；第三方脚本的合法性由脚本编写者与导入者自行承担。
