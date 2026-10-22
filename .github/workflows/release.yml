@@ -1,0 +1,53 @@
+# 推送 main 后检查并打包；该版本尚未发布时自动创建 Release。
+# 同版本提交仍跑检查，但不会覆盖已发布的安装包。
+name: Release
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+jobs:
+  check:
+    uses: ./.github/workflows/ci.yml
+  publish:
+    needs: check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-package
+          path: release-artifacts
+      - name: 检查本版是否已发布
+        id: existing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          # API/权限/网络出错必须失败，不能被当成「版本不存在」。
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '.[].tag_name' > /tmp/release-tags
+          if grep -Fxq "v$VERSION" /tmp/release-tags; then
+            echo 'exists=true' >> "$GITHUB_OUTPUT"
+            echo "v$VERSION 已发布，本次保留现有资产。" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'exists=false' >> "$GITHUB_OUTPUT"
+          fi
+      - name: 发布已测试的安装包
+        if: steps.existing.outputs.exists != 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.check.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          name: 曲率 v${{ needs.check.outputs.version }}
+          body_path: release-artifacts/RELEASE_BODY.md
+          files: |
+            release-artifacts/*.fpk
+            release-artifacts/SHA256SUMS.txt
+          fail_on_unmatched_files: true
+          overwrite_files: false

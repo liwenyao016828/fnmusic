@@ -1,0 +1,63 @@
+name: CI
+on:
+  push:
+    branches-ignore: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+  workflow_call:
+    outputs:
+      version:
+        value: ${{ jobs.check.outputs.version }}
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+          cache-dependency-path: backend/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: 校验四处版本并提取本版说明
+        id: meta
+        run: |
+          mkdir -p release-artifacts
+          VERSION=$(python3 scripts/release_metadata.py --notes release-artifacts/RELEASE_BODY.md)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+      - name: 安装锁定的前端依赖
+        working-directory: frontend
+        run: npm ci
+      - name: 前端测试并生成 Go embed 资源
+        working-directory: frontend
+        run: |
+          node --test src/services/*.test.mjs
+          npm run build
+      - name: 后端测试
+        working-directory: backend
+        run: go test ./... -count=1
+      - name: 洛雪宿主测试
+        run: |
+          node --check sidecar/lx_host/server.mjs
+          node --test scripts/lx-utils-check.mjs
+      - name: 打包并自检
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          python3 scripts/build_fpk.py --skip-frontend --version "$VERSION" --output "release-artifacts/yinshu-ai-$VERSION.fpk"
+          cd release-artifacts
+          sha256sum "yinshu-ai-$VERSION.fpk" > SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-package
+          path: release-artifacts/
+          retention-days: 7
+          if-no-files-found: error

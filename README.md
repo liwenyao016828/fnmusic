@@ -213,12 +213,12 @@ node --test scripts/lx-utils-check.mjs                 # 洛雪宿主单测（14
 
 ## 📚 版本与发版
 
-- 当前版本 **2.17.8**，四处手工同步：`backend/pkg/api/server.go` 的 `CurrentVersion`、
+- 当前版本 **2.17.9**，四处手工同步：`backend/pkg/api/server.go` 的 `CurrentVersion`、
   `fpk-package/manifest` 的 `version`、`RELEASE_NOTES.md` 顶部、`HANDOVER.md` §0。
 - 升哪一位：**x.0.0** 架构级 / 破坏性变更；**2.x.0** 新增能力（新功能 / 新页面 / 新链路）；
   **2.x.y** 修 bug、UI 微调、文档。
-- **发布流程**：`bash scripts/build.sh --version X` → 产物改名 `yinshu-ai-X.fpk` →
-  在 [Releases](https://github.com/liwenyao016828/fnmusic/releases) 建 tag `vX` 并上传 `.fpk`。
+- **自动发布**：功能完成并验证后，由 DSH 提交并推送 `main`。GitHub Actions 自动校验四处版本、运行测试、构建并自检 FPK，再创建 [Release](https://github.com/liwenyao016828/fnmusic/releases)（安装包 + SHA256 + 本版说明）。已有版本不覆盖；同版本文档提交只检查。PR 和其他分支只检查，不发布，也不自动部署 NAS。
+- **失败重跑**：在 Actions 页面重跑，或执行 `bash scripts/release.sh`（需要已登录的 GitHub CLI）。不需要手动打 tag 或另配个人 Token。
 - 仓库里**只保留最新一个** `.fpk`（历史包在 Releases，不在 git 历史里 —— 否则仓库没法克隆）。
   本仓库根目录的 `yinshu-ai-2.17.8.fpk` 就是最新一版（sha256
   `5d840c4b7700c93ed92cff92453c272e60481adde59115bd58c6e42f861ab072`）。
