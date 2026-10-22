@@ -176,9 +176,61 @@ func TestAutoDownloadDedupesConcurrentTriggers(t *testing.T) {
 	if !waitDownloaded(t, h, fake) {
 		t.Fatal("该登记")
 	}
-	time.Sleep(200 * time.Millisecond)
+	// ⚠️ 原来的 `time.Sleep(200ms)` 是一条**能被调度器偏心蒙混过去**的断言，所以它
+	// 在本地多核机器上一直是绿的，到 2 核的 GitHub runner 上就红（同一首歌下了 2 次）。
+	// 改成等「只下一次」这个状态本身：两次触发都已经同步返回，后台 goroutine 最多
+	// 一个 —— 多出来的那次要么已经打到假后端，要么永远打不到（首个完成后
+	// unmarkDownloading 才放行第二个），所以这里不用猜时间，等 5 秒为上限。
+	deadline := time.Now().Add(5 * time.Second)
+	for len(*seen) > 1 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
 	if len(*seen) != 1 {
 		t.Fatalf("同一首歌只该下一次，实际 %d 次", len(*seen))
+	}
+}
+
+// TestBeginDownloadIsAtomic 直接压 beginDownload：「判断该不该下」和「占位」必须是
+// 一次原子操作。这不是重复上面那条端到端用例 —— 那条走 HTTP，两次触发之间隔着
+// 一大段处理链，撞上的概率取决于核数与调度；这条把 64 个并发**直接**怼在同一首歌
+// 上，谁把两步拆开谁立刻红。
+func TestBeginDownloadIsAtomic(t *testing.T) {
+	h := newHarness(t)
+	// 前提（与 autoDownload 开头那两道闸一致）：下载目标接口在、登记表在。
+	// 缺这两个时 beginDownload 一律不放行 —— 那是「不下」而不是「撞车」。
+	srv, _, _ := fakeDownloadBackend(t)
+	h.it.localAPI = srv.URL
+	h.it.favAutoDownload = func() bool { return true }
+	fake := registerOnline(h, "w910", "甲", "乙")
+
+	const n = 64
+	var (
+		wg      sync.WaitGroup
+		mu      sync.Mutex
+		claimed int
+	)
+	wg.Add(n)
+	for k := 0; k < n; k++ {
+		go func() {
+			defer wg.Done()
+			if ok, _ := h.it.beginDownload(fake); ok {
+				mu.Lock()
+				claimed++
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	if claimed != 1 {
+		t.Fatalf("同一首歌 64 个并发触发只该有一个占到名额，实际 %d 个", claimed)
+	}
+	// 没释放之前再来一个也不能占（占位要在整个下载期间有效）。
+	if ok, _ := h.it.beginDownload(fake); ok {
+		t.Fatal("下载没结束时不该再放行第二个")
+	}
+	h.it.unmarkDownloading(fake)
+	if ok, _ := h.it.beginDownload(fake); !ok {
+		t.Fatal("上一个下完之后应该能被再次触发（换源重下就是靠这条）")
 	}
 }
 

@@ -62,6 +62,64 @@ func (i *Interceptor) unmarkDownloading(fake string) {
 	i.dlMu.Unlock()
 }
 
+// beginDownload 把「该不该下」和「占位」合成**一次**原子操作。
+//
+// ⚠️ 这两件事以前是分开的（先 `downloaded.Get`/`shouldRetryUpgrade` 判断，
+// 再 `markDownloading` 占位），看上去差不多，实际上不成立：两次触发之间只要
+// 夹进第二个 goroutine，两边都会在 `dlSet` 为空时读到「没人下」，于是**同一首歌
+// 下两遍**。本地多核机器上几乎撞不到，GitHub 的 2 核 runner 上一撞一个准
+// （`TestAutoDownloadDedupesConcurrentTriggers` 就是这么红的）。
+//
+// 返回 (true, zero) = 轮到你去下；返回 (false, item) = 不用下，`item` 是当前登记
+// 的那条（没有则为零值，供调用方判断要不要提示）。
+//
+// 判据与顺序（与改动前逐条一致，只是搬进了锁里）：
+//  1. 已登记 + 不该重下 → 不下；
+//  2. 已登记 + 该重下 → 先把冷却账记上（一次收藏会同时来「收藏」与「加歌单」两个
+//     触发，账不在这里推后，第二次触发就会又问一遍）；
+//  3. 没登记却不满足下载前提（登记表/本机接口为空）或已有人在下 → 不下。
+//
+// 第 3 条里 `i.downloaded == nil` 以前是在锁外最先判的，这里挪进锁内 —— 它不依赖
+// 共享状态，挪进来只是让「判断 + 占位」完整地待在同一段临界区里。
+func (i *Interceptor) beginDownload(fake string) (bool, online.DownloadedItem) {
+	i.dlMu.Lock()
+	defer i.dlMu.Unlock()
+	if i.dlSet == nil {
+		i.dlSet = map[string]bool{}
+	}
+	if i.dlSet[fake] {
+		return false, online.DownloadedItem{}
+	}
+
+	var cur online.DownloadedItem
+	have := false
+	if i.downloaded != nil {
+		cur, have = i.downloaded.Get(fake)
+	}
+	if have {
+		// 已经在本地了 —— 但如果本地那份是**有损**、而这次能拿无损，允许重下一次
+		// 把它换掉（见 shouldRetryUpgrade）。
+		if !i.shouldRetryUpgrade(cur) {
+			return false, cur
+		}
+		now := time.Now()
+		cur.UpgradeTried = true
+		cur.UpgradeTries++
+		cur.UpgradeNext = now.Add(upgradeRetryCooldown).Unix()
+		cur.At = now.Unix()
+		// 账记在**锁内**的这份副本上，由调用方在锁外 Put（Put 要 stat 文件并落盘，
+		// 占着 dlMu 做是白堵所有下载触发）。
+		if err := i.downloaded.Put(cur); err != nil {
+			i.logf("[INTERCEPT] 标记音质升级尝试失败 %s：%v", fake, err)
+		}
+	}
+	if i.downloaded == nil || i.localAPI == "" {
+		return false, cur
+	}
+	i.dlSet[fake] = true
+	return true, cur
+}
+
 // 自动下载的触发来源。真身在 pkg/online（它们是记录表 schema 的一部分，
 // 读写两侧必须同一套字符串），这里只是本地别名，省掉每处调用点的跨包前缀。
 const (
@@ -82,30 +140,13 @@ func (i *Interceptor) autoDownload(fake string, t online.Track, trigger string) 
 	if !i.favAutoDownloadOn() {
 		return
 	}
-	if i.downloaded == nil || i.localAPI == "" {
-		return
-	}
-	// 升级账本的快照（goroutine 里落盘之后要把它带回新记录，见下面「账本要跟着新记录走」）。
-	var scheduled online.DownloadedItem
-	if item, ok := i.downloaded.Get(fake); ok {
-		// 已经在本地了 —— 但如果本地那份是**有损**、而这次能拿无损，允许重下一次
-		// 把它换掉（见 shouldRetryUpgrade）。只试一次，失败就不再纠缠。
-		if !i.shouldRetryUpgrade(item) {
-			return
-		}
-		// 先把账记上再动手：一次收藏会同时来两个触发（收藏 + 加歌单），
-		// 冷却位不在这里推后，第二次触发就会又下一次。
-		now := time.Now()
-		item.UpgradeTried = true
-		item.UpgradeTries++
-		item.UpgradeNext = now.Add(upgradeRetryCooldown).Unix()
-		item.At = now.Unix()
-		scheduled = item
-		if err := i.downloaded.Put(item); err != nil {
-			i.logf("[INTERCEPT] 标记音质升级尝试失败 %s：%v", fake, err)
-		}
-	}
-	if !i.markDownloading(fake) {
+	// 判断与占位是**一次**原子操作（见 beginDownload 的注释）：分开做的版本在
+	// 两次触发挨得很近时会让同一首歌下两遍。
+	//
+	// `scheduled` 是升级账本的快照 —— goroutine 里落盘之后要把它带回新记录，
+	// 见下面「账本要跟着新记录走」。
+	claimed, scheduled := i.beginDownload(fake)
+	if !claimed {
 		return
 	}
 
