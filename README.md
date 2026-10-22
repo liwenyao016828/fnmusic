@@ -220,11 +220,10 @@ node --test scripts/lx-utils-check.mjs                 # 洛雪宿主单测（14
 - **发布流程**：`bash scripts/build.sh --version X` → 产物改名 `yinshu-ai-X.fpk` →
   在 [Releases](https://github.com/liwenyao016828/fnmusic/releases) 建 tag `vX` 并上传 `.fpk`。
 - 仓库里**只保留最新一个** `.fpk`（历史包在 Releases，不在 git 历史里 —— 否则仓库没法克隆）。
-  最新包同时归档在 [`releases/`](releases/)：sha256
-  `5d840c4b7700c93ed92cff92453c272e60481adde59115bd58c6e42f861ab072`。
-  > ⚠️ 本仓库目前是 **private**，`raw.githubusercontent.com` 链接对未登录者不可用；
-  > 要对外分发，请把包作为 **Release 资产**上传（Release 资产也能被 `gh` / API 直链下载），
-  > 或把仓库转为 public。
+  本仓库根目录的 `yinshu-ai-2.17.8.fpk` 就是最新一版（sha256
+  `5d840c4b7700c93ed92cff92453c272e60481adde59115bd58c6e42f861ab072`）。
+  > 仓库里放的是**发版留档**；对外分发请走 **Release 资产**（含校验和、可追溯、不进 git 历史）。
+  > GitHub 的 raw 直链对超过 100 MB 的单个文件会拒绝，`.fpk` 目前没到线，但别拿它当下载渠道。
 
 ## ⚖️ 免责声明
 
