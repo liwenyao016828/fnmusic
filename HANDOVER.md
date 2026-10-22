@@ -3795,8 +3795,8 @@ window.addEventListener('resize', () => this.resize())   // 匿名函数，移�
 
 | 目录 | 版本 | 说明 |
 |---|---|---|
-| `docs/参考项目/music-tidy/` | **v1.12.0** | 早期提取，留着做版本对比 |
-| `docs/参考项目/music-tidy-1.14.0/` | **v1.14.0** | **看 AI 部分用这个**（`server/ai_llm.py` 675 行 / 8 个方法）；附 `README.md` 指路 |
+| `docs/参考项目/music-tidy/` | **v1.12.0** | ⚠️ **源码已于 2026-10-22 移出仓库**（第三方无 LICENSE，不适合放进公开仓库）。只留 `music-tidy-tidy_engine-研究报告.md` |
+| `docs/参考项目/music-tidy-1.14.0/` | **v1.14.0** | 同上，只留 `README.md` 指路。要读源码：**在仓库外**解包 fpk（`tar -xzf music-tidy-1.14.0.fpk`），别拷回来 |
 
 > 解包 FPK 的方法：`tar -xzf x.fpk && mkdir app && tar -xzf app.tgz -C app`
 > （外层是 gzip 包，里面还有一层 `app.tgz`）
