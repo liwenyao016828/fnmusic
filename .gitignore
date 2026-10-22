@@ -72,3 +72,9 @@ fpk-package/app.tgz
 /fpk-package/app/yinshu-ai
 /fpk-package/app/fn-lx-player
 /fpk-package/fn-lx-player
+
+# 第三方参考项目的源码副本：不进仓库（对方的 LICENSE 不明，见 docs/参考项目/README.md）。
+# 只保留我们自己写的分析报告（*.md）。
+docs/参考项目/music-tidy/server/
+docs/参考项目/music-tidy/cmd/
+docs/参考项目/music-tidy-1.14.0/server/
