@@ -8,10 +8,10 @@
 [![Platform](https://img.shields.io/badge/Platform-fnOS%20%28x86__64%29-3b82f6?logo=linux)](https://developer.fnnas.com/)
 [![Vue 3](https://img.shields.io/badge/Frontend-Vue%203%20%2B%20Vite-42b883?logo=vuedotjs)](https://vuejs.org/)
 [![Go](https://img.shields.io/badge/Backend-Go%201.22+-00add8?logo=go)](https://go.dev/)
-[![Version](https://img.shields.io/badge/Version-2.17.8-0b8a66)](RELEASE_NOTES.md)
+[![Version](https://img.shields.io/badge/Version-2.17.11-0b8a66)](RELEASE_NOTES.md)
 [![License](https://img.shields.io/badge/License-MIT-amber.svg)](LICENSE)
 
-[📦 下载最新版](https://github.com/liwenyao016828/fnmusic/releases/latest) · [✨ 功能](#-功能) · [📥 安装](#-安装) · [🧭 架构](#-架构一页话) · [🛠️ 开发](#️-开发) · [🔌 开放接口](#-开放接口供-ai-与外部程序调用)
+[📦 下载最新版](https://github.com/liwenyao016828/fnmusic/releases/latest) · [✨ 功能](#-功能) · [📥 安装](#-安装) · [🙏 致谢](#-致谢) · [🧭 架构](#-架构一页话) · [🛠️ 开发](#️-开发) · [🔌 开放接口](#-开放接口供-ai-与外部程序调用)
 
 </div>
 
@@ -213,7 +213,7 @@ node --test scripts/lx-utils-check.mjs                 # 洛雪宿主单测（14
 
 ## 📚 版本与发版
 
-- 当前版本 **2.17.9**，四处手工同步：`backend/pkg/api/server.go` 的 `CurrentVersion`、
+- 当前版本 **2.17.11**，四处手工同步：`backend/pkg/api/server.go` 的 `CurrentVersion`、
   `fpk-package/manifest` 的 `version`、`RELEASE_NOTES.md` 顶部、`HANDOVER.md` §0。
 - 升哪一位：**x.0.0** 架构级 / 破坏性变更；**2.x.0** 新增能力（新功能 / 新页面 / 新链路）；
   **2.x.y** 修 bug、UI 微调、文档。
@@ -224,6 +224,50 @@ node --test scripts/lx-utils-check.mjs                 # 洛雪宿主单测（14
   `5d840c4b7700c93ed92cff92453c272e60481adde59115bd58c6e42f861ab072`）。
   > 仓库里放的是**发版留档**；对外分发请走 **Release 资产**（含校验和、可追溯、不进 git 历史）。
   > GitHub 的 raw 直链对超过 100 MB 的单个文件会拒绝，`.fpk` 目前没到线，但别拿它当下载渠道。
+
+## 🙏 致谢
+
+这个项目的骨架不是凭空长出来的。下面这些**开源项目与作者**的实现、文档或踩坑记录，
+在关键处决定了我们怎么做、以及**不怎么做**。借出去的都是设计思路与协议细节，
+代码是我们自己的（未引入任何上游源码，`go.mod` 只有工作区内的模块）：
+
+### 取音与音源
+
+| 项目 | 我们借了什么 |
+|---|---|
+| [CharlesPikachu/musicdl](https://github.com/CharlesPikachu/musicdl) | 咪咕 / 汽水等平台的取链能力。以**独立 Python 进程**接入（`sidecar/musicdl_service/`，Go 侧只通过回环 HTTP 说话），刻意不把它的实现搬进 Go —— 许可与升级边界都更清楚 |
+| [guohuiyuan/go-music-dl](https://github.com/guohuiyuan/go-music-dl) · [guohuiyuan/music-lib](https://github.com/guohuiyuan/music-lib) | 多平台能力矩阵、歌曲/歌单/专辑链接解析。它的底层库 `music-lib` 实测能在我们的 Go 版本下编译，但**许可证是 AGPL-3.0、本项目是 MIT**，所以我们只学设计、没有引入 |
+| [qwex888/miyin](https://github.com/qwex888/miyin) | 音源熔断（连续失败冷却）、音质阶梯、下载队列、歌词内嵌、音源批量导入的交互形态。飞牛官方开放 API（`trim_open_gateway_apiscope` + 自动注入的 `TRIM_API_TOKEN`）这条重要发现也是从它这里看到的 |
+| [pdone/lx-music-source](https://github.com/pdone/lx-music-source) 等洛雪音源脚本作者 | 洛雪（LX Music）脚本协议本身。我们的取链链路是按这套协议对接的，脚本由使用者自行导入 |
+
+### 飞牛（fnOS）应用集成
+
+| 项目 | 我们借了什么 |
+|---|---|
+| [javycoder/fnos_music_ext](https://github.com/javycoder/fnos_music_ext)（fnmusic-ext，原作者 zouclang） | **产品形态的起点**：无侵入接管官方音乐应用的思路、排行榜单注入、在线歌单与「收藏自动绑定本地」的组织方式。我们换掉了它的两处实现（榜单改调实时接口、收藏绑定改在拦截层做），但「该做成什么样」是它教的 |
+| [Baey666/music-monitor](https://github.com/Baey666/music-monitor) | 榜单/歌单监控的**版本过滤词表**（Live / 现场 / 伴奏 / Remix 的剔除规则）、匹配打分、时长校验、干跑预览 |
+| 轻乐集 `music-tidy` v1.12 / v1.14（作者 拾壹，[11.qlj.ink](https://11.qlj.ink)） | 整理引擎的设计：三阶段扫描、枚举完整性安全门、去重优先级，以及**最有价值的一条**——「结果必须来自输入」的防幻觉约束、「让 AI 生成规则而不是让 AI 做判断」。我们据此写了 `pkg/nameparse` 与 `pkg/ai`。⚠️ 原包未附 LICENSE，**源码未进入本仓库**，只保留我们自己写的精读报告（见 [`docs/参考项目/`](docs/参考项目/README.md)） |
+| `fnmusic-flow` v1.0.4 | QQ 扫码登录的**原始移植来源**（推送模型与音源健康度也参考了它）。也正因为它，我们学会了「参考实现不等于参考实现是对的」—— 它的 QQ 流程漏了 `check_sig`，照抄会卡死 |
+
+### 登录与平台协议
+
+| 项目 | 我们借了什么 |
+|---|---|
+| [L-1124/QQMusicApi](https://github.com/L-1124/QQMusicApi) | QQ 扫码登录的**正确**流程：`check_sig` 换 `p_skey` 的做法，以及 `pt_login_type` 等全部参数表（逐项核对，一项都不能省） |
+| [NeteaseCloudMusicApiEnhanced/api-enhanced](https://github.com/NeteaseCloudMusicApiEnhanced/api-enhanced) | 网易云登录的关键参数（`login_qr_key` 的 `type: 3`、`login_qr_create` 的 `chainId`）。没有它，网易云扫码会一直卡在「已扫码未确认」 |
+| `leelaa.playlist` v1.1.1（AI 歌单） | 推理模型的错误处理：`content \|\| reasoning` 回退与 `finish_reason=length` 的识别。它无源码（Rust 二进制），纯靠行为学到的 |
+| `zouclang/fnos_music_ext` v2.8.0 | 榜单注入的产品形态（`proxy/charts.py`），以及官方 socket 拓扑的实测线索 |
+
+### 前端与工程
+
+| 项目 | 我们借了什么 |
+|---|---|
+| [Vue 3](https://github.com/vuejs/core) · [Vite](https://github.com/vitejs/vite) · [Tailwind CSS](https://github.com/tailwindlabs/tailwindcss) · [lucide](https://github.com/lucide-icons/lucide) | 界面底座。v2.11 起的「安静玻璃」视觉重构全部建立在这几件工具之上 |
+| [modernc.org/sqlite](https://gitlab.com/cznic/sqlite) · [coder/websocket](https://github.com/coder/websocket) | 唯一两个 Go 依赖：纯 Go 的 SQLite（免 cgo）与 WebSocket |
+| [GitHub Actions](https://github.com/features/actions) 生态（`setup-go` / `setup-node` / `action-gh-release` …） | 自动检查、打包与发布 |
+
+> **没有列出的**：任何一个具体音源脚本的作者与使用条款 —— 脚本由使用者自行导入并自负其责。
+> 如果你认为某个项目在这里被遗漏，或不希望被这样致谢，开个 issue，我们改。
 
 ## ⚖️ 免责声明
 
