@@ -19,6 +19,7 @@ import (
 	"fn-lx-player/pkg/library"
 	"fn-lx-player/pkg/match"
 	"fn-lx-player/pkg/nas"
+	"fn-lx-player/pkg/push"
 	"fn-lx-player/pkg/search"
 	"fn-lx-player/pkg/security"
 	"fn-lx-player/pkg/tags"
@@ -873,4 +874,41 @@ func (s *Server) loadAIConfig() {
 // libraryIndex 返回曲库索引实例
 func (s *Server) libraryIndex() *library.Index {
 	return s.libIndex
+}
+
+// localTrackSnapshot 把曲库索引转成 push 包认得的一串 LocalTrack（给「飞牛歌单
+// 同步」做本地兜底匹配用）。
+//
+// 为什么要在这里转而不是让 push 包直接吃 library.Index：push 包是被 monitor /
+// runner / api 三层共用的底层，让它依赖 library 会把「推歌单」和「扫曲库」两个
+// 东西绑死（library 那边还在演进）。中间隔一层纯数据，两边都能独立测。
+//
+// 返回 nil 表示索引不可用 —— 调用方据此退回「只看飞牛曲库」的老行为，
+// 绝不能因为拿不到本地索引就把整次推送判失败。
+func (s *Server) localTrackSnapshot() func() []push.LocalTrack {
+	if s.libIndex == nil {
+		return nil
+	}
+	idx := s.libIndex
+	return func() []push.LocalTrack {
+		entries := idx.List()
+		out := make([]push.LocalTrack, 0, len(entries))
+		for _, e := range entries {
+			name := strings.TrimSpace(e.Title)
+			if name == "" {
+				// 没读到标签的条目用文件名兜底：曲库里相当一部分文件靠文件名认，
+				// 少了这一步它们永远匹配不上（用户会说「我明明有这首歌」）。
+				base := filepath.Base(e.Path)
+				name = strings.TrimSuffix(base, filepath.Ext(base))
+			}
+			out = append(out, push.LocalTrack{
+				Path:   e.Path,
+				Name:   name,
+				Artist: e.Artist,
+				Album:  e.Album,
+				Format: e.Format,
+			})
+		}
+		return out
+	}
 }

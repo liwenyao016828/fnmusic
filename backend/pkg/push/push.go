@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -46,21 +47,34 @@ type ItemResult struct {
 	FnosTrackGUID string  `json:"fnos_track_guid,omitempty"`
 	FnosTitle     string  `json:"fnos_title,omitempty"`
 	Reason        string  `json:"reason,omitempty"`
+	// Source 这条是怎么判定的：fnos（飞牛曲库命中）/ local（本地文件命中）/
+	// local_version_diff（本地有一版，但时长对不上，让用户选）。
+	// 空 = 老调用方 / 未命中，按 fnos 理解。
+	Source string `json:"source,omitempty"`
+	// LocalPath 命中的本地文件绝对路径（Source 为 local* 时必有）。
+	// 界面拿它显示「本地已有：xxx.flac」，也拿它做「用本地版本」的依据。
+	LocalPath string `json:"local_path,omitempty"`
+	// LocalDuration / SourceDuration 只有版本存疑时才填，给界面说明差异在哪。
+	LocalDuration  int `json:"local_duration,omitempty"`
+	SourceDuration int `json:"source_duration,omitempty"`
 }
 
 // Result 一次推送的结果。
 type Result struct {
-	GUID            string       `json:"guid"`
-	Title           string       `json:"title"`
-	CreatedPlaylist bool         `json:"created_playlist"`
-	Total           int          `json:"total"`
-	Matched         int          `json:"matched"`
-	Added           int          `json:"added"`
-	AlreadyPresent  int          `json:"already_present"`
-	Missing         []ItemResult `json:"missing"`
-	Items           []ItemResult `json:"items"`
-	CoverWarning    string       `json:"cover_warning,omitempty"`
-	DryRun          bool         `json:"dry_run"`
+	GUID            string `json:"guid"`
+	Title           string `json:"title"`
+	CreatedPlaylist bool   `json:"created_playlist"`
+	Total           int    `json:"total"`
+	Matched         int    `json:"matched"`
+	// LocalMatched 飞牛曲库没有、但**本地曲库已有**的曲目数。
+	// 它们不算 Matched（没推上去，飞牛歌单里不会有），也不算 Missing（歌已经有了）。
+	LocalMatched   int          `json:"local_matched"`
+	Added          int          `json:"added"`
+	AlreadyPresent int          `json:"already_present"`
+	Missing        []ItemResult `json:"missing"`
+	Items          []ItemResult `json:"items"`
+	CoverWarning   string       `json:"cover_warning,omitempty"`
+	DryRun         bool         `json:"dry_run"`
 
 	// Expired 本轮因超出保留期而从歌单移除的曲目数（见 retention.go）
 	Expired int `json:"expired,omitempty"`
@@ -87,7 +101,40 @@ type Options struct {
 	// Pushed 该任务此前推送过的曲目记录。
 	// 清理只在这个范围内进行 —— 绝不碰用户手动加进歌单的曲目。
 	Pushed []PushedTrack
+
+	// LocalIndex 本地曲库索引（可为 nil）。传了就先在**本地文件**里找一遍：
+	// 找到说明这歌用户早就下好了，只是飞牛那边还没收录 —— 这种曲目不该报「缺」
+	// 让前端去重下一遍，也不该在歌单里留个空位。
+	//
+	// 用户 2026-10-23 的原话：「同一个歌单里的歌曲，我提前下载了，然后同步该歌单。
+	// 怎么没有匹配该歌曲？可否增加功能，对现有的本地曲库的歌曲索引。」
+	LocalIndex func() []LocalTrack
 }
+
+// LocalTrack 是本地曲库里的一个文件（由调用方从 library.Index 转好再传进来，
+// 免得 push 包为了一个字段去依赖 library 包）。
+type LocalTrack struct {
+	Path     string
+	Name     string
+	Artist   string
+	Album    string
+	Duration int // 秒；0 = 未知
+	Format   string
+}
+
+// ItemResult.Source 的取值，说明这条曲目是**怎么**找到的。
+const (
+	// SourceFnos = 在飞牛服务端曲库里命中的（正常路径）
+	SourceFnos = "fnos"
+	// SourceLocal = 飞牛曲库没命中，但**本地文件**里有（用户早就下好了）
+	SourceLocal = "local"
+	// SourceLocalVersionDiff = 本地有，但版本看起来不一样（现场版/翻唱/时长差很多）。
+	//
+	// 这一类**不自动决断**：用户说的是「如果歌曲版本不同，则在任务状态里显示让用户
+	// 抉择本地歌曲还是重新下载其他版本」。所以它照样进 Missing（让前端列为待处理），
+	// 但 Reason 说清「本地有另一版」，界面据此给两个按钮。
+	SourceLocalVersionDiff = "local_version_diff"
+)
 
 // PushTracks 把曲目推送到飞牛音乐歌单。
 //
@@ -121,6 +168,9 @@ func PushTracks(m *fnos.Music, tracks []Track, opts Options) (*Result, error) {
 	type outcome struct {
 		item ItemResult
 		guid string // 命中的飞牛曲目 GUID；空表示未命中
+		// localPath 本地文件命中（飞牛曲库没有、但用户盘上有）。
+		// 这种曲目**不进 Missing**：歌已经有了，不该再让前端下一次。
+		localPath string
 	}
 	outcomes := make([]outcome, len(tracks))
 	{
@@ -134,19 +184,43 @@ func PushTracks(m *fnos.Music, tracks []Track, opts Options) (*Result, error) {
 				defer func() { <-sem }()
 
 				t := tracks[i]
-				found, score, ok := matchInLibrary(m, match.Catalog{
+				src := match.Catalog{
 					Name: t.Name, Artist: t.Artist, Album: t.Album, Duration: t.Duration,
-				})
+				}
+				found, score, ok := matchInLibrary(m, src)
 				item := ItemResult{Name: t.Name, Artist: t.Artist, Score: round2(score)}
-				if !ok {
-					item.Reason = "飞牛曲库中没有足够相似的歌曲"
-					outcomes[i] = outcome{item: item}
+				if ok {
+					item.Matched = true
+					item.Source = SourceFnos
+					item.FnosTrackGUID = found.ID
+					item.FnosTitle = found.Name
+					outcomes[i] = outcome{item: item, guid: found.ID}
 					return
 				}
-				item.Matched = true
-				item.FnosTrackGUID = found.ID
-				item.FnosTitle = found.Name
-				outcomes[i] = outcome{item: item, guid: found.ID}
+				// 飞牛曲库没命中 → 再看**本地文件**（用户早就下好的那种）。
+				// 不这样做，用户「先下载、再同步歌单」就会在歌单里看到这首歌缺失，
+				// 然后被前端判成「待下载」又下一遍 —— 正是 2026-10-23 报的那件事。
+				if loc, lscore, diff := matchLocal(opts.LocalIndex, src); loc != nil {
+					item.Score = round2(lscore)
+					item.LocalPath = loc.Path
+					if diff != "" {
+						// 版本存疑：**不**替用户决定。留在 Missing 里并说明原因，
+						// 界面上给「用本地这一版 / 重新下载其他版本」两个选择。
+						item.Source = SourceLocalVersionDiff
+						item.Reason = diff
+						item.LocalDuration = loc.Duration
+						item.SourceDuration = t.Duration
+						outcomes[i] = outcome{item: item}
+						return
+					}
+					item.Matched = true
+					item.Source = SourceLocal
+					item.Reason = "飞牛曲库暂无，本地曲库已有（无需重新下载）"
+					outcomes[i] = outcome{item: item, localPath: loc.Path}
+					return
+				}
+				item.Reason = "飞牛曲库和本地曲库都没有这首歌"
+				outcomes[i] = outcome{item: item}
 			}(i)
 		}
 		wg.Wait()
@@ -158,6 +232,11 @@ func PushTracks(m *fnos.Music, tracks []Track, opts Options) (*Result, error) {
 	for _, o := range outcomes {
 		res.Items = append(res.Items, o.item)
 		if o.guid == "" {
+			// 本地已有也算「这首歌不缺」—— 不进 Missing，否则前端会当成待下载再下一遍。
+			if o.localPath != "" {
+				res.LocalMatched++
+				continue
+			}
 			res.Missing = append(res.Missing, o.item)
 			continue
 		}
@@ -263,6 +342,67 @@ func matchInLibrary(m *fnos.Music, source match.Catalog) (match.Catalog, float64
 		return match.Catalog{}, bestScore, false
 	}
 	return best, bestScore, true
+}
+
+// localMatchMinScore 本地匹配的接受阈值，比飞牛那边（match.MatchMinScore=0.72）
+// 更严一点。
+//
+// 理由：本地索引里的歌是**用户自己的文件**，标错一次就永远错（要他去删文件）；
+// 而飞牛那边错了只是歌单里多一首可以手动去掉。宁可漏判、让用户手点「补下载」，
+// 也不要把他收藏的另一首同名歌当成这一首。
+const localMatchMinScore = 0.80
+
+// localDurationTolerance 判定「同一版本」的时长容差（秒）。
+// 现场版与录音室版通常差十几秒以上；同一版本因编码/静音裁切差 1-2 秒很常见。
+const localDurationTolerance = 8
+
+// matchLocal 在本地曲库索引里找这首歌（索引快照由调用方给，便于测试直接塞数据）。
+//
+// 返回 (命中项, 分数, 版本存疑原因)。第三个返回值非空表示**读到了本地某一版，
+// 但它与要推的这首看起来不是同一个版本**（时长差太多）—— 这种情况由界面让用户选，
+// 函数本身不替用户做决定。
+func matchLocal(snapshot func() []LocalTrack, src match.Catalog) (*LocalTrack, float64, string) {
+	if snapshot == nil || strings.TrimSpace(src.Name) == "" {
+		return nil, 0, ""
+	}
+	list := snapshot()
+	if len(list) == 0 {
+		return nil, 0, ""
+	}
+
+	var (
+		best      *LocalTrack
+		bestScore float64
+		bestCand  match.Catalog
+	)
+	for k := range list {
+		c := match.Catalog{
+			Name: list[k].Name, Artist: list[k].Artist,
+			Album: list[k].Album, Duration: list[k].Duration,
+		}
+		if strings.TrimSpace(c.Name) == "" {
+			// 没有标题，就用文件名（去扩展名）当歌名 —— 曲库里大量文件其实只靠文件名。
+			c.Name = strings.TrimSuffix(filepath.Base(list[k].Path), filepath.Ext(list[k].Path))
+		}
+		score := match.Similarity(src, c)
+		if score > bestScore {
+			best, bestScore, bestCand = &list[k], score, c
+		}
+	}
+	if best == nil || bestScore < localMatchMinScore {
+		return nil, bestScore, ""
+	}
+
+	// 时长校验：两边都有时长且差太多 → 不是同一版本。
+	// 只看**时长**这一个硬指标，不看歌名后缀：名字里带「现场版」也可能只是命名习惯。
+	if src.Duration > 0 && bestCand.Duration > 0 {
+		if d := src.Duration - bestCand.Duration; d > localDurationTolerance || d < -localDurationTolerance {
+			return best, bestScore, fmt.Sprintf(
+				"本地曲库里有一版，但时长差得多（本地 %d 秒 / 这首 %d 秒），可能是现场版或别的版本",
+				bestCand.Duration, src.Duration)
+		}
+	}
+	return best, bestScore, ""
 }
 
 // trackToCatalog 把飞牛曲库返回的曲目对象转成 match.Catalog。

@@ -133,6 +133,12 @@ func TestUpgradeCandidatesGates(t *testing.T) {
 // 一轮最多派 upgradeSweepBatch 首（探测一次几十秒，一轮补太多会把前台收藏挤没了）。
 func TestUpgradeSweepOnceCapsBatch(t *testing.T) {
 	h := newHarness(t)
+	// 补强是在后台 goroutine 里写替换记录的（见 autodownload.go 的 TriggerUpgrade
+	// 分支）。t.TempDir() 在测试函数返回时就 RemoveAll，而 goroutine 还在慢一拍地
+	// 落盘 —— 于是 cleanup 报 "directory not empty"，与被测的「一轮派几首」毫无关系。
+	// 这份测试钉的是派活数量与冷却位，记录只进内存即可。
+	h.it.qrPersist = false
+	h.it.qrPersistSet = true
 	srv, _, _ := fakeDownloadBackend(t)
 	h.it.localAPI = srv.URL
 	h.it.favAutoDownload = func() bool { return true }
@@ -178,5 +184,56 @@ func TestUpgradeCooldownLength(t *testing.T) {
 	}
 	if upgradeRetryCooldown > 7*24*time.Hour {
 		t.Fatalf("冷却长于 7 天就等于不回应用户「慢一点没关系」：%v", upgradeRetryCooldown)
+	}
+}
+
+// 补强的结果必须同时进「替换音质」的记录表（用户 2026-10-23 的原话：
+// 「自动下载记录触发列，出现音质补强的记录是什么意思，替换音质页面怎么没有
+// 同步的记录」）。
+//
+// 两本账的分工是：autolog = 后台干了什么的全量流水；quality_records = 「我的
+// 一份音质被换过/没能换成」的专账。补强本来就是替换音质的自动版，结果不记进
+// 专账，用户去替换音质页自查时就永远看不到它。
+func TestUpgradeSweepWritesQualityRecord(t *testing.T) {
+	h := newHarness(t)
+	// 记录落盘在后台 goroutine 里发生，t.TempDir() 会在测试返回时就删 —— 这里
+	// 要**读**内存里那条，所以只关落盘（见 Interceptor.qrPersist 的注释）。
+	h.it.qrPersist = false
+	h.it.qrPersistSet = true
+	srv, _, _ := fakeDownloadBackend(t)
+	h.it.localAPI = srv.URL
+	h.it.favAutoDownload = func() bool { return true }
+	h.it.cfg.AutoDownloadQuality = func() string { return "highest" }
+
+	// 盘上已经有一份 mp3（有损），补强该把它换成无损。
+	dir := t.TempDir()
+	p := filepath.Join(dir, "asweep.mp3")
+	if err := os.WriteFile(p, []byte("ID3\x03\x00\x00"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	g := registerOnline(h, "asweep", "歌asweep", "乙")
+	it := downloadedItemFor(g, p, "歌asweep", "乙")
+	it.Quality = "320k"
+	if err := h.it.downloaded.Put(it); err != nil {
+		t.Fatal(err)
+	}
+
+	if n := h.it.upgradeSweepOnce(time.Now()); n != 1 {
+		t.Fatalf("该派 1 首，实际 %d", n)
+	}
+	// 补强是后台 goroutine：等记录出现，而不是猜一个 sleep。
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(h.it.QualityRecords()) > 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	recs := h.it.QualityRecords()
+	if len(recs) == 0 {
+		t.Fatal("补强之后「替换音质」记录表该有一条，实际是空的 —— 用户去替换音质页就看不到这次补强")
+	}
+	if recs[0].Title != "歌asweep" {
+		t.Fatalf("记录该带上曲名，实际 %q", recs[0].Title)
 	}
 }

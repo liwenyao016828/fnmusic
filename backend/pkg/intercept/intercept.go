@@ -386,6 +386,16 @@ type Interceptor struct {
 	qrMu     sync.Mutex
 	qrList   []QualityRecord
 	qrLoaded bool
+	// qrPersist 关掉后 appendQualityRecord 只进内存、不落盘。
+	//
+	// 为什么需要这个闸门：音质补强轮在**后台 goroutine** 里写记录
+	// （见 autodownload.go 的 TriggerUpgrade 分支）。测试用 t.TempDir() 当
+	// DataDir，异步 goroutine 在 RemoveAll 之后才落盘，就会出现
+	// 「cleanup: unlinkat …: directory not empty」这种与被测逻辑毫无关系的失败。
+	// 默认 true（生产行为不变），只有需要钉顺序的测试才设它。
+	qrPersist     bool
+	qrPersistSet  bool // 构造时显式给定（测试用），Once 不会再把它顶回 true
+	qrPersistOnce sync.Once
 
 	// tee 是「边听边下」被客户端打断之后的后台续传任务簿（见 tee.go 的 teePool）。
 	// 零值可用 —— 只有真的起过一次续传才会建父 ctx 与登记表。

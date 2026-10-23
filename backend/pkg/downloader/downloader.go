@@ -1045,7 +1045,24 @@ func (s SongPayload) shouldUpgradeOver(existing string) bool {
 	if want < 0 {
 		return false
 	}
-	return want > audioext.TierRank(cur)
+	if want > audioext.TierRank(cur) {
+		return true
+	}
+	// 同档位、**不同格式**也要覆盖（2026-10-23）。
+	//
+	// 用户报的原话：「选择下载音质最高，下载队列显示音质与实际音质不符」。
+	// 其中一种成因在盘上而不是在界面：这条曲目以前按渠道推出来的「320k」
+	// 下成了一个 mp3，而这次 `highest` 实际要的是 flac —— 两个请求的 `Quality`
+	// 字符串都被推成 `320k`（渠道推出来的档位就是它），档位判据于是说「同档，
+	// 不用换」，而用户放耳朵里听到的、在文件管理器里看到的都是 mp3。
+	//
+	// 判据第二条：**要的容器与盘上的容器不同**，就当作「这次能拿到不一样的」去下。
+	// 这不会造成降级 —— 真下回来的档位更低时，落盘后的收尾仍按实际档位比对
+	// （见 downloadSingleSong 里 replacePath 的清理路径），无损永远不会被 mp3 顶掉。
+	if strings.EqualFold(filepath.Ext(existing), "."+strings.TrimPrefix(strings.ToLower(s.Quality), ".")) {
+		return false
+	}
+	return sameTierDifferentContainer(s.Quality, existing)
 }
 
 func findExistingAudio(destDir, base string) (string, bool) {
@@ -1291,4 +1308,41 @@ func (d *Downloader) HandleEnrichExisting(w http.ResponseWriter, r *http.Request
 		"code": 200, "message": "success",
 		"data": map[string]interface{}{"path": req.Path, "embedded": embedded},
 	})
+}
+
+// sameTierDifferentContainer 判断「这次请求的档位与盘上那份文件**同档，但容器该更好**」。
+//
+// 只处理一种情况：盘上是**有损**容器（mp3/m4a/...），而这次请求的档位是无损
+// （flac / flac24bit / hires）。这种组合下 `TierRank` 本应已经判出高低，
+// 但历史上有些记录把「渠道推出来的 320k」与「实际无损」写成同一个字符串，
+// 单看字符串会漏掉。用**文件扩展名**这个盘上事实来兜底，比再引入一个档位字段可靠。
+//
+// 反方向（盘上无损、这次 320k）永远返回 false —— 绝不降级。
+func sameTierDifferentContainer(want, existing string) bool {
+	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(existing)), ".")
+	if ext == "" {
+		return false
+	}
+	if !isLossyExt(ext) {
+		return false // 盘上已经无损
+	}
+	return isLosslessTierName(want)
+}
+
+// isLossyExt 是有损容器扩展名（与 pkg/audioext 的口径保持一致的一组最小集）。
+func isLossyExt(ext string) bool {
+	switch ext {
+	case "mp3", "m4a", "aac", "ogg", "wma":
+		return true
+	}
+	return false
+}
+
+// isLosslessTierName 判断音质档位名是否属于无损。
+func isLosslessTierName(q string) bool {
+	switch strings.ToLower(strings.TrimSpace(q)) {
+	case "flac", "flac24bit", "hires":
+		return true
+	}
+	return false
 }

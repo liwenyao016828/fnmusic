@@ -241,7 +241,16 @@ export function buildSubscriptions(monitors = [], tasks = []) {
           : '来源平台认不出来，暂时建不了另一条',
       intervalMinutes: Number(mon?.interval_minutes || task?.interval_minutes || 0),
       pendingCount: row.monitors.reduce((n, m) => n + (m.pendingCount || 0), 0),
+      // 缺的曲目：这里把 **版本存疑** 的那几条单独挑出来。
+      //
+      // 用户 2026-10-23：「如果歌曲版本不同，则在任务状态里显示让用户抉择本地歌曲
+      // 还是重新下载其他版本。」
+      //
+      // 后端把两种情况都放进 `missing`（本地命中但时长差得多 → source=local_version_diff），
+      // 因为两者都「没推进歌单」。但用户看到的东西完全不同：一个是真的没有，
+      // 一个是「有，只是怕拿错版本」。混在一起数个数，用户没法做决定。
       missingCount: row.tasks.reduce((n, t) => n + (t.last_result?.missing?.length || 0), 0),
+      localConflicts: collectLocalConflicts(row.tasks),
       targetTitle: String(task?.target_title || ''),
       baselineDone: !!mon?.baseline_done,
       lastRunAt: String(mon?.last_run_at || ''),
@@ -544,4 +553,43 @@ export function pushGuideSteps(rows, state = {}) {
 /** 引导区右上角的进度（三步做了几步） */
 export function pushGuideDoneCount(steps) {
   return (steps || []).filter((s) => s && s.done).length
+}
+
+/**
+ * 从推送任务的 `last_result.missing` 里挑出「本地有、但版本对不上」的曲目。
+ *
+ * 这些曲目后端留在 missing 里是**故意的**（见 `backend/pkg/push/push.go` 的
+ * `SourceLocalVersionDiff` 分支）：匹配上了本地文件，但时长差得多，可能是现场版 /
+ * 翻唱 / 另一个 remix。后端不替用户决定用哪一个，所以要拿到界面上问。
+ *
+ * @param {Array} tasks 这一行的推送任务
+ * @returns {Array<{key:string,name:string,artist:string,reason:string,
+ *                  localPath:string,localDuration:number,sourceDuration:number,provider:string}>}
+ */
+export function collectLocalConflicts(tasks) {
+  const out = []
+  const seen = new Set()
+  for (const t of tasks || []) {
+    const missing = t?.last_result?.missing
+    if (!Array.isArray(missing)) continue
+    for (let i = 0; i < missing.length; i++) {
+      const m = missing[i]
+      if (!m || m.source !== 'local_version_diff') continue
+      // 同一首歌可能出现在多条推送任务里（下载侧 + 推送侧）—— 只问一次
+      const key = `${m.name || ''}\u0000${m.artist || ''}\u0000${m.local_path || ''}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      out.push({
+        key: key || `${t.id || 't'}-${i}`,
+        name: String(m.name || ''),
+        artist: String(m.artist || ''),
+        reason: String(m.reason || '本地曲库里有一版，但版本对不上'),
+        localPath: String(m.local_path || ''),
+        localDuration: Number(m.local_duration || 0),
+        sourceDuration: Number(m.source_duration || 0),
+        provider: String(t.provider || ''),
+      })
+    }
+  }
+  return out
 }

@@ -103,6 +103,9 @@ func (s *Server) pushPreview(task push.Task) (*push.Result, error) {
 		CoverURL:  src.CoverURL,
 		SyncCover: false, // 预览不写封面
 		DryRun:    true,
+		// 预览也要算上本地曲库：否则预览说「缺 3 首」、真推时说「本地都有」，
+		// 用户会以为这两个按钮做的事不一样。
+		LocalIndex: s.localTrackSnapshot(),
 	})
 }
 

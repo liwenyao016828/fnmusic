@@ -114,6 +114,14 @@ type QualityRecord struct {
 	Channel string `json:"channel"`
 	OK      bool   `json:"ok"`
 	Note    string `json:"note,omitempty"`
+	// By 记录是谁做的：`""`（缺省）= 用户在「替换音质」页手动点的；
+	// `"upgrade"` = 后台音质补强轮自己试的。
+	//
+	// 为什么要分开：两件事结果相同（都是把有损换成无损），但**要不要动手**完全不同 ——
+	// 手动那条是用户点了他就等着；后台那条是轮子每 20 分钟试一次，失败还会再来。
+	// 不标出来，用户会以为「我什么时候点过这首歌？」（2026-10-23 的原话就是
+	// 「出现音质补强的记录是什么意思，替换音质页面怎么没有同步的记录」）。
+	By string `json:"by,omitempty"`
 }
 
 // qualityRecordLimit 是历史记录上限。替换是人工批量动作，100 条≈几十次操作，
@@ -645,7 +653,11 @@ func (i *Interceptor) appendQualityRecord(rec QualityRecord) {
 		i.qrList = i.qrList[:qualityRecordLimit]
 	}
 	list := append([]QualityRecord(nil), i.qrList...)
+	persist := i.qrPersistValue()
 	i.qrMu.Unlock()
+	if !persist {
+		return
+	}
 	if err := saveQualityRecords(i.cfg.DataDir, list); err != nil {
 		i.logf("[INTERCEPT] 替换记录落盘失败（不影响替换本身）：%v", err)
 	}
@@ -689,4 +701,17 @@ func saveQualityRecords(dir string, list []QualityRecord) error {
 		return err
 	}
 	return os.Rename(tmp, p)
+}
+
+// qrPersistValue 读「这条记录要不要落盘」（缺省 true）。
+//
+// 用 Once 而不是在 New() 里赋值：New() 有几十个调用点，逐个补参只会漏；
+// 而「没设过 = 生产行为」正是我们要的缺省。
+func (i *Interceptor) qrPersistValue() bool {
+	i.qrPersistOnce.Do(func() {
+		if !i.qrPersistSet {
+			i.qrPersist = true
+		}
+	})
+	return i.qrPersist
 }

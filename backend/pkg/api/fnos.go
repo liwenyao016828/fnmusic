@@ -168,6 +168,8 @@ func (s *Server) HandleFnosPush(w http.ResponseWriter, r *http.Request) {
 		FnosGUID:    strings.TrimSpace(req.FnosGUID),
 		SyncCover:   req.SyncCover,
 		DryRun:      req.DryRun,
+		// 本地曲库兜底：用户「先下载、再同步歌单」时，这些歌不该被报成缺（2026-10-23）
+		LocalIndex: s.localTrackSnapshot(),
 	})
 	if err != nil {
 		// 参数类错误用 400，其余按上游失败处理

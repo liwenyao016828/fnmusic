@@ -193,12 +193,20 @@
                 >
                   {{ fillingKey === row.key && fillProgress ? `入队中 ${fillProgress}` : `补下载 ${row.pendingCount + row.missingCount} 首` }}
                 </button>
+                <!--
+                  立即执行 = 「发现新歌」，勾了下载时连下载一起做（用户 2026-10-23：
+                  「合并…实现勾选，执行，下载」）。所以按钮文字跟着能力位走，
+                  让用户点之前就知道会不会把歌下下来。
+                -->
                 <button
                   class="rounded-lg bg-emerald-50 px-2.5 py-1.5 text-[11px] font-medium text-emerald-600 hover:bg-emerald-100 disabled:opacity-50"
                   :disabled="!!busyKey || (!row.download && !row.fnos)"
+                  :title="row.download
+                    ? '立刻检查一遍有没有新歌，并把缺的直接下到本地曲库'
+                    : '立刻检查一遍有没有新歌（没勾「下载到本地曲库」，只登记不下载）'"
                   @click="runRow(row)"
                 >
-                  立即执行
+                  {{ row.download ? '立即执行并下载' : '立即执行' }}
                 </button>
                 <button
                   class="rounded-lg bg-gray-100 px-2.5 py-1.5 text-[11px] text-gray-600 hover:bg-gray-200"
@@ -260,6 +268,56 @@
               >
                 仅停推送
               </button>
+            </div>
+
+            <!--
+              ══ 版本存疑：让用户自己拿主意 ══
+              用户 2026-10-23：「如果歌曲版本不同，则在任务状态里显示让用户抉择本地歌曲
+              还是重新下载其他版本。」
+
+              为什么必须问：推送匹配里命中了本地文件，但**时长差得多**（现场版 / 翻唱 /
+              另一个 remix）。这时若擅自用本地那版，用户会在飞牛歌单里看到一首「名字对、
+              内容不对」的歌，而且很久都发现不了；若擅自重下一版，又可能把用户精心收的
+              那个版本挤掉。所以只陈述事实 + 给两个按钮，不预设默认值。
+
+              没有冲突的行这里整块不渲染（不占高度、不打扰）。
+            -->
+            <div
+              v-if="row.localConflicts && row.localConflicts.length"
+              class="mt-3 rounded-lg border border-amber-200 bg-amber-50/70 p-3"
+            >
+              <p class="text-[12px] font-bold text-amber-800">
+                有 {{ row.localConflicts.length }} 首本地已有、但版本对不上
+              </p>
+              <p class="mt-1 text-[11px] leading-relaxed text-amber-700">
+                名字对得上，时长差得多（多半是现场版 / 翻唱 / 另一个 remix）。用本地这版可能不是你想要的；重下会另存一份，不会删掉本地文件。
+              </p>
+              <div class="mt-2 space-y-2">
+                <div
+                  v-for="c in row.localConflicts"
+                  :key="c.key"
+                  class="rounded-lg border border-amber-200/70 bg-white/80 px-2.5 py-2"
+                >
+                  <p class="truncate text-[12px] font-medium text-gray-800" :title="c.name">
+                    {{ c.name }}<span v-if="c.artist" class="text-gray-400"> · {{ c.artist }}</span>
+                  </p>
+                  <p class="mt-0.5 text-[10.5px] text-amber-700">{{ c.reason }}</p>
+                  <div class="mt-1.5 flex flex-wrap gap-1.5">
+                    <button
+                      type="button"
+                      class="ys-press rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[11px] font-medium text-emerald-700 transition-colors hover:border-emerald-300 hover:bg-emerald-100"
+                      title="就用盘上这一版：不再下载，歌单里挂本地文件"
+                      @click="resolveLocalConflict(row, c, 'local')"
+                    >用本地这一版</button>
+                    <button
+                      type="button"
+                      class="ys-press rounded-lg border border-gray-200 bg-white px-2.5 py-1 text-[11px] font-medium text-gray-600 transition-colors hover:border-emerald-300 hover:text-emerald-700"
+                      title="按订阅设置的目标音质重新下一版（不改动本地已有文件）"
+                      @click="resolveLocalConflict(row, c, 'download')"
+                    >重新下载其他版本</button>
+                  </div>
+                </div>
+              </div>
             </div>
 
             <!-- 设置：只展开当前行（订阅多起来时整页会被撑得很长） -->
@@ -575,7 +633,8 @@ import PageShell from './PageShell.vue'
 import InlineNotice from './InlineNotice.vue'
 import { PushAPI } from '../api/client'
 import { fail } from '../services/userMsg'
-import { ok as flashOk } from '../services/feedback'
+import { ok as flashOk, fail as flashFail } from '../services/feedback'
+import { fail as flashErrorText } from '../services/userMsg'
 import { navigateTo } from '../services/navBus'
 import { loadBool, savePref } from '../services/prefs'
 import {
@@ -584,6 +643,7 @@ import {
   pushGuideDoneCount,
 } from '../services/subscribe'
 import { pushEngine } from '../services/pushEngine'
+import { downloadManager } from '../services/downloadManager'
 
 const {
   subscriptions, fnosConnected, apiSourceCount, pushRuns,
@@ -594,6 +654,57 @@ const {
   clearPushRuns: engineClearRuns,
   reloadAll, loadPushRuns, loadFnosStatus, loadApiSourceCount,
 } = pushEngine
+
+// ── 版本存疑：用户拿主意 ──
+//
+// 两种选择，做的事完全不同：
+//   local    —— 不再下载，把这条当作「已经有了」。
+//               实现上就是把它从这次推送的「缺」里摘掉：下轮推送会重新匹配，
+//               而本地文件还在，因此仍然会以 local_version_diff 出现。
+//               所以这里不是「改后端数据」，而是**记下用户的决定**，给下轮推送用。
+//   download —— 按订阅设置的目标音质重下一版。走的是与「补下载」同一条入队路径，
+//               只是限定了这一首，所以音源/回退/打标全都复用，不另写一套。
+const resolvedLocal = ref(new Set())
+
+/** 用户点完按钮后这条冲突的密钥（决定不再重复提示） */
+function conflictKeyOf(row, c) {
+  return `${row.key}\u0000${c.key}`
+}
+
+async function resolveLocalConflict(row, c, choice) {
+  if (!row || !c) return
+  const key = conflictKeyOf(row, c)
+  if (resolvedLocal.has(key)) return
+  resolvedLocal.add(key)
+  // 立刻从这一行的冲突列表里消失（不等下一轮推送），否则用户会以为没点上
+  row.localConflicts = (row.localConflicts || []).filter((x) => x.key !== c.key)
+
+  if (choice === 'local') {
+    // 只是「接受现状」：本地文件就是它了，不需要任何写入。
+    flashOk(`「${c.name}」按本地这一版处理`)
+    return
+  }
+
+  try {
+    const task = downloadManager.addSong(
+      { song_name: c.name, singer: c.artist, source: c.provider === 'qq' ? 'tx' : 'wy' },
+      row.source === 'tx' ? 'tx' : 'wy',
+      false,
+    )
+    if (task) {
+      task.autoRowKey = row.key
+      flashOk(`「${c.name}」已加入下载队列，下完会重新同步`)
+    } else {
+      flashOk(`「${c.name}」已在下载队列里`)
+    }
+  } catch (e) {
+    resolvedLocal.delete(key)
+    row.localConflicts.push(c)
+    // userMsg.fail() 只**生成**一句人话（并把原始报错写进日志），不会弹提示；
+    // 弹出要交给 feedback.fail()。两件事分开，是为了让同一句文案能复用到行内提示。
+    flashFail(flashErrorText('重新下载', e))
+  }
+}
 
 // ── 刷新 ──
 const reloading = ref(false)

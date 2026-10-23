@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"fn-lx-player/pkg/audioext"
 	"fn-lx-player/pkg/config"
 	"fn-lx-player/pkg/online"
 )
@@ -166,6 +167,22 @@ func (i *Interceptor) autoDownload(fake string, t online.Track, trigger string) 
 				Title: t.Title, Artist: t.Artist(),
 				OK: false, Error: err.Error(),
 			})
+			// 补强失败也进「替换音质」的记录表（用户 2026-10-23：
+			// 「自动下载记录触发列出现音质补强，替换音质页面怎么没有同步的记录」）。
+			//
+			// 两处记录不是重复：autolog 是「后台干了什么」的全量流水，而
+			// quality_records 是「我的一份音质被换过/没能换成」的专账 —— 用户要查
+			// 「这首歌到底换没换」，去的是替换音质页。补强轮本来就是替换音质的
+			// 自动版（同一件事：把有损换成无损），结果不进那本账就没法自查。
+			if trigger == TriggerUpgrade {
+				i.appendQualityRecord(QualityRecord{
+					Title: t.Title, Artist: t.Artist(),
+					From: audioext.TierOfFile(scheduled.Path),
+					Note: err.Error(),
+					OK:   false,
+					By:   "upgrade",
+				})
+			}
 			return
 		}
 		// 账本要跟着新记录走 —— `downloadToLibrary` 造的是全新的一条，不带这些位。
@@ -198,6 +215,26 @@ func (i *Interceptor) autoDownload(fake string, t online.Track, trigger string) 
 			Source: item.Source, Quality: item.Quality, Size: item.Size, Path: item.Path,
 			OK: true,
 		})
+		// 补强成功同样进「替换音质」记录表（见上面失败分支的说明）。
+		if trigger == TriggerUpgrade {
+			from := audioext.TierOfFile(scheduled.Path)
+			to := audioext.TierOfFile(item.Path)
+			note := ""
+			if from == to || to == "" {
+				// 档位没变（同一份文件原地重下、或渠道这批同样只给有损）——
+				// 记成 ok=false 更诚实：用户来这本账上就是想看「换成没有」。
+				note = "这次没换成更高档：拿到的仍是 " + strings.ToUpper(strings.TrimPrefix(to, "."))
+				i.appendQualityRecord(QualityRecord{
+					Title: t.Title, Artist: t.Artist(), Path: item.Path,
+					From: from, To: to, Channel: item.Source, Note: note, OK: false, By: "upgrade",
+				})
+			} else {
+				i.appendQualityRecord(QualityRecord{
+					Title: t.Title, Artist: t.Artist(), Path: item.Path,
+					From: from, To: to, Channel: item.Source, OK: true, By: "upgrade",
+				})
+			}
+		}
 	}()
 }
 

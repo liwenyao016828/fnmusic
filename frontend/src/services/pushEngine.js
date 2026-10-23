@@ -683,7 +683,18 @@ async function runRow(row) {
   busyKey.value = `${row.key}:run`
   try {
     await Promise.all(jobs)
-    notify('已触发，稍后自动刷新')
+
+    // 勾了「下载到本地曲库」= 用户已经说过「这歌我要下」。
+    // 用户 2026-10-23 的原话：「订阅页面里补下载是否可以和勾选下载到本地曲库，
+    // 然后点击立即执行合并，实现勾选，执行，下载。」
+    //
+    // 所以这里把「发现 → 补下载」并成一次动作：
+    //   · 勾了下载：不说「已触发」这种要用户再理解一遍的话，直接说「正在发现并下载」；
+    //   · 没勾：保持原样（只发现、登记成待下载），因为那是订阅更新的原逻辑 ——
+    //     记录留在订阅页，状态如实显示「只发现未下载」。
+    const downloading = !!row.download
+    notify(downloading ? '正在发现并下载，稍后自动刷新' : '已触发，稍后自动刷新')
+
     setTimeout(async () => {
       await loadMonitors()
       loadPushTasks()
@@ -691,7 +702,14 @@ async function runRow(row) {
       // 监控轮把新歌登记成「待下载」之后**立刻**自动补一次。
       // 用户点「立即执行」就是想让歌下下来，不该再干等一个 8 秒轮询周期
       // （后端 run 是异步的，所以给 5 秒让发现+登记先跑完；没赶上还有轮询兜底）。
-      autoFillPending()
+      //
+      // 勾了下载时这里要**等到真的入队**（autoFillPending 是异步的，不等就会
+      // 在「待下载 N 首」还没消失时给用户回一句「已触发」，看起来像没执行）。
+      if (downloading) {
+        await autoFillPending()
+      } else {
+        autoFillPending()
+      }
     }, 5000)
   } catch (e) {
     notify(failText('执行订阅', e), true)
