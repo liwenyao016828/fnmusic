@@ -752,6 +752,107 @@ function retryAllFailed(fallbackSourceId) {
   processQueue()
 }
 
+/**
+ * 只重试**指定 id** 里的失败任务（界面上的「重试选中」）。
+ *
+ * 与 `retryAllFailed` 的差别只在作用范围：用户用「按序号选」框住 11-200 之后，
+ * 他要的是**只重跑这一段**，不是把整条队列里所有失败的一起拉起来。
+ * 非 failed 的 id 直接跳过 —— 勾选只覆盖已结束的行，但队列在后台一直在变。
+ *
+ * 状态复位口径与 `retryTasksByIds` / `retryAllFailed` 必须逐字一致：
+ * 少复位任何一个字段都会出现「点了不跑」或「刚进队列又被判失败」。
+ */
+function retryTasksByIds(ids, fallbackSourceId) {
+  const set = new Set(ids || [])
+  if (!set.size) return 0
+  isPaused.value = false
+  let hit = 0
+  tasks.value.forEach(t => {
+    if (!set.has(t.id) || t.status !== 'failed') return
+    t.status = 'pending'
+    t.error = ''
+    t.errorCode = ''
+    t._aborted = false
+    t._retryAfter = 0
+    if (fallbackSourceId) t.activeSourceId = fallbackSourceId
+    hit++
+  })
+  if (!hit) return 0
+  persistTasks()
+  processQueue()
+  return hit
+}
+
+/**
+ * 只恢复**指定 id** 里停下来、还能救回来的任务（界面上的「恢复选中」）。
+ *
+ * stopped 和 paused 一起管：界面上这两档都长成「停住了、可以接着跑」，
+ * 用户勾了一段点「恢复」，不会记得某一行当初是被暂停还是被停止的。
+ * `_aborted` 必须复位 —— 不复位 `executeTask` 进去就 return，
+ * 正是 `resumeStopped` 注释里记过的那个「点了没反应」。
+ */
+function resumeTasksByIds(ids, fallbackSourceId) {
+  const set = new Set(ids || [])
+  if (!set.size) return 0
+  isPaused.value = false
+  let hit = 0
+  tasks.value.forEach(t => {
+    if (!set.has(t.id)) return
+    if (t.status !== 'stopped' && t.status !== 'paused') return
+    t.status = 'pending'
+    t.error = ''
+    t.errorCode = ''
+    t._aborted = false
+    t._retryAfter = 0
+    if (fallbackSourceId) t.activeSourceId = fallbackSourceId
+    hit++
+  })
+  if (!hit) return 0
+  persistTasks()
+  processQueue()
+  return hit
+}
+
+/**
+ * 把**已完成**的选中任务重新下一次（界面上的「重新下载」）。
+ *
+ * 为什么不复用 `retryTasksByIds`：那个只认 failed。而用户勾上一段已完成的记录说
+ * 「重新下载」，指的常常是「这几首当初拿的是 128k，用新策略再下一次」——
+ * 这也正是「选了最高音质，下载队列显示的音质与实际不符」的补救入口。
+ *
+ * 重下一遍必须**清掉上一次的结论**（attempts / resolvedSource / resolvedQuality /
+ * actualFormat / qualityMismatch / embedded），否则新任务一进场就带着旧的「实际 128k」
+ * 徽标，看起来像这次又降档了。盘上那份文件不删：下载走 already_exists /
+ * upgrade_if_better，比盘上差的不会覆盖，不会把无损换成有损。
+ */
+function redownloadTasksByIds(ids, fallbackSourceId) {
+  const set = new Set(ids || [])
+  if (!set.size) return 0
+  isPaused.value = false
+  let hit = 0
+  tasks.value.forEach(t => {
+    if (!set.has(t.id) || t.status !== 'success') return
+    t.status = 'pending'
+    t.error = ''
+    t.errorCode = ''
+    t.attempts = 0
+    t.resolvedSource = ''
+    t.resolvedQuality = ''
+    t.actualFormat = ''
+    t.qualityMismatch = false
+    t.embedded = false
+    t._aborted = false
+    t._retryAfter = 0
+    t._triedSources = []
+    if (fallbackSourceId) t.activeSourceId = fallbackSourceId
+    hit++
+  })
+  if (!hit) return 0
+  persistTasks()
+  processQueue()
+  return hit
+}
+
 /** 为单个任务切换音质并重新排队 */
 function setTaskQuality(taskId, quality) {
   const task = tasks.value.find(t => t.id === taskId)
@@ -1229,6 +1330,7 @@ export const downloadManager = {
   setQualityOverride,
   QUALITY_OPTIONS,
   qualityLabel,
+  isHighestQuality,
 
   activeCount,
   pausedCount,
@@ -1255,11 +1357,14 @@ export const downloadManager = {
   stopByRow,
   retryTask,
   retryAllFailed,
+  retryTasksByIds,
+  resumeTasksByIds,
   removeTask,
   clearCompleted,
   clearAll,
   removeTasks,
   clearRecords,
+  redownloadTasksByIds,
 
   // 新增：音质 / 换源
   setTaskQuality,

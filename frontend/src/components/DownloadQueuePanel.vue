@@ -9,7 +9,7 @@
 
       现在分三层：
         · 常驻：存储位置（一行小字，点击即改）+ 筛选分段 + 两个「当前真能做」的图标按钮
-        · ⋯：全部恢复 / 重试失败 / 停止全部 / 一键清除记录 / 下载设置
+        · ⋯：全部恢复 / 重试失败 / 停止全部 / 一键清除记录（下载设置已搬成工具栏上的齿轮按钮）
         · 勾选了任务才浮出底部操作条（清除选中 / 全选当前筛选）
     -->
     <div class="flex shrink-0 flex-wrap items-center gap-2 border-b border-[var(--ys-border)] bg-white px-4 py-2.5">
@@ -40,7 +40,45 @@
         </button>
       </div>
 
-      <div class="ml-auto flex items-center gap-1">
+      <!--
+        勾选后的批量动作（用户 2026-10-23：「多选歌曲后，没有出现相应的按钮，比如继续、
+        重新下载、删除记录等等，可以放在右上角」）。
+
+        放在工具栏右上角而不是只靠底部浮条：浮条是「选中了才浮出来」的全局约定，
+        但它离行远，批量动作挤在一个胶囊里也放不下四五个。这里用**文字按钮**，
+        而且只在选中的任务里确实存在那种状态时才出现（没选失败就不摆「重新下载」）——
+        点了得到「0 首」的反馈，和按钮坏了没区别。
+      -->
+      <div v-if="selectedIds.length" class="ml-auto flex flex-wrap items-center gap-1">
+        <span class="px-1 text-[11px] text-[var(--ys-text-muted)]">
+          已选 <b class="text-[var(--ys-text)]">{{ selectedIds.length }}</b>
+        </span>
+        <button
+          v-for="a in selectionActions" :key="a.key"
+          type="button"
+          :class="[
+            'ys-press flex items-center gap-1 rounded-full px-2.5 py-1 text-[11.5px] font-medium transition-colors',
+            a.danger
+              ? 'text-rose-600 hover:bg-rose-50'
+              : 'text-[var(--ys-text-muted)] hover:bg-black/[0.05] hover:text-[var(--ys-text)]',
+          ]"
+          :title="a.hint || a.label"
+          @click="onSelectionAction(a.key)"
+        >
+          <component :is="a.icon" v-if="a.icon" class="h-3.5 w-3.5" :stroke-width="1.9" />
+          {{ a.label }}
+        </button>
+        <button
+          type="button"
+          class="ys-press grid h-7 w-7 place-items-center rounded-full text-[var(--ys-text-faint)] transition-colors hover:bg-black/[0.05] hover:text-[var(--ys-text)]"
+          title="取消选择"
+          @click="selected = new Set()"
+        >
+          <X class="h-3.5 w-3.5" :stroke-width="2" />
+        </button>
+      </div>
+
+      <div class="ml-auto flex items-center gap-1" :class="selectedIds.length ? 'ml-0' : ''">
         <!-- 这两个是「此刻真能做的事」：暂停/继续，图标化后不占文字空间 -->
         <button
           v-if="downloadManager.activeCount.value > 0"
@@ -58,12 +96,40 @@
         >
           <Play class="h-4 w-4" :stroke-width="1.9" />
         </button>
+        <!--
+          下载设置从 ⋯ 里搬了出来（用户 2026-10-23：「下载列表的下载设置移出来」）。
+          ⋯ 里放的是「偶尔用一次的批量动作」，而这一项是**这一页的策略旋钮**
+          （音质、并发、重试次数、任务间隔）—— 藏在 ⋯ 里，用户会以为默认策略改不了。
+          摆成图标而不是文字，是为了不把这条 40px 的行重新塞满。
+        -->
+        <button
+          type="button"
+          class="ys-press grid h-8 w-8 place-items-center rounded-full text-[var(--ys-text-muted)] transition-colors hover:bg-black/[0.05] hover:text-[var(--ys-text)]"
+          title="下载设置（音质 / 并发 / 重试次数 / 间隔）"
+          @click="showSettings = true"
+        >
+          <Settings2 class="h-4 w-4" :stroke-width="1.9" />
+        </button>
         <OverflowMenu :items="queueMenu" @select="onQueueMenu" />
       </div>
     </div>
 
   <!-- 4. 任务列表内容区 -->
   <div class="min-h-0 flex-1 space-y-2 overflow-y-auto bg-[#FAFAFC] p-3 sm:p-4">
+    <!--
+      按序号快速勾选（2026-10-23 用户：「多选框上方增加多选功能，比如输入 100 就是 0-100，
+      也可以输入 11-200」）。行号 = 每行最左边那一列 #，**按当前筛选后的可见列表数**：
+      筛到「失败」再输 100，选的就是失败列表里前 100 行里可勾选的那些。
+    -->
+    <RangeSelectBar
+      v-if="filteredTasks.length"
+      :total="filteredTasks.length"
+      :has-selection="selectedIds.length > 0"
+      :label="`按序号选（共 ${terminalTasks.length} 行可勾）`"
+      @apply="onRangeApply"
+      @clear="selected = new Set()"
+    />
+
     <!-- 空状态 -->
     <div
       v-if="!filteredTasks.length"
@@ -80,20 +146,52 @@
       </p>
     </div>
 
-    <!-- 任务卡片列表 -->
+    <!--
+      任务卡片列表（2026-10-23 改：勾选框做成**卡片边框选中态**）
+
+      用户原话：「多选框美化为卡片边框式的样式，要符合全局多选样式（音源页面的多选样式）」。
+      音源页的选中态是 `ring-2 ring-emerald-500/40`（整张卡描一圈绿边），不是行首一个
+      macOS 蓝方框 —— 那种方框既小又难瞄，一行 40px 高时点中它全靠运气。
+
+      现在：**点整行就是勾选**，选中的行整张卡描绿边 + 极浅绿底，左边一个绿色勾。
+      勾只是**状态显示**，不再是唯一的命中区（pointer-events-none），
+      所以点它等于点卡片，不会出现「点了勾没反应」。
+      在跑/排队的行不可选，它们的卡片保持原样（没有勾、也不会被点选中）。
+    -->
     <div
-      v-for="task in filteredTasks"
+      v-for="(task, rowIndex) in filteredTasks"
       :key="task.id"
-      class="group flex items-center gap-3 rounded-[12px] border border-[var(--ys-border)] bg-white p-3 transition-colors hover:border-[var(--ys-border-strong)]"
+      :class="[
+        'group flex items-center gap-3 rounded-[12px] border bg-white p-3 transition-all',
+        isTerminal(task.status) ? 'cursor-pointer select-none' : '',
+        selected.has(task.id)
+          ? 'border-transparent ring-2 ring-emerald-500/40 bg-emerald-50/30'
+          : 'border-[var(--ys-border)] hover:border-[var(--ys-border-strong)]',
+      ]"
+      :title="isTerminal(task.status) ? (selected.has(task.id) ? '点击取消选中' : '点击选中这一行') : ''"
+      @click="isTerminal(task.status) && toggleSelect(task.id)"
     >
-      <!-- 勾选框：只在已结束的行上出现（见工具栏那段注释） -->
-      <input
+      <!--
+        行号：与上面「按序号选」的输入是同一套口径（当前可见列表里的第几行）。
+        没有这一列数字，用户输 11-200 时无从对照。
+      -->
+      <span class="w-7 shrink-0 text-center font-mono text-[11px] text-gray-300 tabular-nums">
+        {{ rowIndex + 1 }}
+      </span>
+
+      <!-- 选中状态指示：已结束的行才有；绿勾 = 已选，灰圈 = 可点但未选 -->
+      <span
         v-if="isTerminal(task.status)"
-        type="checkbox"
-        class="align-middle accent-emerald-500 shrink-0"
-        :checked="selected.has(task.id)"
-        @change="toggleSelect(task.id)"
-      />
+        class="pointer-events-none grid h-4 w-4 shrink-0 place-items-center rounded-[5px] border transition-colors"
+        :class="selected.has(task.id)
+          ? 'border-emerald-500 bg-emerald-500 text-white'
+          : 'border-[var(--ys-border-strong)] bg-white text-transparent'"
+        aria-hidden="true"
+      >
+        <Check class="h-3 w-3" :stroke-width="3" />
+      </span>
+      <!-- 不可勾的行也要占住这一格，否则整列会左右错开 -->
+      <span v-else class="w-4 shrink-0" aria-hidden="true"></span>
 
       <!-- 封面 -->
       <div class="w-10 h-10 rounded-lg overflow-hidden bg-gray-100 shrink-0 relative flex items-center justify-center shadow-2xs">
@@ -200,8 +298,31 @@
 
         <!-- 音质 / 实际音源 / 重试次数 -->
         <div class="flex items-center gap-1.5 mt-1 text-[10px] flex-wrap">
-          <span class="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-600 font-mono">
-            {{ downloadManager.qualityLabel(task.resolvedQuality || task.quality) }}
+          <!--
+            音质标签（2026-10-23 修「下载队列显示音质与实际音质不符」）。
+
+            以前这里只显示**请求的档位**：用户选了「最高音质」，这一格就写成「最高音质」，
+            而盘上那份可能只有 128k —— 用户看到的就是「显示的音质和实际不符」。
+
+            现在按事实分层显示：
+              · 用户请求 `highest` 时，绝不把 `resolvedQuality` 顶上来冒充档位
+                （`resolvedQuality` 是**渠道推出来的**档位，渠道常把它说高）；
+              · 任务还没落地 → 「最高音质」+「待取」；
+              · 已落地 → 「最高音质」+ **实际容器**（后端按魔数嗅探，是权威结论）；
+              · 请求的是固定档位且与盘上一致 → 只显示该档位（不必啰嗦）。
+          -->
+          <span
+            v-if="downloadManager.isHighestQuality(task.quality)"
+            class="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-600 font-mono"
+            :title="task.actualFormat
+              ? `请求最高音质，实际拿到 ${(task.actualFormat || '').toUpperCase()}`
+              : '请求最高音质：由后端按渠道实际能给到的最高档位决定'"
+          >
+            最高音质<template v-if="task.actualFormat"> · {{ (task.actualFormat || '').toUpperCase() }}</template>
+            <template v-else-if="task.status === 'success'"> · 待取</template>
+          </span>
+          <span v-else class="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-600 font-mono">
+            {{ downloadManager.qualityLabel(task.quality) }}
           </span>
           <!-- 请求无损但真实容器是有损：后端按文件魔数判定，是权威结论。
                文件本身没问题（内容与扩展名一致），只是音源没给无损直链。 -->
@@ -231,7 +352,7 @@
         <!-- 排队或下载中：暂停按钮 -->
         <button
           v-if="task.status === 'pending' || task.status === 'resolving' || task.status === 'downloading'"
-          @click="downloadManager.pauseTask(task.id)"
+          @click.stop="downloadManager.pauseTask(task.id)"
           class="p-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-600 transition-colors"
           title="暂停下载"
         >
@@ -241,7 +362,7 @@
         <!-- 已暂停：继续按钮 -->
         <button
           v-if="task.status === 'paused'"
-          @click="downloadManager.resumeTask(task.id, activeSource?.id)"
+          @click.stop="downloadManager.resumeTask(task.id, activeSource?.id)"
           class="p-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-600 transition-colors"
           title="继续下载"
         >
@@ -255,7 +376,7 @@
         -->
         <button
           v-if="task.status === 'stopped'"
-          @click="downloadManager.resumeTask(task.id, activeSource?.id)"
+          @click.stop="downloadManager.resumeTask(task.id, activeSource?.id)"
           class="px-2 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-600 text-[10px] font-medium transition-colors flex items-center gap-1"
           title="恢复下载（重新排队并继续）"
         >
@@ -266,7 +387,7 @@
         <!-- 排队中/下载中/已暂停：取消并停止按钮 -->
         <button
           v-if="task.status === 'pending' || task.status === 'resolving' || task.status === 'downloading' || task.status === 'paused'"
-          @click="downloadManager.cancelTask(task.id)"
+          @click.stop="downloadManager.cancelTask(task.id)"
           class="p-1.5 rounded-lg text-gray-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
           title="停止并取消此任务"
         >
@@ -285,7 +406,7 @@
           />
 
           <button
-            @click="downloadManager.switchSource(task.id)"
+            @click.stop="downloadManager.switchSource(task.id)"
             class="px-1.5 py-1 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-600 text-[10px] font-medium transition-colors"
             :title="'换一个健康音源重试（上次：' + (task.resolvedSource || '自动') + '）'"
           >
@@ -293,7 +414,7 @@
           </button>
 
           <button
-            @click="downloadManager.retryTask(task.id, activeSource?.id)"
+            @click.stop="downloadManager.retryTask(task.id, activeSource?.id)"
             class="p-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-600 transition-colors"
             title="重新下载"
           >
@@ -304,7 +425,7 @@
         <!-- 移除记录按钮 (已完成 / 失败 / 已停止) -->
         <button
           v-if="task.status === 'success' || task.status === 'failed' || task.status === 'stopped'"
-          @click="downloadManager.removeTask(task.id)"
+          @click.stop="downloadManager.removeTask(task.id)"
           class="p-1.5 rounded-lg text-gray-300 hover:text-gray-500 hover:bg-gray-100 transition-colors"
           title="移除记录"
         >
@@ -315,7 +436,7 @@
   </div>
   </div>
 
-<!-- ── 下载设置弹窗（入口在筛选栏右侧的绿色按钮） ── -->
+<!-- ── 下载设置弹窗（入口：工具栏右侧的齿轮按钮） ── -->
 <Teleport to="body">
   <div
     v-if="showSettings"
@@ -399,18 +520,23 @@
         >完成</button>
       </div>
     </div>
-      <!-- 勾选了任务才浮出的操作条：清除选中 / 全选当前筛选 -->
-    <SelectionBar
-      :count="selectedIds.length"
-      :actions="[
-        { key: 'clear', label: '清除选中', icon: Trash2, danger: true },
-        { key: 'all', label: allSelected ? '取消全选' : '全选已结束', icon: ListChecks },
-      ]"
-      @action="(k) => (k === 'clear' ? clearSelected() : toggleSelectAll())"
-      @clear="selected = new Set()"
-    />
-</div>
+  </div>
 </Teleport>
+
+  <!--
+    勾选了任务才浮出的操作条：清除选中 / 全选当前筛选。
+
+    ⚠️ 这一条**必须留在「下载设置」弹窗外面**。以前它被写在
+    `<Teleport><div v-if="showSettings">` 里面，于是只有在设置弹窗打开时
+    才存在 —— 平时勾了行什么都不浮出来，看起来就像「多选失效了」
+    （用户 2026-10-23：「多选框上方增加多选功能……这些都失效了」）。
+  -->
+  <SelectionBar
+    :count="selectedIds.length"
+    :actions="selectionActions"
+    @action="onSelectionAction"
+    @clear="selected = new Set()"
+  />
 
 </template>
 
@@ -420,15 +546,30 @@ import { downloadManager } from '../services/downloadManager'
 import SelectField from './SelectField.vue'
 import OverflowMenu from './OverflowMenu.vue'
 import SelectionBar from './SelectionBar.vue'
+import RangeSelectBar from './RangeSelectBar.vue'
+import { pickByIndexes } from '../services/rangeSelect'
+import { ok as notifyOk, warn as notifyWarn } from '../services/feedback'
 import {
   X, Folder, RotateCw, Trash2, Check,
   AlertCircle, Loader2, Music2, Clock, Pause, Play, Square,
-  Settings2, Settings, ListChecks, Eraser, RotateCcw
+  Settings2, ListChecks, Eraser, RotateCcw
 } from 'lucide-vue-next'
 
 const props = defineProps({
   activeSource: Object
 })
+
+/**
+ * ⚠️ `<script setup>` 里，props 只有**在模板中**才能当裸变量用（编译器会把模板里的
+ * `activeSource` 变成 `__props.activeSource`）。普通函数里必须写 `props.activeSource`。
+ * 以前 `onQueueMenu` 直接写 `activeSource?.id`，点「全部恢复 / 重试失败」时抛
+ * `ReferenceError: activeSource is not defined`，两个按钮就这么死了
+ * （用户 2026-10-23：「全部恢复和重试失败等这个页面的。这些都失效了」）。
+ * 统一走下面这个取值函数，别再在脚本里裸写。
+ */
+function activeSourceId() {
+  return props.activeSource?.id || ''
+}
 
 // 下载设置面板默认折叠，避免一屏挤满控件
 const showSettings = ref(false)
@@ -443,15 +584,13 @@ const queueMenu = computed(() => [
   { key: 'retryFailed', label: '重试失败', icon: RotateCcw, disabled: downloadManager.failedCount.value === 0, hint: `${downloadManager.failedCount.value} 首失败` },
   { key: 'stopAll', label: '停止全部', icon: Square, danger: true, disabled: downloadManager.activeCount.value + downloadManager.pausedCount.value === 0 },
   { key: 'clearRecords', label: '清除所有记录', icon: Eraser, danger: true, disabled: terminalCount.value === 0, hint: '已完成 / 失败 / 已停止' },
-  { key: 'settings', label: '下载设置…', icon: Settings },
 ])
 
 function onQueueMenu(key) {
-  if (key === 'resumeStopped') downloadManager.resumeStopped(activeSource?.id)
-  else if (key === 'retryFailed') downloadManager.retryAllFailed(activeSource?.id)
+  if (key === 'resumeStopped') downloadManager.resumeStopped(activeSourceId())
+  else if (key === 'retryFailed') downloadManager.retryAllFailed(activeSourceId())
   else if (key === 'stopAll') downloadManager.stopAll()
   else if (key === 'clearRecords') clearAllRecords()
-  else if (key === 'settings') showSettings.value = true
 }
 
 // ── 下载策略设置的读写模型 ──
@@ -533,9 +672,96 @@ function toggleSelectAll() {
     : new Set(terminalTasks.value.map(t => t.id))
 }
 
+/**
+ * 按序号区间勾选（2026-10-23 新增，解析规则见 services/rangeSelect.js）。
+ *
+ * 语义是**替换**：一次输入 = 一次把「我要的这些行」说清楚（`1-10,80` 一次就能填完），
+ * 而不是往已有选择上叠加 —— 叠加的话用户填完 100 再填 11-200，会得到 1-200，
+ * 而他想要的其实是「只有 11-200」。想清空重来用右侧「清空选择」。
+ *
+ * 只有「已结束」的行能勾（在跑/排队的行没有勾选框，见 isTerminal 那段注释），
+ * 所以命中里要摘掉不可勾的那些，并把摘掉多少首说给用户 —— 不然他会以为全选上了。
+ */
+function onRangeApply(indexes) {
+  const rows = pickByIndexes(filteredTasks.value, indexes)
+  const selectable = rows.filter(t => isTerminal(t.status))
+  if (!selectable.length) {
+    notifyWarn(`命中的 ${rows.length} 行都还在跑或排队，没有可勾选的记录（换个筛选试试）`)
+    return
+  }
+  selected.value = new Set(selectable.map(t => t.id))
+  const skipped = rows.length - selectable.length
+  notifyOk(
+    `已选中 ${selectable.length} 行` +
+      (skipped > 0 ? `，另有 ${skipped} 行在跑/排队不能勾` : ''),
+  )
+}
+
 function clearSelected() {
   downloadManager.removeTasks(selectedIds.value)
   selected.value = new Set()
+}
+
+/**
+ * 勾选后浮出的操作条：「按序号选」框住的这一段，用户接下来想干什么。
+ *
+ * 只有真的存在可做的事才摆按钮（失败数为 0 就不给「重试选中」），
+ * 否则用户点下去得到一个「0 首」的提示，会以为功能又坏了 ——
+ * 这个页面刚因为按钮点了没反应被投诉过一次。
+ */
+const selectedTasks = computed(() => downloadManager.tasks.value.filter(t => selected.value.has(t.id)))
+const selectedFailedCount = computed(() => selectedTasks.value.filter(t => t.status === 'failed').length)
+const selectedResumableCount = computed(() =>
+  selectedTasks.value.filter(t => t.status === 'stopped' || t.status === 'paused').length)
+
+const selectedDoneCount = computed(() => selectedTasks.value.filter(t => t.status === 'success').length)
+const selectedRetryableCount = computed(() => selectedFailedCount.value + selectedDoneCount.value)
+
+const selectionActions = computed(() => {
+  const acts = []
+  // 「继续」覆盖在跑之外的一切（失败要重试、停止要恢复），所以它是第一条
+  if (selectedRetryableCount.value > 0 || selectedResumableCount.value > 0) {
+    acts.push({
+      key: 'continue',
+      label: '继续',
+      icon: Play,
+      hint: '选中的任务重新排队：失败的会重试、停止/暂停的会接着下',
+    })
+  }
+  if (selectedDoneCount.value > 0) {
+    acts.push({
+      key: 'redownload',
+      label: `重新下载（${selectedDoneCount.value}）`,
+      icon: RotateCw,
+      // 这条的用处是把「当初只拿到 128k」的那批用当前策略再要一遍
+      hint: '把选中的已完成任务重新下一次（盘上那份不会被更差的覆盖）',
+    })
+  }
+  acts.push({ key: 'all', label: allSelected.value ? '取消全选' : '全选已结束', icon: ListChecks })
+  acts.push({ key: 'clear', label: `删除记录（${selectedIds.value.length}）`, icon: Trash2, danger: true, hint: '只从队列里移除记录，不删 NAS 上的文件' })
+  return acts
+})
+
+function onSelectionAction(key) {
+  if (key === 'clear') return clearSelected()
+  if (key === 'all') return toggleSelectAll()
+  if (key === 'continue') {
+    // 一个「继续」把两档都管了：失败的要重试、停止/暂停的要接着下。
+    // 用户勾了一段按「继续」，不该还要先分辨哪几行当初是被停掉的。
+    const retried = downloadManager.retryTasksByIds(selectedIds.value, activeSourceId())
+    const resumed = downloadManager.resumeTasksByIds(selectedIds.value, activeSourceId())
+    selected.value = new Set()
+    const n = retried + resumed
+    if (n > 0) notifyOk(`已重新排队 ${n} 首${retried && resumed ? `（重试 ${retried}、恢复 ${resumed}）` : ''}`)
+    else notifyWarn('选中的行里没有可继续的任务（已完成的请用「重新下载」）')
+    return
+  }
+  if (key === 'redownload') {
+    const n = downloadManager.redownloadTasksByIds(selectedIds.value, activeSourceId())
+    selected.value = new Set()
+    if (n > 0) notifyOk(`已把 ${n} 首重新排进队列`)
+    else notifyWarn('选中的行里没有已完成的任务')
+  }
 }
 
 /**
