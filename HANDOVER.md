@@ -16,15 +16,15 @@
 |---|---|
 | **这是什么** | 飞牛 NAS（fnOS）上的音乐播放器 + 曲库管理工具（下载 / 订阅追新 / 补全整理），`Go` 后端 + `Vue 3` 前端，打包成 fnOS 原生 `.fpk` |
 | **主要用途** | **供其他 AI / 外部程序调用**（帮用户下载歌曲、看歌单），其次才是人机交互 |
-| **代码规模** | 后端 **36 个包 / 273 个 `.go` / 86,708 行**（不含测试 50,970；测试 35,738）/ 后端测试函数 **1,215 个**（联网用例默认 skip，要 `LIVE_NET_TEST=1`）；前端 **36 个 `.vue` / 25,196 行 / 364 个测试**（2026-10-18 实测，复测跑 `bash scripts/audit-numbers.sh`） |
+| **代码规模** | 后端 **36 个包 / 282 个 `.go` / 91,336 行**（不含测试 53,863；测试 37,473）/ 后端测试函数 **1,266 个**（联网用例默认 skip，要 `LIVE_NET_TEST=1`）；前端 **42 个 `.vue` / 27,053 行 / 377 个测试**（2026-10-23 实测，复测跑 `bash scripts/audit-numbers.sh`） |
 | **文档怎么读** | 本文件只有 **§0–§10**（活文档：架构 / 坑 / 业务规则 / 接口）。**历史变更条目在 [`docs/变更记录/`](docs/变更记录/INDEX.md)** —— `INDEX.md` 是全部回合的目录（编号见其表头），正文按日期段分文件（2026-09-26 从 §11 拆出：那一节积到 4,595 行 / 310KB，占全文三分之二）。别处写的「§11 ㊼ 块十」= 那里同名回合的小节 |
 | **应用标识** | 显示名 **曲率**，`appname` **`yinshu-ai`**，端口 **8898**（旧应用 `fn-lx-player` / 8899 可并存） |
 | **后端依赖** | **已引入第三方依赖**（`modernc.org/sqlite v1.36.1`，纯 Go）。旧版「零依赖」规则已作废，见 §2 规则二 |
 | **前端依赖** | vue / vite / tailwindcss / axios / lucide-vue-next / crypto-js / buffer / qrcode |
 | **打包** | `bash scripts/build.sh`，**不需要 fnpack** |
-| **当前版本** | `2.17.12`（代码与 manifest 已同步，见 §7） |
+| **当前版本** | `2.17.14`（代码与 manifest 已同步，见 §7） |
 | **自动发布** | 功能完成并验证后由 DSH 提交、推送 main；GitHub Actions 校验四处版本 → 前端构建 → 后端/前端/洛雪测试 → FPK 自检 → 新版本 Release + SHA256。已有版本不覆盖；不自动部署 NAS。不用 git hook 自动暂存工作区。 |
-| **作者署名** | `fpk-package/manifest` 的 `maintainer` / `distributor` 与 `LICENSE` 的版权人统一为 `liwenyao016828`（此前是第三方壳的 `积木搬运师` / `webspider7`）。README 顶部署名作者并注明「AI 协作」，致谢只列参考过的项目，不再自称「上游移植」。改这四处是署名问题，与 `appname=yinshu-ai` / `desktop_applaunchme` 这些**技术标识**无关，别混在一起改。 |
+| **作者署名** | `fpk-package/manifest` 的 `maintainer` / `distributor` 与 `LICENSE` 的版权人统一为 `<作者账号>`（此前是第三方壳的 `积木搬运师` / `webspider7`）。README 顶部署名作者并注明「AI 协作」，致谢只列参考过的项目，不再自称「上游移植」。改这四处是署名问题，与 `appname=yinshu-ai` / `desktop_applaunchme` 这些**技术标识**无关，别混在一起改。 |
 | **并发闸门** | 自动下载「该不该下」与「占位」必须是 `beginDownload` 里的一次原子操作；分开写会让同一首歌下两遍（本地多核难复现，2 核 CI 一撞一个准）。`TestBeginDownloadIsAtomic` 64 路并发钉死这条。 |
 | **名称** | 显示名 **曲率**（2026-09-28 由「音枢 AI」更名）；技术标识 **`yinshu-ai`**（`appname` / 启动项 / 包文件名 / API 身份串）**刻意不改** |
 | **改名红线** | 显示名随便改（`display_name`、界面、文档）；**`appname` 是技术标识，动之前必须单独跟用户确认** —— 它决定飞牛应用中心认不认"同一个应用"，改了就是新装一个，旧配置和数据不继承 |
@@ -52,8 +52,8 @@
 
 ### 1.0 开发环境：推荐 WSL2（重要）
 
-**仓库主副本位于 WSL 原生文件系统**：`/home/liwenyao/projects/music-v2`
-（Windows 侧经 `\\wsl$\Debian\home\liwenyao\projects\music-v2` 访问）
+**仓库主副本位于 WSL 原生文件系统**：`/home/<user>/projects/music-v2`
+（Windows 侧经 `\\wsl$\<发行版>\home\<user>\projects\music-v2` 访问）
 
 **为什么用 WSL**：
 - 目标平台是 Linux，WSL 下 `pkg/nas` 的路径守卫测试才能全绿（Windows 上有 5 个必失败，属平台语义差异）
@@ -63,7 +63,7 @@
 **统一入口**：`.dev/wsl-run.sh`
 ```bash
 bash .dev/wsl-run.sh status     # 环境与仓库状态
-bash .dev/wsl-run.sh test       # 跑测试（后端 519 + 前端 105，全绿）
+bash .dev/wsl-run.sh test       # 跑测试（后端 + 前端全绿；具体条数以实跑为准）
 bash .dev/wsl-run.sh build      # 仅编译
 bash .dev/wsl-run.sh fpk        # 打包 FPK（含前端）
 bash .dev/wsl-run.sh fpk-fast   # 打包（跳过前端，复用 dist）
@@ -71,7 +71,7 @@ bash .dev/wsl-run.sh dev        # 开发环境（:3000 热更新 + :8900）
 ```
 从 Windows 调用：
 ```
-wsl.exe -d Debian -- bash /home/liwenyao/projects/music-v2/.dev/wsl-run.sh test
+wsl.exe -d <发行版> -- bash /home/<user>/projects/music-v2/.dev/wsl-run.sh test
 ```
 
 **访问服务的坑**：浏览器必须用 `localhost`（WSL2 转发走 IPv6 `[::1]`，`127.0.0.1` 不通）；
@@ -170,11 +170,11 @@ cd backend && go test ./... ; cd ../frontend && npm test
 
 ### 1.4 把 fpk 送到飞牛（用户 2026-09-30 要的「放测试文件夹」）
 
-**投放目录就是 `/vol3/1000/音乐/测试下载/`**（同时也是曲率的下载目录）。用户是从这个目录装包的，
+**投放目录就是 `<投放目录>/`**（同时也是曲率的下载目录）。用户是从这个目录装包的，
 里面按版本平铺着 `yinshu-ai-2.1.32.fpk … 2.1.72.fpk`。文件名必须带版本号。
 
-**NAS 主机名 `wenyaoNAS`，局域网地址 `192.168.1.66`**（2026-10-05 补记）。NAS 上装的曲率版本
-用 `curl http://192.168.1.66:8898/api/app/version` 查；`8899` 是并存的旧「极光音乐」（`fn-lx-player`）。
+**NAS 主机名 `NAS-主机名`，局域网地址 `192.168.x.x`**（2026-10-05 补记）。NAS 上装的曲率版本
+用 `curl http://192.168.x.x:8898/api/app/version` 查；`8899` 是并存的旧「极光音乐」（`fn-lx-player`）。
 
 ⚠️ **别再用「让应用自己下载」这条路**：那个目录虽然就是应用的下载目录，但 `POST /api/download/song`
 有 SSRF 策略（`pkg/security`），**会拒绝内网地址**，实测返回
@@ -184,17 +184,17 @@ cd backend && go test ./... ; cd ../frontend && npm test
 ✅ **首选：SSH（2026-10-07 用户告知端口）** —— 比下面那条 ego 桥简单得多：
 
 ```bash
-ssh -p 6828 liwenyao@192.168.1.66      # ⚠️ 端口是 6828，不是 22（22 关着）
+ssh -p <SSH端口> <user>@192.168.x.x      # ⚠️ 端口不是默认的 22（22 关着）
 ```
 
-开发机的 `~/.ssh/id_ed25519` 已授权，**免密**；liwenyao 在 `Administrators` 组，`sudo -n` 直接可用，
+开发机的 `~/.ssh/id_ed25519` 已授权，**免密**；登录用户在 `Administrators` 组，`sudo -n` 直接可用，
 所以能 `cp` 进投放目录、能跑 `appcenter-cli`、能读 `/var/log/apps/yinshu-ai.log`。
 
 ⚠️ **别再用 22 端口下结论说「飞牛没有 SSH」** —— 这条写错过一次，白白绕了几轮。
 
 <details><summary>备选：ego_script 那条桥（依赖 Chrome，可能失效）</summary>
 
-`ego_script` 里的 Node 进程**跑在飞牛本机上**（`os.hostname()` = `wenyaoNAS`，能直接看到 `/vol1` `/vol3`），
+`ego_script` 里的 Node 进程**跑在飞牛本机上**（`os.hostname()` = `NAS-主机名`，能直接看到 `/vol1` `/vol3`），
 而本会话的 `bash`/文件工具跑在**开发机**（看不到 NAS 文件系统）。**2026-10-07 实测这条路已经坏了**：
 `ego-browser` 每次启动都要先拉一个 Chrome，Chrome 起不来就整个 CLI 退出
 （`Chrome did not expose a DevTools port within 20000ms`）—— 有 SSH 就别折腾它。
@@ -207,15 +207,15 @@ ssh -p 6828 liwenyao@192.168.1.66      # ⚠️ 端口是 6828，不是 22（22 
 // 2) ego_script（注意：该运行时的 fetch 不是全局函数，要用 node:http）
 const http = await import('node:http');
 const fs = await import('node:fs');
-// ... http.get 取回 Buffer → fs.writeFileSync('/vol3/1000/音乐/测试下载/yinshu-ai-X.fpk', buf)
-fs.chmodSync('/vol3/1000/音乐/测试下载/yinshu-ai-X.fpk', 0o644);   // ⚠️ 必须
+// ... http.get 取回 Buffer → fs.writeFileSync('<投放目录>/yinshu-ai-X.fpk', buf)
+fs.chmodSync('<投放目录>/yinshu-ai-X.fpk', 0o644);   // ⚠️ 必须
 ```
 
 ⚠️ **必须 `chmod 644`**：那个进程的 umask 会把文件写成 `707`，和同目录其它包（`644`）不一致。
 
 </details>
 
-其他已知边界：SMB 445 开着（用户凭据可写「共享文件夹」→ 实为 `/vol3/1000/共享文件夹`，
+其他已知边界：SMB 445 开着（用户凭据可写「共享文件夹」→ 实为 `<共享文件夹>`，
 **覆盖不到 `/vol3/1000/音乐/`**，所以走 SMB 只能把包丢进共享文件夹，进不了投放目录）；
 从开发机只能到 `4398`/`4399`/`8898`/`8899`。
 
@@ -228,8 +228,8 @@ fs.chmodSync('/vol3/1000/音乐/测试下载/yinshu-ai-X.fpk', 0o644);   // ⚠�
 比人眼扫截图可靠：
 
 ```bash
-scp -P 6828 .dev/measure-mobile.mjs liwenyao@192.168.1.66:/tmp/
-ssh -p 6828 liwenyao@192.168.1.66 \
+scp -P <SSH端口> .dev/measure-mobile.mjs <user>@192.168.x.x:/tmp/
+ssh -p <SSH端口> <user>@192.168.x.x \
   'cd /tmp && /vol1/@appcenter/nodejs_v24/bin/node measure-mobile.mjs http://127.0.0.1:8898/ 390 844 /tmp/shots'
 ```
 
@@ -252,7 +252,7 @@ ssh -p 6828 liwenyao@192.168.1.66 \
 
 ```bash
 sudo -n appcenter-cli uninstall yinshu-ai
-sudo -n appcenter-cli install-fpk '/vol3/1000/音乐/测试下载/yinshu-ai-<版本>.fpk'
+sudo -n appcenter-cli install-fpk '<投放目录>/yinshu-ai-<版本>.fpk'
 sudo -n appcenter-cli start yinshu-ai     # 装完不会自动起
 ```
 
@@ -1878,12 +1878,12 @@ fnos     —— 把曲库里匹配上的同步到飞牛歌单（底层 push task
 
 **坑 A：代理死锁**
 
-本机环境变量设了全局代理 `http_proxy=http://192.168.1.3:7890`，
+本机环境变量设了全局代理 `http_proxy=http://<代理地址>:<端口>`，
 `no_proxy` 只含 localhost/127.0.0.1。Go 的 `http.ProxyFromEnvironment` 会把
 **内网请求也发给代理**，而 SSRF 防护又拦内网 → 死锁：
 
 ```
-proxyconnect tcp: dial tcp 192.168.1.3:7890: 禁止访问内网/元数据地址
+proxyconnect tcp: dial tcp 192.168.x.x:7890: 禁止访问内网/元数据地址
 ```
 
 **已修**：`pkg/security` 的 `proxyFunc` 按目标分流 —— 内网/回环直连，公网才走代理。
@@ -1905,7 +1905,7 @@ data: [DONE]
 
 **其他要点**：
 - 该网关**每次随机路由到不同免费模型**，偶尔返回**空 content**（不是 bug，重试即可）
-- 访问必须用 `http://127.0.0.1:20128/v1`；用局域网 IP `192.168.1.66:20128` 会 hairpin 不通
+- 访问必须用 `http://127.0.0.1:20128/v1`；用局域网 IP `192.168.x.x:20128` 会 hairpin 不通
 - 用户明确要求过：**不要再加"多地址自动回退"之类的复杂逻辑**
 
 **坑 C：推理模型返回空 content（2026-09-18 修，从参考实现学到的）**
@@ -2644,7 +2644,7 @@ QQ 才是原版（叶惠美 / `2003` / `track=3`）。取错来源就把翻唱�
 拼错后端不报错，只会静默不补。
 
 ⚠️ **界面**：早期几轮测不了（浏览器自动化在本机被权限分类器拦，见 §4.10 末尾的替代验证配方），
-但 2026-09-26 起能用 NAS 上的 ego 浏览器真机走了：`http://192.168.1.230:3000/` → 曲库管家 → 补全整理 → 点「扫描缺失」，
+但 2026-09-26 起能用 NAS 上的 ego 浏览器真机走了：`http://192.168.x.x:3000/` → 曲库管家 → 补全整理 → 点「扫描缺失」，
 缺口行读回来是「上次统计（刚刚）· 共 7 首，其中 6 首读过标签 · 待补 6 首（…）·
 另有 1 首格式写不了标签（wav×1），补全不会动它们（要补得先转成 MP3/FLAC）」，
 六个字段格子（歌词 4 / 封面 4 / 年份 6 / 曲序 6 / 光盘 6 / 风格 6）与 `/api/library/gaps` 逐项一致。
@@ -2709,7 +2709,7 @@ ai 补全也可以更名补全整理，补全后显示补全歌曲信息展示�
 
 | 层 | 现象 | 根因 | 修法（`backend/pkg/security/security.go`） |
 |---|---|---|---|
-| 1 | `proxyconnect tcp: dial tcp 192.168.1.3:7890: 禁止访问内网/元数据地址` | 我们自己的 SSRF `Dialer.Control` 拦下了**用户自己配置的代理出口**（代理是内网地址） | `proxyExemptAddrs()` 把环境里配的代理加进豁免白名单；`dialControl(opts, exempt)` 先查豁免再判内网。**豁免是固定白名单**，没配在环境里的私网地址照旧拦 |
+| 1 | `proxyconnect tcp: dial tcp 192.168.x.x:7890: 禁止访问内网/元数据地址` | 我们自己的 SSRF `Dialer.Control` 拦下了**用户自己配置的代理出口**（代理是内网地址） | `proxyExemptAddrs()` 把环境里配的代理加进豁免白名单；`dialControl(opts, exempt)` 先查豁免再判内网。**豁免是固定白名单**，没配在环境里的私网地址照旧拦 |
 | 2 | `Post …: EOF`（明文 HTTP 经代理通、HTTPS/CONNECT 不通） | 后端对公网**无条件走代理**，代理的 CONNECT 隧道坏了就全挂 | `proxyFallbackTransport`：**只在「没拿到响应 + 连接层错误 + 请求体可重放」时直连重试一次**；拿到任何响应（哪怕 502）绝不重试；单次经代理上限 5s，失败后 60s 冷却（冷却期内 `proxyFunc` 直接返回 nil）。**流式中继用 `NewSafeStreamRoundTripper`（无上限）**，否则 5s 会掐断长音频响应体 |
 | 3 | `http2: timeout awaiting response headers` 卡满 20s | `newSafeTransport` 里 `ForceAttemptHTTP2: true`，而音乐站多挂在 CDN 边缘（openresty / EdgeOne）上：宣告支持 h2 却把 Go 的 h2 客户端挂到 `ResponseHeaderTimeout` | 改为 `ForceAttemptHTTP2: false`（同一地址 HTTP/1.1 只要 0.2s）。回归测试 `TestOutboundTransportDoesNotForceHTTP2` 钉住 |
 
@@ -3239,7 +3239,7 @@ GET /api/accounts/tracks?provider=netease&kind=playlist&id=<歌单ID>&limit=200
 
 ## 6. 接口契约（对外最重要）
 
-**`backend/pkg/api/catalog.go` 是接口文档的单一数据源**，`GET /api/catalog` 返回全部 **122 个**
+**`backend/pkg/api/catalog.go` 是接口文档的单一数据源**，`GET /api/catalog` 返回全部 **136 个**
 接口的结构化描述，前端「开放接口」抽屉渲染同一份数据。
 
 > **目录的主要读者是「替用户操作本应用」的外部 AI**，不是翻手册的人。
@@ -3439,7 +3439,7 @@ node .dev/catalog-audit.mjs http://127.0.0.1:8900               # 线上：跑�
 跑法（dev box 把脚本挂到 `:8893`，在 NAS 上取正文求值）：
 
 ```js
-const src = await (取 http://192.168.1.230:8893/nas-acceptance.mjs 的正文);
+const src = await (取 http://192.168.x.x:8893/nas-acceptance.mjs 的正文);
 const fn = new Function('page','cp','http', 'return (async () => {' + src + '})()');
 console.log(JSON.stringify(await fn(page, cp, http), null, 1));
 ```
@@ -3877,7 +3877,7 @@ window.addEventListener('resize', () => this.resize())   // 匿名函数，移�
 - [ ] `bash .dev/wsl-run.sh status` 环境正常（WSL 下）；或 Windows 下 `bash scripts/dev.sh` 能起来，浏览器能看到界面
 - [ ] `go test ./...` 全绿（**698 个用例**，其中 8 个联网用例默认 skip）
 - [ ] `cd frontend && npm run test` 全绿（**138 个用例**）与 `npm run build` 通过
-- [ ] `GET /api/catalog` 返回 **122 个**接口（core 87 / internal 35），顶层带 `guide`（9 条任务食谱）
+- [ ] `GET /api/catalog` 返回 **136 个**接口（core 99 / internal 37），顶层带 `guide`（9 条任务食谱）
 - [ ] `cd backend && go test ./pkg/api/ -run 'Catalog|Route'` 绿（源码：路由↔目录双向、目录自洽）
       `node .dev/catalog-audit.mjs http://127.0.0.1:8900` 输出「线上这一版与源码一致。」且 role/hidden 无不一致
 - [ ] `GET /api/fnos/status` 可访问（非飞牛环境两个 available 为 false 属正常）
