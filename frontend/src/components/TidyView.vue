@@ -559,6 +559,14 @@
           <div class="flex items-center gap-2">
             <span class="text-[11px] font-medium text-[var(--ys-text-muted)]">最近替换</span>
             <span class="text-[10px] text-[var(--ys-text-faint)]">共 {{ qScan?.records?.length || 0 }} 条</span>
+            <!--
+              自动补强的记录也在这本账上（2026-10-23）：补强轮是「替换音质」的自动版，
+              结果只写进自动下载记录的话，用户来这一页自查就永远看不到它。
+              这里把两者的条数分开说清，免得看到没印象的条目。
+            -->
+            <span v-if="qAutoCount" class="text-[10px] text-[var(--ys-text-faint)]">
+              （其中后台自动补强 {{ qAutoCount }} 条）
+            </span>
           </div>
           <div class="mt-1.5 overflow-hidden rounded-[12px] border border-[var(--ys-border)] bg-white">
             <div
@@ -571,7 +579,14 @@
                 :class="r.ok ? 'bg-emerald-500' : 'bg-[var(--ys-text-faint)]'"
               ></span>
               <div class="min-w-0 flex-1">
-                <div class="truncate text-[12px] text-[var(--ys-text)]">{{ r.label }}</div>
+                <div class="flex items-center gap-1.5">
+                  <span class="truncate text-[12px] text-[var(--ys-text)]">{{ r.label }}</span>
+                  <span
+                    v-if="r.by === 'upgrade'"
+                    class="shrink-0 rounded bg-[var(--ys-bg-soft)] px-1 py-px text-[9.5px] text-[var(--ys-text-muted)]"
+                    title="后台音质补强轮自动试的（每 20 分钟一轮，失败会隔天再试）—— 不是你手动点的替换"
+                  >自动补强</span>
+                </div>
                 <div class="mt-0.5 truncate text-[10.5px] text-[var(--ys-text-muted)]">
                   {{ r.tierText }}<span v-if="r.channel"> · {{ Q_CHANNEL_LABELS[r.channel] || r.channel }}</span>
                 </div>
@@ -812,6 +827,12 @@ const qRecords = computed(() => {
       ? `${r.from || '?'} → ${r.to || '?'}`
       : (r?.note || '没换成'),
   }))
+})
+
+/** 记录里有几条是后台自动补强做的（`by === 'upgrade'`，见 pkg/intercept/quality.go 的 QualityRecord.By）。 */
+const qAutoCount = computed(() => {
+  const list = Array.isArray(qScan.value?.records) ? qScan.value.records : []
+  return list.filter((r) => r && r.by === 'upgrade').length
 })
 
 function formatRecordTime(at) {

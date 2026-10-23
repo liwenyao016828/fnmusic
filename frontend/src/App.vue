@@ -43,10 +43,12 @@
       @clear-playlist="clearPlaylist"
     />
 
-    <!-- ════════════ 顶部一条栏：品牌 + 当前页面名 + 音源 ════════════
+    <!-- ════════════ 顶部一条栏：品牌 +（手机端）当前页面名 + 音源 ════════════
          2026-10-18 用户口径：「页面最顶部，把发现音乐、本地曲库等页面名，移到 logo 和
          音源管理那行去」——所以页面名**只**出现在这一条栏里，各页内容区不再重复写标题
          （PageShell / SearchView 的自带标题都已撤掉）。
+         2026-10-23 追加：「去掉桌面端」——桌面端有侧栏高亮指路，这一格的标题已按
+         `sm:hidden` 收敛到手机端，详见下面 h1 上方的注释。
          品牌按钮仍是「开放接口」入口（点图标滑出抽屉）。
          ⚠️ `pt-safe` 挂 header、真实内边距挂内层 div —— 两者挂同一元素会互相覆盖。 -->
     <header class="pt-safe z-20 shrink-0 border-b border-[var(--ys-border)] bg-[var(--ys-surface-glass)] backdrop-blur-xl backdrop-saturate-150">
@@ -72,11 +74,20 @@
           </span>
         </button>
 
-        <span class="hidden h-5 w-px shrink-0 bg-[var(--ys-border)] sm:block" aria-hidden="true"></span>
+        <!--
+          当前页面名只在**手机**上出现（用户 2026-10-23：「帮我去掉桌面端，当前用户选择的
+          导航页面名字会显示在左上角的 logo 右边」）。
 
-        <!-- 当前页面名（导航注册表 navViews.js 是单一数据源，不能在这儿另写一份表） -->
+          为什么桌面端可以去：左侧栏的导航项本身已经高亮了当前页（那就是「我在哪」的答案），
+          顶部再写一遍是同一件事说两遍；腾出来的位置让音源胶囊更靠左，头部更干净。
+
+          为什么手机端必须留：手机上侧栏是抽屉，关着的时候界面上**没有**任何地方标示
+          当前在哪一页，删了就成了「不知道自己在哪」。分隔线跟着一起 `sm:hidden`，
+          否则桌面端会在 logo 后面留一根孤零零的竖线。
+        -->
+        <span class="hidden h-5 w-px shrink-0 bg-[var(--ys-border)] sm:hidden" aria-hidden="true"></span>
         <h1
-          class="min-w-0 truncate text-[15px] font-semibold tracking-[-0.01em] text-[var(--ys-text)] sm:text-[16px]"
+          class="min-w-0 truncate text-[15px] font-semibold tracking-[-0.01em] text-[var(--ys-text)] sm:hidden"
           :title="currentViewDesc"
         >
           {{ currentViewName }}

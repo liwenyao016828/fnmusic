@@ -82,7 +82,15 @@
                   <template v-else>—</template>
                   <span v-if="r.quality" class="ml-1 font-mono text-[10.5px] text-[var(--ys-text-faint)]">{{ r.quality }}</span>
                 </td>
-                <td class="hidden px-2 py-2 text-[var(--ys-text-muted)] sm:table-cell">{{ autoTriggerLabel(r.trigger) }}</td>
+                <td class="hidden px-2 py-2 text-[var(--ys-text-muted)] sm:table-cell">
+                  <!--
+                    触发来源（2026-10-23 用户问：「音质补强」是什么意思）。
+                    加 title 是因为这一列只有四个字，没法在表里讲清它和「收藏」的区别：
+                    「音质补强」不是用户点的动作，是后台轮子**替你把有损换成无损**
+                    （见 pkg/intercept/upgrade_sweeper.go）。它失败不代表歌没下来。
+                  -->
+                  <span :title="autoTriggerHint(r.trigger)">{{ autoTriggerLabel(r.trigger) }}</span>
+                </td>
                 <td class="px-2 py-2">
                   <span v-if="r.ok" class="rounded-[6px] bg-[var(--ys-accent-soft)] px-1.5 py-0.5 text-[var(--ys-accent)]">已下载</span>
                   <span v-else class="rounded-[6px] bg-rose-50 px-1.5 py-0.5 text-rose-600" :title="r.error">失败</span>
@@ -199,6 +207,29 @@ function autoTriggerLabel(t) {
   // 分开显示：同一行里「收藏 · 失败」是「你要的歌没下下来」，
   // 「音质补强 · 失败」只是「这首的无损版还没搞到，mp3 好好地在盘上」。
   return { fav: '收藏', playlist: '加歌单', page: '页面点下载', upgrade: '音质补强' }[t] || t || '自动'
+}
+
+/**
+ * 触发来源的一句话解释（鼠标悬停时显示）。
+ *
+ * 「音质补强」最容易被误读成「用户点了什么」，所以要把三件事说清：谁发起的、
+ * 干什么、失败意味着什么。失败那半句尤其重要 —— 补强失败时歌**是好好的**，
+ * 只是还差一份无损，与「收藏 · 失败」（歌压根没下下来）完全是两回事。
+ */
+function autoTriggerHint(t) {
+  switch (t) {
+    case 'upgrade':
+      return '音质补强：后台每隔一段时间替你试一次，把盘上的有损（mp3）换成无损（flac）。'
+        + '失败只代表这次渠道仍只给有损，歌本身在盘上好着；连续几次不成会停手，剩下的去「替换音质」页手动换。'
+    case 'fav':
+      return '收藏：你收藏了一首歌，后台自动把它下到本地。失败=歌没下下来。'
+    case 'playlist':
+      return '加歌单：你把它加进了飞牛歌单，后台自动下载。'
+    case 'page':
+      return '页面点下载：你在发现音乐 / 歌单页面直接点了下载。'
+    default:
+      return '自动下载记录：后台替你把歌下到本地曲库。'
+  }
 }
 
 /** 记录时间：今天的只给时分秒，更早的带上月日 —— 一屏里最常看的是「刚刚那几次」。 */
