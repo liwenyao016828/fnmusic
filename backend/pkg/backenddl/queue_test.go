@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -344,4 +345,45 @@ func TestUnknownAction(t *testing.T) {
 	if _, err := q.Apply("explode", nil); !errors.Is(err, ErrUnknownAction) {
 		t.Fatalf("未知动作应回 ErrUnknownAction，实际 %v", err)
 	}
+}
+
+// 迁移进来的历史超过上限时只裁最旧的，不能连新记录一起扔。
+// 2026-10-23 实测：老浏览器队列 266 条迁进来，上限 200 让 66 条历史直接消失。
+func TestTrimKeepsNewestHistory(t *testing.T) {
+	q := newTestQueue(t, func(ctx context.Context, it Item) (Result, error) {
+		return Result{}, errors.New("历史记录不该被执行")
+	})
+	total := limitTerminal + 12
+	items := make([]Item, 0, total)
+	for i := 0; i < total; i++ {
+		items = append(items, Item{
+			ClientID:  fmt.Sprintf("h-%d", i),
+			Name:      fmt.Sprintf("歌%d", i),
+			Singer:    "测试",
+			Status:    StatusSuccess,
+			Path:      "/music/x.mp3",
+			AddedAt:   int64(1000 + i),
+			UpdatedAt: int64(1000 + i),
+		})
+	}
+	added, skipped, err := q.Submit(items, false, true)
+	if err != nil {
+		t.Fatalf("迁移提交失败：%v", err)
+	}
+	if len(skipped) != 0 || len(added) != total {
+		t.Fatalf("迁移应全数入队：added=%d skipped=%d", len(added), len(skipped))
+	}
+	list := q.List()
+	if len(list) != limitTerminal {
+		t.Fatalf("历史应裁到 %d 条，实际 %d", limitTerminal, len(list))
+	}
+	for _, it := range list {
+		if it.ClientID == "h-0" {
+			t.Fatalf("最旧的历史应被裁掉")
+		}
+		if it.ClientID == fmt.Sprintf("h-%d", total-1) {
+			return
+		}
+	}
+	t.Fatalf("最新的历史不能被裁")
 }

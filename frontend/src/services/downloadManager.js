@@ -172,6 +172,11 @@ function syncTasks() {
   persistUnsent()
 }
 
+// 必须早于下面这个 immediate watcher 声明：watcher 在模块求值阶段就会立刻跑
+// syncTasks → persistUnsent，那时若 unsentReady 还在 TDZ，抛的是 ReferenceError
+// 「Cannot access 'unsentReady' before initialization」——整页白屏（v2.18.0 首版踩过）。
+let unsentReady = false
+
 watch(backendDownload.items, syncTasks, { immediate: true })
 
 // ── 计数 ──
@@ -304,7 +309,6 @@ function makeProvisional(song, sourceId, quality) {
   return task
 }
 
-let unsentReady = false
 function persistUnsent() {
   // 模块加载时 items watcher 会先 immediate 跑一次；那时还没读旧占位，
   // 绝不能把磁盘上的「未确认提交」当成空队列擦掉。
