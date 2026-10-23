@@ -23,6 +23,7 @@ import { fail as failText, apiError } from './userMsg.js'
 import { logError } from './appLog.js'
 import { pickAlreadyLocal } from './downloadDedup.js'
 import { downloadManager } from './downloadManager.js'
+import { backendDownload } from './backendDownload.js'
 import { markLoaded } from './viewCache.js'
 import { ok as notifyOk, fail as notifyFail } from './feedback.js'
 import {
@@ -200,8 +201,8 @@ async function fetchPendingTracks(monitorId) {
 /**
  * 逐首「搜索 → 入队」。
  *
- * ⚠️ **入队前先按「歌名 + 歌手」查本地有没有**（`POST /api/download/check`，
- * 后端判据是 `歌手 - 歌名.mp3` 存在且 >300KB）。用户原话：
+ * 入队前通过 `/api/download/check` 检查本地文件与曲库索引，同时传入专辑、
+ * 时长和目标音质，供后端保护不同版本并允许低音质升级。用户原话：
  * 「同一首，同歌手，不需要，只下载不一样的版本」。
  *
  * 本地已有的不但不再下一遍，还要**回写成「已下载」** ——
@@ -228,6 +229,9 @@ async function enqueueSongs(items, platform, rowKey = '') {
       id: t.song_id || '',
       name: t.name || '',
       singer: t.artist || '',
+      album: t.album || '',
+      duration: Number(t.duration) || 0,
+      quality: downloadManager.effectiveDefaultQuality(),
     }))
     const chk = await DownloadAPI.checkDownloaded(probe)
     if (chk?.code === 200 && chk.exists) haveLocal = pickAlreadyLocal(items, chk.exists)
@@ -441,6 +445,15 @@ function trackKey(t) {
  */
 async function autoFillPending() {
   if (fillingKey.value || autoFilling.value) return
+  // 后端队列接管了订阅下载时，这里必须让开：后端监控调度发现新歌后会自己
+  // 入队（ClientID = mon:...，幂等）并等到成功才记 downloaded。前端再补一遍
+  // 会换一个 client_id 重复入队，同一首歌被下两次。
+  //
+  // 只在**明确 true** 时让开：status 还没拉到（null）时保持旧行为，否则旧后端
+  // 或瞬时报错会让订阅静默停掉。后端不 ready（没渠道）时 managed=false，
+  // 前端仍是唯一入口。用户 2026-10-24 的要求是「订阅更新不必开着网页」，
+  // 这条闸门就是它的开关。
+  if (backendDownload.subscriptionsManaged.value === true) return
   for (const row of subscriptions.value) {
     // 被停止的行一律跳过 —— 服务端 enabled 也能拦住，但停止是**立即生效**的，
     // 不能等下一轮 loadMonitors 刷回来（那一轮结束前用户已经看到队列还在涨）
@@ -672,17 +685,33 @@ async function stopPushOnly(row) {
   }
 }
 
-/** 立即执行：把**已勾选**的能力位各触发一次（下载侧发现 / 飞牛侧推送） */
+/**
+ * 立即执行：把**已勾选**的能力位各触发一次（下载侧发现 / 飞牛侧推送）
+ *
+ * 返回 `{ ok, error }`：单条按钮不看返回值，但「全部执行」（PushManager 里的批量入口）
+ * 要拿它统计失败条数 —— runRow 内部自己 catch 掉了异常，不留返回值的话外面
+ * 永远分不清「跑成功了」和「跑失败了」，只能按条数硬猜。
+ */
 async function runRow(row) {
-  if (!row || busyKey.value) return
+  if (!row) return { ok: false, error: '订阅已不存在' }
+  if (busyKey.value) return { ok: false, error: '这条订阅正在执行别的动作，已跳过' }
   const jobs = []
   if (row.download) for (const m of row.monitors) jobs.push(MonitorAPI.run(m.id))
   if (row.fnos) for (const t of row.tasks) jobs.push(PushAPI.run(t.id))
-  if (!jobs.length) return notify('这个订阅没有开启任何能力位', true)
+  if (!jobs.length) {
+    notify('这个订阅没有开启任何能力位', true)
+    return { ok: false, error: '没有开启任何能力位' }
+  }
 
   busyKey.value = `${row.key}:run`
   try {
-    await Promise.all(jobs)
+    // 等这一行的所有请求落定，单个失败不让仍在执行的请求与下一行重叠。
+    const responses = await Promise.allSettled(jobs)
+    for (const response of responses) {
+      if (response.status === 'rejected') throw response.reason
+      const error = apiError(response.value)
+      if (error) throw new Error(error)
+    }
 
     // 勾了「下载到本地曲库」= 用户已经说过「这歌我要下」。
     // 用户 2026-10-23 的原话：「订阅页面里补下载是否可以和勾选下载到本地曲库，
@@ -711,8 +740,11 @@ async function runRow(row) {
         autoFillPending()
       }
     }, 5000)
+    return { ok: true }
   } catch (e) {
-    notify(failText('执行订阅', e), true)
+    const msg = failText('执行订阅', e)
+    notify(msg, true)
+    return { ok: false, error: msg }
   } finally {
     busyKey.value = ''
   }

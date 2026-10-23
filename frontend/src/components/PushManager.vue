@@ -112,7 +112,35 @@
           <button class="text-emerald-600 hover:underline" @click="openPushGuide">展开看看</button>
         </div>
 
-        <div class="flex items-center justify-end gap-2">
+        <!--
+          全部执行（GitHub issue #6，@jinjinfun：「大佬订阅里建议增加一键下载到本地，
+          一键同步到飞牛歌单，一键执行。」）—— 之前只有行内的「立即执行」，
+          订阅一多就得一行一行点，批量这件事完全没有入口。
+
+          依次提交，避免同时发起大量请求。run 接口异步执行，等待响应只代表已接受，
+          不代表发现、同步或下载完成；实际并发与同曲去重由各服务端任务管理。
+
+          title 挂在 span 上：禁用状态的 button 在多数浏览器里收不到 hover 事件，
+          挂在它自己的 title 上等于没写 —— 用户会觉得「灰着但不告诉我为什么」。
+        -->
+        <div class="flex flex-wrap items-center justify-end gap-2">
+          <button
+            v-if="runAllBusy"
+            class="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[13px] font-medium text-rose-600 transition-colors hover:bg-rose-100 disabled:opacity-50"
+            :disabled="runAllStopRequested"
+            title="当前请求返回后停止提交，已开始的后台任务会继续"
+            @click="stopRunAll"
+          >{{ runAllStopRequested ? '停止中…' : '停止' }}</button>
+          <span class="inline-flex" :title="runAllTitle">
+            <button
+              class="rounded-lg border px-4 py-2 text-[13px] font-semibold transition-all disabled:opacity-50"
+              :class="runnableRows.length
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                : 'border-gray-200 bg-white text-gray-400'"
+              :disabled="runAllBusy || !runnableRows.length"
+              @click="runAll"
+            >{{ runAllText }}</button>
+          </span>
           <button
             class="flex shrink-0 items-center justify-center rounded-lg bg-emerald-500 px-4 py-2 text-[13px] font-semibold text-white transition-all hover:bg-emerald-600"
             @click="openCreate"
@@ -121,24 +149,14 @@
           </button>
         </div>
 
-        <!--
-          「下载到本地曲库」这一步在**浏览器里**执行（音源脚本只能在浏览器跑），
-          所以那个窗口关掉就停。这件事以前只在**报错文案**里提过，而且说的是「网页端」——
-          用户直接问过「网页开着什么意思，飞牛里应用启动算吗」（2026-09-22）。
-          配了服务型音源则由后端直连取链、关页面也能下，所以只在**没配**时提示。
-          引导卡片的第①步已经把这件事说清了，所以**引导显示时不再重复**；
-          等用户把引导收起（那时他可能压根没读过第①步的文案）才把这条常驻提醒放出来。
-
-          2026-10-18 简化：原来这一段是三行正文，现在压成一行标题 +
-          完整说明进 title；它是一条**提示**，不该在页面上占掉三行。
-        -->
+        <!-- 下载统一由服务端执行，可用渠道以下载页状态为准。 -->
         <p
           v-if="pushGuideCollapsed && !apiSourceCount"
           class="rounded-[18px] border border-gray-200 bg-white px-4 py-2.5 text-[11px] text-gray-500"
-          title="取链脚本只能在浏览器里跑；关掉窗口后已排队的会停，下次打开继续。想关掉页面也能下：到「音源管理 → 按服务地址接入」配一个服务型音源，那种音源由后端直接取链，跟浏览器无关。"
+          title="下载由后端服务执行并持久化，页面关闭后仍继续；可用渠道在「下载」页查看状态。"
         >
-          <b class="text-gray-700">「下载到本地曲库」需要让曲率 这个窗口一直开着</b>
-          <span class="ml-1 text-gray-400">（关掉也能下：配一个服务型音源）</span>
+          <b class="text-gray-700">下载任务由后台服务执行</b>
+          <span class="ml-1 text-gray-400">页面可关闭，状态见「下载」页</span>
         </p>
 
         <!--
@@ -187,7 +205,7 @@
                 <button
                   v-if="row.pendingCount || row.missingCount"
                   class="rounded-lg bg-amber-50 px-2.5 py-1.5 text-[11px] font-medium text-amber-700 hover:bg-amber-100 disabled:opacity-50"
-                  :disabled="!!busyKey"
+                  :disabled="!!busyKey || runAllBusy"
                   :title="fillHint(row)"
                   @click="fillRow(row)"
                 >
@@ -200,7 +218,7 @@
                 -->
                 <button
                   class="rounded-lg bg-emerald-50 px-2.5 py-1.5 text-[11px] font-medium text-emerald-600 hover:bg-emerald-100 disabled:opacity-50"
-                  :disabled="!!busyKey || (!row.download && !row.fnos)"
+                  :disabled="!!busyKey || runAllBusy || (!row.download && !row.fnos)"
                   :title="row.download
                     ? '立刻检查一遍有没有新歌，并把缺的直接下到本地曲库'
                     : '立刻检查一遍有没有新歌（没勾「下载到本地曲库」，只登记不下载）'"
@@ -215,7 +233,9 @@
                   {{ expandedKey === row.key ? '收起' : '设置' }}
                 </button>
                 <button
-                  class="rounded-lg p-1.5 text-gray-300 hover:bg-red-50 hover:text-red-400"
+                  class="rounded-lg p-1.5 text-gray-300 hover:bg-red-50 hover:text-red-400 disabled:opacity-40"
+                  :disabled="runAllBusy"
+                  title="全部执行进行中，跑完再删"
                   @click="removeRow(row)"
                 >
                   <Trash2 class="h-3.5 w-3.5" />
@@ -235,7 +255,7 @@
               <button
                 class="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[12px] font-medium transition-all disabled:opacity-50"
                 :class="row.download ? 'bg-emerald-500 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'"
-                :disabled="!!busyKey || capBlocked(row, 'download')"
+                :disabled="!!busyKey || runAllBusy || capBlocked(row, 'download')"
                 :title="capTitle(row, 'download')"
                 @click="toggleCapability(row, 'download', !row.download)"
               >
@@ -246,7 +266,7 @@
               <button
                 class="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[12px] font-medium transition-all disabled:opacity-50"
                 :class="row.fnos ? 'bg-emerald-500 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'"
-                :disabled="!!busyKey || capBlocked(row, 'fnos')"
+                :disabled="!!busyKey || runAllBusy || capBlocked(row, 'fnos')"
                 :title="capTitle(row, 'fnos')"
                 @click="toggleCapability(row, 'fnos', !row.fnos)"
               >
@@ -262,7 +282,7 @@
               <button
                 v-if="row.fnos"
                 class="rounded-lg px-2.5 py-1.5 text-[11px] text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600 disabled:opacity-50"
-                :disabled="!!busyKey"
+                :disabled="!!busyKey || runAllBusy"
                 title="只停「同步到飞牛歌单」，本地下载继续跑。要恢复就再点一下左边的「同步到飞牛歌单」"
                 @click="stopPushOnly(row)"
               >
@@ -424,7 +444,7 @@
                 >{{ opt.label }}</button>
                 <button
                   class="ml-auto rounded-lg bg-emerald-500 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-emerald-600 disabled:opacity-50"
-                  :disabled="!!busyKey"
+                  :disabled="!!busyKey || runAllBusy"
                   @click="onSaveSettings(row)"
                 >保存设置</button>
               </div>
@@ -633,7 +653,7 @@ import PageShell from './PageShell.vue'
 import InlineNotice from './InlineNotice.vue'
 import { PushAPI } from '../api/client'
 import { fail } from '../services/userMsg'
-import { ok as flashOk, fail as flashFail } from '../services/feedback'
+import { ok as flashOk, warn as flashWarn, fail as flashFail } from '../services/feedback'
 import { fail as flashErrorText } from '../services/userMsg'
 import { navigateTo } from '../services/navBus'
 import { loadBool, savePref } from '../services/prefs'
@@ -644,6 +664,7 @@ import {
 } from '../services/subscribe'
 import { pushEngine } from '../services/pushEngine'
 import { downloadManager } from '../services/downloadManager'
+import { submitSubscriptionBatch } from '../services/subscriptionBatch'
 
 const {
   subscriptions, fnosConnected, apiSourceCount, pushRuns,
@@ -757,6 +778,102 @@ function runGuideAction(step) {
   if (to.kind === 'view') navigateTo(to.name)
   else if (to.kind === 'create') openCreate()
   else if (to.kind === 'tab') navigateTo(to.name, to.sub)
+}
+
+// ── 全部执行（批量，串行）──
+//
+// issue #6 要的「一键执行」：把所有开着能力位的订阅挨个跑一遍，用户不用一行一行点。
+//
+// 依次等待每条订阅的提交响应，限制这一层的并发请求数量。
+// 实现上还有一条：`runRow` 的 `busyKey` 只管「同一行不许点两次」，它**不是**并发闸门 ——
+// 全部 Promise.all 放出去就是真的几十个请求同时到后端，所以串行只能在这一层做。
+//
+// runRow 只等待后端接受请求，发现与下载仍异步执行。因此停止只拦后续提交，
+// 已接受的后台任务继续运行；汇总提示也必须说「已提交」，不能声称已下载完成。
+
+const runAllBusy = ref(false)
+/** 已跑完几条（含失败）；执行中显示为「执行中 已完成+1/总数」 */
+const runAllDone = ref(0)
+const runAllTotal = ref(0)
+const runAllFail = ref(0)
+/** 用户点过停止：当前这条跑完就不再开下一条（也用来自锁停止按钮） */
+const runAllStopRequested = ref(false)
+
+/** 两个能力位至少开一个的行才跑得动（都没开的话 runRow 会直接拒绝） */
+const runnableRows = computed(() => subscriptions.value.filter((r) => r.download || r.fnos))
+
+const runAllText = computed(() => {
+  if (runAllBusy.value) {
+    return `执行中 ${Math.min(runAllDone.value + 1, runAllTotal.value)}/${runAllTotal.value}`
+  }
+  const n = runnableRows.value.length
+  return n ? `全部执行（${n}）` : '全部执行'
+})
+
+/** 悬停说明：禁用时尤其要写清「为什么点不了」，否则灰按钮等于没反馈 */
+const runAllTitle = computed(() => {
+  if (runAllBusy.value) return '正在逐条提交订阅。点「停止」会在当前请求返回后停止提交，已开始的后台任务会继续'
+  const n = runnableRows.value.length
+  if (!n) {
+    return subscriptions.value.length
+      ? '下面的订阅都没有开启「下载到本地曲库」或「同步到飞牛歌单」，没有可执行的动作'
+      : '还没有订阅，先点「新建订阅」'
+  }
+  return `依次执行这 ${n} 条订阅：勾了下载的会下载，勾了同步的会推送`
+})
+
+function stopRunAll() {
+  runAllStopRequested.value = true
+}
+
+async function runAll() {
+  if (runAllBusy.value || !runnableRows.value.length) return
+  // 先把这一批的 key 拍下来。跑的过程中引擎会自己 reload（runRow 里排的 5 秒延时），
+  // subscriptions 是 computed 重建出来的**新对象**，抓着旧行引用会读到过期的能力位开关。
+  const keys = runnableRows.value.map((r) => r.key)
+  runAllBusy.value = true
+  runAllStopRequested.value = false
+  runAllDone.value = 0
+  runAllFail.value = 0
+  runAllTotal.value = keys.length
+  const failed = []
+  try {
+    await submitSubscriptionBatch({
+      keys,
+      findRow: (key) => subscriptions.value.find((r) => r.key === key),
+      runRow,
+      shouldStop: () => runAllStopRequested.value,
+      onResult(row, res) {
+        runAllDone.value += 1
+        if (!res.ok) {
+          runAllFail.value += 1
+          failed.push(`${row.name}：${res.error || '未知错误'}`)
+          console.warn('[订阅·全部执行] 失败：', row.name, res.error)
+        }
+      },
+    })
+  } finally {
+    runAllBusy.value = false
+    const done = runAllDone.value
+    const okCount = done - runAllFail.value
+    // 停止只可能停在中间：跑完最后一条再点停止不算「没跑完」
+    const stoppedShort = runAllStopRequested.value && done < runAllTotal.value
+    if (stoppedShort) {
+      flashWarn(`已停止提交，已处理 ${done}/${runAllTotal.value}${runAllFail.value ? `（已提交 ${okCount} 条，请求失败 ${runAllFail.value} 条）` : ''}；已开始的后台任务会继续`)
+    } else if (runAllFail.value) {
+      // 逐条失败原因已经被 runRow 的 fail 提示 + 日志记过，这里给「汇总口径」，
+      // 顺手把行名与原因拼进日志（scope 给了才写日志，见 services/feedback.js）
+      flashWarn(`已提交 ${okCount} 条，请求失败 ${runAllFail.value} 条`, {
+        scope: '订阅全部执行',
+        detail: failed.join('；'),
+      })
+    } else {
+      flashOk(`已提交 ${done} 条订阅，发现与下载进度请看各行状态`)
+    }
+    // 列表刷新**故意不在这里做**：runRow 每条都排了「5 秒后 loadMonitors/loadPushTasks/
+    // loadPushRuns + autoFillPending」，最后一条的定时器覆盖到的正是最终状态，
+    // 这里再补一次就是同一批数据刷两遍（issue 里的要求是「和单条一致」）。
+  }
 }
 
 // ── 行状态 ──

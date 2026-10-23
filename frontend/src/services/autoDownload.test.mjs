@@ -91,11 +91,12 @@ test('下载队列：多选与一键清除记录都在，且只清「已结束�
   assert.ok(queuePanelVue.includes('clearSelected'), '应有「清除选中」')
   assert.ok(queuePanelVue.includes('clearAllRecords'), '应有「一键清除记录」')
   assert.ok(queuePanelVue.includes('function isTerminal('), '应有「已结束」判据')
-  assert.ok(downloadManagerJs.includes('function removeTasks('), 'service 应支持批量移除')
-  assert.ok(downloadManagerJs.includes('function clearRecords('), 'service 应支持清记录')
+  assert.ok(downloadManagerJs.includes('removeTasks'), 'service 应支持批量移除')
+  assert.ok(downloadManagerJs.includes('clearRecords'), 'service 应支持清记录')
   // 「清记录」不能把正在下的歌停掉 —— 那是 clearAll 的语义，两者必须分开。
-  assert.match(downloadManagerJs, /function clearRecords\(\)[\s\S]{0,400}'downloading'/,
-    'clearRecords 必须保留正在下载的任务')
+  // 单后端队列下 clearRecords 只挑终态行发给后端 remove，下载中的行不在 ids 里。
+  assert.match(downloadManagerJs, /async function clearRecords\(\)[\s\S]{0,220}t\.status\)\.includes\('downloading'\)|async function clearRecords\(\)[\s\S]{0,400}'stopped'/,
+    'clearRecords 只清已结束的行，不得移除正在下载的任务')
 })
 
 test('试听音质：注入面板的切换按钮接的是同源通道那两条接口', () => {

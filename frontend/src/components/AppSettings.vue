@@ -307,7 +307,7 @@
           <button
             type="button"
             class="ys-press rounded-[9px] border border-[var(--ys-border)] bg-white px-3 py-1.5 text-[12px] font-medium text-[var(--ys-text-muted)] transition-colors hover:text-[var(--ys-text)]"
-            title="技术中立免责声明：纯本地技术容器，不内置在线音源；导入脚本请自负合规责任"
+            title="查看软件功能、第三方音源与内容授权的使用说明"
             @click="emit('open-disclaimer')"
           >免责声明与合规</button>
           <span v-if="exportNote" class="text-[12px] text-[var(--ys-text-faint)]">{{ exportNote }}</span>

@@ -698,6 +698,18 @@ func (h *Handler) RunOnce(mon *Monitor) *Run {
 			run.NewItems++
 
 		case "resolve":
+			// 后端托管下载队列可用时，取链+落盘全交给它（关网页也照下）；
+			// 成功才标「已下载」，失败/停止都留在可重试状态。
+			if bd, ok := h.disp.(interface {
+				DownloadViaQueue(mon *Monitor, s Song) (string, error)
+			}); ok {
+				if path, berr := bd.DownloadViaQueue(mon, item.Song); berr == nil {
+					recordDownloaded(item, path)
+				} else {
+					recordFailed(item, "后端下载失败："+berr.Error())
+				}
+				continue
+			}
 			// 后端向已配置的服务型音源取直链并落盘。
 			// 取链全失败 → 登记 pending；候选都下载失败 → 才标 failed。
 			// 换源重试的细节在 downloadWithFailover。

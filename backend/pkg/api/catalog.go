@@ -543,6 +543,12 @@ func APICatalog(baseURL string) []Endpoint {
 			Example: "curl -X POST " + baseURL + "/api/download/check -H 'Content-Type: application/json' -d '{\"songs\":[{\"id\":\"1\",\"name\":\"夜曲\",\"singer\":\"周杰伦\"}]}'",
 		},
 		{
+			Method: http.MethodPost, Path: "/api/download/library/lookup", Summary: "批量查询曲库里是否已有这些歌", Category: catDownload,
+			Params:  []Param{{Name: "songs", In: "body", Required: true, Desc: "待查询歌曲数组（id/name/singer/album/duration）"}},
+			Example: "curl -X POST " + baseURL + "/api/download/library/lookup -H 'Content-Type: application/json' -d '{\"songs\":[{\"id\":\"1\",\"name\":\"晴天\",\"singer\":\"周杰伦\"}]}'",
+			Notes:   "只读查询，回答「盘上有没有」：命中时返回 hit（path/score/tier/duration/upgradable），未命中 hit=null；与 /api/download/check 的 exists（要不要下载）区分。",
+		},
+		{
 			Method: http.MethodGet, Path: "/api/download/queue", Summary: "读取下载队列（持久化在 NAS 上）", Category: catDownload,
 			Example: "curl " + baseURL + "/api/download/queue",
 		},
@@ -550,6 +556,35 @@ func APICatalog(baseURL string) []Endpoint {
 			Method: http.MethodPut, Path: "/api/download/queue", Summary: "整体替换下载队列", Category: catDownload,
 			Params:  []Param{{Name: "tasks", In: "body", Required: true, Desc: "完整队列数组（整体替换，不是追加）"}},
 			Example: "curl -X PUT " + baseURL + "/api/download/queue -H 'Content-Type: application/json' -d '{\"tasks\":[]}'",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/download/backend/submit", Summary: "提交下载任务到后端队列（关网页也照下）", Category: catDownload,
+			Params: []Param{
+				{Name: "items", In: "body", Required: true, Desc: "任务数组：client_id/name/singer/album/duration/cover/platform/platform_id/quality"},
+				{Name: "force", In: "body", Desc: "true=已结束的同 client_id 任务原地重排（重新下载）"},
+				{Name: "migrate", In: "body", Desc: "true=旧本地队列一次性迁移：保留 items[].status/error/path/actual_quality/size/added_at，success 只作历史记录、绝不重下"},
+			},
+			Example: "curl -X POST " + baseURL + "/api/download/backend/submit -H 'Content-Type: application/json' -d '{\"items\":[{\"client_id\":\"t1\",\"name\":\"夜曲\",\"singer\":\"周杰伦\",\"platform\":\"wy\",\"platform_id\":\"186016\",\"quality\":\"highest\"}]}'",
+			Notes:   "client_id 幂等：同 id 已在队列里就回原任务确认（existing=true），不重复下载；缺歌名 → skipped(invalid)；没有任何可用音源渠道 → skipped(no_channel)；整批逐条处理。",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/download/backend/queue", Summary: "读取后端下载队列", Category: catDownload,
+			Example: "curl " + baseURL + "/api/download/backend/queue",
+			Notes:   "状态枚举：pending / downloading / paused / success / failed / stopped；返回 stats 与整队暂停位 paused。最新加入的在前。",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/download/backend/actions", Summary: "控制后端下载队列（暂停/继续/停止/重试/删除）", Category: catDownload,
+			Params: []Param{
+				{Name: "action", In: "body", Required: true, Desc: "pause / resume / stop / cancel / retry / retry_failed / remove / clear_done / clear_all"},
+				{Name: "ids", In: "body", Desc: "任务 id 数组；pause/resume 不带 ids 时为整队暂停/继续"},
+			},
+			Example: "curl -X POST " + baseURL + "/api/download/backend/actions -H 'Content-Type: application/json' -d '{\"action\":\"stop\",\"ids\":[\"bd-1\"]}'",
+			Notes:   "stop 会取消在途取音（半文件保留为可续传的 .part，绝不标 success）；remove 对 downloading 无效（先 stop）；clear_all 只清 success/failed/stopped。",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/download/backend/status", Summary: "后端下载能力探测（可用渠道 / 是否已接管订阅）", Category: catDownload,
+			Example: "curl " + baseURL + "/api/download/backend/status",
+			Notes:   "ready=false 时 reason 说明原因（例如洛雪宿主未开启）；channels 列出 native/dl/lx 各自可用状态；subscriptions.managed=true 表示订阅自动下载已交给后端队列。",
 		},
 		{
 			Method: http.MethodGet, Path: "/api/download/config", Summary: "读取下载目录配置", Category: catDownload,

@@ -19,11 +19,13 @@ import (
 
 	"fn-lx-player/pkg/api"
 	"fn-lx-player/pkg/applog"
+	"fn-lx-player/pkg/backenddl"
 	"fn-lx-player/pkg/config"
 	"fn-lx-player/pkg/intercept"
 	"fn-lx-player/pkg/lxnode"
 	"fn-lx-player/pkg/namefmt"
 	"fn-lx-player/pkg/online"
+	"fn-lx-player/pkg/search"
 	"fn-lx-player/pkg/sources"
 	"fn-lx-player/pkg/takeover"
 )
@@ -385,6 +387,83 @@ func main() {
 		}
 	}
 	defer lxn.Stop()
+
+	// 后端托管的下载队列：**唯一**的下载执行者（见 pkg/backenddl 包注释）。
+	//
+	// 浏览器关掉也照下 —— 取链（原生 / musicdl / 洛雪宿主）与落盘（本机
+	// /api/download/song）全在服务端完成。前端只提交任务、轮询状态。
+	//
+	// 能力一律现取（函数而不是值）：用户可能在运行中开关洛雪宿主、调渠道顺序，
+	// 抓一份就等于永远停在启动那一刻。
+	//
+	// bq 提到块外：创建在服务监听**之前**（API 要能立刻回答 status），
+	// 但 Start 要等监听就绪后才执行（见下方「先建监听再开跑」）。
+	var bq *backenddl.Queue
+	{
+		bcfg := backenddl.FetcherConfig{
+			Pool: pool,
+			Lx:   lxn,
+			Channels: func() []string {
+				return cfgMgr.Get().DownloadChannels()
+			},
+			DownloadSources: func() []string {
+				// 与拦截层同一口径：外挂平台总开关关着时，池里一个源都不该用。
+				if !cfgMgr.Get().MusicDLOn() {
+					return nil
+				}
+				return cfgMgr.Get().MusicDLActiveSources()
+			},
+			// 洛雪脚本白名单：按用户勾选的顺序（顺序就是轮询顺序）。只给
+			// **启用中**的脚本名 —— 名字→文件名的转换必须走 lxnode.ScriptFileName
+			// 这一处口径，否则和落盘的文件名对不上，宿主会找不到脚本。
+			Scripts: func() []string {
+				c := cfgMgr.Get()
+				// ActiveIDs 兼容老配置（只有 active_source_id 单值）：直接用
+				// ActiveSourceIDs 会让升级用户的洛雪名单突然变空。
+				active := map[string]bool{}
+				for _, id := range c.ActiveIDs() {
+					active[id] = true
+				}
+				names := make([]string, 0, len(c.CustomSources))
+				seen := map[string]bool{}
+				for _, cs := range c.CustomSources {
+					if len(active) > 0 && !active[cs.ID] {
+						continue
+					}
+					if strings.TrimSpace(cs.Script) == "" || strings.TrimSpace(cs.Name) == "" {
+						continue
+					}
+					file := lxnode.ScriptFileName(cs.Name)
+					if seen[file] {
+						continue
+					}
+					seen[file] = true
+					names = append(names, file)
+				}
+				return names
+			},
+			// musicdl 渠道的候选曲目搜索：与界面搜索同一套（同一份平台开关）。
+			Searcher: func(keyword, platform string) []search.UnifiedSong {
+				return search.Search(keyword, platform, 1, 3)
+			},
+			LocalAPI: fmt.Sprintf("http://127.0.0.1:%d", *port),
+			// authMode=token 时本机回环也要带 Token，否则队列自己调落盘接口 401。
+			Token: api.APIToken(),
+			Logf:  log.Printf,
+		}
+		bq = backenddl.New(*dataDir, backenddl.NewFetcher(bcfg), log.Printf)
+		// ⚠️ Start 必须等 HTTP 已 listen（见下方「先建监听再开跑」）——
+		// 队列取音后要回调本机 /api/download/song 落盘；服务没起来第一批
+		// 恢复任务会全部 connection refused，而失败会写进任务状态。
+		defer bq.Close()
+		server.EnableBackendDownload(bq, bcfg)
+		if av := bcfg.Availability(); !av.Ready {
+			log.Printf("[INIT] 后端下载队列已创建，但当前没有可用取音渠道：%s", av.Reason)
+		} else {
+			log.Printf("[INIT] 后端下载队列已创建（将在服务监听后开始执行）")
+		}
+	}
+
 	server.SetTakeover(tk)
 	server.SetTakeoverError(tkErr)
 	// 启动歌单监控调度（轮询式，重启后状态天然正确，不会因错过时刻丢任务）
@@ -413,6 +492,12 @@ func main() {
 		if err != nil {
 			log.Fatalf("[FATAL] Failed to bind to port %d: %v", *port, err)
 		}
+	}
+
+	// 先建监听再开跑：队列的取音→落盘要回调本机 /api/download/song，
+	// 服务没 listen 就 Start，重启恢复的第一批任务会全部 connection refused。
+	if bq != nil {
+		bq.Start()
 	}
 
 	// 后台「音质补强」轮：把「收藏时各渠道都没给无损」的那批歌，隔天再试一遍。
@@ -452,6 +537,13 @@ func main() {
 	log.Println("[SHUTDOWN] Stopping 曲率...")
 
 	server.StopScheduler()
+
+	// 先停下载队列再关 HTTP：队列在途任务会继续回调本机落盘接口，
+	// 等 Shutdown 之后才停，会把「回调被拒」写成任务失败。
+	// Close 会取消在途取音，被中断的任务按「进程退出」口径保留为可恢复。
+	if bq != nil {
+		bq.Close()
+	}
 
 	// 收掉「边听边下」在途的后台续传：取消 + 等它们把半截删掉（最多几秒）。
 	// 不调也能退（进程会带走 goroutine），但会留下一堆 `.part`，要等下次启动

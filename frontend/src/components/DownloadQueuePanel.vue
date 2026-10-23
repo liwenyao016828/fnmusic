@@ -81,31 +81,39 @@
       <div class="ml-auto flex items-center gap-1" :class="selectedIds.length ? 'ml-0' : ''">
         <!-- 这两个是「此刻真能做的事」：暂停/继续，图标化后不占文字空间 -->
         <button
-          v-if="downloadManager.activeCount.value > 0"
+          v-if="downloadManager.queuePaused.value"
+          @click="downloadManager.resumeAll()"
+          class="ys-press grid h-8 w-8 place-items-center rounded-full text-[var(--ys-text-muted)] transition-colors hover:bg-black/[0.05] hover:text-[var(--ys-text)]"
+          title="后台队列已暂停，点此继续"
+        >
+          <Play class="h-4 w-4" :stroke-width="1.9" />
+        </button>
+        <button
+          v-else-if="downloadManager.activeCount.value > 0"
           @click="downloadManager.pauseAll()"
           class="ys-press grid h-8 w-8 place-items-center rounded-full text-[var(--ys-text-muted)] transition-colors hover:bg-black/[0.05] hover:text-[var(--ys-text)]"
-          title="暂停所有下载中的任务"
+          title="暂停后台队列（不会删任务）"
         >
           <Pause class="h-4 w-4" :stroke-width="1.9" />
         </button>
         <button
           v-if="downloadManager.pausedCount.value > 0"
-          @click="downloadManager.resumeAll(activeSource?.id)"
+          @click="downloadManager.resumeAll()"
           class="ys-press grid h-8 w-8 place-items-center rounded-full text-[var(--ys-text-muted)] transition-colors hover:bg-black/[0.05] hover:text-[var(--ys-text)]"
-          title="继续所有已暂停的任务"
+          title="继续所有已暂停的任务（并恢复后台队列）"
         >
           <Play class="h-4 w-4" :stroke-width="1.9" />
         </button>
         <!--
           下载设置从 ⋯ 里搬了出来（用户 2026-10-23：「下载列表的下载设置移出来」）。
           ⋯ 里放的是「偶尔用一次的批量动作」，而这一项是**这一页的策略旋钮**
-          （音质、并发、重试次数、任务间隔）—— 藏在 ⋯ 里，用户会以为默认策略改不了。
+          （新任务的默认音质）—— 藏在 ⋯ 里，用户会以为默认策略改不了。
           摆成图标而不是文字，是为了不把这条 40px 的行重新塞满。
         -->
         <button
           type="button"
           class="ys-press grid h-8 w-8 place-items-center rounded-full text-[var(--ys-text-muted)] transition-colors hover:bg-black/[0.05] hover:text-[var(--ys-text)]"
-          title="下载设置（音质 / 并发 / 重试次数 / 间隔）"
+          title="下载设置（新任务的默认音质）"
           @click="showSettings = true"
         >
           <Settings2 class="h-4 w-4" :stroke-width="1.9" />
@@ -113,6 +121,25 @@
         <OverflowMenu :items="queueMenu" @select="onQueueMenu" />
       </div>
     </div>
+
+  <!--
+    后台下载状态条（NAS 端执行）。下载是后台做的，这里只如实报告「能不能下 / 在跑什么」，
+    任务明细与全部动作在下面的列表里（一条调用链，不在两处各写一套按钮）。
+  -->
+  <BackendDownloadPanel />
+
+  <!-- 旧浏览器队列 → 后台队列的一次性迁移：逐条确认，没确认的下次再试，绝不静默丢 -->
+  <div
+    v-if="downloadManager.migration.value.active"
+    class="flex shrink-0 items-start gap-2 border-b border-amber-100 bg-amber-50/70 px-4 py-2 text-[11.5px] leading-relaxed text-amber-700"
+  >
+    <RefreshCw class="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin" :stroke-width="1.9" />
+    <span>
+      正在把旧浏览器的下载记录迁移到 NAS 后台队列（还剩
+      <b>{{ downloadManager.migration.value.remaining }}</b> / {{ downloadManager.migration.value.total }} 条）。
+      已确认的才删除本地记录；提交失败的会留到下次启动继续，不会丢，也不会把已完成的历史重新下载。
+    </span>
+  </div>
 
   <!-- 4. 任务列表内容区 -->
   <div class="min-h-0 flex-1 space-y-2 overflow-y-auto bg-[#FAFAFC] p-3 sm:p-4">
@@ -142,7 +169,7 @@
         {{ currentFilter === 'all' ? '暂无下载任务' : `暂无${currentFilterName}任务` }}
       </p>
       <p class="text-[11px] text-gray-400 max-w-xs">
-        在「发现音乐」里点下载，任务会进这个队列并存到 NAS
+        在「发现音乐」里点下载，任务会直接提交给 NAS 后台队列
       </p>
     </div>
 
@@ -223,31 +250,24 @@
 
         <!-- 状态徽标与提示 -->
         <div class="flex items-center gap-1.5 text-[10px]">
-          <!-- 等待中 -->
+          <!-- 后台排队中 -->
           <span
             v-if="task.status === 'pending'"
             class="px-2 py-0.5 rounded-md bg-gray-100 text-gray-500 flex items-center gap-1"
+            title="已提交到 NAS 后台队列，前端关闭也会继续"
           >
             <Clock class="w-3 h-3 text-gray-400" />
-            <span>排队等待中...</span>
+            <span>后台排队中</span>
           </span>
 
-          <!-- 解析直链中 -->
-          <span
-            v-else-if="task.status === 'resolving'"
-            class="px-2 py-0.5 rounded-md bg-blue-50 text-blue-600 flex items-center gap-1"
-          >
-            <Loader2 class="w-3 h-3 animate-spin text-blue-500" />
-            <span>正在解析音源直链...</span>
-          </span>
-
-          <!-- 下载写入 NAS 中 -->
+          <!-- 后台下载中 -->
           <span
             v-else-if="task.status === 'downloading'"
             class="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-600 flex items-center gap-1 font-medium"
+            title="由 NAS 后端执行，关掉本页/浏览器也会继续"
           >
             <Loader2 class="w-3 h-3 animate-spin text-emerald-500" />
-            <span>正在下载写入 NAS...</span>
+            <span>后台下载中</span>
           </span>
 
           <!-- 已暂停 -->
@@ -256,7 +276,7 @@
             class="px-2 py-0.5 rounded-md bg-amber-50 text-amber-600 flex items-center gap-1 font-medium"
           >
             <Pause class="w-3 h-3 text-amber-500" />
-            <span>已暂停下载</span>
+            <span>已暂停</span>
           </span>
 
           <!-- 下载成功 -->
@@ -265,7 +285,7 @@
             class="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-600 flex items-center gap-1 font-medium"
           >
             <Check class="w-3 h-3 text-emerald-500" />
-            <span>已保存至 NAS 本地</span>
+            <span>已保存至 NAS</span>
           </span>
 
           <!--
@@ -311,39 +331,27 @@
               · 已落地 → 「最高音质」+ **实际容器**（后端按魔数嗅探，是权威结论）；
               · 请求的是固定档位且与盘上一致 → 只显示该档位（不必啰嗦）。
           -->
-          <span
-            v-if="downloadManager.isHighestQuality(task.quality)"
-            class="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-600 font-mono"
-            :title="task.actualFormat
-              ? `请求最高音质，实际拿到 ${(task.actualFormat || '').toUpperCase()}`
-              : '请求最高音质：由后端按渠道实际能给到的最高档位决定'"
-          >
-            最高音质<template v-if="task.actualFormat"> · {{ (task.actualFormat || '').toUpperCase() }}</template>
-            <template v-else-if="task.status === 'success'"> · 待取</template>
+          <span class="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-600 font-mono">
+            {{ downloadManager.qualityLabel(task.quality) || '最高音质' }}
           </span>
-          <span v-else class="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-600 font-mono">
-            {{ downloadManager.qualityLabel(task.quality) }}
-          </span>
-          <!-- 请求无损但真实容器是有损：后端按文件魔数判定，是权威结论。
-               文件本身没问题（内容与扩展名一致），只是音源没给无损直链。 -->
           <span
-            v-if="task.qualityMismatch"
-            class="px-1.5 py-0.5 rounded bg-amber-50 text-amber-600 font-medium"
-            :title="`请求的是无损音质，但文件实际是 ${(task.actualFormat || '未知').toUpperCase()} —— 音源没提供无损直链。文件内容与扩展名一致，可正常播放。`"
+            v-if="task.resolvedQuality && task.resolvedQuality !== task.quality"
+            class="px-1.5 py-0.5 rounded bg-gray-100 text-gray-500 font-mono"
+            :title="'后台实际拿到的音质/容器'"
           >
-            实际 {{ (task.actualFormat || '?').toUpperCase() }}
+            实际 {{ task.resolvedQuality }}
           </span>
           <span
             v-if="task.resolvedSource"
-            class="px-1.5 py-0.5 rounded bg-gray-100 text-gray-500 truncate max-w-[110px]"
-            :title="'实际取链音源：' + task.resolvedSource"
+            class="px-1.5 py-0.5 rounded bg-gray-100 text-gray-500 truncate max-w-[130px]"
+            :title="'实际取链渠道：' + task.resolvedSource"
           >
             {{ task.resolvedSource }}
           </span>
           <span v-if="task.attempts > 0" class="text-gray-400">
-            第 {{ task.attempts }}/{{ downloadManager.maxAttempts.value }} 次
+            重试 {{ task.attempts }} 次
           </span>
-          <span v-if="task.embedded" class="text-emerald-500">✓ 已内嵌歌词</span>
+          <span v-if="task.path" class="text-gray-400 truncate max-w-[220px]" :title="task.path">{{ task.path }}</span>
         </div>
       </div>
 
@@ -351,7 +359,7 @@
       <div class="shrink-0 flex items-center gap-1">
         <!-- 排队或下载中：暂停按钮 -->
         <button
-          v-if="task.status === 'pending' || task.status === 'resolving' || task.status === 'downloading'"
+          v-if="task.status === 'pending' || task.status === 'downloading'"
           @click.stop="downloadManager.pauseTask(task.id)"
           class="p-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-600 transition-colors"
           title="暂停下载"
@@ -362,7 +370,7 @@
         <!-- 已暂停：继续按钮 -->
         <button
           v-if="task.status === 'paused'"
-          @click.stop="downloadManager.resumeTask(task.id, activeSource?.id)"
+          @click.stop="downloadManager.resumeTask(task.id)"
           class="p-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-600 transition-colors"
           title="继续下载"
         >
@@ -376,7 +384,7 @@
         -->
         <button
           v-if="task.status === 'stopped'"
-          @click.stop="downloadManager.resumeTask(task.id, activeSource?.id)"
+          @click.stop="downloadManager.resumeTask(task.id)"
           class="px-2 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-600 text-[10px] font-medium transition-colors flex items-center gap-1"
           title="恢复下载（重新排队并继续）"
         >
@@ -386,7 +394,7 @@
 
         <!-- 排队中/下载中/已暂停：取消并停止按钮 -->
         <button
-          v-if="task.status === 'pending' || task.status === 'resolving' || task.status === 'downloading' || task.status === 'paused'"
+          v-if="task.status === 'pending' || task.status === 'downloading' || task.status === 'paused'"
           @click.stop="downloadManager.cancelTask(task.id)"
           class="p-1.5 rounded-lg text-gray-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
           title="停止并取消此任务"
@@ -394,7 +402,7 @@
           <Square class="w-3.5 h-3.5" />
         </button>
 
-        <!-- 失败任务：切换音质 / 换源 / 重试 -->
+        <!-- 失败任务：选音质后重试；渠道由后台按顺序自动选，前端不提供换源 -->
         <template v-if="task.status === 'failed'">
           <SelectField
             compact
@@ -406,21 +414,23 @@
           />
 
           <button
-            @click.stop="downloadManager.switchSource(task.id)"
-            class="px-1.5 py-1 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-600 text-[10px] font-medium transition-colors"
-            :title="'换一个健康音源重试（上次：' + (task.resolvedSource || '自动') + '）'"
-          >
-            换源
-          </button>
-
-          <button
-            @click.stop="downloadManager.retryTask(task.id, activeSource?.id)"
+            @click.stop="downloadManager.retryTask(task.id)"
             class="p-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-600 transition-colors"
             title="重新下载"
           >
             <RotateCw class="w-3.5 h-3.5" />
           </button>
         </template>
+
+        <!-- 已完成：用当前默认音质再下一次 -->
+        <button
+          v-if="task.status === 'success'"
+          @click.stop="downloadManager.redownloadTasksByIds([task.id])"
+          class="p-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-600 transition-colors"
+          title="重新下载（用当前默认音质再入队一次）"
+        >
+          <RotateCw class="w-3.5 h-3.5" />
+        </button>
 
         <!-- 移除记录按钮 (已完成 / 失败 / 已停止) -->
         <button
@@ -454,71 +464,19 @@
         </button>
       </div>
 
-      <div class="max-h-[70vh] space-y-4 overflow-y-auto px-5 py-4">
-        <div class="grid grid-cols-2 gap-3 sm:gap-4">
-          <SelectField
-            v-model="qualityModel"
-            label="默认音质"
-            :options="downloadManager.QUALITY_OPTIONS"
-            hint="「最高音质」会在多音源之间轮询最高可用档位"
-          />
-          <SelectField
-            v-model="attemptsModel"
-            label="失败重试"
-            numeric
-            :options="[1, 2, 3, 4, 5].map(n => ({ value: n, label: n + ' 次' }))"
-            hint="单个任务失败后的重试次数"
-          />
-          <SelectField
-            v-model="concurrencyModel"
-            label="同时下载"
-            numeric
-            :options="[1, 2, 3].map(n => ({ value: n, label: n + ' 首' }))"
-            hint="保守设置可降低被音源风控的概率"
-          />
-          <SelectField
-            v-model="startIntervalModel"
-            label="任务间隔"
-            numeric
-            :options="[0, 3, 5, 8, 10, 15, 20, 30].map(n => ({ value: n, label: n === 0 ? '不等待' : n + ' 秒' }))"
-            hint="每两首之间至少等待多久再开始下一首"
-          />
-          <SelectField
-            v-model="doneIntervalModel"
-            label="完成后间隔"
-            numeric
-            :options="[0, 2, 3, 5, 8, 10, 15].map(n => ({ value: n, label: n === 0 ? '不等待' : n + ' 秒' }))"
-            hint="一首完成后至少间隔多久才开始下一首"
-          />
-        </div>
-
-        <!-- 开关项：与上面的下拉分组隔开，避免和 SelectField 的 hint 挤在一起 -->
-        <div class="flex flex-wrap items-center gap-x-5 gap-y-2 rounded-lg border border-gray-200 bg-gray-50/60 px-3.5 py-3">
-          <label class="flex items-center gap-2 cursor-pointer text-[12px] text-gray-600" title="失败时自动轮换到其它健康音源重试">
-            <input type="checkbox" v-model="failoverModel" class="accent-emerald-500 w-3.5 h-3.5" />
-            <span>自动换源</span>
-          </label>
-          <label class="flex items-center gap-2 cursor-pointer text-[12px] text-gray-600" title="把歌词写入音频文件标签（MP3 USLT / FLAC LYRICS）">
-            <input type="checkbox" v-model="embedModel" class="accent-emerald-500 w-3.5 h-3.5" />
-            <span>内嵌歌词</span>
-          </label>
-          <label class="flex items-center gap-2 cursor-pointer text-[12px] text-gray-600" title="同时写出与音频同名的 .lrc 文件">
-            <input type="checkbox" v-model="lrcModel" class="accent-emerald-500 w-3.5 h-3.5" />
-            <span>外挂 .lrc</span>
-          </label>
-        </div>
-
+      <div class="space-y-4 px-5 py-4">
+        <SelectField
+          v-model="qualityModel"
+          label="默认音质"
+          :options="downloadManager.QUALITY_OPTIONS"
+          hint="只影响新提交的任务；已在后台队列里的任务按当初的档位走"
+        />
         <p class="text-[11px] leading-relaxed text-gray-400">
-          改动立即生效并记住；已经在队列里的任务不受影响。
+          下载由 NAS 后台队列统一调度：并发、重试和取音渠道都由后端策略决定，
+          不再由浏览器逐首执行。这里只保留「新任务要什么音质」。
         </p>
       </div>
 
-      <div class="flex justify-end border-t border-gray-100 px-5 py-3.5">
-        <button
-          class="rounded-lg bg-emerald-500 px-4 py-2 text-[12px] font-semibold text-white transition-colors hover:bg-emerald-600"
-          @click="showSettings = false"
-        >完成</button>
-      </div>
     </div>
   </div>
 </Teleport>
@@ -547,6 +505,7 @@ import SelectField from './SelectField.vue'
 import OverflowMenu from './OverflowMenu.vue'
 import SelectionBar from './SelectionBar.vue'
 import RangeSelectBar from './RangeSelectBar.vue'
+import BackendDownloadPanel from './BackendDownloadPanel.vue'
 import { pickByIndexes } from '../services/rangeSelect'
 import { ok as notifyOk, warn as notifyWarn } from '../services/feedback'
 import {
@@ -567,10 +526,6 @@ const props = defineProps({
  * （用户 2026-10-23：「全部恢复和重试失败等这个页面的。这些都失效了」）。
  * 统一走下面这个取值函数，别再在脚本里裸写。
  */
-function activeSourceId() {
-  return props.activeSource?.id || ''
-}
-
 // 下载设置面板默认折叠，避免一屏挤满控件
 const showSettings = ref(false)
 
@@ -586,11 +541,15 @@ const queueMenu = computed(() => [
   { key: 'clearRecords', label: '清除所有记录', icon: Eraser, danger: true, disabled: terminalCount.value === 0, hint: '已完成 / 失败 / 已停止' },
 ])
 
-function onQueueMenu(key) {
-  if (key === 'resumeStopped') downloadManager.resumeStopped(activeSourceId())
-  else if (key === 'retryFailed') downloadManager.retryAllFailed(activeSourceId())
-  else if (key === 'stopAll') downloadManager.stopAll()
-  else if (key === 'clearRecords') clearAllRecords()
+async function onQueueMenu(key) {
+  try {
+    if (key === 'resumeStopped') await downloadManager.resumeStopped()
+    else if (key === 'retryFailed') await downloadManager.retryAllFailed()
+    else if (key === 'stopAll') await downloadManager.stopAll()
+    else if (key === 'clearRecords') await clearAllRecords()
+  } catch (e) {
+    notifyWarn(`操作失败：${e?.userMessage || e?.message || '后台没有响应'}`)
+  }
 }
 
 // ── 下载策略设置的读写模型 ──
@@ -598,44 +557,6 @@ const qualityModel = computed({
   get: () => downloadManager.defaultQuality.value,
   set: v => downloadManager.updateSettings({ defaultQuality: v }),
 })
-const attemptsModel = computed({
-  get: () => downloadManager.maxAttempts.value,
-  set: v => downloadManager.updateSettings({ maxAttempts: Number(v) }),
-})
-const concurrencyModel = computed({
-  get: () => downloadManager.concurrency.value,
-  set: v => downloadManager.updateSettings({ concurrency: Number(v) }),
-})
-const startIntervalModel = computed({
-  get: () => downloadManager.startIntervalSec.value,
-  set: v => downloadManager.updateSettings({ startIntervalSec: Number(v) }),
-})
-const doneIntervalModel = computed({
-  get: () => downloadManager.doneIntervalSec.value,
-  set: v => downloadManager.updateSettings({ doneIntervalSec: Number(v) }),
-})
-const failoverModel = computed({
-  get: () => downloadManager.autoFailover.value,
-  set: v => downloadManager.updateSettings({ autoFailover: !!v }),
-})
-const embedModel = computed({
-  get: () => downloadManager.embedLyric.value,
-  set: v => downloadManager.updateSettings({ embedLyric: !!v }),
-})
-const lrcModel = computed({
-  get: () => downloadManager.writeLrc.value,
-  set: v => downloadManager.updateSettings({ writeLrc: !!v }),
-})
-
-/** 折叠状态下的一行摘要，让用户不展开也知道当前策略 */
-const settingsSummary = computed(() => {
-  const q = downloadManager.qualityLabel(downloadManager.defaultQuality.value)
-  const parts = [q, `同时 ${downloadManager.concurrency.value} 首`]
-  if (downloadManager.autoFailover.value) parts.push('自动换源')
-  if (downloadManager.embedLyric.value) parts.push('内嵌歌词')
-  return parts.join(' · ')
-})
-
 /** 为单个失败任务指定音质并立即重试（SelectField 直接给出值，不再是 DOM event） */
 function onTaskQualityPick(task, quality) {
   if (!quality) return
@@ -697,9 +618,11 @@ function onRangeApply(indexes) {
   )
 }
 
-function clearSelected() {
-  downloadManager.removeTasks(selectedIds.value)
+async function clearSelected() {
+  const n = selectedIds.value.length
+  await downloadManager.removeTasks(selectedIds.value)
   selected.value = new Set()
+  notifyOk(`已从队列移除 ${n} 条记录（NAS 上的文件未删除）`)
 }
 
 /**
@@ -742,22 +665,30 @@ const selectionActions = computed(() => {
   return acts
 })
 
-function onSelectionAction(key) {
+async function onSelectionAction(key) {
+  try {
+    await runSelectionAction(key)
+  } catch (e) {
+    notifyWarn(`操作失败：${e?.userMessage || e?.message || '后台没有响应'}`)
+  }
+}
+
+async function runSelectionAction(key) {
   if (key === 'clear') return clearSelected()
   if (key === 'all') return toggleSelectAll()
   if (key === 'continue') {
     // 一个「继续」把两档都管了：失败的要重试、停止/暂停的要接着下。
     // 用户勾了一段按「继续」，不该还要先分辨哪几行当初是被停掉的。
-    const retried = downloadManager.retryTasksByIds(selectedIds.value, activeSourceId())
-    const resumed = downloadManager.resumeTasksByIds(selectedIds.value, activeSourceId())
+    const retried = await downloadManager.retryTasksByIds(selectedIds.value)
+    const resumed = await downloadManager.resumeTasksByIds(selectedIds.value)
     selected.value = new Set()
-    const n = retried + resumed
+    const n = (retried || 0) + (resumed || 0)
     if (n > 0) notifyOk(`已重新排队 ${n} 首${retried && resumed ? `（重试 ${retried}、恢复 ${resumed}）` : ''}`)
     else notifyWarn('选中的行里没有可继续的任务（已完成的请用「重新下载」）')
     return
   }
   if (key === 'redownload') {
-    const n = downloadManager.redownloadTasksByIds(selectedIds.value, activeSourceId())
+    const n = await downloadManager.redownloadTasksByIds(selectedIds.value)
     selected.value = new Set()
     if (n > 0) notifyOk(`已把 ${n} 首重新排进队列`)
     else notifyWarn('选中的行里没有已完成的任务')
@@ -768,12 +699,13 @@ function onSelectionAction(key) {
  * 一键清除记录。问一句 `confirm`：清记录不可撤销，而它与「清除选中」挨着放，
  * 误点一下就全没了 —— 确认是**界面**的责任（service 只管做）。
  */
-function clearAllRecords() {
+async function clearAllRecords() {
   const n = terminalCount.value
   if (!n) return
   if (!confirm(`确定清除 ${n} 条已结束的记录？（正在下载与排队中的不受影响）`)) return
-  downloadManager.clearRecords()
+  await downloadManager.clearRecords()
   selected.value = new Set()
+  notifyOk(`已清除 ${n} 条记录`)
 }
 
 const currentFilter = ref('all') // 'all' | 'downloading' | 'paused' | 'completed' | 'failed'
@@ -799,7 +731,7 @@ const currentFilterName = computed(() => {
 const filteredTasks = computed(() => {
   const list = downloadManager.tasks.value
   if (currentFilter.value === 'downloading') {
-    return list.filter(t => t.status === 'pending' || t.status === 'resolving' || t.status === 'downloading')
+    return list.filter(t => t.status === 'pending' || t.status === 'downloading')
   }
   if (currentFilter.value === 'paused') {
     return list.filter(t => t.status === 'paused')

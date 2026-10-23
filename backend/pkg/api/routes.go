@@ -121,9 +121,15 @@ var routeTable = []routeSpec{
 	{Path: "/api/download/batch", Handler: func(s *Server) http.HandlerFunc { return s.downloader.HandleDownloadBatch }},
 	{Path: "/api/download/batch/status", Handler: func(s *Server) http.HandlerFunc { return s.downloader.HandleBatchStatus }},
 	{Path: "/api/download/check", Handler: func(s *Server) http.HandlerFunc { return s.downloader.HandleCheckDownloaded }},
+	{Path: "/api/download/library/lookup", Handler: func(s *Server) http.HandlerFunc { return s.HandleDownloadLibraryLookup }},
 
 	// 下载队列持久化：原来只存浏览器，换设备/清缓存就丢（2026-09-22）
 	{Path: "/api/download/queue", Handler: func(s *Server) http.HandlerFunc { return s.HandleDownloadQueue }},
+	// 后端托管下载队列：提交 / 读 / 控制 / 能力探测。前端只提交和展示，执行全在这里。
+	{Path: "/api/download/backend/submit", Handler: func(s *Server) http.HandlerFunc { return s.HandleBackendDownloadSubmit }},
+	{Path: "/api/download/backend/queue", Handler: func(s *Server) http.HandlerFunc { return s.HandleBackendDownloadQueue }},
+	{Path: "/api/download/backend/actions", Handler: func(s *Server) http.HandlerFunc { return s.HandleBackendDownloadActions }},
+	{Path: "/api/download/backend/status", Handler: func(s *Server) http.HandlerFunc { return s.HandleBackendDownloadStatus }},
 
 	// 2.7 AI 解析桥（外部调用者 ↔ 浏览器音源运行时）
 	{Path: "/api/bridge/resolve", Handler: func(s *Server) http.HandlerFunc { return s.bridge.HandleResolve }},

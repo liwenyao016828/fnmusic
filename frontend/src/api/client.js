@@ -158,9 +158,43 @@ export const DownloadAPI = {
  * 队列状态机归 `services/downloadManager` 所有，后端只当它是不透明的 JSON 数组 ——
  * 所以这里是**整体读写**，不是按条增删。见 `backend/pkg/downloadqueue` 的包注释。
  */
+// 旧版浏览器队列的 NAS 备份接口。保留只为兼容早期版本/回滚；新下载一律走
+// 下面的 BackendDownloadAPI，不要再往这里写入。
 export const DownloadQueueAPI = {
   load: () => api.get('/download/queue').then(res => res.data),
   save: (tasks) => api.put('/download/queue', { tasks }).then(res => res.data),
+}
+
+/**
+ * 后台托管下载队列（`backend/pkg/backenddl`）。
+ *
+ * 这是**唯一**的下载队列：任务由 NAS 后端进程执行，提交之后关掉网页/浏览器
+ * 也照样下完。旧版 `DownloadQueueAPI` 只是浏览器队列的 NAS 备份，新代码不要再
+ * 用它入队。
+ *
+ * 提交必须带 `client_id`（前端生成、重试时复用）：后端按它做幂等与回传映射，
+ * 前端据此确认任务真的入队。**绝不能用 name+singer 对回** —— 同名不同版本
+ * 会串到别的任务上。
+ *
+ * 旧后端没有这些路由（404）＝ 后台能力不可用，`services/backendDownload.js`
+ * 会把 404 归一成 `available=false`，不要误报「就绪」。
+ */
+export const BackendDownloadAPI = {
+  status: () => api.get('/download/backend/status').then(res => res.data),
+  /**
+   * force：同 client_id 的终态任务原地重排（重下）；
+   * migrate：旧浏览器队列迁移，允许带 status/error/path 等字段且 success 只作历史。
+   * 两个开关都不要在普通新增下载时传。
+   */
+  submit: (items, opts = {}) => {
+    const body = { items }
+    if (opts === true || opts.force) body.force = true
+    if (opts && opts.migrate) body.migrate = true
+    return api.post('/download/backend/submit', body).then(res => res.data)
+  },
+  queue: () => api.get('/download/backend/queue').then(res => res.data),
+  action: (action, ids = []) =>
+    api.post('/download/backend/actions', { action, ids }).then(res => res.data),
 }
 
 export const SearchAPI = {

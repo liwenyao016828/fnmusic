@@ -1,12 +1,15 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"fn-lx-player/pkg/apisource"
+	"fn-lx-player/pkg/backenddl"
 	"fn-lx-player/pkg/downloader"
 	"fn-lx-player/pkg/monitor"
 )
@@ -106,7 +109,16 @@ func qualityChain(q monitor.Quality, fb monitor.Fallback) []string {
 // 返回 false 时监控不会产出取链动作 —— 没配音源的用户应该看到「待网页端补下载」，
 // 而不是满屏「取链失败」。
 func (d *monitorDispatcher) CanResolve() bool {
-	if d.srv == nil || d.srv.cfgMgr == nil {
+	if d.srv == nil {
+		return false
+	}
+	// 后端托管下载队列可用时，订阅的自动下载就交给它执行（见 downloadViaQueue）。
+	// 这是「关掉网页也能自动下新歌」的关键：以前只认服务型音源，没配音源的
+	// 用户订阅永远是「待网页端补下载」。
+	if d.backendReady() {
+		return true
+	}
+	if d.srv.cfgMgr == nil {
 		return false
 	}
 	for _, src := range d.srv.cfgMgr.Get().APISources {
@@ -115,6 +127,104 @@ func (d *monitorDispatcher) CanResolve() bool {
 		}
 	}
 	return false
+}
+
+// backendReady 报告后端托管下载队列当前是否真的能下（有渠道、worker 在跑）。
+func (d *monitorDispatcher) backendReady() bool {
+	if d.srv == nil || d.srv.backendDL == nil {
+		return false
+	}
+	return d.srv.backendCfg.Availability().Ready
+}
+
+// queueQuality 把监控的音质档位映射成后端队列的目标档位。
+func queueQuality(q monitor.Quality) string {
+	switch q {
+	case monitor.QualityStandard:
+		return "128k"
+	case monitor.QualityHigh:
+		return "320k"
+	default: // lossless / hires / 未知 → 要最高
+		return "flac"
+	}
+}
+
+// downloadViaQueue 把一首订阅曲目交给后端下载队列，并**等它真的落盘**。
+//
+// 为什么必须等：订阅的语义是「下载成功才算已下载」，先标成功再下载等于骗用户。
+// 队列本身是串行的，一轮订阅最多 mon.MaxDownloads 首，等待是可接受的；
+// 队列里的任务在网页关掉后仍会继续跑完（这正是这次改造的目的）。
+//
+// 失败/停止的任务会被显式重排一次（retry）：订阅每一轮都是「重新发现」，
+// 上一轮失败的那首不该永远卡在 failed 上。
+// DownloadViaQueue 是 monitor 包用的窄接口（见 pkg/monitor/http.go 的 resolve 分支）：
+// 只有实现了它的 Dispatcher（本机就是 monitorDispatcher）才会走后端队列。
+func (d *monitorDispatcher) DownloadViaQueue(mon *monitor.Monitor, song monitor.Song) (string, error) {
+	return d.downloadViaQueue(mon, song)
+}
+
+func (d *monitorDispatcher) downloadViaQueue(mon *monitor.Monitor, song monitor.Song) (string, error) {
+	q := d.srv.backendDL
+	if q.Paused() {
+		return "", fmt.Errorf("后端下载队列处于「已暂停」，订阅下载暂缓（恢复后下一轮继续）")
+	}
+	it := backenddl.Item{
+		// 对账键按「监控 + 曲目」固定：同一首歌被反复发现时幂等，不会重复排队。
+		ClientID:   "mon:" + mon.ID + ":" + song.Source + ":" + song.ID,
+		Name:       song.Name,
+		Singer:     song.Artist,
+		Album:      song.Album,
+		Duration:   song.Duration,
+		Cover:      song.Cover,
+		Platform:   song.Source,
+		PlatformID: song.ID,
+		Quality:    queueQuality(mon.Quality),
+	}
+	added, skipped, err := q.Submit([]backenddl.Item{it}, false, false)
+	if err != nil {
+		return "", err
+	}
+	if len(added) == 0 {
+		reason := "未知原因"
+		if len(skipped) > 0 {
+			reason = skipped[0].Reason
+		}
+		return "", fmt.Errorf("未能入队（%s）", reason)
+	}
+	id := added[0].ID
+
+	// 上一轮失败/停止的那条：显式重试一次（Submit 的幂等语义不会自动重排终态）。
+	if cur, ok := q.Get(id); ok {
+		switch cur.Status {
+		case backenddl.StatusFailed, backenddl.StatusStopped:
+			if _, aerr := q.Apply(backenddl.ActionRetry, []string{id}); aerr != nil {
+				return "", fmt.Errorf("重试入队失败：%w", aerr)
+			}
+		case backenddl.StatusPaused:
+			return "", fmt.Errorf("该曲目在后端队列里被单独暂停了（点继续后下一轮会继续）")
+		}
+	}
+
+	// 单首最多等 40 分钟：无损大文件 + 串行队列，给足余量；超时就把原因写清楚，
+	// 任务本身还在队列里继续下（不会因此丢）。
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Minute)
+	defer cancel()
+	done, ok := q.Wait(ctx, id)
+	if !ok {
+		return "", fmt.Errorf("等待后端下载超时（任务仍在队列里，可稍后在下载队列查看）")
+	}
+	switch done.Status {
+	case backenddl.StatusSuccess:
+		return done.Path, nil
+	case backenddl.StatusPaused:
+		return "", fmt.Errorf("后端队列任务被暂停")
+	case backenddl.StatusStopped:
+		return "", fmt.Errorf("后端队列任务被停止")
+	}
+	if strings.TrimSpace(done.Error) != "" {
+		return "", fmt.Errorf("%s", done.Error)
+	}
+	return "", fmt.Errorf("后端下载失败（无错误信息）")
 }
 
 // ResolveURL 实现 monitor.URLResolver：为无直链曲目向后端音源服务取下载地址。

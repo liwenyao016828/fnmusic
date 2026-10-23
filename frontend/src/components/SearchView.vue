@@ -2132,6 +2132,11 @@ function downloadSingleSong(song) {
     showToast('下载需要先导入音源 —— 点上方「导入音源」')
     return
   }
+  const blocked = downloadManager.enqueueBlockReason.value
+  if (blocked) {
+    showToast(`后台下载当前不可用：${blocked}`)
+    return
+  }
   // NAS 本地曲目不涉及在线音质，直接入队
   if (song.source === 'nas') {
     downloadManager.addSong(song, sourceIdFor(song.source), false)
@@ -2146,6 +2151,11 @@ function downloadSingleSong(song) {
 function onQualityConfirm({ quality, remember }) {
   const song = qualityTargetSong.value
   if (!song) return
+  const blocked = downloadManager.enqueueBlockReason.value
+  if (blocked) {
+    showToast(`后台下载当前不可用：${blocked}`)
+    return
+  }
   if (remember) downloadManager.setAllQuality(quality)
   downloadManager.addSong(song, sourceIdFor(song.source), false, quality)
   const tip = isHighestQuality(quality) ? '' : ` · ${qualityLabel(quality)}`
@@ -2161,6 +2171,11 @@ function batchDownloadAll() {
     return
   }
 
+  const blocked = downloadManager.enqueueBlockReason.value
+  if (blocked) {
+    showToast(`后台下载当前不可用：${blocked}`)
+    return
+  }
   // 批量：每首按自己的平台挑源（池有序 → 命中优先级最高的那个）
   downloadManager.addBatch(list, poolIds.value[0] || '', false, (song) => sourceIdFor(song.source))
   showToast(`已添加 ${list.length} 首歌曲至后台下载队列`)

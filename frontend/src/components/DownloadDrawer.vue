@@ -45,10 +45,10 @@
                     v-if="downloadManager.activeCount.value > 0"
                     class="px-2 py-0.5 rounded-full bg-emerald-500 text-white text-[10px] font-semibold animate-pulse"
                   >
-                    {{ downloadManager.activeCount.value }} 首下载中
+                    {{ downloadManager.activeCount.value }} 首进行中
                   </span>
                 </h3>
-                <p class="text-[11px] text-gray-400">后台持久下载，切换页面不中断</p>
+                <p class="text-[11px] text-gray-400">后台持久下载，关掉本页也会继续</p>
               </div>
             </div>
 

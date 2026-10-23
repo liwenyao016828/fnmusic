@@ -16,6 +16,7 @@ import (
 	"fn-lx-player/pkg/account"
 	"fn-lx-player/pkg/ai"
 	"fn-lx-player/pkg/applog"
+	"fn-lx-player/pkg/backenddl"
 	"fn-lx-player/pkg/bridge"
 	"fn-lx-player/pkg/charts"
 	"fn-lx-player/pkg/config"
@@ -36,7 +37,7 @@ import (
 )
 
 // CurrentVersion 应用版本号。发布新版本时与 fpk-package/manifest 的 version 同步修改。
-const CurrentVersion = "2.17.15"
+const CurrentVersion = "2.18.0"
 
 // CurrentAppName 对外暴露的应用标识，必须与 fpk-package/manifest 的 appname 一致。
 //
@@ -89,6 +90,13 @@ type Server struct {
 
 	// 网页端下载队列的持久化（原来只存浏览器 localStorage，换设备就没了）
 	downloadQueue *downloadqueue.Store
+
+	// 后端托管的下载队列（关网页也照下，见 pkg/backenddl）。
+	// nil = 本进程没有启动 worker；接口会明确回「不可用」，而不是假装受理。
+	backendDL *backenddl.Queue
+	// backendCfg 是取音能力（渠道/候选）的现取配置：渠道开关、洛雪宿主状态
+	// 都可能在运行中变化，所以不缓存 Availability，而是每次调用时现算。
+	backendCfg backenddl.FetcherConfig
 
 	// 自动下载记录（飞牛页面触发的收藏 / 加歌单 / 点下载那批），见 pkg/online/autolog.go。
 	//
@@ -207,6 +215,9 @@ func NewServer(cfgMgr *config.ConfigManager, sourcesMgr *sources.Manager, static
 
 	// 曲库增量索引与 AI 客户端
 	s.libIndex = library.NewIndex(cfgMgr.DataDir())
+	// 索引比下载器晚构造（下载器在 :179），所以在这里补接线：让 /download/song 与
+	// /download/check 能认出「下载目录之外、但曲库里已有」的歌，避免重复下载。
+	s.attachDownloadLibraryIndex()
 	s.aiClient = ai.NewClient(ai.DefaultConfig())
 	s.loadAIConfig()
 

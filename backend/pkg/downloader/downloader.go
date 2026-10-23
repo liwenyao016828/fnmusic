@@ -22,6 +22,7 @@ import (
 	"fn-lx-player/pkg/config"
 	"fn-lx-player/pkg/flacok"
 	"fn-lx-player/pkg/fnos"
+	"fn-lx-player/pkg/library"
 	"fn-lx-player/pkg/nas"
 	"fn-lx-player/pkg/search"
 	"fn-lx-player/pkg/security"
@@ -183,6 +184,11 @@ type Downloader struct {
 	secOpts    security.Options
 	mu         sync.RWMutex
 	batchTasks map[string]*BatchTask
+
+	// libIndex 是全库索引快照的读取函数（见 library_index.go / SetLibraryIndex）。
+	// 单独一把锁：批量任务的状态读写很频繁，别让它们跟索引快照互相等。
+	libMu    sync.RWMutex
+	libIndex func() []library.Entry
 }
 
 func NewDownloader(cfgMgr *config.ConfigManager) *Downloader {
@@ -443,6 +449,37 @@ func (d *Downloader) downloadSingleSong(song SongPayload) (*SongResult, error) {
 			}, nil
 		}
 		replacePath = existing
+	}
+
+	// 下载目录里没有同名文件时，再查一次全库索引（曲库管家扫出来的所有目录）。
+	//
+	// 为什么必须放在同名检查之后：同名文件就在本次目标目录里，能直接原地升级；
+	// 而索引命中可能在别的目录，语义不同（下面分别处理）。
+	//
+	// 为什么要跳过 DestDir/DestBase：那是调用方明确指定的「替换这一份」，
+	// 候选歌名与本地文件名不一样时（见 SongPayload.DestDir 注释），不能被
+	// 库里另一份同名版本提前挡回去，否则替换永远落不到目标文件上。
+	if replacePath == "" && strings.TrimSpace(song.DestDir) == "" && strings.TrimSpace(song.DestBase) == "" {
+		if hit, ok := d.findInLibrary(song); ok {
+			if !song.shouldUpgradeOver(hit.Path) {
+				return &SongResult{
+					SongName:     song.Name,
+					Singer:       song.Singer,
+					Status:       "already_exists",
+					Path:         filepath.ToSlash(hit.Path),
+					Quality:      song.Quality,
+					ActualFormat: strings.TrimPrefix(strings.ToLower(filepath.Ext(hit.Path)), "."),
+				}, nil
+			}
+			// 库里那份档位更低、本次要升级：继续下载。
+			//
+			// 只有命中文件正好在下载目录里时，才设为 replacePath（原地换掉、不留两份）；
+			// 在别的目录就不动它 —— 下载器没有权利去别处删用户的文件，落点仍按
+			// 本次请求的目录与文件名（与「替换指定文件」的 DestDir/DestBase 语义分开）。
+			if sameDirAs(hit.Path, destDir) {
+				replacePath = hit.Path
+			}
+		}
 	}
 
 	// Resolve download audio URL
@@ -1068,7 +1105,7 @@ func (s SongPayload) shouldUpgradeOver(existing string) bool {
 func findExistingAudio(destDir, base string) (string, bool) {
 	for _, ext := range audioExtensions {
 		p := filepath.Join(destDir, base+"."+ext)
-		if fi, err := os.Stat(p); err == nil && !fi.IsDir() && fi.Size() > 500*1024 {
+		if fi, err := os.Stat(p); err == nil && !fi.IsDir() && fi.Size() >= libraryMinAudioBytes {
 			return p, true
 		}
 	}
@@ -1107,6 +1144,15 @@ func (d *Downloader) HandleCheckDownloaded(w http.ResponseWriter, r *http.Reques
 
 	destDir := d.getDownloadDir()
 	existsMap := make(map[string]bool)
+	// paths / upgradable 是**新增**的附加字段（老前端只读 exists，不受影响）：
+	//   paths[key]      = 命中的那份文件在哪 —— 「已下载」时告诉用户东西在哪，
+	//                     「可升级」时告诉他会被替换掉的是哪一份；
+	//   upgradable[key] = 盘上那份档位更低、还能升，界面可以显示「可升级」。
+	pathsMap := make(map[string]string)
+	upgradableMap := make(map[string]bool)
+	// 一次请求只取一份全库快照：批量探测几百首时，每首重建一遍索引列表
+	// （几万条记录的拷贝）纯属浪费，而且同一批里条目本来就不该变。
+	entries := d.librarySnapshot()
 
 	for _, s := range req.Songs {
 		cleanSinger := sanitizeFilename(s.Singer)
@@ -1118,22 +1164,51 @@ func (d *Downloader) HandleCheckDownloaded(w http.ResponseWriter, r *http.Reques
 		// 落盘扩展名由魔数嗅探决定（见 detectAudioExtByMagic），下载现在会优先取无损，
 		// 所以「已下载」的那份很可能是 .flac。硬编码 .mp3 会让已经下过的无损查不到 ——
 		// 界面照样显示「未下载」，用户再点一次就是白白重下一遍（一张专辑几百 MB）。
-		if _, ok := findExistingAudio(destDir, base); ok {
-			existsMap[key] = true
-			if s.ID != "" {
-				existsMap[s.ID] = true
+		hitPath, found := findExistingAudio(destDir, base)
+		// 下载目录里没有同名文件时查全库索引（跨目录、不同文件名的同一首）。
+		// 与 /download/song 复用同一套判据（MatchLibrary），否则界面显示的「已有」
+		// 和实际会不会下载会对不上。
+		if !found {
+			if hit, ok := MatchLibrary(entries, s); ok {
+				hitPath, found = hit.Path, true
 			}
-		} else {
-			existsMap[key] = false
+		}
+
+		upgradable := false
+		if found {
+			// 盘上这份档位低于**本次请求**的音质 → 不算「已下载」，但要标出可升级。
+			//
+			// 判据用的是 libraryUpgradable（内部走 shouldUpgradeOver），而不是
+			// 「有没有更新版」这种模糊说法：只有调用方明确带了足够高的 quality
+			// 才算可升级，否则界面会对每首歌都喊「可升级」。
+			if up, _ := libraryUpgradable(s, hitPath); up {
+				found, upgradable = false, true
+			}
+		}
+
+		existsMap[key] = found
+		if s.ID != "" {
+			existsMap[s.ID] = found
+		}
+		if hitPath != "" {
+			pathsMap[key] = filepath.ToSlash(hitPath)
 			if s.ID != "" {
-				existsMap[s.ID] = false
+				pathsMap[s.ID] = filepath.ToSlash(hitPath)
+			}
+		}
+		if upgradable {
+			upgradableMap[key] = true
+			if s.ID != "" {
+				upgradableMap[s.ID] = true
 			}
 		}
 	}
 
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"code":   200,
-		"exists": existsMap,
+		"code":       200,
+		"exists":     existsMap,
+		"paths":      pathsMap,
+		"upgradable": upgradableMap,
 	})
 }
 
