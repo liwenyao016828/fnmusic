@@ -57,6 +57,11 @@ var routeTable = []routeSpec{
 			}
 		},
 	},
+	// 应用内更新：检查 → 下载 → 安装。安装会重启应用，前端需容忍请求中断。
+	{Path: "/api/app/update/check", Handler: func(s *Server) http.HandlerFunc { return s.HandleAppUpdateCheck }},
+	{Path: "/api/app/update/download", Handler: func(s *Server) http.HandlerFunc { return s.HandleAppUpdateDownload }},
+	{Path: "/api/app/update/state", Handler: func(s *Server) http.HandlerFunc { return s.HandleAppUpdateState }},
+	{Path: "/api/app/update/install", Handler: func(s *Server) http.HandlerFunc { return s.HandleAppUpdateInstall }},
 
 	// 1. Proxy（已启用 SSRF 防护）
 	{Path: "/api/proxy/http", Handler: func(s *Server) http.HandlerFunc { return proxy.HandleProxyHTTP }},
@@ -231,6 +236,11 @@ var routeTable = []routeSpec{
 	{Path: "/api/nas/stream", Handler: func(s *Server) http.HandlerFunc { return nas.StreamAudio }},
 	{Path: "/api/nas/cover", Handler: func(s *Server) http.HandlerFunc { return nas.ExtractCover }},
 	{Path: "/api/nas/lyric", Handler: func(s *Server) http.HandlerFunc { return nas.HandleNasLyric }},
+
+	// 库体检：查／修「飞牛里文件夹显示未知错误」的非法条目（用户 2026-10-24 反馈）。
+	// 扫描只读；修复要用户在前端确认后才逐条传上来，不做「一键全自动改盘」。
+	{Path: "/api/nas/health/scan", Handler: func(s *Server) http.HandlerFunc { return nas.HandleHealthScan }},
+	{Path: "/api/nas/health/fix", Handler: func(s *Server) http.HandlerFunc { return nas.HandleHealthFix }},
 
 	// 3.5 音频标签（歌词内嵌 / 封面 / 元数据）
 	{

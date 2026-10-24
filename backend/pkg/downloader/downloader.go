@@ -12,7 +12,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -20,6 +19,7 @@ import (
 	"fn-lx-player/pkg/applog"
 	"fn-lx-player/pkg/audioext"
 	"fn-lx-player/pkg/config"
+	"fn-lx-player/pkg/filename"
 	"fn-lx-player/pkg/flacok"
 	"fn-lx-player/pkg/fnos"
 	"fn-lx-player/pkg/library"
@@ -30,39 +30,18 @@ import (
 	"fn-lx-player/pkg/useragent"
 )
 
-var illegalChars = regexp.MustCompile(`[\\/:*?"<>|\r\n\t]`)
-
-// maxFilenameBytes 文件名（不含扩展名）的字节上限，避免 ENAMETOOLONG
+// maxFilenameBytes 与 pkg/filename 的上限保持一致（本包测试要引用这个常量）。
 const maxFilenameBytes = 180
 
 // audioExtensions 落盘时需要考虑的音频扩展名（用于查重与命名）
 var audioExtensions = []string{"mp3", "flac", "m4a", "aac", "ogg", "wav", "ape", "dsf", "dff"}
 
-func sanitizeFilename(s string) string {
-	s = illegalChars.ReplaceAllString(s, "_")
-	s = strings.TrimSpace(s)
-	s = strings.Trim(s, ". ")
-	if s == "" {
-		s = "未知"
-	}
-	if len(s) > maxFilenameBytes {
-		// 按字节截断，避免切断多字节 UTF-8 字符
-		cut := maxFilenameBytes
-		for cut > 0 && !utf8Start(s[cut]) {
-			cut--
-		}
-		s = strings.TrimSpace(s[:cut])
-		if s == "" {
-			s = "未知"
-		}
-	}
-	return s
-}
-
-// utf8Start 判断字节是否为 UTF-8 字符起始字节
-func utf8Start(b byte) bool {
-	return b&0xC0 != 0x80
-}
+// sanitizeFilename 是 pkg/filename.Sanitize 在本包的薄封装。
+//
+// 规则本身（非法字符 / 非法 UTF-8 / 控制字符 / Windows 保留名 / 按字符边界截断）
+// 全在 filename 包里，因为库体检也要用同一套规则算出「这个名字该改成什么」——
+// 两处各写一份必然漂移（2026-10-24 抽取）。
+func sanitizeFilename(s string) string { return filename.Sanitize(s) }
 
 type SongPayload struct {
 	ID        string `json:"id"`

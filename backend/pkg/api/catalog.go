@@ -193,6 +193,27 @@ func APICatalog(baseURL string) []Endpoint {
 			Example: "curl " + baseURL + "/api/app/version",
 		},
 		{
+			Method: http.MethodGet, Path: "/api/app/update/check", Summary: "检查 GitHub 上是否有新版本", Category: catSystem,
+			Params:  []Param{{Name: "refresh", In: "query", Desc: "1/true 跳过 10 分钟缓存强制重新检查"}},
+			Example: "curl " + baseURL + "/api/app/update/check",
+			Notes:   "结果缓存 10 分钟。`error` 非空表示检查失败（网络/限速/无 fpk），此时 `current` 仍有效；`has_update` 由语义化版本比较得出，预发布后缀不视为更新。",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/app/update/download", Summary: "下载新版 fpk 安装包（后台，幂等）", Category: catSystem,
+			Example: "curl -X POST " + baseURL + "/api/app/update/download",
+			Notes:   "立即返回，下载在后台继续；进度用 GET /api/app/update/state 轮询。已下载完成时重复调用直接返回 ready 与已有路径。落盘位置：<数据目录>/updates/。",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/app/update/state", Summary: "查看更新下载与安装状态", Category: catSystem,
+			Example: "curl " + baseURL + "/api/app/update/state",
+			Notes:   "`status` 取值 idle / downloading / ready / installing / error；`progress` 为 0~100，`size` 为已下载字节。",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/app/update/install", Summary: "安装已下载的新版（会重启应用）", Category: catSystem,
+			Example: "curl -X POST " + baseURL + "/api/app/update/install",
+			Notes:   "脚本写在 /tmp/yinshu-update/apply-update.sh 并脱离本进程执行（需 root 或免密 sudo），会 stop/uninstall/install 本应用，因此请求可能中断。403=没有安装权限（请到飞牛应用中心手动安装 fpk）；409=安装包未就绪；日志见 /tmp/yinshu-update/install.log。",
+		},
+		{
 			Method: http.MethodGet, Path: "/api/config", Summary: "读取应用配置（含主力平台 preferred_platforms）", Category: catSystem,
 			Example: "curl " + baseURL + "/api/config",
 			Notes:   "改任何设置前**先 GET 拿全量**，改完再整份 POST 回去 —— 见下一条的警告。",
@@ -630,6 +651,18 @@ func APICatalog(baseURL string) []Endpoint {
 			},
 			Example: "curl '" + baseURL + "/api/nas/songs?dir=/vol1/Music'",
 			Notes:   "与 /api/library/index 同一套枚举规则（排除 @eaDir 等目录、深度上限 12 层、软链接环剪枝）。单次最多 1000 首；被截断或目录读不全都如实返回 truncated/warnings，命中缓存也照样带着。",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/nas/health/scan", Summary: "体检曲库目录里的非法文件名（修「文件夹未知错误」）", Category: catNAS,
+			Params:  []Param{{Name: "dir", In: "query", Desc: "目录绝对路径；留空用第一个允许根目录"}},
+			Example: "curl '" + baseURL + "/api/nas/health/scan?dir=/vol1/Music'",
+			Notes:   "只读，不改动任何文件。查 GBK 脏字节／控制字符／Windows 保留名／超长名（这些会让 fnOS 文件管理与官方音乐 App 整层目录报错），顺带数 0 字节音频与 .part 残留。上限 20 万条目 / 500 条问题。",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/nas/health/fix", Summary: "修复非法文件名（按 scan 返回的 id）", Category: catNAS,
+			Params:  []Param{{Name: "body", In: "body", Desc: "{\"dir\":\"/vol1/Music\",\"ids\":[\"...\"],\"dry_run\":false}；ids 取 /health/scan 每条 issue 的 id"}},
+			Example: "curl -X POST '" + baseURL + "/api/nas/health/fix' -H 'Content-Type: application/json' -d '{\"dir\":\"/vol1/Music\",\"ids\":[\"L3ZvbDEvTXVzaWMv...\"]}'",
+			Notes:   "只收 id 不收路径（非法 UTF-8 的名字过不了 JSON 往返；id 是路径字节的 base64url，服务端在最近 8 次扫描缓存里回查，重启后返回 409 要你重扫）。rename 冲突时加序号、绝不覆盖；dry_run=true 只回报 would_fix 且不改文件。",
 		},
 		{
 			Method: http.MethodGet, Path: "/api/nas/stream", Summary: "流式播放本地音频（支持 Range 拖动）", Category: catNAS,

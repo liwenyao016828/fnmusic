@@ -399,6 +399,13 @@
         </div>
       </SectionCard>
 
+      <!--
+        文件名体检（用户 2026-10-24）：「飞牛文件和官方音乐 App 打开音乐文件夹显示未知错误」。
+        和上面的曲库体检是同一件事的两种口径 —— 上面数的是「元数据缺口」，
+        这张看的是「磁盘条目本身不合法」。放同一段，用户不用点两次才找得到。
+      -->
+      <LibraryHealthCard v-show="sub === 'audit'" :dir="healthDir || tidyDir || nasDir" class="mt-3" />
+
       <!-- ═════ 分段四：记录（整理快照 + 撤销入口） ═════ -->
       <SectionCard
         v-show="sub === 'records'"
@@ -690,6 +697,7 @@ import SideSheet from './SideSheet.vue'
 import StatLine from './StatLine.vue'
 import SegmentedControl from './SegmentedControl.vue'
 import SelectionBar from './SelectionBar.vue'
+import LibraryHealthCard from './LibraryHealthCard.vue'
 import { TidyAPI, TagsAPI, NasAPI, ConfigAPI, QualityAPI, DEFAULT_AUTO_DOWNLOAD_CHANNELS } from '../api/client'
 import { loadPref, savePref, loadBool, loadCache, saveCache } from '../services/prefs'
 import {
@@ -708,7 +716,7 @@ import {
 import { fail as failText, apiError } from '../services/userMsg'
 import { logError } from '../services/appLog'
 import { ok as notifyOk, fail as notifyFail } from '../services/feedback'
-import { navigateTo, segmentOf } from '../services/navBus'
+import { currentView, navigateTo, onNavigate, segmentOf } from '../services/navBus'
 
 /** 页面提示统一走全局 feedback（右下角浮层），不再占页面底部一条 InlineNotice */
 function flash(msg, isError = false) {
@@ -719,6 +727,16 @@ function flash(msg, isError = false) {
 // ── 目录与状态 ──
 const nasDir = computed(() => loadPref('nas_dir', ''))
 const tidyDir = ref('')
+/**
+ * 体检卡片要扫哪个目录。
+ *
+ * 2026-10-24 用户报的坑：在「本地曲库」里点「体检文件名」，卡片却扫了"补全整理"自己那份
+ * 曲库目录 —— 因为入口只写了偏好、卡片优先读 props.dir。入口点明摆着是「就查我现在看的
+ * 这个文件夹」，所以改成一次性 payload 传进来；`watch(currentView)` 在离开本页时清掉，
+ * 免得用户下次从导航栏自己走进来还停在上次的目录上（这就是当初塞 localStorage 的毛病）。
+ */
+const healthDir = ref('')
+let stopHealthNav = null
 // 2026-10-19 渐进式披露 → 2026-10-21 分段导航：「偶尔才改一次的设置」仍在右侧抽屉；
 // 主功能入口升为顶部分段，⋯ 里只留真正次要的动作（增量扫描）。
 const optionsOpen = ref(false)
@@ -1589,6 +1607,13 @@ async function onRefresh() {
 
 onMounted(() => {
   tidyDir.value = loadPref('nas_dir', '')
+  // 「本地曲库 → 体检文件名」带过来的目录（一次性）：消费后仍留到离开本页为止，
+  // 这样用户切到别的分段看一眼再回来，卡片不会突然换成另一个目录
+  stopHealthNav = onNavigate((view, payload) => {
+    if (view === 'tidy' && payload && typeof payload === 'object' && payload.healthDir) {
+      healthDir.value = String(payload.healthDir)
+    }
+  })
   // 首屏自动读取上次整理快照（持久化索引），无需等用户点扫描
   loadIndexStats()
   // 上次体检 / 缺口统计 / 结果卡片都从缓存恢复（2026-09-22「数据每次都会消失」）
@@ -1606,5 +1631,11 @@ onMounted(() => {
 onUnmounted(() => {
   stopCompletePolling()
   stopQualityPolling()
+  if (stopHealthNav) stopHealthNav()
+})
+
+// 离开「补全整理」就丢掉入口带来的一次性目录，避免导航栏自己走进来时停在过期目录
+watch(currentView, (v) => {
+  if (v !== 'tidy') healthDir.value = ''
 })
 </script>

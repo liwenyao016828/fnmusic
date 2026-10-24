@@ -286,6 +286,9 @@
         </div>
       </DisclosureSection>
 
+      <!-- 版本更新：检查 GitHub Release、下载 fpk、自动安装。后端执行，前端只展示状态。 -->
+      <UpdateCard />
+
       <!-- ③ 关于 / 导出日志：不再是一张「带图标方块」的卡（那套视觉语言属于内容分区），
            收尾信息用一个安静的信息块：版本一行 + 两个轻按钮。 -->
       <section class="mt-1 rounded-[var(--ys-radius-card)] border border-[var(--ys-border)] bg-[#FBFBFD] px-4 py-3.5 sm:px-5">
@@ -327,6 +330,7 @@ import { ConfigAPI, DownloadAPI, LogsAPI, AppAPI, ChartInjectAPI, SourcesAPI, DE
 import { QUALITY_OVERRIDE_OPTIONS } from '../services/qualityOverride'
 import { fail, apiError } from '../services/userMsg'
 import InlineNotice from './InlineNotice.vue'
+import UpdateCard from './UpdateCard.vue'
 
 /** 条款弹窗由 App.vue 持有（openDisclaimer），这里只负责把「想看条款」这件事报上去。 */
 const emit = defineEmits(['open-disclaimer'])

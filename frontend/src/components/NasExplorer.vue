@@ -45,6 +45,21 @@
         <span>{{ isScanning ? '扫描中...' : '重新扫描' }}</span>
       </button>
 
+      <!--
+        用户 2026-10-24：「飞牛里打开音乐文件夹显示未知错误」。
+        他看到文件的地方就是这一页，所以把体检入口放在这里（真正的报告在
+        「补全整理 → 体检」，那边才有扫描/修复的完整交互）——
+        否则功能藏在另一个页面，用户只会觉得「没修」。
+      -->
+      <button
+        @click="openHealthCheck"
+        class="px-3.5 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 font-semibold text-xs border border-rose-200/80 shadow-xs flex items-center gap-1.5 transition-all"
+        title="飞牛文件管理或官方音乐 App 打开这个文件夹报「未知错误」时，先来这里体检文件名"
+      >
+        <ShieldAlert class="w-3.5 h-3.5" />
+        <span>体检文件名</span>
+      </button>
+
       <button
         @click="embedAllLyrics"
         :disabled="!songs.length || isBatchEmbedding"
@@ -172,17 +187,82 @@
         <table class="w-full table-fixed text-left text-xs text-gray-600 border-collapse sm:table-auto sm:min-w-[560px]">
           <thead class="bg-gray-50/80 border-b border-gray-100 text-gray-400 font-medium">
             <tr>
-              <th class="py-3 px-2 sm:px-3 w-10 sm:w-12 text-center">#</th>
-              <th class="py-3 px-3 sm:px-4">歌曲标题 / 封面</th>
-              <th class="hidden md:table-cell py-3 px-4">专辑</th>
-              <th class="hidden sm:table-cell py-3 px-3 text-center">格式</th>
-              <th class="hidden lg:table-cell py-3 px-3 text-right">文件大小</th>
+              <!--
+                列排序（2026-10-24 用户：「曲库里面已下载的歌曲，按照最新排序，或者帮我增加列排序选项」）。
+                默认列是「最新」（updated_at 倒序），所以「#」本身也是可点的：点了就回到默认顺序，
+                否则用户一旦切到「专辑」就再也没有回程入口了。
+                手机上专辑/格式/大小三列本来就 hidden，剩下的标题列照样可点，不影响窄屏。
+              -->
+              <th class="py-3 px-2 sm:px-3 w-10 sm:w-12 text-center" :aria-sort="sortKey === 'newest' ? 'descending' : 'none'">
+                <button
+                  type="button"
+                  @click="sortByNewest"
+                  class="mx-auto flex items-center gap-0.5 rounded px-1 transition-colors hover:text-[var(--ys-text)]"
+                  :class="sortKey === 'newest' ? 'font-semibold text-[var(--ys-accent)]' : ''"
+                  title="按最新排序（刚下载的在前）"
+                >
+                  <span>#</span>
+                  <ChevronDown v-if="sortKey === 'newest'" class="h-3 w-3" />
+                </button>
+              </th>
+              <th class="py-3 px-3 sm:px-4" :aria-sort="ariaSortOf('title')">
+                <button
+                  type="button"
+                  @click="toggleSort('title')"
+                  class="flex items-center gap-1 rounded transition-colors hover:text-[var(--ys-text)]"
+                  :class="sortKey === 'title' ? 'font-semibold text-[var(--ys-text)]' : ''"
+                  title="点击按歌曲标题排序，再点一次切换升 / 降序"
+                >
+                  <span>歌曲标题 / 封面</span>
+                  <ChevronUp v-if="sortKey === 'title' && sortDir === 'asc'" class="h-3 w-3 shrink-0" />
+                  <ChevronDown v-else-if="sortKey === 'title'" class="h-3 w-3 shrink-0" />
+                </button>
+              </th>
+              <th class="hidden md:table-cell py-3 px-4" :aria-sort="ariaSortOf('album')">
+                <button
+                  type="button"
+                  @click="toggleSort('album')"
+                  class="flex items-center gap-1 rounded transition-colors hover:text-[var(--ys-text)]"
+                  :class="sortKey === 'album' ? 'font-semibold text-[var(--ys-text)]' : ''"
+                  title="点击按专辑排序，再点一次切换升 / 降序"
+                >
+                  <span>专辑</span>
+                  <ChevronUp v-if="sortKey === 'album' && sortDir === 'asc'" class="h-3 w-3 shrink-0" />
+                  <ChevronDown v-else-if="sortKey === 'album'" class="h-3 w-3 shrink-0" />
+                </button>
+              </th>
+              <th class="hidden sm:table-cell py-3 px-3 text-center" :aria-sort="ariaSortOf('format')">
+                <button
+                  type="button"
+                  @click="toggleSort('format')"
+                  class="mx-auto flex items-center gap-1 rounded transition-colors hover:text-[var(--ys-text)]"
+                  :class="sortKey === 'format' ? 'font-semibold text-[var(--ys-text)]' : ''"
+                  title="点击按格式排序，再点一次切换升 / 降序"
+                >
+                  <span>格式</span>
+                  <ChevronUp v-if="sortKey === 'format' && sortDir === 'asc'" class="h-3 w-3 shrink-0" />
+                  <ChevronDown v-else-if="sortKey === 'format'" class="h-3 w-3 shrink-0" />
+                </button>
+              </th>
+              <th class="hidden lg:table-cell py-3 px-3 text-right" :aria-sort="ariaSortOf('size')">
+                <button
+                  type="button"
+                  @click="toggleSort('size')"
+                  class="ml-auto flex items-center gap-1 rounded transition-colors hover:text-[var(--ys-text)]"
+                  :class="sortKey === 'size' ? 'font-semibold text-[var(--ys-text)]' : ''"
+                  title="点击按文件大小排序，再点一次切换升 / 降序"
+                >
+                  <span>文件大小</span>
+                  <ChevronUp v-if="sortKey === 'size' && sortDir === 'asc'" class="h-3 w-3 shrink-0" />
+                  <ChevronDown v-else-if="sortKey === 'size'" class="h-3 w-3 shrink-0" />
+                </button>
+              </th>
               <th class="w-[112px] py-3 px-2 text-center sm:w-20 sm:px-4">操作</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-gray-100">
             <tr 
-              v-for="(song, idx) in songs" 
+              v-for="(song, idx) in sortedSongs" 
               :key="song.path"
               @dblclick="playSong(song, idx)"
               class="group cursor-pointer transition-colors hover:bg-black/[0.02]"
@@ -509,9 +589,10 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
 import { markLoaded, isStale } from '../services/viewCache'
-import { currentView } from '../services/navBus'
+import { currentView, navigateTo } from '../services/navBus'
 import { NasAPI, TagsAPI, FnosAPI } from '../api/client'
 import { loadPref, savePref, memGet, memSet } from '../services/prefs'
+import { sortSongs, parseSortPref, sortPrefOf, nextSortDir } from '../services/librarySort'
 import {
   breadcrumbsFor,
   scanCacheKey,
@@ -522,8 +603,8 @@ import {
 } from '../services/nasView'
 import {
   RotateCw, Folder, FolderOpen, Play, X, Check,
-  HardDrive, CornerLeftUp, ChevronRight, FileMusic, Loader2,
-  Image as ImageIcon
+  HardDrive, CornerLeftUp, ChevronRight, ChevronUp, ChevronDown, FileMusic, Loader2,
+  ShieldAlert, Image as ImageIcon
 } from 'lucide-vue-next'
 import InlineNotice from './InlineNotice.vue'
 import { describeError } from '../services/userMsg'
@@ -534,6 +615,41 @@ const emit = defineEmits(['play'])
 const quickDirs = ref(['/vol1/Music', '/vol1/music', '/vol2/Music', '/vol1'])
 const currentDir = ref(loadPref('nas_dir', '/vol1/Music'))
 const songs = ref([])
+
+// ── 列表排序（2026-10-24 用户：「曲库里面已下载的歌曲，按照最新排序，或者帮我增加列排序选项」）──
+// 判据全部在 services/librarySort.js（纯函数 + node:test 回归），这里只做三件事：
+// 记住用户点的是哪一列、把有序结果喂给表格与播放列表、在表头画出当前方向。
+// 默认「最新」= updated_at 倒序，理由很直白：枚举文件系统的顺序跟下载先后毫无关系，
+// 用户想看的永远是「刚下的那几首在哪」。
+const sortState = ref(parseSortPref(loadPref('nas_sort', '')))
+const sortKey = computed(() => sortState.value.key)
+const sortDir = computed(() => sortState.value.dir)
+// 表格与「播放全部 / 播放某首」必须共用同一份有序列表：否则界面第 1 行点了播放，
+// 播放器拿到的仍是后端原始顺序，实际播的是另一首（这是最容易埋进去的坑）。
+const sortedSongs = computed(() => sortSongs(songs.value, sortState.value.key, sortState.value.dir))
+
+function persistSort() {
+  savePref('nas_sort', sortPrefOf(sortState.value))
+}
+
+/** 点表头：同一列切升降序，换列则用该列默认方向。 */
+function toggleSort(key) {
+  const dir = sortKey.value === key ? nextSortDir(key, sortDir.value) : nextSortDir(key, undefined)
+  sortState.value = { key, dir }
+  persistSort()
+}
+
+/** 「#」列头：回到默认的「最新」；也是切到其它列后唯一的回程入口。 */
+function sortByNewest() {
+  sortState.value = { key: 'newest', dir: nextSortDir('newest', undefined) }
+  persistSort()
+}
+
+/** 给 <th aria-sort> 用（读屏器靠它知道当前按哪列、哪个方向）。 */
+function ariaSortOf(key) {
+  if (sortKey.value !== key) return 'none'
+  return sortDir.value === 'asc' ? 'ascending' : 'descending'
+}
 const isScanning = ref(false)
 // 枚举是否被截断（数量上限/深度上限）：后端 /api/nas/scan 现在会如实返回
 // truncated 与 warnings，界面据此提示「还有没列出来的」，不再假装这就是全部。
@@ -841,7 +957,7 @@ function mapNasSong(song) {
 }
 
 function playSong(song, idx) {
-  const allFormatted = songs.value.map(mapNasSong)
+  const allFormatted = sortedSongs.value.map(mapNasSong)
   const currentFormatted = mapNasSong(song)
   emit('play', {
     song: currentFormatted,
@@ -850,9 +966,18 @@ function playSong(song, idx) {
   })
 }
 
+// 跳到「补全整理 → 体检」，并把当前目录带过去（体检要扫的就是他正在看的这个目录）。
+// 走 navBus 而不是自己弹一个对话框：报告 + 修复的完整交互只在 TidyView 里有一份，
+// 两个地方各写一套扫描 UI 迟早会不一致。
+function openHealthCheck() {
+  const dir = (currentDir.value || '').trim()
+  // 带上当前目录（一次性 payload）：体检卡片优先用这个，用户点的是「就查我现在看的文件夹」
+  navigateTo('tidy', { segment: 'audit', healthDir: dir })
+}
+
 function playAllNasSongs() {
-  if (!songs.value.length) return
-  const allFormatted = songs.value.map(mapNasSong)
+  if (!sortedSongs.value.length) return
+  const allFormatted = sortedSongs.value.map(mapNasSong)
   emit('play', {
     song: allFormatted[0],
     playlist: allFormatted,

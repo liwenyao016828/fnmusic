@@ -16,6 +16,7 @@ import (
 	"fn-lx-player/pkg/account"
 	"fn-lx-player/pkg/ai"
 	"fn-lx-player/pkg/applog"
+	"fn-lx-player/pkg/appupdate"
 	"fn-lx-player/pkg/backenddl"
 	"fn-lx-player/pkg/bridge"
 	"fn-lx-player/pkg/charts"
@@ -37,7 +38,7 @@ import (
 )
 
 // CurrentVersion 应用版本号。发布新版本时与 fpk-package/manifest 的 version 同步修改。
-const CurrentVersion = "2.18.1"
+const CurrentVersion = "2.19.1"
 
 // CurrentAppName 对外暴露的应用标识，必须与 fpk-package/manifest 的 appname 一致。
 //
@@ -90,6 +91,9 @@ type Server struct {
 
 	// 网页端下载队列的持久化（原来只存浏览器 localStorage，换设备就没了）
 	downloadQueue *downloadqueue.Store
+	// appUpdate 是应用内更新（检查/下载/安装）的唯一入口；进度与安装状态是
+	// 进程级状态，因此挂在 Server 上而不是每个请求新建。
+	appUpdate *appupdate.Manager
 
 	// 后端托管的下载队列（关网页也照下，见 pkg/backenddl）。
 	// nil = 本进程没有启动 worker；接口会明确回「不可用」，而不是假装受理。
@@ -234,6 +238,7 @@ func NewServer(cfgMgr *config.ConfigManager, sourcesMgr *sources.Manager, static
 	s.pushStore = push.NewStore(cfgMgr.DataDir())
 	s.pushRunner = push.NewRunner(s.pushStore, s.accountStore)
 	s.downloadQueue = downloadqueue.NewStore(cfgMgr.DataDir())
+	s.appUpdate = newAppUpdateManager(cfgMgr.DataDir())
 	s.pushRunner.Start(time.Minute)
 
 	// 曲库重扫的节流状态落盘：`lastRun` 只存内存的话进程重启就归零，

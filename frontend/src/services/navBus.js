@@ -71,12 +71,20 @@ export function onNavigate(fn) {
  * 等价于 goView(view) + 把 (view, payload) 广播给 onNavigate 订阅者。
  * payload 可以是分段 id 字符串（如 navigateTo('download', 'queue')），
  * 也可以是对象（如 { chartPreview }）—— 订阅者自己判断。
+ *
+ * 2026-10-24：对象里带 `segment` 时也切换分段（`navigateTo('tidy', { segment: 'audit', healthDir })`）。
+ * 以前只有字符串形态能切分段，于是「带着一次性数据跳分段」的调用要么写两次、要么干脆不切，
+ * 调用方只能把数据塞进 localStorage 传——那是持久状态，用户下次从导航栏自己走进来会读到过期值。
  */
 export function navigateTo(view, payload) {
   if (!view) return
-  // payload 直接给的是已知分段 id 时，当作分段跳转（老调用形态 navigateTo('download','queue')）
-  const seg = typeof payload === 'string' && segmentsOf(view).some((s) => s.id === payload)
+  // payload 直接给的是已知分段 id 时，当作分段跳转（老调用形态 navigateTo('download','queue')）；
+  // 对象形态读 payload.segment（新调用形态）
+  const wantSeg = typeof payload === 'string'
     ? payload
+    : (payload && typeof payload === 'object' ? payload.segment : undefined)
+  const seg = typeof wantSeg === 'string' && segmentsOf(view).some((s) => s.id === wantSeg)
+    ? wantSeg
     : undefined
   goView(view, seg)
   for (const fn of listeners) {
