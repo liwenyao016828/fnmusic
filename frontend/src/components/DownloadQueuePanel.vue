@@ -541,12 +541,30 @@ const queueMenu = computed(() => [
   { key: 'clearRecords', label: '清除所有记录', icon: Eraser, danger: true, disabled: terminalCount.value === 0, hint: '已完成 / 失败 / 已停止' },
 ])
 
+/**
+ * ⋯ 菜单里的批量动作。
+ *
+ * 每个动作都要**当场回话**：返回的 hit 是后端真动了几条。以前这里只有异常分支
+ * 才提示，正常但「一条都没动」时界面毫无反应 —— 用户就会觉得按钮又失效了
+ * （2026-10-24：「下载里的重试失败又失效了吗」）。
+ */
 async function onQueueMenu(key) {
   try {
-    if (key === 'resumeStopped') await downloadManager.resumeStopped()
-    else if (key === 'retryFailed') await downloadManager.retryAllFailed()
-    else if (key === 'stopAll') await downloadManager.stopAll()
-    else if (key === 'clearRecords') await clearAllRecords()
+    if (key === 'resumeStopped') {
+      const n = await downloadManager.resumeStopped()
+      if (n > 0) notifyOk(`已恢复 ${n} 首重新排队`)
+      else notifyWarn('没有可恢复的任务（已结束的请用「重新下载」）')
+    } else if (key === 'retryFailed') {
+      const n = await downloadManager.retryAllFailed()
+      if (n > 0) notifyOk(`已重试 ${n} 首失败任务`)
+      else notifyWarn('没有失败任务可重试')
+    } else if (key === 'stopAll') {
+      const n = await downloadManager.stopAll()
+      if (n > 0) notifyOk(`已停止 ${n} 首`)
+      else notifyWarn('当前没有在跑或排队的任务')
+    } else if (key === 'clearRecords') {
+      await clearAllRecords()
+    }
   } catch (e) {
     notifyWarn(`操作失败：${e?.userMessage || e?.message || '后台没有响应'}`)
   }

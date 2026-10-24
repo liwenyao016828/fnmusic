@@ -561,6 +561,32 @@
           还没有扫描结果 —— 点「开始扫描」，让洛雪 / musicdl / 原生三条渠道逐条对比
         </div>
 
+        <!--
+          替换 / 下载进度条（2026-10-24 用户原话：「用户选择歌曲并替换后，在下方增加正在
+          替换或者正在下载的进度条」）。
+          · 只在真有批次在跑时出现，收尾立刻收起，没进行中时不占位；
+          · 与「扫描中」那条同一个 Quiet Glass 形状（1.5px 细条 + 圆角），
+            青玉色 #0B8A66 只用在进度本身，文字统一 11px 次要灰；
+          · 文案说清「正在下载并替换 i / total」，并带上这一批在换的那首歌。
+        -->
+        <div v-if="qReplacing" class="mt-2.5">
+          <div class="flex items-center justify-between gap-2 text-[11px] text-[var(--ys-text-muted)]">
+            <span class="min-w-0 truncate">
+              正在下载并替换
+              <b class="ys-num text-[var(--ys-text)]">{{ qReplaceStep }}</b> /
+              <b class="ys-num text-[var(--ys-text)]">{{ qReplaceTotal }}</b> 条
+              <span v-if="qReplaceCurrent" class="text-[var(--ys-text-faint)]"> · {{ qReplaceCurrent }}</span>
+            </span>
+            <span class="ys-num shrink-0 text-[var(--ys-text-faint)]">{{ qReplacePercent }}%</span>
+          </div>
+          <div class="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-black/[0.06]">
+            <div
+              class="h-full rounded-full bg-[#0B8A66] transition-all duration-300"
+              :style="{ width: qReplacePercent + '%' }"
+            ></div>
+          </div>
+        </div>
+
         <!-- 最近替换记录：原地覆盖看不出变化，它是唯一凭据（需求 m04229） -->
         <div v-if="qRecords.length" class="mt-3">
           <div class="flex items-center gap-2">
@@ -769,9 +795,10 @@ function onCompleteMenu(key) {
 //  · scan 是**异步任务**：start 只是启动，进度靠轮询 status（2s 一次，对齐补全轮询）。
 //    视图 v-show 常驻，切走再切回状态不丢；
 //  · 「停止」只停本页轮询 —— 后端并不知道，状态文案必须诚实「已中断」，不许假装任务停了；
-//  · 只有 upgradeable 的行可勾选；替换一次最多 50 条，超出前端分批顺序发；
-//  · 成功只把对应行标成已替换（**不整表刷新**，用户的滚动位置/勾选视角保持连续），
-//    失败把后端 error 写回该行。
+//  · 只有 upgradeable 的行可勾选；替换一次最多 50 条，超出前端分批顺序发（这里一批只发 5 条，
+//    见 Q_REPLACE_BATCH —— 50 条一批要等好几分钟，进度条根本看不出在动）；
+//  · 替换中在结果表下方给一条细进度条；收尾**只**增量刷新「最近替换」记录、把成功的行移出
+//    扫描队列（不整表重扫 —— 用户的滚动位置/勾选视角保持连续），失败把后端 error 写回该行。
 const Q_CHANNEL_LABELS = { lx: '洛雪', dl: 'musicdl', native: '原生' }
 const qMode = ref('lossy')
 const qLimit = ref(clampQLimit(Number(loadPref('quality_limit', 200))))
@@ -781,6 +808,21 @@ const qErrorText = ref('')   // 请求层失败（接口没上线/断网）的�
 const qSelected = ref(new Set())
 const qBusy = ref(false)     // 替换批次进行中
 let qTimer = null
+// 替换 / 下载进度（2026-10-24 用户原话：「用户选择歌曲并替换后，在下方增加正在替换或者
+// 正在下载的进度条」）：
+//  - qReplacing 只在真有批次在跑时为 true，收尾立刻收起，没进行中时不占位；
+//  - qReplaceDone 是**已经回来**的条数，qReplaceInFlight 是这一批刚发出去、还没回来的条数；
+//    进度条的分子是两者之和（见 qReplaceStep），否则一批没回来之前条子一动不动。
+const qReplacing = ref(false)
+const qReplaceTotal = ref(0)
+const qReplaceDone = ref(0)
+const qReplaceInFlight = ref(0)
+const qReplaceCurrent = ref('')  // 这一批在换的那首歌（取该批第一条的歌名 / 文件名）
+
+// 一批只发 5 条：契约上限是 50（见 api/client.js 的 QualityAPI.replace 注释），
+// 但 50 条一批要等好几分钟才回来一次 —— 用户要的是「看得见在动」的进度，
+// 所以这里小批串行：每十几秒推进一次，也不会把后端的外网请求打满。
+const Q_REPLACE_BATCH = 5
 
 function clampQLimit(n) {
   const v = Math.floor(Number(n))
@@ -794,6 +836,18 @@ const qPercent = computed(() => {
   const t = Number(qScan.value?.total) || 0
   if (!t) return 0
   return Math.min(100, Math.round(((Number(qScan.value?.scanned) || 0) * 100) / t))
+})
+// 替换进度条的分子 = 已回来的条数 + 这一批刚发出去还在飞的条数。
+// 只算 done 的话，一批（5 条，走一次外网）没回来之前条子就是死的 —— 用户会觉得卡住了；
+// 把在飞的一批算进来，批一发出去进度就前进一格（2026-10-24：「进度条要真的动」）。
+const qReplaceStep = computed(() => Math.min(qReplaceTotal.value, qReplaceDone.value + qReplaceInFlight.value))
+const qReplacePercent = computed(() => {
+  const total = qReplaceTotal.value
+  if (!total) return 0
+  const pct = Math.round((qReplaceStep.value * 100) / total)
+  // 替换中最多画到 99%：最后一批是「发出去就算进进度」的，若直接给到 100%，
+  // 用户会看到「100% 但还在等」—— 收尾一旦完成这条就整体收起，不需要 100% 这个态。
+  return qReplacing.value ? Math.min(99, pct) : Math.min(100, pct)
 })
 const qSelectedCount = computed(() => qSelected.value.size)
 const qRows = computed(() => {
@@ -917,6 +971,9 @@ function startQualityPolling() {
     try {
       const res = await QualityAPI.scan('status', qMode.value, clampQLimit(qLimit.value))
       if (res.code !== 200 || !res.data) return // 单次查询失败不打断轮询（对齐补全轮询口径）
+      // 替换进行中不拿 status 覆盖表格：旧扫描快照会把刚移出队列的行放回来，
+      // 用户会看到「已经换完的歌又出现在待替换列表里」（2026-10-24 改）
+      if (qBusy.value) return
       qScan.value = normalizeScan(res.data)
       if (qState.value === 'done' || qState.value === 'failed') {
         stopQualityPolling()
@@ -983,14 +1040,28 @@ async function replaceWithBest() {
   qErrorText.value = ''
   let doneCount = 0
   let failCount = 0
+  // 成功的 path 收在这里：收尾时一次性从扫描队列里移除
+  // （用户 2026-10-24 原话：「移除已完成歌曲的扫描队列」）。
+  const donePaths = new Set()
+  qReplaceTotal.value = paths.length
+  qReplaceDone.value = 0
+  qReplaceInFlight.value = 0
+  qReplaceCurrent.value = ''
+  qReplacing.value = true
   try {
-    // 契约：一次最多 50 条 —— 超出由前端分批，顺序发（一批一落，失败行当场标注）
-    for (let i = 0; i < paths.length; i += 50) {
-      const batch = paths.slice(i, i + 50)
+    // 契约：一次最多 50 条 —— 这里刻意只发 5 条一批（见 Q_REPLACE_BATCH），顺序发、一批一落。
+    for (let i = 0; i < paths.length; i += Q_REPLACE_BATCH) {
+      const batch = paths.slice(i, i + Q_REPLACE_BATCH)
+      // 批一发出去就把「在等哪首」摆到进度条上：5 条也要各走一次外网，用户得知道进度在哪
+      qReplaceCurrent.value = qBatchLabel(batch[0])
+      qReplaceInFlight.value = batch.length
       const res = await QualityAPI.replace(batch)
       if (res.code !== 200) {
         failCount += batch.length
         qErrorText.value = apiError(res, '替换音质')
+        // 整批失败也算「处理过了」：进度得继续走，不能停在原地让人以为卡死
+        qReplaceDone.value += batch.length
+        qReplaceInFlight.value = 0
         continue
       }
       const d = res.data || {}
@@ -1005,7 +1076,11 @@ async function replaceWithBest() {
       for (const it of d.failed || []) failMap.set(it.path, it.error || '替换失败')
       doneCount += doneMap.size
       failCount += failMap.size
+      for (const path of doneMap.keys()) donePaths.add(path)
       applyQReplace(doneMap, failMap)
+      // 这批回来了：把在飞数换成真实完成数（进度条分子不变，但自此算「已落盘」）
+      qReplaceDone.value += batch.length
+      qReplaceInFlight.value = 0
     }
     if (doneCount) flash(`已用最高音质替换 ${doneCount} 首`)
     if (failCount) flash(`${failCount} 条替换失败，原因写在对应行`, true)
@@ -1013,7 +1088,63 @@ async function replaceWithBest() {
     // 某批直接抛错：后面的批次不再发（不假装成功），已勾选未处理的留在条上可重试
     flash(failText('替换音质', e), true)
   } finally {
+    // 收尾（2026-10-24 用户原话：「替换完成后，自动更新当前页面的最近记录，
+    // 移除已完成歌曲的扫描队列」）：
+    // 1) 只取一次 status 把 records 换掉 —— 不整表重扫，表格/滚动位置/其他字段都保持原样，
+    //    这样刚换完的那几首立刻出现在「最近替换」里；
+    // 2) 成功的行从扫描队列里移除（不再标 replaced:true 留在表里），失败行留着带 rowError。
+    await refreshQualityRecordsOnly()
+    dropReplacedFromQueue(donePaths)
+    qReplaceInFlight.value = 0
+    qReplacing.value = false
     qBusy.value = false
+  }
+}
+
+// 进度条上「当前这首」的可读名：表里能查到时用歌名，查不到就退回文件名。
+function qBatchLabel(path) {
+  const hit = (qScan.value?.entries || []).find((e) => e.path === path)
+  return (hit && hit.title) || baseName(path) || ''
+}
+
+/**
+ * 只刷新「最近替换」记录，其余字段一概不动（2026-10-24 需求）。
+ *
+ * 为什么不是直接再调一次 loadQualityStatus()：那会把 entries / state / scanned /
+ * upgradeable 全量覆盖 —— 用户刚替换完，表格正被他自己看着，整表重扫一次等于把
+ * 滚动位置和失败行都洗掉。这里只把 `records` 写回去，刚替换完的记录就会出现在
+ * 「最近替换」里，其余字段保持调用前的样子。
+ */
+async function refreshQualityRecordsOnly() {
+  try {
+    const res = await QualityAPI.scan('status', qMode.value, clampQLimit(qLimit.value))
+    if (res.code !== 200 || !res.data) return
+    const records = Array.isArray(res.data.records) ? res.data.records : null
+    if (!records) return
+    if (qScan.value) qScan.value.records = records
+    else qScan.value = normalizeScan(res.data) // 极端情况（表都没了）才整份采纳
+  } catch (_) {
+    // 记录刷不出来不影响「替换成功」这个结论：flash 已经报过条数了，别叠第二块错误
+  }
+}
+
+/**
+ * 把成功的行移出扫描队列（2026-10-24 用户原话：「移除已完成歌曲的扫描队列」）。
+ *
+ * 换过的歌已经没有「可替换」可言 —— 留着只会让用户以为还没换。
+ * 同步把 upgradeable 减掉真正移除的条数（不能减成负数），勾选集合也剔除掉这些 path。
+ */
+function dropReplacedFromQueue(donePaths) {
+  const j = qScan.value
+  if (!j || !donePaths.size) return
+  const before = (j.entries || []).length
+  j.entries = (j.entries || []).filter((x) => !donePaths.has(x.path))
+  const removed = before - j.entries.length
+  if (removed > 0) j.upgradeable = Math.max(0, (Number(j.upgradeable) || 0) - removed)
+  if (qSelected.value.size) {
+    const sel = new Set(qSelected.value)
+    for (const path of donePaths) sel.delete(path)
+    qSelected.value = sel
   }
 }
 

@@ -101,7 +101,12 @@
         协议总览（改任何「音源能力」相关逻辑前先读这块）
         本项目支持两种互补的协议，不是替代关系：
           · 官方协议 —— 后端内置，免脚本，负责 搜索 / 榜单 / 歌单 / 歌词
-          · LX 协议  —— 浏览器沙箱执行用户脚本，负责 取直链
+          · LX 协议  —— 浏览器沙箱执行用户脚本，负责 取直链（页面内播放用）
+        2026-10-24 的一条重要变化（用户原话：「音源协议这里也该更新了，我下载歌曲
+        可以在后台下了」）：**下载已经不在 LX 协议这条链上了**。批量/单曲下载交给
+        NAS 后台队列（pkg/backenddl）执行，取音走 原生平台直链 / 外挂源池 / 服务端
+        洛雪宿主，提交完关掉网页也会继续下。所以 LX 协议不再是「下载的前置条件」，
+        它只剩「页面内把歌解析成可播放直链」这件事。文案口径见 pkg/protocol。
         数据来自 GET /api/protocols（后端 pkg/protocol），此处只做展示。
       -->
       <SectionCard v-if="protocols.length" :icon="Layers" title="音源协议" :sub="protocolSummary" compact>
@@ -255,8 +260,9 @@
         </div>
         <h3 class="mb-1 text-[13px] font-semibold text-gray-700">还没有导入第三方音源</h3>
         <p class="mb-5 max-w-sm px-4 text-[11px] leading-relaxed text-gray-400">
-          官方协议已可用：搜索、榜单、歌单、歌词都不需要音源。若还要<b>播放</b>，导入一份
-          LX 音源脚本（网络 URL 或本地 .js）用于解析直链。
+          官方协议已可用：搜索、榜单、歌单、歌词都不需要音源。<b>下载</b>由 NAS 后台执行
+          （提交后关掉网页也会继续下），也不用音源；只有<b>页面内播放</b>需要导入一份
+          LX 音源脚本来解析直链。
         </p>
         <button @click="openImportModal"
           class="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-semibold flex items-center gap-1.5 shadow-sm transition-all">

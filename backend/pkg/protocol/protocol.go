@@ -14,6 +14,12 @@
 // 二者是**互补**关系，不是替代关系：没有 lx 音源时，官方协议依然能搜索、能逛榜单、
 // 能看歌词；只有「点击播放」这一步需要 lx 协议把音乐地址解析出来。
 //
+// 注意「下载」已经不在这条链上了：2026-10-23 起批量/单曲下载交给 NAS 后台队列
+// （pkg/backenddl）执行，取音走 原生平台直链 / 外挂源池 / 服务端洛雪宿主 三种渠道，
+// 关掉网页也会继续下。所以 lx 协议不再等于「下载的前置条件」，只有页面内播放仍需要它。
+// 哪些渠道当下真能用，以 /api/download/backend/status 的 channels 为准，别拿这里的
+// 静态描述当运行状态。
+//
 // # 脚本来源与执行位置
 //
 // 应用不内置第三方音源脚本，脚本由使用者提供。本目录里的 lx 描述对应浏览器
@@ -84,12 +90,12 @@ func List() []Protocol {
 			Capabilities: []Capability{
 				CapSearch, CapCharts, CapPlaylist, CapLyric,
 			},
-			Notes: "不需要导入任何音源。但它只负责搜索与浏览；播放/下载要先把歌曲解析成直链，那一步得靠 lx 协议。",
+			Notes: "不需要导入任何音源。它负责搜索与浏览；页面内播放要先把歌曲解析成直链（那一步靠 lx 协议），而下载由 NAS 后台队列执行、不要求页面开着。",
 		},
 		{
 			ID:             IDLx,
 			Name:           "LX 自定义源协议",
-			Description:    "你导入的第三方脚本，负责把歌曲解析成可播放的直链 —— 不导入就无法播放与下载。",
+			Description:    "你导入的第三方脚本，负责把歌曲解析成可播放的直链 —— 页面内播放靠它；下载已改由 NAS 后台执行。",
 			Location:       LocBrowser,
 			Builtin:        false,
 			RequiresSource: true,
@@ -97,7 +103,7 @@ func List() []Protocol {
 			Capabilities: []Capability{
 				CapMusicURL, CapSearch, CapLyric,
 			},
-			Notes: "合规约束：后端不内置、不执行第三方 JS，脚本只在浏览器里跑。搜索与歌词优先走官方协议，脚本主要承担取直链。",
+			Notes: "合规约束：后端不内置、不执行第三方 JS，用户脚本只在浏览器里跑；服务端洛雪宿主是另一条可选路径（默认关闭，需用户显式开启且实际就绪）。搜索与歌词优先走官方协议，脚本主要承担取直链。下载由 pkg/backenddl 的后台队列执行，可用渠道见 /api/download/backend/status。",
 		},
 	}
 }

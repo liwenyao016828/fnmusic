@@ -68,7 +68,14 @@ type Result struct {
 	Matched         int    `json:"matched"`
 	// LocalMatched 飞牛曲库没有、但**本地曲库已有**的曲目数。
 	// 它们不算 Matched（没推上去，飞牛歌单里不会有），也不算 Missing（歌已经有了）。
-	LocalMatched   int          `json:"local_matched"`
+	LocalMatched int `json:"local_matched"`
+	// LocalAdopted 本地命中的曲目里，经「触发曲库扫描 → 重新检索」已经真正
+	// 加进飞牛歌单的数量（2026-10-24 收编逻辑）。
+	LocalAdopted int `json:"local_adopted,omitempty"`
+	// ScanTriggered 本轮是否成功触发了飞牛曲库重扫（为收编本地文件）。
+	ScanTriggered bool `json:"scan_triggered,omitempty"`
+	// ScanWarning 触发扫描 / 收编过程的警告（不影响已完成的推送结果）。
+	ScanWarning    string       `json:"scan_warning,omitempty"`
 	Added          int          `json:"added"`
 	AlreadyPresent int          `json:"already_present"`
 	Missing        []ItemResult `json:"missing"`
@@ -229,12 +236,16 @@ func PushTracks(m *fnos.Music, tracks []Track, opts Options) (*Result, error) {
 	// 汇总：保持与输入相同的顺序，并按 GUID 去重
 	matched := make([]string, 0, len(tracks))
 	seen := make(map[string]bool, len(tracks))
+	// localPending 记录「本地命中、待收编」的曲目在 res.Items 里的下标，
+	// 供第 4.5 步扫描后收编进歌单。
+	localPending := make([]int, 0)
 	for _, o := range outcomes {
 		res.Items = append(res.Items, o.item)
 		if o.guid == "" {
 			// 本地已有也算「这首歌不缺」—— 不进 Missing，否则前端会当成待下载再下一遍。
 			if o.localPath != "" {
 				res.LocalMatched++
+				localPending = append(localPending, len(res.Items)-1)
 				continue
 			}
 			res.Missing = append(res.Missing, o.item)
@@ -277,6 +288,24 @@ func PushTracks(m *fnos.Music, tracks []Track, opts Options) (*Result, error) {
 	res.Added = len(toAdd)
 	res.AlreadyPresent = len(matched) - len(toAdd)
 
+	// 4.5 收编「本地已有」的曲目（2026-10-24 用户：「推送歌单的时候发现本地有
+	// 歌曲是在该歌单里，就替换原有在线播放」）。
+	//
+	// 背景：matchLocal 命中的歌**只**被标记为 LocalMatched 然后跳过 —— 但本地文件
+	// 此刻不在飞牛共享曲库里，歌单里就永远缺这首。正确做法是触发一次飞牛曲库
+	// 扫描把本地文件收进去，然后在扫描结果里重新找它们、加进歌单。
+	// 扫描是异步的，所以给一小段有界轮询；没等到的留待下一轮订阅任务收编
+	//（runDue 会定期重跑，最终一致）。
+	if len(localPending) > 0 {
+		if err := m.ScanLibrary(); err != nil {
+			// 扫描触发失败不废掉已完成的推送，只记警告。
+			res.ScanWarning = "触发飞牛曲库扫描失败: " + err.Error()
+		} else {
+			res.ScanTriggered = true
+			adoptLocalIntoPlaylist(m, guid, localPending, res, current)
+		}
+	}
+
 	// 5. 可选：同步封面（失败不影响已加入的曲目）
 	if opts.SyncCover && opts.CoverURL != "" {
 		if err := syncCover(m, guid, title, opts.CoverURL); err != nil {
@@ -290,7 +319,9 @@ func PushTracks(m *fnos.Music, tracks []Track, opts Options) (*Result, error) {
 	for _, g := range toAdd {
 		added = append(added, PushedTrack{GUID: g, AddedAt: now})
 	}
-	res.Pushed = MergePushed(opts.Pushed, added)
+	// 注意：第 4.5 步收编的曲目已经写进 res.Pushed 了，这里要在它的基础上
+	// 并进任务历史与新增 —— 直接用 opts.Pushed 会把收编清单整个抹掉。
+	res.Pushed = MergePushed(append(append(opts.Pushed, res.Pushed...), added...), nil)
 
 	if NormalizeRetentionMode(opts.RetentionMode) == RetentionDays {
 		removed, kept, pruneErr := PruneExpired(m, guid, res.Pushed, opts.RetentionDays)
@@ -331,6 +362,13 @@ func matchInLibrary(m *fnos.Music, source match.Catalog) (match.Catalog, float64
 			}
 			seen[c.ID] = true
 			if score := match.Similarity(source, c); score > bestScore {
+				// 歌手硬门槛：总分过了、但歌手差得远（翻唱 / 同名不同人）也不收。
+				// 总分是「歌名 70% + 歌手 30%」，同名歌光靠歌名就能拿 0.7+，
+				// 挡不住「另一首别人翻唱的歌被当作目标歌推上歌单」（2026-10-24 报障）。
+				// 只在两边都标了歌手时才否决；缺一边时以总分为准。
+				if artistKnown(source, c) && match.ArtistScore(source, c) < artistHardFloor {
+					continue
+				}
 				best, bestScore = c, score
 			}
 		}
@@ -351,6 +389,16 @@ func matchInLibrary(m *fnos.Music, source match.Catalog) (match.Catalog, float64
 // 而飞牛那边错了只是歌单里多一首可以手动去掉。宁可漏判、让用户手点「补下载」，
 // 也不要把他收藏的另一首同名歌当成这一首。
 const localMatchMinScore = 0.80
+
+// artistHardFloor 歌手硬门槛：两边都标了歌手、而歌手相似度低于这个值的候选，
+// 无论总分多高一律不收。0.5 意味着「完全不同的两个人」（0 分）会被拒，
+// 「其中一个名字出现在另一方里」的常见多歌手写法（0.9 分）不受影响。
+const artistHardFloor = 0.5
+
+// artistKnown 判断两边是否都标了歌手（缺一边时歌手比较没有意义，不否决）。
+func artistKnown(a, b match.Catalog) bool {
+	return strings.TrimSpace(a.Artist) != "" && strings.TrimSpace(b.Artist) != ""
+}
 
 // localDurationTolerance 判定「同一版本」的时长容差（秒）。
 // 现场版与录音室版通常差十几秒以上；同一版本因编码/静音裁切差 1-2 秒很常见。
@@ -386,6 +434,10 @@ func matchLocal(snapshot func() []LocalTrack, src match.Catalog) (*LocalTrack, f
 		}
 		score := match.Similarity(src, c)
 		if score > bestScore {
+			// 与 matchInLibrary 同一把歌手硬门槛，理由见那边注释。
+			if artistKnown(src, c) && match.ArtistScore(src, c) < artistHardFloor {
+				continue
+			}
 			best, bestScore, bestCand = &list[k], score, c
 		}
 	}
@@ -504,4 +556,106 @@ func syncCover(m *fnos.Music, guid, title, coverURL string) error {
 // round2 保留两位小数，让相似度分数在 JSON 里更易读。
 func round2(v float64) float64 {
 	return float64(int(v*100+0.5)) / 100
+}
+
+// adoptScanRounds / adoptPollDelay 收编「本地命中」曲目时的轮询预算：
+// 触发飞牛曲库扫描后，扫描是异步的，这里等一小会儿、再搜一遍，
+// 每轮间隔 adoptPollDelay。全等不到就放弃 —— 下一轮订阅任务（runDue 定时
+// 重跑）会在曲库已收录后自然把它们匹配进歌单，最终一致。
+const (
+	adoptScanRounds = 3
+	// adoptPollDelay 每轮之间的等待。测试里会被改成 0（见 push_test.go）。
+	// 用 var 而不是 const 就是为了这个。
+)
+
+var adoptPollDelay = 8 * time.Second
+
+// adoptLocalIntoPlaylist 在触发飞牛曲库扫描后，把「本地已有、飞牛曲库还没收录」
+// 的曲目收编进歌单：轮询检索这些曲目，等曲库把它们扫出来，再写入歌单。
+//
+// current 是歌单现有曲目 GUID 集（第 4 步已取过，复用免得再打一次接口）。
+// idxs 是这些曲目在 res.Items 里的下标 —— 收编成功会把对应 ItemResult 改成
+// Matched 并补上 FnosTrackGUID，界面上「已匹配」的语义因此保持一致：
+// 只要歌真正进了歌单，就显示为已匹配（用户 2026-10-24：「飞牛同步历史显示的
+// 已匹配，是指的匹配不同平台的、能够推送到飞牛歌曲吗」—— 是的，指的就是
+// 这件事：能进飞牛歌单的才算已匹配）。
+func adoptLocalIntoPlaylist(m *fnos.Music, guid string, idxs []int, res *Result, current map[string]bool) {
+	pending := make([]ItemResult, 0, len(idxs))
+	for _, i := range idxs {
+		pending = append(pending, res.Items[i])
+	}
+
+	var adopted []string
+	for round := 0; round < adoptScanRounds && len(pending) > 0; round++ {
+		if round > 0 {
+			time.Sleep(adoptPollDelay)
+		}
+		var still []ItemResult
+		for _, it := range pending {
+			src := match.Catalog{Name: it.Name, Artist: it.Artist}
+			found, score, ok := matchInLibrary(m, src)
+			if !ok {
+				still = append(still, it)
+				continue
+			}
+			if current[found.ID] {
+				// 已在歌单里（可能是上一轮推送加过）：不重复加，但状态要改成已匹配。
+				markAdopted(res, idxs, it, found, score)
+				continue
+			}
+			adopted = append(adopted, found.ID)
+			markAdopted(res, idxs, it, found, score)
+		}
+		pending = still
+	}
+	if len(adopted) == 0 {
+		return
+	}
+	if err := m.AddTracks(guid, adopted); err != nil {
+		// 加进去失败：不要谎报收编成功。把已标记的条目回滚成「本地已有」，
+		// 等下一轮订阅任务重试。
+		res.ScanWarning = "本地曲目收编进歌单失败: " + err.Error()
+		for _, i := range idxs {
+			if res.Items[i].FnosTrackGUID != "" && res.Items[i].Source == SourceFnos {
+				// 收编加歌失败：状态回滚成「本地已有」（Matched 仍为 true ——
+				// 本地命中态本来就是 true，界面看 Source 区分），等下一轮订阅任务重试。
+				res.Items[i].FnosTrackGUID = ""
+				res.Items[i].FnosTitle = ""
+				res.Items[i].Matched = true
+				res.Items[i].Source = SourceLocal
+				res.Items[i].Reason = "飞牛曲库暂无，本地曲库已有（无需重新下载）"
+			}
+		}
+		return
+	}
+	// 收编的也算「本任务推送过」，保留期清理才认得它们。
+	now := time.Now().Unix()
+	added := make([]PushedTrack, 0, len(adopted))
+	for _, g := range adopted {
+		added = append(added, PushedTrack{GUID: g, AddedAt: now})
+	}
+	res.Pushed = MergePushed(res.Pushed, added)
+	res.LocalAdopted = len(adopted)
+	res.Matched += len(adopted)
+	res.Added += len(adopted)
+}
+
+// markAdopted 把 res.Items 里对应条目（由 idxs 定位）改成「飞牛曲库已命中」。
+//
+// 注意：本地命中态本来就是 Matched=true + Source=SourceLocal（界面靠 Source 区分
+// 「进歌单了」和「本地有但还没进歌单」），所以定位条件不能写 !Matched，
+// 要认 Source 还是 SourceLocal、且 GUID 尚未填。
+func markAdopted(res *Result, idxs []int, it ItemResult, found match.Catalog, score float64) {
+	for _, i := range idxs {
+		if res.Items[i].Name == it.Name && res.Items[i].Artist == it.Artist &&
+			res.Items[i].Source == SourceLocal && res.Items[i].FnosTrackGUID == "" {
+			res.Items[i].Matched = true
+			res.Items[i].Source = SourceFnos
+			res.Items[i].Score = round2(score)
+			res.Items[i].FnosTrackGUID = found.ID
+			res.Items[i].FnosTitle = found.Name
+			res.Items[i].Reason = "本地文件已由曲库扫描收编，进歌单"
+			return
+		}
+	}
 }

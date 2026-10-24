@@ -763,9 +763,16 @@ func (q *Queue) Apply(action string, ids []string) (int, error) {
 	// 需要收掉的连接：在锁里决定，出锁后再 cancel（cancel 本身不会阻塞，
 	// 但先记账再统一调用，避免持锁时触发 fetch 的收尾回调）。
 	var toCancel []context.CancelFunc
-	byIDs := func(fn func(idx int) (bool, string)) int {
+	// byIDs 按给定 id 列表逐条改状态。
+	//
+	// 参数**必须**显式传入列表，不再隐式读外面的 `ids`：以前是闭包直接吃 `ids`，
+	// 而前端点「重试失败」只发 `{"action":"retry_failed"}`、不带 ids —— 于是这个
+	// 循环一行都不转，点上去什么都不发生（用户 2026-10-24：「下载里的重试失败又
+	// 失效了吗」）。改成参数后，「哪些动作对整队生效」必须在调用处写明，
+	// 同类 bug 不会再从别的动作里冒出来。
+	byIDs := func(list []string, fn func(idx int) (bool, string)) int {
 		hit := 0
-		for _, id := range ids {
+		for _, id := range list {
 			idx := q.indexLocked(id)
 			if idx < 0 {
 				continue
@@ -792,7 +799,7 @@ func (q *Queue) Apply(action string, ids []string) (int, error) {
 			q.paused = true
 			hit = 1
 		} else {
-			hit = byIDs(func(idx int) (bool, string) {
+			hit = byIDs(ids, func(idx int) (bool, string) {
 				switch q.items[idx].Status {
 				case StatusPending:
 					q.items[idx].Error = "已暂停（点继续恢复）"
@@ -817,7 +824,7 @@ func (q *Queue) Apply(action string, ids []string) (int, error) {
 			q.paused = false
 			hit = 1
 		} else {
-			hit = byIDs(func(idx int) (bool, string) {
+			hit = byIDs(ids, func(idx int) (bool, string) {
 				switch q.items[idx].Status {
 				case StatusPaused, StatusStopped, StatusFailed:
 					q.items[idx].Error = ""
@@ -828,7 +835,7 @@ func (q *Queue) Apply(action string, ids []string) (int, error) {
 		}
 
 	case ActionStop, ActionCancel:
-		hit = byIDs(func(idx int) (bool, string) {
+		hit = byIDs(ids, func(idx int) (bool, string) {
 			switch q.items[idx].Status {
 			case StatusPending, StatusPaused, StatusDownloading:
 				if c, ok := q.inflight[q.items[idx].ID]; ok {
@@ -841,7 +848,7 @@ func (q *Queue) Apply(action string, ids []string) (int, error) {
 		})
 
 	case ActionRetry:
-		hit = byIDs(func(idx int) (bool, string) {
+		hit = byIDs(ids, func(idx int) (bool, string) {
 			switch q.items[idx].Status {
 			case StatusFailed, StatusStopped, StatusPaused:
 				q.items[idx].Error = ""
@@ -851,7 +858,16 @@ func (q *Queue) Apply(action string, ids []string) (int, error) {
 		})
 
 	case ActionRetryFailed:
-		hit = byIDs(func(idx int) (bool, string) {
+		// 不带 ids = 重试队列里**所有**失败项（前端「重试失败」就是这么调的）。
+		// 带 ids = 只重试这几条。
+		targets := ids
+		if len(targets) == 0 {
+			targets = make([]string, 0, len(q.items))
+			for i := range q.items {
+				targets = append(targets, q.items[i].ID)
+			}
+		}
+		hit = byIDs(targets, func(idx int) (bool, string) {
 			if q.items[idx].Status == StatusFailed {
 				q.items[idx].Error = ""
 				return true, StatusPending

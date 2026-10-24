@@ -218,21 +218,29 @@ func keepAlnumCJK(s string) string {
 // 这是中文多歌手标注的常见形态。
 func Similarity(a, b Catalog) float64 {
 	title := ratio(NormTitle(a.Name), NormTitle(b.Name))
+	return round4(title*0.7 + ArtistScore(a, b)*0.3)
+}
 
+// ArtistScore 只比歌手名，不算歌名。
+//
+// 为什么把它单独暴露：Similarity 是「歌名 70% + 歌手 30%」的加权平均，
+// 歌名完全相同（同名歌）时哪怕歌手对不上也能拿 0.7+ 分 —— 挡不住
+// 「另一首别人翻唱的歌被当成原曲推上歌单」这种错（2026-10-24 用户报障）。
+// 需要歌手硬门槛的调用方（push 包）用它做二次否决：总分过了线、
+// 但歌手差得远（翻唱 / 同名不同人）就拒收。
+func ArtistScore(a, b Catalog) float64 {
 	a1, a2 := NormArtist(a.Artist), NormArtist(b.Artist)
-	var artist float64
-	switch {
-	case a1 == "" || a2 == "":
-		artist = 0.5
-	default:
-		artist = ratio(a1, a2)
-		if strings.Contains(a1, a2) || strings.Contains(a2, a1) {
-			if artist < 0.9 {
-				artist = 0.9
-			}
+	if a1 == "" || a2 == "" {
+		// 一方没标歌手：说不清像不像，给中性分（与 Similarity 原逻辑一致）。
+		return 0.5
+	}
+	s := ratio(a1, a2)
+	if strings.Contains(a1, a2) || strings.Contains(a2, a1) {
+		if s < 0.9 {
+			s = 0.9
 		}
 	}
-	return round4(title*0.7 + artist*0.3)
+	return s
 }
 
 // ratio 基于最长公共子序列的相似度（等价于 difflib.SequenceMatcher.ratio 的常用近似）

@@ -387,3 +387,65 @@ func TestTrimKeepsNewestHistory(t *testing.T) {
 	}
 	t.Fatalf("最新的历史不能被裁")
 }
+
+// 「重试失败」不带 ids 时必须对整队生效。
+//
+// 前端点这个按钮只发 {"action":"retry_failed"}（见 frontend/src/services/
+// backendDownload.js 的 retryFailed），历史实现把 ids 当唯一来源，空列表 = 一条
+// 都不动，于是按钮点了没反应（用户 2026-10-24：「下载里的重试失败又失效了吗」）。
+func TestRetryFailedWithoutIDsRetriesWholeQueue(t *testing.T) {
+	q := newTestQueue(t, nil)
+	added, _, err := q.Submit([]Item{
+		{ClientID: "f1", Name: "失败一", Status: StatusFailed, Error: "源挂了"},
+		{ClientID: "f2", Name: "失败二", Status: StatusFailed, Error: "取音超时"},
+		{ClientID: "s1", Name: "成功的", Status: StatusSuccess, Path: "/ok.flac", ActualQuality: "flac"},
+		{ClientID: "p1", Name: "暂停的", Status: StatusPaused},
+	}, false, true)
+	if err != nil || len(added) != 4 {
+		t.Fatalf("准备数据失败：added=%v err=%v", added, err)
+	}
+
+	hit, err := q.Apply(ActionRetryFailed, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hit != 2 {
+		t.Fatalf("不带 ids 应重试 2 条失败项，实际 hit=%d", hit)
+	}
+	for _, a := range added[:2] {
+		it, ok := q.Get(a.ID)
+		if !ok || it.Status != StatusPending || it.Error != "" {
+			t.Fatalf("失败项应回到 pending 且清掉原因：%+v", it)
+		}
+	}
+	if it, _ := q.Get(added[2].ID); it.Status != StatusSuccess || it.Path != "/ok.flac" {
+		t.Fatalf("已完成的不该被重试改动：%+v", it)
+	}
+	if it, _ := q.Get(added[3].ID); it.Status != StatusPaused {
+		t.Fatalf("暂停的只归「继续」管，重试失败不该动它：%+v", it)
+	}
+
+	// 幂等：再点一次没有可重试的失败项 → hit=0，不能把 pending 重新计数。
+	if hit2, err := q.Apply(ActionRetryFailed, nil); err != nil || hit2 != 0 {
+		t.Fatalf("重复点重试失败应 hit=0，实际 %d err=%v", hit2, err)
+	}
+}
+
+// 带 ids 时仍然只动这几条（显式点名不能被「整队重试」吃掉）。
+func TestRetryFailedWithIDsOnlyTouchesGiven(t *testing.T) {
+	q := newTestQueue(t, nil)
+	added, _, err := q.Submit([]Item{
+		{ClientID: "a", Name: "失败甲", Status: StatusFailed},
+		{ClientID: "b", Name: "失败乙", Status: StatusFailed},
+	}, false, true)
+	if err != nil || len(added) != 2 {
+		t.Fatalf("准备数据失败：added=%v err=%v", added, err)
+	}
+	hit, err := q.Apply(ActionRetryFailed, []string{added[0].ID})
+	if err != nil || hit != 1 {
+		t.Fatalf("点名重试应 hit=1，实际 %d err=%v", hit, err)
+	}
+	if it, _ := q.Get(added[1].ID); it.Status != StatusFailed {
+		t.Fatalf("没点名的失败项不该被重试：%+v", it)
+	}
+}

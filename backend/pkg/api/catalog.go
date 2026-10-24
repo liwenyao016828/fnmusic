@@ -1423,10 +1423,14 @@ func CatalogGuide() Guide {
 			"先读 workflows 决定串哪几条接口，再按需查 endpoints 细节；不要把 100 多条全读一遍。",
 		},
 		Prereq: []string{
-			"⚠️ **在线取直链只能在开着的应用页面里完成**（第三方音源脚本跑在浏览器）。" +
-				"POST /api/bridge/resolve 之后若没人开着页面，任务会一直 pending —— 这不是接口坏了。",
-			"例外：配了「按服务地址」的 API 音源时后端能自己取链，不需要人开着页面。" +
-				"先 GET /api/protocols 看各协议的能力与就绪状态，再决定走哪条路。",
+			"⚠️ **下载请优先用后端下载队列**：POST /api/download/backend/submit 提交后由 NAS 进程执行，" +
+				"提交完就可以走人 —— 关掉网页也会继续下。进度读 GET /api/download/backend/queue，" +
+				"暂停/继续/停止/重试/删除用 POST /api/download/backend/actions。",
+			"后端目前能用哪几条取音渠道（原生平台直链 / 外挂源池 / 服务端洛雪宿主）要读 " +
+				"GET /api/download/backend/status 的 channels —— 服务端洛雪宿主默认关闭，别假设它在跑。",
+			"老路仍在但用途变了：POST /api/bridge/resolve 的解析任务**必须有开着的应用页面**" +
+				"（第三方音源脚本跑在浏览器），没人开着页面时就一直 pending —— 那不是接口坏了。" +
+				"只有页面内播放、或必须借浏览器脚本取链时才走它。",
 			"要往曲库目录读写文件，目录必须在应用允许的根目录内（环境变量 FN_ALLOWED_ROOTS），否则一律 403。" +
 				"可写的曲库根目录用 GET /api/nas/folders 看。",
 			"拉账号歌单/日推要先扫码连上平台账号；二维码必须由用户手机扫，AI 自己过不去这一步。",
@@ -1435,17 +1439,17 @@ func CatalogGuide() Guide {
 		Workflows: []Workflow{
 			{
 				Task:      "下载一首指定的歌到 NAS 曲库",
-				Summary:   "搜索 → 取直链 → 验链 → 落盘 → 确认",
-				Steps:     []string{"1. GET /api/search 找到曲目，记下平台与 id/songmid", "2. 需要特定音质时 GET /api/music/qualities", "3. POST /api/bridge/resolve 提交解析任务，再 GET /api/bridge/jobs/{job_id} 轮询到出结果", "4. GET /api/player/check 确认直链真能取（平台常返回错误页）", "5. POST /api/download/song 落盘，会顺带内嵌歌词与封面", "6. POST /api/download/check 复查是否已在库里"},
-				Endpoints: []string{"GET /api/search", "GET /api/music/qualities", "POST /api/bridge/resolve", "GET /api/bridge/jobs/{job_id}", "GET /api/player/check", "POST /api/download/song", "POST /api/download/check"},
-				WatchOut:  "第 3 步依赖开着的应用页面（见 prereq）。已经下过的歌直接跳第 5 步会秒回 already_exists。",
+				Summary:   "搜索 → 提交后端队列 → 轮询结果（关掉网页也会继续）",
+				Steps:     []string{"1. GET /api/search 找到曲目，记下平台与 id/songmid", "2. 需要特定音质时 GET /api/music/qualities", "3. POST /api/download/backend/submit 提交（带 client_id，可批量一次传多首）", "4. GET /api/download/backend/queue 轮询到该 client_id 变 success / failed", "5. POST /api/download/check 复查是否已在库里"},
+				Endpoints: []string{"GET /api/search", "GET /api/music/qualities", "POST /api/download/backend/submit", "GET /api/download/backend/queue", "POST /api/download/check"},
+				WatchOut:  "提交后任务在 NAS 上跑，别傻等页面 —— 关掉网页也会继续。取音渠道不通时任务会以 failed 落地并写明原因，先看 GET /api/download/backend/status 的 channels。已经下过的歌直接跳第 5 步会秒回 already_exists。",
 			},
 			{
 				Task:      "批量下载 / 一整个歌单",
-				Summary:   "先列清单，再交给服务端并发队列，别自己一首首调",
-				Steps:     []string{"1. GET /api/charts/playlist/detail 或 /api/charts/detail 拿到曲目数组", "2. POST /api/download/batch 提交（服务端并发队列 + 失败自动换源）", "3. GET /api/download/batch/status 轮询进度与每首结果"},
-				Endpoints: []string{"GET /api/charts/playlist/detail", "GET /api/charts/detail", "POST /api/download/batch", "GET /api/download/batch/status"},
-				WatchOut:  "批量任务同样要靠音源取链；没服务型音源时保持应用页面开着。",
+				Summary:   "先列清单，整批提交给后端下载队列，别自己一首首取链",
+				Steps:     []string{"1. GET /api/charts/playlist/detail 或 /api/charts/detail 拿到曲目数组", "2. POST /api/download/backend/submit 一次提交整批（每首带 client_id，服务端排队 + 失败自动换源）", "3. GET /api/download/backend/queue 轮询进度与每首结果（失败用 POST /api/download/backend/actions 重试）"},
+				Endpoints: []string{"GET /api/charts/playlist/detail", "GET /api/charts/detail", "POST /api/download/backend/submit", "GET /api/download/backend/queue", "POST /api/download/backend/actions"},
+				WatchOut:  "不要再走「浏览器逐首取链」那条老路：批量任务交给后端队列后，关掉网页也会继续下完。可用渠道以 status.channels 为准。",
 			},
 			{
 				Task:      "订阅一个歌单，以后有新歌就自动下",

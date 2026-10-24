@@ -424,3 +424,128 @@ func TestPushTracksDeduplicatesConcurrently(t *testing.T) {
 		t.Errorf("同一 guid 应只加 1 次，实际 Added=%d", res.Added)
 	}
 }
+
+// ---- 歌手硬门槛 / 本地收编（2026-10-24）----
+
+func TestPushTracksRejectsCoverVersion(t *testing.T) {
+	// 场景：歌单里要推「周杰伦 - 夜曲」，曲库里只有「李四 - 夜曲」（翻唱）。
+	// 歌名完全相同，旧打分 0.7*1 + 0.3*低分 ≈ 0.76，过 0.72 线 → 误推。
+	// 歌手硬门槛必须把它拦下。
+	m := fakeMusic(t, map[string]http.HandlerFunc{
+		"/music/api/v1/playlist/list": jsonHandler(okBody([]map[string]any{
+			{"guid": "pl-1", "name": "日推"},
+		})),
+		"/music/api/v1/track/playlist-detail/list": jsonHandler(okBody([]map[string]any{})),
+		"/music/api/v1/search/track": jsonHandler(okBody([]map[string]any{
+			{"guid": "cover-1", "title": "夜曲", "artist": "李四", "duration": 200},
+		})),
+	})
+	got, err := PushTracks(m, []Track{{Name: "夜曲", Artist: "周杰伦", Duration: 200}},
+		Options{Title: "日推"})
+	if err != nil {
+		t.Fatalf("PushTracks: %v", err)
+	}
+	if got.Matched != 0 {
+		t.Fatalf("翻唱版不该被匹配：matched=%d items=%+v", got.Matched, got.Items)
+	}
+	if len(got.Missing) != 1 {
+		t.Fatalf("应报缺失而不是张冠李戴：%+v", got.Items)
+	}
+}
+
+func TestPushTracksAdoptsLocalTracksAfterScan(t *testing.T) {
+	// 场景（用户 2026-10-24）：歌单里的歌用户本地早就有，但飞牛曲库还没收录。
+	// 期望：触发曲库扫描 → 扫出来 → 自动加进歌单，而不是只标「本地已有」就完事。
+	oldDelay := adoptPollDelay
+	adoptPollDelay = 0
+	t.Cleanup(func() { adoptPollDelay = oldDelay })
+
+	var scanned atomic.Int32
+	m := fakeMusic(t, map[string]http.HandlerFunc{
+		"/music/api/v1/playlist/list": jsonHandler(okBody([]map[string]any{
+			{"guid": "pl-1", "name": "日推"},
+		})),
+		"/music/api/v1/shared-library/scan-all": func(w http.ResponseWriter, _ *http.Request) {
+			scanned.Add(1)
+			_, _ = w.Write([]byte(`{"code":0}`))
+		},
+		"/music/api/v1/track/playlist-detail/list": jsonHandler(okBody([]map[string]any{})),
+		"/music/api/v1/search/track": func(w http.ResponseWriter, _ *http.Request) {
+			// 扫描前搜不到；扫描后能搜到（模拟飞牛把本地文件扫进曲库）。
+			if scanned.Load() == 0 {
+				_, _ = w.Write([]byte(`{"code":0,"data":[]}`))
+				return
+			}
+			_ = json.NewEncoder(w).Encode(okBody([]map[string]any{
+				{"guid": "tr-1", "title": "晴天", "artist": "周杰伦", "duration": 269},
+			}))
+		},
+		"/music/api/v1/playlist/add-track": func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(`{"code":0}`))
+		},
+	})
+	got, err := PushTracks(m, []Track{{Name: "晴天", Artist: "周杰伦", Duration: 269}},
+		Options{Title: "日推", LocalIndex: func() []LocalTrack {
+			return []LocalTrack{{Path: "/music/晴天.flac", Name: "晴天", Artist: "周杰伦", Duration: 269}}
+		}})
+	if err != nil {
+		t.Fatalf("PushTracks: %v", err)
+	}
+	if !got.ScanTriggered {
+		t.Fatalf("应触发曲库扫描")
+	}
+	if got.LocalAdopted != 1 || got.Matched != 1 {
+		t.Fatalf("本地曲目应收编进歌单：local_adopted=%d matched=%d items=%+v",
+			got.LocalAdopted, got.Matched, got.Items)
+	}
+	if len(got.Pushed) != 1 || got.Pushed[0].GUID != "tr-1" {
+		t.Fatalf("收编的曲目应记入 Pushed 供保留期清理：%+v", got.Pushed)
+	}
+}
+
+func TestPushTracksAdoptionFailsGracefully(t *testing.T) {
+	// 收编的最后一步（写歌单）失败时：不谎报成功，条目回滚成「本地已有」。
+	oldDelay := adoptPollDelay
+	adoptPollDelay = 0
+	t.Cleanup(func() { adoptPollDelay = oldDelay })
+
+	var scanned atomic.Int32
+	m := fakeMusic(t, map[string]http.HandlerFunc{
+		"/music/api/v1/playlist/list": jsonHandler(okBody([]map[string]any{
+			{"guid": "pl-1", "name": "日推"},
+		})),
+		"/music/api/v1/shared-library/scan-all": func(w http.ResponseWriter, _ *http.Request) {
+			scanned.Add(1)
+			_, _ = w.Write([]byte(`{"code":0}`))
+		},
+		"/music/api/v1/track/playlist-detail/list": jsonHandler(okBody([]map[string]any{})),
+		"/music/api/v1/search/track": func(w http.ResponseWriter, _ *http.Request) {
+			if scanned.Load() == 0 {
+				_, _ = w.Write([]byte(`{"code":0,"data":[]}`))
+				return
+			}
+			_ = json.NewEncoder(w).Encode(okBody([]map[string]any{
+				{"guid": "tr-1", "title": "晴天", "artist": "周杰伦", "duration": 269},
+			}))
+		},
+		"/music/api/v1/playlist/add-track": func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(`{"code":1,"msg":"boom"}`))
+		},
+	})
+	got, err := PushTracks(m, []Track{{Name: "晴天", Artist: "周杰伦", Duration: 269}},
+		Options{Title: "日推", LocalIndex: func() []LocalTrack {
+			return []LocalTrack{{Path: "/music/晴天.flac", Name: "晴天", Artist: "周杰伦", Duration: 269}}
+		}})
+	if err != nil {
+		t.Fatalf("收编失败不该废掉整个推送: %v", err)
+	}
+	if got.LocalAdopted != 0 || got.Matched != 0 {
+		t.Fatalf("写歌单失败不该算收编成功：%+v", got.Items)
+	}
+	if got.ScanWarning == "" {
+		t.Fatalf("应记录收编失败警告")
+	}
+	if len(got.Items) != 1 || got.Items[0].Source != SourceLocal || got.Items[0].FnosTrackGUID != "" {
+		t.Fatalf("条目应回滚成「本地已有、未进歌单」：%+v", got.Items)
+	}
+}

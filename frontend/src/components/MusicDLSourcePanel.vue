@@ -128,7 +128,7 @@
           它是一条注意事项，不再和卡片网格抢视觉重量，也不会看着像没人管的散字。
         -->
         <p class="mt-2 rounded-lg bg-amber-50/70 px-2.5 py-1.5 text-[11px] text-amber-700">
-          ⚠️ 启用一个<b>用不了</b>的源，每次搜索都要等它超时 —— 先检测再启用。
+          ⚠️ 启用一个<b>用不了</b>的源，每次搜索都要等它超时 —— 先检测再启用；检测里的「返回 N 条结果」只证明那一刻能出结果，不代表曲库大小。
         </p>
       </div>
 
@@ -180,8 +180,8 @@
             v-if="probeOf(s.id)"
             :class="['text-[10px] font-mono shrink-0 px-1.5 py-0.5 rounded',
                      probeOf(s.id).ok ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-500']"
-            :title="probeOf(s.id).error ? (probeOf(s.id).error.kind + ': ' + probeOf(s.id).error.message) : ''">
-            {{ probeOf(s.id).ok ? `${probeOf(s.id).ms}ms · ${probeOf(s.id).items} 首` : `失败 ${probeOf(s.id).ms}ms` }}
+            :title="probeTitle(probeOf(s.id))">
+            {{ probeOf(s.id).ok ? `${probeOf(s.id).ms}ms · 返回 ${probeOf(s.id).items} 条结果` : `失败 ${probeOf(s.id).ms}ms` }}
           </span>
           <span v-else-if="probing" class="text-[10px] text-gray-300 shrink-0 font-mono">待测</span>
 
@@ -342,6 +342,21 @@ const visibleSources = computed(() => {
 
 function isOn(id) { return selected.value.includes(id) }
 function probeOf(id) { return probed.value.find((r) => r.id === id) || null }
+
+/**
+ * 检测结果那个数字的 tooltip。
+ *
+ * 2026-10-24 用户问：「musicdl 检测全部后，检测记录的 2 首 3 首什么意思」——
+ * `items` 是**用探针关键词真搜一次**拿到的结果条数（后端 probe 的口径），
+ * 它只证明「此刻这个源能出结果」，跟这个源的曲库有多大没有关系：
+ * 探针只问一个词，多一首都算多，少一首也可能只是那个词没命中。
+ * 所以界面上写「返回 N 条结果」，并在这里把口径说全，别让人误读成曲库容量。
+ */
+function probeTitle(r) {
+  if (!r) return ''
+  if (r.ok) return '数字 = 用探针关键词真搜一次拿到的结果条数，只证明这个源此刻能出结果，不代表它的曲库大小'
+  return r.error ? (r.error.kind + ': ' + r.error.message) : '这次没搜到结果'
+}
 
 /**
  * 这个源清单读不到时，还要不要弹红条。
