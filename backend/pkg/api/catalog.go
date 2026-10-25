@@ -193,7 +193,7 @@ func APICatalog(baseURL string) []Endpoint {
 			Example: "curl " + baseURL + "/api/app/version",
 		},
 		{
-			Method: http.MethodGet, Path: "/api/app/update/check", Summary: "检查 GitHub 上是否有新版本", Category: catSystem,
+			Method: http.MethodGet, Path: "/api/app/update/check", Summary: "检查 GitHub 上是否有新版本（?refresh=1 跳过 10 分钟缓存）", Category: catSystem,
 			Params:  []Param{{Name: "refresh", In: "query", Desc: "1/true 跳过 10 分钟缓存强制重新检查"}},
 			Example: "curl " + baseURL + "/api/app/update/check",
 			Notes:   "结果缓存 10 分钟。`error` 非空表示检查失败（网络/限速/无 fpk），此时 `current` 仍有效；`has_update` 由语义化版本比较得出，预发布后缀不视为更新。",
@@ -214,6 +214,19 @@ func APICatalog(baseURL string) []Endpoint {
 			Notes:   "脚本写在 /tmp/yinshu-update/apply-update.sh 并脱离本进程执行（需 root 或免密 sudo），会 stop/uninstall/install 本应用，因此请求可能中断。403=没有安装权限（请到飞牛应用中心手动安装 fpk）；409=安装包未就绪；日志见 /tmp/yinshu-update/install.log。",
 		},
 		{
+			Method: http.MethodGet, Path: "/api/app/update/notice", Summary: "读取「更新完成」提示（版本号变化时提示一次）", Category: catSystem,
+			Example: "curl " + baseURL + "/api/app/update/notice",
+			Notes: "应用启动后前端调一次：返回 {show,version,from_version,direction,notes}。" +
+				"判据是**版本号变了**（不只是走完应用内安装），所以手动装 fpk、应用中心升级同样会提示；" +
+				"首次运行（没有 last_run.json）不提示。不联网，不会去查 GitHub。" +
+				"前端展示过之后要调 notice/ack，否则下次启动还会提示。",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/app/update/notice/ack", Summary: "把「更新完成」提示标记为已展示", Category: catSystem,
+			Example: "curl -X POST " + baseURL + "/api/app/update/notice/ack -H 'Content-Type: application/json' -d '{\"version\":\"2.21.1\"}'",
+			Notes: "body.version 必须等于当前版本号，否则返回 {ok:false}（旧页面拿着旧版本号点确认，不能把新版本的提示作废）。不读到就作废：提示要先渲染出来再 ack。",
+		},
+		{
 			Method: http.MethodGet, Path: "/api/config", Summary: "读取应用配置（含主力平台 preferred_platforms）", Category: catSystem,
 			Example: "curl " + baseURL + "/api/config",
 			Notes:   "改任何设置前**先 GET 拿全量**，改完再整份 POST 回去 —— 见下一条的警告。",
@@ -226,6 +239,16 @@ func APICatalog(baseURL string) []Endpoint {
 				{Name: "cache_dir", In: "body", Desc: "缓存/暂存目录（边听边存的暂存档与滚动试听缓存都放这里）；传空串 = 回到默认位置"},
 				{Name: "filename_format", In: "body", Desc: "曲库文件命名格式：artist-title（默认，『歌手 - 歌名』）或 title-artist（『歌名 - 歌手』）"},
 				{Name: "preferred_platforms", In: "body", Desc: "主力平台有序数组，默认 [wy,tx]；其余平台只在主力没有时兜底"},
+				{Name: "update_proxy", In: "body", Desc: "应用内更新的出站代理（http/https/socks5），如 http://192.168.1.3:7890；只影响检查更新与下载安装包，内网地址始终直连"},
+				{Name: "update_clear_proxy", In: "body", Desc: "传 true 清空更新代理（因为 update_proxy 带 omitempty，空串分不出「没传」和「清空」）"},
+				{Name: "update_github_token", In: "body", Desc: "GitHub 个人访问令牌（只写不读，读接口只回 update_token_set 布尔）"},
+				{Name: "update_token_clear", In: "body", Desc: "传 true 清空 GitHub 令牌"},
+				{Name: "chart_size", In: "body", Desc: "榜单显示首数（10–300，0/缺省 = 默认 100）"},
+				{Name: "chart_sizes", In: "body", Desc: "按榜单覆盖首数，如 {\"wy_19723756\":50}"},
+				{Name: "chart_size_overwrite", In: "body", Desc: "与 chart_sizes_overwrite 一起用于「改回默认」：带这两个键时按整体覆盖处理，0 / 空表才会真的写进去"},
+				{Name: "update_mirrors", In: "body", Desc: "更新镜像清单（有序数组，整体替换）：[{\"name\":\"gh-proxy\",\"url\":\"https://gh-proxy.com\",\"disabled\":false}]；url 可以是前缀（拼在原地址前），也可以含 {repo} 占位当「更新源」；空数组 = 只用官方源"},
+				{Name: "update_mirrors_reset", In: "body", Desc: "传 true 把镜像清单恢回内置默认（只留 gh-proxy.com）。因为 update_mirrors 是指针，空数组代表「不要镜像」，两者得分清"},
+				{Name: "update_mirrors_disabled", In: "body", Desc: "可选：传 true 时连同官方源一起停用（等价于清单里放一条 {url:\"github://official\",disabled:true}）；默认官方源永远兜底"},
 			},
 			Example: "curl -X POST " + baseURL + "/api/config -H 'Content-Type: application/json' -d '{\"download_dir\":\"/vol1/Music\"}'",
 			Notes: "⚠️ 这是**选择性合并**：只有非空字段会写入（nil 切片表示不动）。" +

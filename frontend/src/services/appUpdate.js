@@ -12,11 +12,28 @@
  *   POST /api/app/update/download → {status:'idle'|'downloading'|'ready'|'installing'|'error',progress,path,size,error}
  *   GET  /api/app/update/state    → 同上
  *   POST /api/app/update/install  → {started,log}；失败时 code!=200 + 中文 message
+ *   GET  /api/app/update/notice   → {show,version,from_version,direction,notes}
+ *   POST /api/app/update/notice/ack → {ok}
+ *
+ * 「更新完成后第一次进入应用，提示更新完成和版本号」（用户 2026-10-25）：
+ * 判据由后端定（版本号变了就提示一次，见 backend/pkg/appupdate/notice.go），
+ * 前端只负责「取一次 → 弹窗 → 用户看到后 ack」。**不能**一取到就 ack：
+ * 那样提示还没渲染就被标记已读，用户永远看不到。
  */
 
 import { ref } from 'vue'
 
 export const UPDATE_POLL_MS = 1000
+
+/**
+ * 自动检查更新的间隔：15 分钟。
+ *
+ * 用户 2026-10-25：「自动检查更新改为15分钟一次」。后端缓存 TTL 也是 15 分钟
+ * （backend/pkg/appupdate/manager.go 的 defaultCacheTTL），两边必须一起改：
+ * 前端比后端短 = 每次都打空（后端直接返缓存，没问题但浪费请求）；
+ * 前端比后端长 = 用户看到的信息最旧能旧到 15 分钟以上。
+ */
+export const AUTO_CHECK_MS = 15 * 60 * 1000
 
 /** 有语义的更新错误：界面只显示 message，不暴露 HTTP/JSON 细节。 */
 export class UpdateError extends Error {
@@ -50,6 +67,30 @@ export function normalizeCheck(data) {
     htmlUrl: d.html_url || '',
     checkedAt: Number(d.checked_at || 0) || 0,
     error: typeof d.error === 'string' ? d.error : '',
+    source: typeof d.source === 'string' ? d.source : '',
+    tried: Array.isArray(d.tried)
+      ? d.tried.map((t) => ({
+        name: String(t?.name || ''),
+        url: String(t?.url || ''),
+        ok: !!t?.ok,
+        skipped: !!t?.skipped,
+        reason: String(t?.reason || ''),
+        error: String(t?.error || ''),
+      }))
+      : [],
+  }
+}
+
+export function normalizeNotice(data) {
+  const d = data || {}
+  const direction = String(d.direction || '').toLowerCase()
+  return {
+    show: !!d.show,
+    version: cleanVersion(d.version),
+    fromVersion: cleanVersion(d.from_version),
+    // 老后端不带 direction（或值不认识）时按 up 处理：这是最常见的情形。
+    direction: ['up', 'down', 'unknown'].includes(direction) ? direction : 'up',
+    notes: typeof d.notes === 'string' ? d.notes : '',
   }
 }
 
@@ -89,6 +130,7 @@ function defaultFetch(...args) {
 export function createAppUpdate({
   fetchImpl = defaultFetch,
   pollMs = UPDATE_POLL_MS,
+  autoCheckMs = AUTO_CHECK_MS,
   now = () => Date.now(),
 } = {}) {
   const current = ref('')
@@ -102,6 +144,15 @@ export function createAppUpdate({
   const htmlUrl = ref('')
   const checkedAt = ref(0)
   const checkError = ref('')
+  // 本次检查依次试过的更新源（[{name,url,ok,reason,error,skipped}]）。
+  // 字段名 tried 与后端一致；界面用它显示「哪台成功、哪台为什么失败」。
+  const checkTried = ref([])
+  const checkSource = ref('')
+
+  // 「更新完成」提示（见文件头）：notice 为 null 表示没提示或已处理完。
+  const notice = ref(null)
+  let notifyChecked = false
+  let notifyTimer = null
 
   const checking = ref(false)
   const downloading = ref(false)
@@ -184,6 +235,8 @@ export function createAppUpdate({
     htmlUrl.value = d.htmlUrl
     checkedAt.value = now()
     checkError.value = d.error
+    checkSource.value = d.source || ''
+    checkTried.value = Array.isArray(d.tried) ? d.tried : []
     if (installed.value) {
       phase.value = 'installed'
     } else if (d.hasUpdate) {
@@ -352,11 +405,86 @@ export function createAppUpdate({
     if (keepGoing && !installed.value && epoch === pollEpoch) startPolling()
   }
 
+  /**
+   * 取一次「更新完成」提示。每个应用会话只取一次（notifyChecked 去重），
+   * 避免用户在多个页面之间切换时反复弹。
+   *
+   * 失败一律静默：提示是锦上添花，绝不能因为它让应用启动时报错。
+   */
+  async function ensureNotice() {
+    if (notifyChecked) return null
+    notifyChecked = true
+    try {
+      const data = await request('/api/app/update/notice', { timeout: 8000 })
+      const n = normalizeNotice(data)
+      notice.value = n.show ? n : null
+      return n.show ? n : null
+    } catch (_) {
+      return null
+    }
+  }
+
+  /** 用户看到提示后调用：后端记「已提示过」，下次启动不再弹。 */
+  async function ackNotice() {
+    const v = notice.value?.version || current.value
+    notice.value = null
+    if (!v) return false
+    try {
+      const data = await request('/api/app/update/notice/ack', {
+        method: 'POST', body: { version: v }, timeout: 8000,
+      })
+      return !!data?.ok
+    } catch (_) {
+      // ack 失败最坏结果就是下次启动再提示一次，不需要打扰用户。
+      return false
+    }
+  }
+
+  /**
+   * 启动静默自动检查：先查一次，之后每 AUTO_CHECK_MS 再查一次。
+   *
+   * 为什么是「定时轮询」而不是只看启动一次：应用是常驻的，NAS 上一开就是几个月，
+   * 只在启动时查等于永远查不到新版本。轮询期间任何失败都只在设置页留一行浅灰字
+   * （check 的 silent 分支），不弹错。
+   */
+  function startAutoCheck() {
+    ensureChecked()
+    if (notifyTimer) return
+    notifyTimer = setInterval(() => {
+      // 正在下载/安装时不要插一脚：check 会改 phase，把进度条状态搅乱。
+      if (downloading.value || installing.value) return
+      check({ silent: true })
+    }, autoCheckMs)
+  }
+
+  function stopAutoCheck() {
+    if (notifyTimer) {
+      clearInterval(notifyTimer)
+      notifyTimer = null
+    }
+  }
+
   /** 每个应用会话只自动检查一次；之后进设置页不再打扰。 */
   async function ensureChecked() {
     if (autoChecked) return null
     autoChecked = true
     return check({ silent: true })
+  }
+
+  // 仅供排查用的内部状态快照（浏览器控制台 appUpdate.debugState()）。
+  // 生产代码不读它，但「弹窗为什么不出现」这类问题只看 DOM 是查不出来的：
+  // notice/phase/notifyChecked 三者谁先被改，只有它们自己知道。
+  function debugState() {
+    return {
+      notifyChecked,
+      hasTimer: !!notifyTimer,
+      autoChecked,
+      notice: notice.value,
+      phase: phase.value,
+      hasUpdate: hasUpdate.value,
+      latest: latest.value,
+      current: current.value,
+    }
   }
 
   function resetForTests() {
@@ -372,6 +500,8 @@ export function createAppUpdate({
     htmlUrl.value = ''
     checkedAt.value = 0
     checkError.value = ''
+    checkTried.value = []
+    checkSource.value = ''
     checking.value = false
     downloading.value = false
     installing.value = false
@@ -384,14 +514,20 @@ export function createAppUpdate({
     installRequested = false
     autoChecked = false
     stopped = false
+    notice.value = null
+    notifyChecked = false
+    stopAutoCheck()
   }
 
   return {
     current, latest, hasUpdate, notes, publishedAt, assetName, assetUrl, size, htmlUrl,
-    checkedAt, checkError, checking, downloading, installing, installed, progress,
+    checkedAt, checkError, checkTried, checkSource,
+    checking, downloading, installing, installed, progress,
     downloadPath, error, phase,
+    notice,
     check, startUpdate, pollOnce, installUpdate, stopPolling, startPolling,
-    resumeIfActive, ensureChecked, resetForTests,
+    resumeIfActive, ensureChecked, ensureNotice, ackNotice,
+    startAutoCheck, stopAutoCheck, resetForTests, debugState,
   }
 }
 

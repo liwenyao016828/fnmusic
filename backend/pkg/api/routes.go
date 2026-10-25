@@ -62,6 +62,9 @@ var routeTable = []routeSpec{
 	{Path: "/api/app/update/download", Handler: func(s *Server) http.HandlerFunc { return s.HandleAppUpdateDownload }},
 	{Path: "/api/app/update/state", Handler: func(s *Server) http.HandlerFunc { return s.HandleAppUpdateState }},
 	{Path: "/api/app/update/install", Handler: func(s *Server) http.HandlerFunc { return s.HandleAppUpdateInstall }},
+	// 「更新完成后第一次进入应用，提示更新完成和版本号」（用户 2026-10-25）。
+	{Path: "/api/app/update/notice", Handler: func(s *Server) http.HandlerFunc { return s.HandleAppUpdateNotice }},
+	{Path: "/api/app/update/notice/ack", Handler: func(s *Server) http.HandlerFunc { return s.HandleAppUpdateNoticeAck }},
 
 	// 1. Proxy（已启用 SSRF 防护）
 	{Path: "/api/proxy/http", Handler: func(s *Server) http.HandlerFunc { return proxy.HandleProxyHTTP }},

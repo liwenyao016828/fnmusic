@@ -14,7 +14,7 @@
   <Teleport to="body">
     <div
       v-if="open"
-      class="fixed inset-0 z-60 flex items-center justify-center bg-black/50 p-4 backdrop-blur-xs"
+      class="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4 backdrop-blur-xs"
       role="dialog"
       aria-modal="true"
       aria-label="版本更新"

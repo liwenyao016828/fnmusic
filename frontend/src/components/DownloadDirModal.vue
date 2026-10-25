@@ -18,7 +18,7 @@
   <Teleport to="body">
     <div
       v-if="downloadManager.showDirModal.value"
-      class="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs"
+      class="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs"
     >
       <div class="bg-white rounded-2xl max-w-md w-full p-5 shadow-2xl border border-gray-100 space-y-4 max-h-[85vh] overflow-y-auto">
         <div class="flex items-center justify-between">

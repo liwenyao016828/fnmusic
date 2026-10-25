@@ -610,6 +610,9 @@
     <!-- ── 版本更新弹窗（侧栏底部入口点开；内容复用系统页那张 UpdateCard） ── -->
     <UpdateModal :open="showUpdateModal" @close="showUpdateModal = false" />
 
+    <!-- ── 「更新完成」提示（版本号变化后第一次进入应用弹一次） ── -->
+    <UpdateNoticeModal :notice="showUpdateNotice" @close="closeUpdateNotice" />
+
     <!-- ── 全局免责声明与服务条款弹窗 ── -->
     <DisclaimerModal
       v-model="showDisclaimerModal"
@@ -678,6 +681,7 @@ import SwipePager from './components/SwipePager.vue'
 import AppSettings from './components/AppSettings.vue'
 import FpsMeter from './components/FpsMeter.vue'
 import UpdateModal from './components/UpdateModal.vue'
+import UpdateNoticeModal from './components/UpdateNoticeModal.vue'
 import LogViewer from './components/LogViewer.vue'
 import FeedbackHost from './components/FeedbackHost.vue'
 import SegmentedControl from './components/SegmentedControl.vue'
@@ -777,6 +781,17 @@ watch(currentView, () => { showMoreDrawer.value = false })
  * 不渲染 —— 侧栏底部是常驻区，挂一个永远灰着的「已是最新」就是噪音。
  */
 const showUpdateModal = ref(false)
+// «更新完成»提示：非 null 时渲染 UpdateNoticeModal（见 template）。
+//
+// 必须放在 setup 顶层：它以前被误写在下面 updateEntry 这个 computed 的**函数体里**
+// （2026-10-25），于是每次 updateEntry 重算都新建一份 null，闭包里的那份和模板读到的
+// 那份还不是同一个——弹窗永远拿不到值。功能「写完了却不出现」，查了很久。
+const showUpdateNotice = ref(null)
+// 关掉即确认：通知后端「这个版本的提示已经给过了」，下次启动不再弹。
+function closeUpdateNotice() {
+  showUpdateNotice.value = null
+  appUpdate.ackNotice()
+}
 const updateEntry = computed(() => {
   const { phase, hasUpdate, installed, latest, progress, checking } = appUpdate
   if (installed.value) return { label: '更新已装好，点重启', tone: 'done' }
@@ -1060,7 +1075,18 @@ onMounted(async () => {
   // 版本检查提到应用启动这一步（用户 2026-10-24：「检测到更新后显示有更新的窗口」）：
   // 以前只有进「系统」页才检查，人不进那一页就永远不知道有新版本，侧栏底部那个入口
   // 也就永远不亮。ensureChecked 每个会话只真查一次，失败静默（不打扰、不弹 toast）。
-  appUpdate.ensureChecked()
+  //
+  // 2026-10-25 起改成「每 15 分钟一次」（用户：「自动检查更新改为15分钟一次」）。
+  // 应用在 NAS 上是常驻的，只在启动查一次等于永远查不到新版本。
+  appUpdate.startAutoCheck()
+  // 「更新完成后第一次进入应用，提示更新完成和版本号」：判据是版本号变了
+  // （手动装 fpk / 应用中心升级同样会提示），具体规则在后端 notice.go。
+  // 拿到提示就弹窗，用户看到后由弹窗自己调 ackNotice()。
+  // 不 await：这段在 onMounted 最前面，后面还有一大串启动请求（音源脚本、窗口记忆…），
+  // 任何一步卡住都不该让「更新完成」提示永远不出现。
+  appUpdate.ensureNotice().then((n) => {
+    if (n) showUpdateNotice.value = n
+  })
   // 上次离开时如果下载/安装还在跑，回来接着轮询，别让进度丢在半路。
   appUpdate.resumeIfActive()
 

@@ -238,20 +238,20 @@ func TestProxyExemptAddrsFromEnv(t *testing.T) {
 	t.Setenv("https_proxy", "https://proxy.internal")
 	t.Setenv("ALL_PROXY", "socks5://192.168.1.3:7891")
 
-	got := proxyExemptAddrs()
+	got := proxyExemptAddrs(Options{})
 	want := []string{"192.168.1.3:7890", "proxy.internal:443", "192.168.1.3:7891"}
 	if len(got) != len(want) {
-		t.Fatalf("proxyExemptAddrs() = %v, 期望 %d 项", got, len(want))
+		t.Fatalf("proxyExemptAddrs(Options{}) = %v, 期望 %d 项", got, len(want))
 	}
 	for _, w := range want {
 		if !got[w] {
-			t.Errorf("proxyExemptAddrs() 缺少 %s，实际 %v", w, got)
+			t.Errorf("proxyExemptAddrs(Options{}) 缺少 %s，实际 %v", w, got)
 		}
 	}
 
 	clearProxyEnv(t)
-	if len(proxyExemptAddrs()) != 0 {
-		t.Errorf("没有配代理时不应有任何豁免，实际 %v", proxyExemptAddrs())
+	if len(proxyExemptAddrs(Options{})) != 0 {
+		t.Errorf("没有配代理时不应有任何豁免，实际 %v", proxyExemptAddrs(Options{}))
 	}
 }
 
@@ -259,7 +259,7 @@ func TestProxyExemptAddrsFromEnv(t *testing.T) {
 func TestDialControlExemptsOnlyConfiguredProxy(t *testing.T) {
 	clearProxyEnv(t)
 	t.Setenv("HTTP_PROXY", "http://192.168.1.3:7890")
-	ctl := dialControl(Options{}, proxyExemptAddrs())
+	ctl := dialControl(Options{}, proxyExemptAddrs(Options{}))
 
 	if err := ctl("tcp", "192.168.1.3:7890", nil); err != nil {
 		t.Fatalf("已配置的代理出口不应被拦: %v", err)
@@ -275,7 +275,7 @@ func TestDialControlExemptsOnlyConfiguredProxy(t *testing.T) {
 	}
 
 	clearProxyEnv(t)
-	ctlNoProxy := dialControl(Options{}, proxyExemptAddrs())
+	ctlNoProxy := dialControl(Options{}, proxyExemptAddrs(Options{}))
 	if err := ctlNoProxy("tcp", "192.168.1.3:7890", nil); err == nil {
 		t.Error("没配代理时 192.168.1.3:7890 必须被拦")
 	}
@@ -607,5 +607,122 @@ func TestResponseHeaderTimeoutOverride(t *testing.T) {
 	}
 	if tr2 := NewSafeTransport(Options{}); tr2.ResponseHeaderTimeout != 20*time.Second {
 		t.Fatalf("未设置时 transport 应回落 20s，实得 %v", tr2.ResponseHeaderTimeout)
+	}
+}
+
+// ── 应用内配置的代理（Options.ProxyURL，用户 2026-10-25）──
+//
+// 背景：fnOS 上的应用进程读不到 shell 的 HTTP_PROXY，而 GitHub 的 release 资产在
+// 部分网络下直连就是 `dial tcp 20.205.243.166:443: i/o timeout`。所以代理要能从
+// 配置里喂进来。这一组用例锁住四件事：地址能被归一/辨认、出口地址被豁免、
+// 内网目标不会被绕进代理、以及它真的优先于环境变量。
+
+func TestParseProxyURLVariants(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string // 期望的 Host；空 = 判为无效
+	}{
+		{"http://192.168.1.3:7890", "192.168.1.3:7890"},
+		{"  socks5://192.168.1.3:7891  ", "192.168.1.3:7891"},
+		{"https://proxy.example.com", "proxy.example.com"},
+		// 只填 host:port 也要能用 —— 界面上最容易漏的就是 scheme。
+		{"192.168.1.3:7890", "192.168.1.3:7890"},
+		// 不支持的协议 / 空值 / 明显不是地址 → 当没配，而不是报错。
+		{"ftp://192.168.1.3:21", ""},
+		{"", ""},
+		{"   ", ""},
+		{"http://", ""},
+	}
+	for _, c := range cases {
+		got := parseProxyURL(c.in)
+		if c.want == "" {
+			if got != nil {
+				t.Errorf("parseProxyURL(%q) 应判为无效，得到 %v", c.in, got)
+			}
+			continue
+		}
+		if got == nil {
+			t.Errorf("parseProxyURL(%q) 不该判为无效", c.in)
+			continue
+		}
+		if got.Host != c.want {
+			t.Errorf("parseProxyURL(%q).Host = %q，期望 %q", c.in, got.Host, c.want)
+		}
+	}
+}
+
+func TestProxyExemptAddrsIncludesConfiguredProxy(t *testing.T) {
+	clearProxyEnv(t)
+	got := proxyExemptAddrs(Options{ProxyURL: "http://192.168.1.3:7890"})
+	if !got["192.168.1.3:7890"] {
+		t.Fatalf("配置里的代理出口必须进豁免表，实际 %v", got)
+	}
+	// 与环境变量里的并存，不是二选一。
+	t.Setenv("HTTP_PROXY", "http://10.0.0.9:8080")
+	got = proxyExemptAddrs(Options{ProxyURL: "http://192.168.1.3:7890"})
+	if !got["192.168.1.3:7890"] || !got["10.0.0.9:8080"] {
+		t.Errorf("配置代理与环境变量代理应同时被豁免，实际 %v", got)
+	}
+}
+
+func TestProxyFuncPrefersConfiguredProxyAndKeepsLAN_Direct(t *testing.T) {
+	defer resetProxyFailureState()
+	clearProxyEnv(t)
+
+	// 显式配置的代理：公网目标走它。
+	pf := proxyFunc(Options{ProxyURL: "http://192.168.1.3:7890"})
+	req, _ := http.NewRequest(http.MethodGet, "https://objects.githubusercontent.com/x.fpk", nil)
+	u, err := pf(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u == nil || u.Host != "192.168.1.3:7890" {
+		t.Fatalf("公网目标应走配置的代理，得到 %v", u)
+	}
+
+	// 内网/回环目标必须直连：填了代理不该让本地音源绕出去。
+	for _, raw := range []string{"http://192.168.1.9:8900/api", "http://127.0.0.1:8900/api"} {
+		lanReq, _ := http.NewRequest(http.MethodGet, raw, nil)
+		if lu, _ := pf(lanReq); lu != nil {
+			t.Errorf("%s 是内网目标，必须直连，却要走 %v", raw, lu)
+		}
+	}
+
+	// 配置的代理优先于环境变量（用户显式填的应该赢）。
+	t.Setenv("HTTPS_PROXY", "http://env-proxy:3128")
+	if u, _ := pf(req); u == nil || u.Host != "192.168.1.3:7890" {
+		t.Errorf("配置的代理应优先于环境变量，得到 %v", u)
+	}
+
+	// 「没配代理时回落环境变量」不在这里断言：http.ProxyFromEnvironment 的
+	// 环境快照是**进程级一次**的（Go 自己的 envProxyOnce），本进程里已经被前面的
+	// 调用读成了空环境，改 env 不会再生效。环境变量那条路另有
+	// TestProxyExemptAddrsFromEnv / TestProxyBypassedForLocalTargets 覆盖。
+}
+
+func TestNewSafeTransportAllowsConfiguredProxyExit(t *testing.T) {
+	clearProxyEnv(t)
+	// 用 NewSafeTransport（走 Options.ProxyURL 那条正式路径）出站到一个内网代理，
+	// 必须真的连得上 —— 这是「配了代理但每次都被自己的 SSRF 规则拦掉」的回归。
+	var hits int
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		_, _ = w.Write([]byte("via-proxy:" + r.URL.Host))
+	}))
+	defer proxy.Close()
+
+	tr := NewSafeTransport(Options{ProxyURL: proxy.URL})
+	client := &http.Client{Transport: tr, Timeout: 5 * time.Second}
+	resp, err := client.Get("http://public.example.invalid/fpk")
+	if err != nil {
+		t.Fatalf("配了代理却走不通（多半被 SSRF 豁免漏掉）: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.HasPrefix(string(body), "via-proxy:") {
+		t.Errorf("响应 = %q，期望经代理返回", body)
+	}
+	if hits == 0 {
+		t.Error("代理一次都没被访问到")
 	}
 }

@@ -248,3 +248,31 @@ test('轮询接口失败即停止，不再定时打后端', async () => {
   await wait(20)
   assert.equal(stateCalls, 1)
 })
+
+// 「更新完成」提示的取值必须走**同一个**实例。
+//
+// 这个用例是为一个真 bug 加的（2026-10-25）：线上页面刷新后弹窗永远不出现，
+// 手工在控制台 import('/src/services/appUpdate.js') 调 ensureNotice() 却正常。
+// 根因是 App.vue 的 onMounted 开着头，后面还有一串 await（音源脚本、窗口记忆…），
+// vite 在开发态第二次请求同一个模块时带了不同的 `?t=`，模块被实例化了两份——
+// App.vue 用的是「带头的那份」，控制台拿到的是「不带头的另一份」。
+// 所以入口处必须自己把提示取好并写进响应式 ref，不能依赖某个异步阶段去取。
+test('ensureNotice 命中时写入 notice，并只请求一次', async () => {
+  let noticeCalls = 0
+  const c = createAppUpdate({
+    fetchImpl: async (url) => {
+      if (url === '/api/app/update/notice') {
+        noticeCalls += 1
+        return ok({ show: true, version: '2.21.1', from_version: '2.20.0', direction: 'up' })
+      }
+      throw new Error(`unexpected ${url}`)
+    },
+  })
+  const n = await c.ensureNotice()
+  assert.equal(n.version, '2.21.1')
+  assert.equal(n.direction, 'up')
+  assert.equal(c.notice.value.version, '2.21.1')
+  // 同一会话第二次调用直接返回 null，不再打后端（否则切页就反复弹）。
+  assert.equal(await c.ensureNotice(), null)
+  assert.equal(noticeCalls, 1)
+})

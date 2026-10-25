@@ -2,7 +2,9 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -170,6 +172,25 @@ func newAppUpdateManager(cfgMgr *config.ConfigManager) *appupdate.Manager {
 			}
 			return cfgMgr.Get().UpdateGitHubToken
 		},
+		// 更新源镜像清单（用户 2026-10-25）：「增加默认镜像站，可删减增加」「可以填自己的」。
+		// 同样是函数：在设置里增删镜像后，下一次检查立刻按新清单试。
+		MirrorsFunc: func() []config.UpdateMirror {
+			if cfgMgr == nil {
+				return config.DefaultUpdateMirrors()
+			}
+			return cfgMgr.Get().UpdateMirrorList()
+		},
+		// 应用内代理（用户 2026-10-25）：同样是函数，改完下一次请求就生效。
+		// 环境变量 FN_UPDATE_PROXY 优先（排障时能临时盖住配置）。
+		ProxyFunc: func() string {
+			if v := strings.TrimSpace(os.Getenv("FN_UPDATE_PROXY")); v != "" {
+				return v
+			}
+			if cfgMgr == nil {
+				return ""
+			}
+			return cfgMgr.Get().UpdateProxyURL()
+		},
 		// FN_UPDATE_API 换掉「去哪里查新版本」的整条地址（不只是仓库名）：自建
 		// GitHub 镜像/内网发布源用得上，也让这台开发机能拿本地假源做端到端验证
 		// —— 共享代理出去的匿名 GitHub 请求经常直接 403 限速，真机上也可能遇到。
@@ -178,4 +199,52 @@ func newAppUpdateManager(cfgMgr *config.ConfigManager) *appupdate.Manager {
 			applog.Default().Add(fmt.Sprintf(format, args...))
 		},
 	})
+}
+
+// HandleAppUpdateNotice 返回「更新完成后第一次进入应用」的提示内容。
+//
+//	GET /api/app/update/notice
+//
+// 不联网：只读数据目录里的 last_run.json 与当前版本号比一下，启动路径要快。
+// 判断规则见 pkg/appupdate/notice.go —— 关键是「版本号变了就提示一次」，
+// 覆盖应用内升级、手动装 fpk、应用中心升级（用户 2026-10-25：「变化就提示」）。
+func (s *Server) HandleAppUpdateNotice(w http.ResponseWriter, r *http.Request) {
+	m := s.appUpdateManager()
+	if m == nil {
+		errJSON(w, http.StatusServiceUnavailable, "更新模块未初始化")
+		return
+	}
+	if r.Method != http.MethodGet {
+		errJSON(w, http.StatusMethodNotAllowed, "只支持 GET")
+		return
+	}
+	n := m.NoticeNotes(m.Notice())
+	writeJSON(w, http.StatusOK, map[string]interface{}{"code": 200, "data": n})
+}
+
+// HandleAppUpdateNoticeAck 把「版本变化提示」标记为已展示。
+//
+//	POST /api/app/update/notice/ack   body: {"version":"2.21.1"}
+//
+// 必须由用户看到提示后显式调用：不能一读就作废，否则提示还没渲染就被标记已读，
+// 用户永远看不到（页面上两个标签页同时开着时尤其明显）。
+func (s *Server) HandleAppUpdateNoticeAck(w http.ResponseWriter, r *http.Request) {
+	m := s.appUpdateManager()
+	if m == nil {
+		errJSON(w, http.StatusServiceUnavailable, "更新模块未初始化")
+		return
+	}
+	if r.Method != http.MethodPost {
+		errJSON(w, http.StatusMethodNotAllowed, "只支持 POST")
+		return
+	}
+	var body struct {
+		Version string `json:"version"`
+	}
+	raw, _ := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<16))
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, &body)
+	}
+	ok := m.AckNotice(body.Version)
+	writeJSON(w, http.StatusOK, map[string]interface{}{"code": 200, "data": map[string]interface{}{"ok": ok}})
 }

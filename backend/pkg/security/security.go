@@ -48,6 +48,15 @@ type Options struct {
 	// 判成 `net/http: timeout awaiting response headers`（2026-10-24 用户截图：应用内
 	// 更新下载失败）。要下大文件的调用方显式把它调大。
 	ResponseHeaderTimeout time.Duration
+	// ProxyURL 是**用户显式配置**的出站代理（http / https / socks5），非空时优先于
+	// 环境变量 HTTP_PROXY / HTTPS_PROXY。空 = 沿用环境变量那一套。
+	//
+	// 为什么需要它：fnOS 上的应用进程拿不到 shell 的 HTTP_PROXY（应用由系统拉起，
+	// 环境变量不跟着走），而 GitHub 一类境外站点在部分网络下**必须经代理才连得上**。
+	// 2026-10-25 用户截图：应用内更新下载报
+	// `dial tcp 20.205.243.166:443: i/o timeout` —— 直连根本出不去。
+	// 仍然沿用「内网目标直连」的分流，所以填了代理也不会把本地音源绕出去。
+	ProxyURL string
 }
 
 // headerTimeout 返回生效的「等响应头」上限（0 回落默认 20s）。
@@ -196,7 +205,7 @@ func isPrivateOrMetadata(ip net.IP) bool {
 // 于是公网出站仍然会死在同一条错误上（取链 502、流中继 502）。
 // 所以拨号校验还要放行「环境变量里配置的那个代理出口」，见 dialControl。
 func NewSafeTransport(opts Options) *http.Transport {
-	return newSafeTransport(opts, proxyExemptAddrs(), proxyFunc(opts))
+	return newSafeTransport(opts, proxyExemptAddrs(opts), proxyFunc(opts))
 }
 
 // newSafeTransport 是 NewSafeTransport 的可注入版本（测试用显式代理与豁免表，
@@ -260,11 +269,15 @@ func normalizeAddr(address string) string {
 	return strings.ToLower(net.JoinHostPort(host, port))
 }
 
-// proxyExemptAddrs 收集环境变量里配置的代理出口地址（host:port）。
+// proxyExemptAddrs 收集「允许拨号」的代理出口地址（host:port）：
+// 环境变量里配置的（HTTP_PROXY / HTTPS_PROXY / ALL_PROXY）**加上** Options.ProxyURL。
 // Go 的 http.ProxyFromEnvironment 认 HTTP_PROXY / HTTPS_PROXY / NO_PROXY（大小写都读），
 // ALL_PROXY 是其它工具链的约定，这里一并收进来，免得 socks 代理踩同一个坑。
-func proxyExemptAddrs() map[string]bool {
+func proxyExemptAddrs(opts Options) map[string]bool {
 	out := map[string]bool{}
+	if u := parseProxyURL(opts.ProxyURL); u != nil {
+		out[proxyAddrKey(u)] = true
+	}
 	for _, key := range []string{"HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"} {
 		raw := strings.TrimSpace(os.Getenv(key))
 		if raw == "" {
@@ -274,17 +287,47 @@ func proxyExemptAddrs() map[string]bool {
 		if err != nil || u.Host == "" {
 			continue
 		}
-		port := u.Port()
-		if port == "" {
-			if strings.EqualFold(u.Scheme, "https") {
-				port = "443"
-			} else {
-				port = "80"
-			}
-		}
-		out[strings.ToLower(net.JoinHostPort(u.Hostname(), port))] = true
+		out[proxyAddrKey(u)] = true
 	}
 	return out
+}
+
+// proxyAddrKey 把代理 URL 归一成小写 host:port（补默认端口）。
+func proxyAddrKey(u *url.URL) string {
+	port := u.Port()
+	if port == "" {
+		if strings.EqualFold(u.Scheme, "https") {
+			port = "443"
+		} else {
+			port = "80"
+		}
+	}
+	return strings.ToLower(net.JoinHostPort(u.Hostname(), port))
+}
+
+// parseProxyURL 解析用户配置的代理地址；空 / 非法 / 协议不支持时返回 nil（按「没配」处理）。
+//
+// 支持 http、https、socks5、socks5h。非法值静默回落到环境变量而不是报错：代理配置是
+// 一个可选便利项，不该因为它拼错了就让整个更新功能不可用。
+func parseProxyURL(raw string) *url.URL {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	// 容忍用户只填 host:port（不带协议）——界面上最容易漏的就是 scheme。
+	if !strings.Contains(raw, "://") {
+		raw = "http://" + raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return nil
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "http", "https", "socks5", "socks5h":
+		return u
+	default:
+		return nil
+	}
 }
 
 // proxyFunc 决定单个请求是否走代理。
@@ -297,6 +340,7 @@ func proxyExemptAddrs() map[string]bool {
 // 因此提供 FN_PROXY_PRIVATE_NET=1 让内网目标也走代理，由用户按环境决定。
 func proxyFunc(opts Options) func(*http.Request) (*url.URL, error) {
 	envProxy := http.ProxyFromEnvironment
+	cfgProxy := parseProxyURL(opts.ProxyURL)
 	proxyPrivate := envBool("FN_PROXY_PRIVATE_NET")
 
 	return func(req *http.Request) (*url.URL, error) {
@@ -311,6 +355,9 @@ func proxyFunc(opts Options) func(*http.Request) (*url.URL, error) {
 		}
 		if isLocalTarget(req.URL.Hostname()) && !proxyPrivate && !opts.ForceProxyForLocal {
 			return nil, nil // 内网/回环目标直连，绕过代理
+		}
+		if cfgProxy != nil {
+			return cfgProxy, nil // 用户显式配置的代理优先于环境变量
 		}
 		return envProxy(req)
 	}
@@ -498,7 +545,7 @@ func NewSafeStreamRoundTripper(opts Options) http.RoundTripper {
 }
 
 func newFallbackTransport(opts Options, attemptTimeout time.Duration) http.RoundTripper {
-	exempt := proxyExemptAddrs()
+	exempt := proxyExemptAddrs(opts)
 	proxyFor := proxyFunc(opts)
 	return &proxyFallbackTransport{
 		proxied:        newSafeTransport(opts, exempt, proxyFor),

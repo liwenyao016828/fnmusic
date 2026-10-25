@@ -38,7 +38,7 @@ import (
 )
 
 // CurrentVersion 应用版本号。发布新版本时与 fpk-package/manifest 的 version 同步修改。
-const CurrentVersion = "2.21.0"
+const CurrentVersion = "2.21.1"
 
 // CurrentAppName 对外暴露的应用标识，必须与 fpk-package/manifest 的 appname 一致。
 //
@@ -572,7 +572,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// ── overwrite 钥匙：榜单显示首数、清空 GitHub token ──
+		// ── overwrite 钥匙：榜单显示首数、清空 GitHub token、清空更新代理 ──
 		//
 		// 为什么要专门一套：ChartSize / ChartSizes 带 omitempty，0 和空表在 Go 的
 		// 解码里和「没传这个键」长得一模一样，补丁语义会把「改回默认」永远吃掉；
@@ -586,11 +586,17 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			_, hasSize := keys["chart_size_overwrite"]
 			_, hasSizes := keys["chart_sizes_overwrite"]
 			_, hasClearTok := keys["update_token_clear"]
-			if hasSize || hasSizes || hasClearTok {
+			_, hasClearProxy := keys["update_clear_proxy"]
+			// 镜像清单本身走 patch 的普通字段（update_mirrors 有指针，给键=整体替换），
+			// 只有「恢复默认」需要 overwrite 块。
+			_, hasResetMirrors := keys["update_mirrors_reset"]
+			if hasSize || hasSizes || hasClearTok || hasClearProxy || hasResetMirrors {
 				var ov struct {
 					ChartSizeOverwrite  *int           `json:"chart_size_overwrite"`
 					ChartSizesOverwrite map[string]int `json:"chart_sizes_overwrite"`
 					UpdateTokenClear    bool           `json:"update_token_clear"`
+					UpdateProxyClear    bool           `json:"update_clear_proxy"`
+					UpdateMirrorReset   bool           `json:"update_mirrors_reset"`
 				}
 				if err := json.Unmarshal(raw, &ov); err != nil {
 					w.WriteHeader(http.StatusBadRequest)
@@ -611,6 +617,14 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 				if hasClearTok && ov.UpdateTokenClear {
 					patch.UpdateClearToken = true
 				}
+				if hasClearProxy && ov.UpdateProxyClear {
+					patch.UpdateClearProxy = true
+				}
+				if hasResetMirrors && ov.UpdateMirrorReset {
+					// 清单用指针存，「清空」只能表达「只要官方源」，回不到「默认清单」；
+					// 恢复默认必须走这个独立动作（置 nil = 用 config 内置默认）。
+					patch.UpdateResetMirrors = true
+				}
 			}
 		}
 
@@ -619,6 +633,10 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		cfg := redactConfig(s.cfgMgr.Get())
+		// 镜像清单回显时要把内置「GitHub 官方源」那条也带上：它不落盘，但界面
+		// 需要看见它才能画「停用/启用」开关，也才对得上「现在会用哪些源」。
+		ui := s.cfgMgr.Get().UpdateMirrorsForUI()
+		cfg.UpdateMirrors = &ui
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"code":    200,
 			"message": "ok",

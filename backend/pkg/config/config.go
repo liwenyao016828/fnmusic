@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"log"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -164,6 +165,32 @@ type AppConfig struct {
 	// UpdateTokenSet 是**只读**的派生字段：表示「磁盘上存了 token」，
 	// 供 GET /api/config 回给前端显示状态（值本身在 redactConfig 里被抹掉）。
 	UpdateTokenSet bool `json:"update_token_set,omitempty"`
+	// UpdateProxy 是应用内出站代理（http / https / socks5）。
+	//
+	// 为什么要有这个字段（用户 2026-10-25，NAS 上更新失败截图）：
+	// 应用由 fnOS 拉起，**读不到 shell 里的 HTTP_PROXY**，而 GitHub 的 release
+	// 资产（objects.githubusercontent.com）在部分网络下直连就是
+	// `dial tcp 20.205.243.166:443: i/o timeout`。用户的原话是要能在应用里设置，
+	// 而不是「SSH 上去给应用进程加环境变量」。
+	//
+	// 只作用于**应用内更新**（检查/下载 fpk）这一条链路，不影响音源与播放：
+	// 那些走后端自己的 transport，代理由那里的环境变量决定。
+	// 空 = 不额外配置（沿用环境变量 / 直连）。
+	UpdateProxy string `json:"update_proxy,omitempty"`
+	// UpdateClearProxy 与 UpdateClearToken 同一套路：omitempty 让空串与「没传」同形，
+	// 所以「清空代理」要一个显式标记。
+	UpdateClearProxy bool `json:"-"`
+	// UpdateMirrors 是「去哪儿查新版本 / 下安装包」的镜像清单（用户 2026-10-25：
+	// 「增加默认镜像站，可删减增加」「可以填自己的」「回退」）。
+	//
+	// 用**指针**是必须的：`[]` 和「没这个键」解码后都是 len==0，但前者表示
+	// 「我只要官方源」，后者表示「没配过、用默认」。语义差别很大，靠指针区分。
+	// nil → 读的时候用 DefaultUpdateMirrors()。
+	// 详见 pkg/config/mirrors.go 的说明（为什么默认只有 gh-proxy.com）。
+	UpdateMirrors *[]UpdateMirror `json:"update_mirrors,omitempty"`
+	// UpdateResetMirrors 是内部的「恢复默认清单」标记：清空 UpdateMirrors 让人
+	// 回不到默认（回到 nil 只能靠删配置文件），所以单给一个动作。不落盘。
+	UpdateResetMirrors bool `json:"-"`
 	// ChartSizeOverride 是**只在 /api/config 内部流转**的提示位：这次 Update 要把
 	// ChartSize / ChartSizes 当成「整体覆盖」而不是「非空才改」。
 	//
@@ -364,6 +391,50 @@ const (
 // HasUpdateToken 判断是否配了 GitHub token（只回布尔，绝不回值）。
 func (a AppConfig) HasUpdateToken() bool {
 	return strings.TrimSpace(a.UpdateGitHubToken) != ""
+}
+
+// UpdateMirrorList 返回实际生效的镜像清单（未配置时是默认清单）。
+//
+// 只返回启用项？不 —— 停用的也要返回，界面得把它们显示出来才能「重新启用」。
+// 调用方（appupdate）自己按 Disabled 过滤。
+func (a AppConfig) UpdateMirrorList() []UpdateMirror {
+	if a.UpdateMirrors == nil {
+		return DefaultUpdateMirrors()
+	}
+	return NormalizeUpdateMirrors(*a.UpdateMirrors)
+}
+
+// UpdateProxyURL 返回归一后的应用内更新代理；没配 / 非法时返回空串。
+//
+// 归一（补 scheme、去空白）放在读写两端共用的一个函数里：界面上最容易漏的就是
+// scheme，只填 `192.168.1.3:7890` 也得能用。
+func (a AppConfig) UpdateProxyURL() string {
+	return NormalizeUpdateProxy(a.UpdateProxy)
+}
+
+// NormalizeUpdateProxy 把用户填的代理地址归一成带 scheme 的 URL 字符串。
+//
+// 只认 http / https / socks5 / socks5h；不合法就返回空串（当没配），
+// 与 security.parseProxyURL 的判定保持一致 —— 两端判据不同的结果就是
+// 「界面显示已配置，实际不生效」这类查半天的问题。
+func NormalizeUpdateProxy(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if !strings.Contains(raw, "://") {
+		raw = "http://" + raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "http", "https", "socks5", "socks5h":
+		return raw
+	default:
+		return ""
+	}
 }
 
 // NormalizeChartSize 把任意输入夹到合法区间；<=0 表示「用默认」。
@@ -887,6 +958,15 @@ func (cm *ConfigManager) load() {
 		if c.UpdateGitHubToken != "" {
 			cm.config.UpdateGitHubToken = strings.TrimSpace(c.UpdateGitHubToken)
 		}
+		// 应用内更新代理（用户 2026-10-25）。同上：load 与 Update 两处都要登记。
+		if c.UpdateProxy != "" {
+			cm.config.UpdateProxy = NormalizeUpdateProxy(c.UpdateProxy)
+		}
+		// 更新镜像清单（用户 2026-10-25）。同上：load 与 Update 两处都要登记。
+		if c.UpdateMirrors != nil {
+			list := NormalizeUpdateMirrors(*c.UpdateMirrors)
+			cm.config.UpdateMirrors = &list
+		}
 		if c.UIInjectEnabled != nil {
 			v := *c.UIInjectEnabled
 			cm.config.UIInjectEnabled = &v
@@ -1078,6 +1158,24 @@ func (cm *ConfigManager) Update(c AppConfig) error {
 	}
 	if c.UpdateClearToken {
 		cm.config.UpdateGitHubToken = ""
+	}
+	// 应用内更新代理：空串 = 不动，清空走 UpdateClearProxy。
+	// 存归一后的值（补 scheme），避免界面填 `192.168.1.3:7890` 时读写两端不一致。
+	if c.UpdateProxy != "" {
+		cm.config.UpdateProxy = NormalizeUpdateProxy(c.UpdateProxy)
+	}
+	if c.UpdateClearProxy {
+		cm.config.UpdateProxy = ""
+	}
+	// 更新镜像清单：给键 = 整体替换（含给空数组 = 只用官方源）；恢复默认走
+	// UpdateResetMirrors。两者都做了时以「恢复默认」为准 —— 界面上不可能同时
+	// 点两个按钮，真同时发了也是「恢复默认」更安全（清单不会被清空）。
+	if c.UpdateMirrors != nil {
+		list := NormalizeUpdateMirrors(*c.UpdateMirrors)
+		cm.config.UpdateMirrors = &list
+	}
+	if c.UpdateResetMirrors {
+		cm.config.UpdateMirrors = nil
 	}
 	// 配了更新的限速 / token 之后，管理器要在下一次下载时用新值。这里不直接推进去：
 	// 保存流程末尾统一走 OnUpdate 回调（见 api 层注册处），重启也走 load ——

@@ -21,6 +21,13 @@ const defaultGitHubAPI = "https://api.github.com/repos/%s/releases/latest"
 // 取值来源：`git remote get-url origin`（当前为 git@github.com:liwenyao016828/fnmusic.git）。
 const DefaultRepo = "liwenyao016828/fnmusic"
 
+// OfficialMirrorURL 是「内置 GitHub 官方源」在镜像清单里的占位 URL。
+//
+// 它不指向任何真实地址：清单里出现一条 URL 等于本常量的条目，只表示
+// 「官方源被停用了」（见 source.go 的 officialDisabled）。用占位值而不是加一个
+// 布尔配置项，是为了让「清单」继续是唯一真源 —— 少一个必须手动同步的字段。
+const OfficialMirrorURL = "github://official"
+
 // ReleaseAsset GitHub release 里的一个产物。
 type ReleaseAsset struct {
 	Name        string `json:"name"`

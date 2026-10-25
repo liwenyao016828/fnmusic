@@ -763,7 +763,7 @@
       >
         <div
           v-if="toastMessage"
-          class="fixed bottom-22 left-1/2 -translate-x-1/2 z-60 bg-gray-900/90 text-white text-xs px-4 py-2 rounded-full shadow-lg backdrop-blur-xs flex items-center gap-2 pointer-events-none"
+          class="fixed bottom-22 left-1/2 -translate-x-1/2 z-[60] bg-gray-900/90 text-white text-xs px-4 py-2 rounded-full shadow-lg backdrop-blur-xs flex items-center gap-2 pointer-events-none"
         >
           <Check class="w-3.5 h-3.5 text-emerald-400" />
           <span>{{ toastMessage }}</span>

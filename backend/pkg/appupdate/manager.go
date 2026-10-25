@@ -2,6 +2,7 @@ package appupdate
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"fn-lx-player/pkg/config"
 )
 
 // 下载/安装状态机的取值。前端按这些字符串切换界面，**不要**改成中文。
@@ -24,7 +27,12 @@ const (
 const (
 	// defaultCacheTTL 是检查结果的缓存时长。GitHub 未鉴权限速 60 次/小时/IP，
 	// 用户反复打开「关于」页时不该每次都打一次 API。
-	defaultCacheTTL = 10 * time.Minute
+	//
+	// 2026-10-25 用户要求「自动检查更新改为 15 分钟一次」：前端加了 15 分钟
+	// 静默轮询，这里的缓存也必须同步到 15 分钟 —— 否则前端每 15 分钟问一次、
+	// 后端每 10 分钟就重新打一次 GitHub，两边节奏对不上，还会让「多久检查一次」
+	// 这件事说不清。两处一起改是刻意的，别只改一边。
+	defaultCacheTTL = 15 * time.Minute
 	// defaultScriptDir 必须**在应用目录之外**：安装脚本会 uninstall 掉应用，
 	// 放在应用目录里等于脚本把自己删了（knock 的 apply-update.sh 也是这个原因放 /tmp）。
 	defaultScriptDir = "/tmp/yinshu-update"
@@ -55,6 +63,24 @@ type CheckResult struct {
 	HTMLURL     string `json:"html_url"`
 	CheckedAt   string `json:"checked_at"`
 	Error       string `json:"error"`
+	// Source 是这次**命中**的更新源名（官方源时为「GitHub 官方」）。
+	// 用户 2026-10-25 提镜像站时要求「能看出走的是哪台」，排障第一问就是它。
+	Source string `json:"source,omitempty"`
+	// Tried 是依次试过的源（失败原因内嵌），仅在有失败时非空。
+	// 只给「试过哪些」不够用 —— 用户要知道**每台为什么失败**。
+	Tried []SourceAttempt `json:"tried,omitempty"`
+}
+
+// SourceAttempt 记录一次更新源尝试（成功/失败都要，界面按 ok 显示颜色）。
+type SourceAttempt struct {
+	Name    string `json:"name"`
+	URL     string `json:"url"`
+	OK      bool   `json:"ok"`
+	Error   string `json:"error,omitempty"`
+	// Reason 是**给界面看**的短原因（「超时」「返回的不是 JSON」…）。
+	// 与 Error 分开：Error 是给排障看的原文（可能很长、带 URL），Reason 一句话。
+	Reason  string `json:"reason,omitempty"`
+	Skipped bool   `json:"skipped,omitempty"` // 停用的镜像不参与尝试，但界面要能列出
 }
 
 // DownloadState 是 GET /api/app/update/state 返回的数据。
@@ -86,19 +112,23 @@ type Options struct {
 	Token          string // 可选 GitHub token
 	APIURL         string // 测试/镜像用；空 = 官方 releases/latest
 	Client         *http.Client
-	// RateKBPS 是下载安装包的限速（KB/s）。0 = 不限速。
+	// TokenFunc 是**每次请求前重新读一次**的取值函数（可选）。
 	//
-	// 用户 2026-10-25：「版本更新新增限制速率，避免被限速」——共享代理后面
-	// 裸速下载会把整条出口吃满，镜像/代理侧也更容易 429。限速在**读 body** 时做
-	// （见 download），不影响检查更新这类小请求。
-	RateKBPS int
-	// TokenFunc / RateFunc 是**每次下载前重新读一次**的取值函数（可选）。
+	// 为什么是函数而不是只在构造时读一次：token 在「系统 → 设置」里可改，用户改完
+	// 不希望「要重启才生效」；而 Manager 是进程级单例，构造时就固定了。
+	// 有函数时以函数为准（返回空串 = 不用 token）。
+	TokenFunc func() string
+	// ProxyFunc 同理，每次请求前现取用户配置的出站代理（空 = 用环境变量/直连）。
 	//
-	// 为什么要函数而不是只在构造时读一次：这两个值在「系统 → 设置」里可改，
-	// 用户改完不希望「要点重启才生效」；而 Manager 是进程级单例，构造时就固定了。
-	// 有函数时以函数为准（函数返回的 0 表示不限速、空串表示不用 token）。
-	TokenFunc     func() string
-	RateFunc      func() int
+	// 2026-10-25：NAS 上「检查更新」能通、「下载安装包」失败于
+	// `dial tcp 20.205.243.166:443: i/o timeout` —— release 资产在
+	// objects.githubusercontent.com，直连出不去。用户要求「应用内能设置代理，
+	// 而不是去改环境变量」。
+	ProxyFunc func() string
+	// MirrorsFunc 每次检查/下载前现取镜像清单（用户 2026-10-25：「增加默认镜像站，
+	// 可删减增加」「可以填自己的」「回退」）。nil = 只用官方源。
+	// 与 ProxyFunc 同理：界面里改完，下一次检查就该生效。
+	MirrorsFunc   func() []config.UpdateMirror
 	Logf          func(string, ...any)
 	Now           func() time.Time
 	CacheTTL      time.Duration
@@ -126,6 +156,17 @@ type Manager struct {
 	tokenFunc func() string
 
 	client *http.Client
+	// proxyFunc / clientProxy / cmu 一起实现「改了代理即时生效」：
+	// clientProxy 记住当前 client 是按哪个代理值建的，值变了就重建。
+	// 为什么要重建而不是改 client 内部字段：Transport 是不可变的，
+	// 而且 http.Client 被并发使用时不允许换 Transport（竞态）。
+	proxyFunc   func() string
+	clientProxy string
+	cmu         sync.Mutex
+	// mirrorsFunc 见 Options.MirrorsFunc（每次检查/下载现取，改完即时生效）。
+	mirrorsFunc func() []config.UpdateMirror
+	// allowOfficial 见 sourceEntry.allowOfficial（默认 true，只有测试会改它）。
+	allowOfficial bool
 	logf   func(string, ...any)
 	now    func() time.Time
 	ttl    time.Duration
@@ -143,6 +184,9 @@ type Manager struct {
 	assetURL     string
 	assetName    string
 	assetVersion string
+	// assetSource 是「查到这个版本时命中的源」：下载失败要换源重试时，
+	// 得知道从哪一台继续（见 download 的换源逻辑）。
+	assetSource sourceEntry
 	cancel       context.CancelFunc
 }
 
@@ -193,6 +237,9 @@ func New(opts Options) *Manager {
 		apiURL:        strings.TrimSpace(opts.APIURL),
 		dir:           dir,
 		client:        opts.Client,
+		proxyFunc:     opts.ProxyFunc,
+		mirrorsFunc:   opts.MirrorsFunc,
+		allowOfficial: true,
 		logf:          logf,
 		now:           now,
 		ttl:           ttl,
@@ -201,7 +248,11 @@ func New(opts Options) *Manager {
 		sudoAvailable: opts.SudoAvailable,
 	}
 	if m.client == nil {
-		m.client = newUpdateClient()
+		m.client = newUpdateClient("")
+	} else {
+		// 测试注入的 client 必须原样用：不要再按 proxyFunc 重建，否则
+		// 用 httptest.Server 写的用例会突然去连真代理。
+		m.proxyFunc = nil
 	}
 	if m.launch == nil {
 		m.launch = launchDetached
@@ -222,6 +273,34 @@ func New(opts Options) *Manager {
 // Current 返回应用当前版本（供 /api/app/version 之外的地方复用）。
 func (m *Manager) Current() string { return m.current }
 
+// httpClient 返回当前该用的 HTTP 客户端，并在代理配置变化时重建。
+//
+// 为什么每次请求都问一遍：代理是「系统 → 设置」里随时可改的项，而 Manager 是
+// 进程级单例。构造时读一次的结果就是「改完代理必须重启应用才生效」—— 而用户
+// 配代理的场景（GitHub 连不上）恰恰是**当场就想重试一次**的场景。
+func (m *Manager) httpClient() *http.Client {
+	if m.proxyFunc == nil {
+		return m.client // 测试注入的 client，或没配代理的默认 client
+	}
+	proxy := strings.TrimSpace(m.proxyFunc())
+	m.cmu.Lock()
+	defer m.cmu.Unlock()
+	if m.client == nil || proxy != m.clientProxy {
+		prev := m.clientProxy
+		m.client = newUpdateClient(proxy)
+		m.clientProxy = proxy
+		// 代理是否真的被应用是排障的第一问（「我填了代理怎么还超时？」），
+		// 所以状态变化必须留痕：日志里能直接看到某次检查/下载用的是哪个出口。
+		switch {
+		case proxy != "" && proxy != prev:
+			m.logf("[UPDATE] 已应用网络代理 %s（内网与本地地址仍直连）", proxy)
+		case proxy == "" && prev != "":
+			m.logf("[UPDATE] 已清除网络代理，改回直连 / 环境变量")
+		}
+	}
+	return m.client
+}
+
 // AppName 返回解析出的包名。
 func (m *Manager) AppName() string { return m.appName }
 
@@ -239,12 +318,10 @@ func (m *Manager) Check(ctx context.Context, refresh bool) CheckResult {
 	}
 	m.mu.Unlock()
 
-	res := CheckResult{Current: m.current, CheckedAt: m.now().Format(time.RFC3339)}
-
 	// m.tokenNow() 而不是 m.token 字段：设置里刚改的 token 下一次检查就用上。
-	rel, err := FetchLatestRelease(ctx, m.client, m.apiURL, m.repo, m.tokenNow(), m.ua)
-	if err != nil {
-		res.Error = err.Error()
+	// 更新源（镜像）由 tryCheck 逐个尝试，官方源兜底 —— 见 source.go。
+	res, rel, src := m.tryCheck(ctx)
+	if rel.TagName == "" {
 		m.storeCheck(res)
 		return res
 	}
@@ -256,7 +333,11 @@ func (m *Manager) Check(ctx context.Context, refresh bool) CheckResult {
 	res.HasUpdate = IsNewer(res.Latest, m.current)
 	if asset := PickFPKAsset(rel.Assets); asset != nil {
 		res.AssetName = asset.Name
-		res.AssetURL = asset.DownloadURL
+		// 资产地址也要走**同一个源**：资产在 objects.githubusercontent.com，
+		// 直连同样可能超时；只加速 JSON 那一步等于没加速。
+		// 记住实际用的源，下载时不重新做选择（否则用户改了清单会导致
+		// 「查到了新版、下载去另一台」的诡异现象）。
+		res.AssetURL = assetURLFor(src, asset.DownloadURL)
 		res.Size = asset.Size
 	} else {
 		// 有新版却没有 fpk：这是发布侧问题，明确告诉用户，别让人反复点「更新」。
@@ -270,8 +351,9 @@ func (m *Manager) Check(ctx context.Context, refresh bool) CheckResult {
 	m.assetURL = res.AssetURL
 	m.assetName = res.AssetName
 	m.assetVersion = res.Latest
+	m.assetSource = src
 	m.mu.Unlock()
-	m.logf("[UPDATE] 检查更新：当前 %s，最新 %s，有更新 %v，error=%q", res.Current, res.Latest, res.HasUpdate, res.Error)
+	m.logf("[UPDATE] 检查更新：当前 %s，最新 %s，有更新 %v，源=%s，error=%q", res.Current, res.Latest, res.HasUpdate, res.Source, res.Error)
 	return res
 }
 
@@ -326,7 +408,7 @@ func (m *Manager) StartDownload(ctx context.Context) (DownloadState, error) {
 		m.mu.Unlock()
 		return st, fmt.Errorf("正在安装，无法再次下载")
 	}
-	url, name, version := m.assetURL, m.assetName, m.assetVersion
+	url, name, version, src := m.assetURL, m.assetName, m.assetVersion, m.assetSource
 	m.mu.Unlock()
 
 	if url == "" {
@@ -339,7 +421,7 @@ func (m *Manager) StartDownload(ctx context.Context) (DownloadState, error) {
 			return DownloadState{Status: StatusError, Error: res.Error}, fmt.Errorf("%s", res.Error)
 		}
 		m.mu.Lock()
-		url, name, version = m.assetURL, m.assetName, m.assetVersion
+		url, name, version, src = m.assetURL, m.assetName, m.assetVersion, m.assetSource
 		m.mu.Unlock()
 	}
 	if url == "" || name == "" {
@@ -354,12 +436,16 @@ func (m *Manager) StartDownload(ctx context.Context) (DownloadState, error) {
 	state := m.dl
 	m.mu.Unlock()
 
-	go m.download(dlCtx, url, name)
+	go m.download(dlCtx, url, name, src)
 	return state, nil
 }
 
 // download 是后台协程：流式落盘 + 逐块更新进度。
-func (m *Manager) download(ctx context.Context, rawURL, assetName string) {
+//
+// src 是「查到这个资产时命中的源」，用于下载失败后**换源重试**：
+// 镜像命中的 JSON、下载却 404/超时，说明这台镜像只代理了一半，
+// 换下一台比让用户自己再点一次强（用户 2026-10-25：「回退」）。
+func (m *Manager) download(ctx context.Context, rawURL, assetName string, src sourceEntry) {
 	defer func() {
 		m.mu.Lock()
 		if m.cancel != nil {
@@ -391,42 +477,20 @@ func (m *Manager) download(ctx context.Context, rawURL, assetName string) {
 	finalPath := filepath.Join(dir, name)
 	tmpPath := finalPath + ".part"
 
-	// 一次网络抖动不该报废整个更新：GitHub 经代理回源偶发首字节超时，重试一次再报错。
-	// 只重试「请求没发出去/响应头没回来」这一类传输层错误；HTTP 状态码不对不重
-	// （404 的资产重试一百次也不会出现）。
-	var resp *http.Response
-	for attempt := 1; ; attempt++ {
-		req, rerr := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
-		if rerr != nil {
-			fail(rerr)
+	resp, tried, derr := m.openAsset(ctx, rawURL, src)
+	if derr != nil {
+		if errors.Is(derr, context.Canceled) || errors.Is(derr, context.DeadlineExceeded) {
+			fail(derr)
 			return
 		}
-		req.Header.Set("User-Agent", m.ua)
-		req.Header.Set("Accept", "application/octet-stream")
-		resp, rerr = m.client.Do(req)
-		if rerr == nil {
-			break
+		if len(tried) > 0 {
+			fail(fmt.Errorf("%w（已尝试：%s）", derr, strings.Join(tried, "；")))
+		} else {
+			fail(derr)
 		}
-		if attempt >= downloadRetries || ctx.Err() != nil {
-			fail(fmt.Errorf("下载请求失败：%w", rerr))
-			return
-		}
-		m.logf("[UPDATE] 下载第 %d 次失败（%v），%s 后重试", attempt, rerr, downloadRetryWait)
-		m.mu.Lock()
-		m.dl.Error = fmt.Sprintf("网络不稳定，正在重试（%v）", rerr)
-		m.mu.Unlock()
-		select {
-		case <-time.After(downloadRetryWait):
-		case <-ctx.Done():
-			fail(ctx.Err())
-			return
-		}
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		fail(fmt.Errorf("下载失败：HTTP %d", resp.StatusCode))
 		return
 	}
+	defer resp.Body.Close()
 	m.mu.Lock()
 	m.dl.Error = "" // 清掉重试期间写下的「正在重试」
 	m.mu.Unlock()
@@ -445,29 +509,67 @@ func (m *Manager) download(ctx context.Context, rawURL, assetName string) {
 		return
 	}
 	var written int64
+	var interrupted error
 	buf := make([]byte, 256<<10)
-	for {
-		n, rerr := resp.Body.Read(buf)
-		if n > 0 {
-			if _, werr := f.Write(buf[:n]); werr != nil {
-				_ = f.Close()
-				_ = os.Remove(tmpPath)
-				fail(fmt.Errorf("写入安装包失败：%w", werr))
-				return
+	// 单独拆一个闭包：下载中断后要「换源重来」，主流程得能从第二遍重新开始，
+	// 而不是被这一层的 return 锁死。
+	stream := func() error {
+		for {
+			n, rerr := resp.Body.Read(buf)
+			if n > 0 {
+				if _, werr := f.Write(buf[:n]); werr != nil {
+					return fmt.Errorf("写入安装包失败：%w", werr)
+				}
+				written += int64(n)
+				m.mu.Lock()
+				m.dl.Progress = percent(written, total)
+				m.dl.Size = written
+				m.mu.Unlock()
 			}
-			written += int64(n)
+			if rerr == io.EOF {
+				return nil
+			}
+			if rerr != nil {
+				return fmt.Errorf("下载中断：%w", rerr)
+			}
+		}
+	}
+	if err := stream(); err != nil {
+		interrupted = err
+	}
+	if interrupted != nil {
+		// 传输中途断开：清掉半个文件，换下一台镜像从头下。
+		// 为什么值得换源：公共反代「能出 JSON、下大文件被掐」很常见，
+		// 而这正是用户点了「更新」之后最不想再点第二次的时刻。
+		_ = f.Close()
+		_ = os.Remove(tmpPath)
+		resp2, moreTried, aerr := m.openAssetRetry(ctx, rawURL, src, resp, interrupted)
+		if aerr != nil {
+			fail(aerr)
+			return
+		}
+		defer resp2.Body.Close()
+		resp = resp2
+		total = resp.ContentLength
+		if total <= 0 {
 			m.mu.Lock()
-			m.dl.Progress = percent(written, total)
-			m.dl.Size = written
+			total = m.dl.Size
 			m.mu.Unlock()
 		}
-		if rerr == io.EOF {
-			break
+		written = 0
+		f, err = os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+		if err != nil {
+			fail(fmt.Errorf("创建临时文件失败：%w", err))
+			return
 		}
-		if rerr != nil {
+		if err := stream(); err != nil {
 			_ = f.Close()
 			_ = os.Remove(tmpPath)
-			fail(fmt.Errorf("下载中断：%w", rerr))
+			if len(moreTried) > 0 {
+				fail(fmt.Errorf("%w（已尝试：%s）", err, strings.Join(moreTried, "；")))
+			} else {
+				fail(err)
+			}
 			return
 		}
 	}

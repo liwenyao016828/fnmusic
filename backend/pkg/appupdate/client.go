@@ -3,6 +3,7 @@ package appupdate
 import (
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"fn-lx-player/pkg/security"
@@ -17,7 +18,9 @@ import (
 //     NewSafeStreamRoundTripper）。这里直接用 Stream 版本 + 手动逐跳校验。
 //   - 总时长不设死：检查更新由调用方 ctx 控制，下载由 downloadTimeout 控制；
 //     Client.Timeout 一旦生效会把 30 分钟的下载也砍掉。
-func newUpdateClient() *http.Client {
+//
+// proxy 是用户配置的出站代理（空 = 沿用环境变量 / 直连）。见 Options.ProxyFunc。
+func newUpdateClient(proxy string) *http.Client {
 	opts := security.DefaultOptions()
 	opts.MaxBodyBytes = 512 << 20 // 只影响 LimitedRead；transport 不读它，留作语义完整
 	// 「等响应头」放宽到 2 分钟：Release 资产会 302 到 objects.githubusercontent.com，
@@ -25,6 +28,7 @@ func newUpdateClient() *http.Client {
 	// （`net/http: timeout awaiting response headers`，2026-10-24 用户截图）。
 	// 只放宽**首字节**，总时长仍由 downloadTimeout（30 分钟）兜着。
 	opts.ResponseHeaderTimeout = 2 * time.Minute
+	opts.ProxyURL = strings.TrimSpace(proxy)
 	return &http.Client{
 		Transport: security.NewSafeStreamRoundTripper(opts),
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {

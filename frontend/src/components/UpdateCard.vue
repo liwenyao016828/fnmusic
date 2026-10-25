@@ -67,6 +67,22 @@
       aria-live="polite"
     >{{ statusText }}</p>
 
+    <!-- 连不上时直接把出口指出来：这类报错（i/o timeout、connection refused、
+         connection reset）几乎都是「这个网络出不去 GitHub」，而不是版本或权限问题。
+         2026-10-25 用户就是卡在这里：本机能开代理，但应用由飞牛拉起、读不到环境变量。 -->
+    <p
+      v-if="proxyHintNeeded"
+      class="mt-2 rounded-[9px] bg-[#FFF8E6] px-2.5 py-2 text-[11px] leading-relaxed text-[#8A6100]"
+    >
+      看起来是网络出不去 GitHub。如果这台机器需要代理才能访问外网，在下面
+      <button
+        type="button"
+        class="font-medium underline decoration-dotted underline-offset-2"
+        @click="settingsOpen = true"
+      >网络代理</button>
+      里填上地址即可（不用改环境变量、不用重启应用）。
+    </p>
+
     <div v-if="active" class="mt-2">
       <div class="h-1.5 overflow-hidden rounded-full bg-[var(--ys-surface-sunken)]">
         <div
@@ -108,9 +124,10 @@
       上次检查：{{ checkedLabel }}
     </div>
 
-    <!-- 下载设置（用户 2026-10-25：「版本更新新增限制速率，避免被限速，新增个人token输入」）。
+    <!-- 下载设置（用户 2026-10-25：「新增个人token输入」＋「应用内能设置代理」）。
          默认收起：绝大多数人不需要碰；但「一直 403 / 一直下载失败」的人需要它。
-         这两个值存在后端配置里（POST /api/config），改了立刻对下一次检查/下载生效。 -->
+         这几个值存在后端配置里（POST /api/config），改了立刻对下一次检查/下载生效，
+         不必重启应用 —— Manager 每次请求前现取一次（见 appupdate.Options.ProxyFunc）。 -->
     <div class="mt-3 border-t border-[var(--ys-border)] pt-2.5">
       <button
         type="button"
@@ -119,8 +136,10 @@
         @click="settingsOpen = !settingsOpen"
       >
         <SlidersHorizontal class="h-3.5 w-3.5" :stroke-width="1.8" />
-        GitHub 令牌
-        <span class="text-[10.5px] font-normal text-[var(--ys-text-faint)]">{{ tokenSet ? '已配置' : '未配置' }}</span>
+        镜像、网络与令牌
+        <span class="text-[10.5px] font-normal text-[var(--ys-text-faint)]">
+          {{ settingsSummary }}
+        </span>
       </button>
 
       <div v-if="settingsOpen" class="mt-2.5 space-y-3">
@@ -155,6 +174,139 @@
           </div>
           <p v-if="tokenNote" class="mt-1 text-[11px]" :class="tokenError ? 'text-rose-600' : 'text-[var(--ys-text-faint)]'">{{ tokenNote }}</p>
         </div>
+
+        <!-- ── 镜像清单（用户 2026-10-25：「增加默认镜像站，可删减增加」）──
+             为什么要镜像：更新分两步 —— ① 取 releases/latest 的 JSON  ② 下 fpk。
+             公共「GitHub 加速」站点几乎**只加速第②步**（它们只代理 github.com），
+             第一步请求 api.github.com 照样超时。所以这里默认只放实测能两步都代理的
+              gh-proxy.com，并且清单末尾永远有「GitHub 官方源」兜底（用户拍板「回退」）。
+             填自己的也能填：前缀（拼在原地址前）或含 {repo} 的完整更新源地址。 -->
+        <div class="border-t border-[var(--ys-border)] pt-2.5">
+          <div class="flex items-center justify-between gap-2">
+            <div class="text-[11.5px] font-medium text-[var(--ys-text)]">更新镜像（按顺序尝试）</div>
+            <button
+              type="button"
+              class="ys-press text-[11px] text-[var(--ys-text-muted)] underline decoration-dotted underline-offset-2 transition-colors hover:text-[var(--ys-text)] disabled:opacity-50"
+              :disabled="mirrorSaving"
+              @click="resetMirrors"
+            >恢复默认</button>
+          </div>
+          <p class="mt-0.5 text-[11px] leading-relaxed text-[var(--ys-text-muted)]">
+            一个失败就自动试下一个；全部失败再回落到 GitHub 官方源。
+            填 <code class="font-mono text-[10.5px]">https://你的反代/</code> 当加速前缀，
+            或填含 <code class="font-mono text-[10.5px]">{repo}</code> 的完整地址当自建更新源。
+          </p>
+
+          <ul class="mt-1.5 space-y-1.5">
+            <li
+              v-for="(m, i) in mirrorRows"
+              :key="`${m.url}-${i}`"
+              class="flex items-center gap-1.5 rounded-[9px] border border-[var(--ys-border)] bg-white px-2 py-1.5"
+            >
+              <input
+                type="checkbox"
+                class="h-3.5 w-3.5 shrink-0 accent-[var(--ys-accent)]"
+                :checked="!m.disabled"
+                :title="m.disabled ? '已停用：点一下启用' : '启用中：取消勾选即停用'"
+                @change="toggleMirror(i, !m.disabled)"
+              />
+              <span class="min-w-0 flex-1">
+                <span class="block truncate font-mono text-[11.5px]" :class="m.disabled ? 'text-[var(--ys-text-faint)] line-through' : 'text-[var(--ys-text)]'">{{ m.url }}</span>
+                <span class="block truncate text-[10.5px] text-[var(--ys-text-faint)]">{{ m.name || m.url }}</span>
+              </span>
+              <button
+                type="button"
+                class="ys-press shrink-0 rounded-[7px] px-1.5 py-0.5 text-[11px] text-[var(--ys-text-muted)] transition-colors hover:bg-[var(--ys-surface-sunken)] disabled:opacity-30"
+                :disabled="i === 0 || mirrorSaving"
+                title="上移（越靠前越先试）"
+                @click="moveMirror(i, -1)"
+              >↑</button>
+              <button
+                type="button"
+                class="ys-press shrink-0 rounded-[7px] px-1.5 py-0.5 text-[11px] text-[var(--ys-text-muted)] transition-colors hover:bg-[var(--ys-surface-sunken)] disabled:opacity-30"
+                :disabled="i === mirrorRows.length - 1 || mirrorSaving"
+                title="下移"
+                @click="moveMirror(i, 1)"
+              >↓</button>
+              <button
+                type="button"
+                class="ys-press shrink-0 rounded-[7px] px-1.5 py-0.5 text-[11px] text-rose-600 transition-colors hover:bg-rose-50 disabled:opacity-30"
+                :disabled="mirrorSaving"
+                title="删除这条镜像"
+                @click="removeMirror(i)"
+              >删</button>
+            </li>
+            <li class="text-[11px] text-[var(--ys-text-muted)]">
+              GitHub 官方源
+              <span class="text-[var(--ys-text-faint)]">
+                · {{ officialDisabled ? '已停用（现在只能用上面的镜像）' : '内置兜底，永远最后尝试，不可删除' }}
+              </span>
+              <button
+                type="button"
+                class="ml-1 underline decoration-dotted underline-offset-2 disabled:opacity-50"
+                :disabled="mirrorSaving"
+                @click="toggleOfficial"
+              >{{ officialDisabled ? '重新启用' : '停用' }}</button>
+            </li>
+          </ul>
+
+          <div class="mt-1.5 flex flex-wrap items-center gap-2">
+            <input
+              v-model="mirrorInput"
+              type="text"
+              autocomplete="off"
+              spellcheck="false"
+              class="min-w-0 flex-1 rounded-[9px] border border-[var(--ys-border)] bg-white px-2.5 py-1.5 font-mono text-[12px] text-[var(--ys-text)] outline-none placeholder:text-[var(--ys-text-faint)] focus:border-[var(--ys-accent)]"
+              placeholder="https://gh-proxy.com 或 https://自建/{repo}/latest.json"
+            />
+            <button
+              type="button"
+              class="ys-press rounded-[9px] border border-[var(--ys-border)] bg-white px-3 py-1.5 text-[12px] font-medium text-[var(--ys-text-muted)] transition-colors hover:text-[var(--ys-text)] disabled:opacity-50"
+              :disabled="mirrorSaving || !mirrorInput.trim()"
+              @click="addMirror"
+            >添加</button>
+          </div>
+          <p v-if="mirrorNote" class="mt-1 text-[11px]" :class="mirrorError ? 'text-rose-600' : 'text-[var(--ys-text-faint)]'">{{ mirrorNote }}</p>
+          <p v-if="triedText" class="mt-1 break-words text-[10.5px] leading-relaxed text-[var(--ys-text-faint)]">{{ triedText }}</p>
+        </div>
+
+        <!-- 出站代理。只作用于「检查更新 / 下载安装包」这一条链路，不影响音源与播放。 -->
+        <div class="border-t border-[var(--ys-border)] pt-2.5">
+          <div class="text-[11.5px] font-medium text-[var(--ys-text)]">网络代理（可选）</div>
+          <p class="mt-0.5 text-[11px] leading-relaxed text-[var(--ys-text-muted)]">
+            应用由飞牛系统拉起，读不到 shell 里的 <code class="font-mono text-[10.5px]">HTTP_PROXY</code>；
+            GitHub 在部分网络下必须经代理才连得上。填在这里就生效，不用改环境变量、不用重启。
+          </p>
+          <p class="mt-1 text-[11px] leading-relaxed text-[var(--ys-text-faint)]">
+            支持 http / https / socks5，例如 <code class="font-mono text-[10.5px]">http://192.168.1.3:7890</code>
+            或 <code class="font-mono text-[10.5px]">socks5://192.168.1.3:7891</code>。
+            <b>内网与本地地址始终直连</b>，不会被绕进代理；只影响更新，不影响音源与播放。
+          </p>
+          <div class="mt-1.5 flex flex-wrap items-center gap-2">
+            <input
+              v-model="proxyInput"
+              type="text"
+              autocomplete="off"
+              spellcheck="false"
+              class="min-w-0 flex-1 rounded-[9px] border border-[var(--ys-border)] bg-white px-2.5 py-1.5 font-mono text-[12px] text-[var(--ys-text)] outline-none placeholder:text-[var(--ys-text-faint)] focus:border-[var(--ys-accent)]"
+              placeholder="http://192.168.1.3:7890"
+            />
+            <button
+              type="button"
+              class="ys-press rounded-[9px] border border-[var(--ys-border)] bg-white px-3 py-1.5 text-[12px] font-medium text-[var(--ys-text-muted)] transition-colors hover:text-[var(--ys-text)] disabled:opacity-50"
+              :disabled="proxySaving || !proxyInput.trim()"
+              @click="saveProxy"
+            >保存</button>
+            <button
+              v-if="proxySet"
+              type="button"
+              class="ys-press rounded-[9px] border border-[var(--ys-border)] bg-white px-3 py-1.5 text-[12px] font-medium text-rose-600 transition-colors hover:bg-rose-50 disabled:opacity-50"
+              :disabled="proxySaving"
+              @click="clearProxy"
+            >清除</button>
+          </div>
+          <p v-if="proxyNote" class="mt-1 text-[11px]" :class="proxyError ? 'text-rose-600' : 'text-[var(--ys-text-faint)]'">{{ proxyNote }}</p>
+        </div>
       </div>
     </div>
   </section>
@@ -173,6 +325,7 @@ defineProps({
 
 const {
   current, latest, hasUpdate, notes, publishedAt, size, checkedAt, checkError,
+  checkTried, checkSource,
   checking, installed, progress, error, phase,
 } = appUpdate
 
@@ -257,6 +410,196 @@ const tokenSaving = ref(false)
 const tokenNote = ref('')
 const tokenError = ref(false)
 
+const proxyInput = ref('')
+const proxySet = ref(false)
+const proxySaving = ref(false)
+const proxyNote = ref('')
+const proxyError = ref(false)
+
+async function saveProxy() {
+  const v = proxyInput.value.trim()
+  if (!v || proxySaving.value) return
+  proxySaving.value = true
+  proxyError.value = false
+  try {
+    const res = await ConfigAPI.save({ update_proxy: v })
+    const bad = apiError(res)
+    if (bad) {
+      proxyError.value = true
+      proxyNote.value = fail('保存代理', new Error(bad))
+      return
+    }
+    // 后端会把地址归一（补 scheme）再回传，用回传值回显，避免「我明明填了 http://」的疑问。
+    const saved = String(res?.data?.update_proxy || '').trim()
+    proxySet.value = !!saved
+    proxyInput.value = saved
+    proxyNote.value = '已保存。下一次「检查更新」就走这个代理（内网地址仍直连）'
+    // 配代理的人一定是刚失败过的人：立刻重查一次，让他马上看到能不能通。
+    appUpdate.check()
+  } catch (e) {
+    proxyError.value = true
+    proxyNote.value = fail('保存代理', e)
+  } finally {
+    proxySaving.value = false
+  }
+}
+
+async function clearProxy() {
+  proxySaving.value = true
+  proxyError.value = false
+  try {
+    const res = await ConfigAPI.save({ update_clear_proxy: true })
+    const bad = apiError(res)
+    if (bad) {
+      proxyError.value = true
+      proxyNote.value = fail('清除代理', new Error(bad))
+      return
+    }
+    proxySet.value = false
+    proxyInput.value = ''
+    proxyNote.value = '代理已清除（回到直连 / 环境变量）'
+  } catch (e) {
+    proxyError.value = true
+    proxyNote.value = fail('清除代理', e)
+  } finally {
+    proxySaving.value = false
+  }
+}
+
+// ── 更新镜像清单（用户 2026-10-25）──────────────────────────────────
+//
+// 数据结构与后端一致：{name,url,disabled} 有序数组，整体替换（POST /api/config
+// 的 update_mirrors 是指针，空数组 = 「只用官方源」，和「没配过用默认」要分清）。
+//
+// 官方源不落盘：它由后端内置在清单末尾。用户在界面上「停用官方源」时，我们往清单里
+// 塞一条 {url:'github://official',disabled:true} —— 这是唯一表示「连官方也别试」的方式。
+const OFFICIAL_MIRROR_URL = 'github://official'
+const DEFAULT_MIRRORS = [{ name: 'gh-proxy', url: 'https://gh-proxy.com', disabled: false }]
+
+const mirrors = ref([])
+const mirrorInput = ref('')
+const mirrorSaving = ref(false)
+const mirrorNote = ref('')
+const mirrorError = ref(false)
+
+const mirrorRows = computed(() => mirrors.value.filter((m) => m.url !== OFFICIAL_MIRROR_URL))
+const officialDisabled = computed(() => mirrors.value.some((m) => m.url === OFFICIAL_MIRROR_URL && m.disabled))
+const activeMirrorCount = computed(() => mirrorRows.value.filter((m) => !m.disabled).length + (officialDisabled.value ? 0 : 1))
+
+const settingsSummary = computed(() => {
+  const parts = []
+  if (activeMirrorCount.value) parts.push(`${activeMirrorCount.value} 个更新源`)
+  if (proxySet.value) parts.push('代理已配置')
+  if (tokenSet.value) parts.push('令牌已配置')
+  return parts.join('、') || '未配置'
+})
+
+/** 把「界面上的行」和「官方源标记」合成要提交给后端的完整清单。 */
+function buildMirrorPayload(rows, officialOff) {
+  const list = rows.map((m) => ({ name: m.name || '', url: m.url, disabled: !!m.disabled }))
+  if (officialOff) list.push({ url: OFFICIAL_MIRROR_URL, disabled: true })
+  return list
+}
+
+async function saveMirrors(nextRows, officialOff) {
+  mirrorSaving.value = true
+  mirrorError.value = false
+  try {
+    const payload = buildMirrorPayload(nextRows, officialOff)
+    const res = await ConfigAPI.save({ update_mirrors: payload })
+    const bad = apiError(res)
+    if (bad) {
+      mirrorError.value = true
+      mirrorNote.value = fail('保存镜像', new Error(bad))
+      return false
+    }
+    // 以服务端归一后的结果为准（它会补 scheme、去重、丢掉非法项）——
+    // 直接回显用户输入会让「看着存了其实被丢弃」这种问题永远发现不了。
+    const saved = res?.data?.update_mirrors
+    mirrors.value = Array.isArray(saved) ? saved.map((m) => ({ name: m.name || '', url: m.url, disabled: !!m.disabled })) : payload
+    mirrorNote.value = '已保存，下一次「检查更新」按这个顺序尝试'
+    appUpdate.check({ silent: true })
+    return true
+  } catch (e) {
+    mirrorError.value = true
+    mirrorNote.value = fail('保存镜像', e)
+    return false
+  } finally {
+    mirrorSaving.value = false
+  }
+}
+
+function addMirror() {
+  const raw = mirrorInput.value.trim()
+  if (!raw || mirrorSaving.value) return
+  if (mirrorRows.value.some((m) => m.url.toLowerCase() === raw.toLowerCase())) {
+    mirrorError.value = true
+    mirrorNote.value = '这条已经在清单里了'
+    return
+  }
+  const rows = [...mirrorRows.value, { name: '', url: raw, disabled: false }]
+  if (saveMirrors(rows, officialDisabled.value)) mirrorInput.value = ''
+}
+
+function removeMirror(i) {
+  const rows = mirrorRows.value.filter((_, idx) => idx !== i)
+  saveMirrors(rows, officialDisabled.value)
+}
+
+function toggleMirror(i, enabled) {
+  const rows = mirrorRows.value.map((m, idx) => (idx === i ? { ...m, disabled: !enabled } : m))
+  saveMirrors(rows, officialDisabled.value)
+}
+
+function moveMirror(i, delta) {
+  const rows = [...mirrorRows.value]
+  const j = i + delta
+  if (j < 0 || j >= rows.length) return
+  const tmp = rows[i]
+  rows[i] = rows[j]
+  rows[j] = tmp
+  saveMirrors(rows, officialDisabled.value)
+}
+
+function toggleOfficial() {
+  saveMirrors(mirrorRows.value, !officialDisabled.value)
+}
+
+function resetMirrors() {
+  mirrorSaving.value = true
+  mirrorError.value = false
+  ConfigAPI.save({ update_mirrors_reset: true }).then((res) => {
+    const bad = apiError(res)
+    if (bad) {
+      mirrorError.value = true
+      mirrorNote.value = fail('恢复默认镜像', new Error(bad))
+      return
+    }
+    const saved = res?.data?.update_mirrors
+    mirrors.value = Array.isArray(saved) && saved.length
+      ? saved.map((m) => ({ name: m.name || '', url: m.url, disabled: !!m.disabled }))
+      : DEFAULT_MIRRORS.map((m) => ({ ...m }))
+    mirrorNote.value = '已恢复默认：只保留 gh-proxy.com，GitHub 官方源兜底'
+    appUpdate.check({ silent: true })
+  }).catch((e) => {
+    mirrorError.value = true
+    mirrorNote.value = fail('恢复默认镜像', e)
+  }).finally(() => {
+    mirrorSaving.value = false
+  })
+}
+
+/** 最近一次检查「试过哪些源」—— 命中/失败都列出来，用户才知道该删哪条。 */
+const triedText = computed(() => {
+  const list = checkTried.value || []
+  if (!list.length) return ''
+  const parts = list.map((t) => {
+    if (t.skipped) return `${t.name}（已停用）`
+    return t.ok ? `${t.name} ✓` : `${t.name} ✗ ${t.reason || t.error || '失败'}`
+  })
+  return `本次检查：${parts.join('　')}`
+})
+
 /** 读出当前配置（GET /api/config 与 ConfigAPI.get 同一份结构）。 */
 async function loadSettings() {
   try {
@@ -264,10 +607,26 @@ async function loadSettings() {
     const cfg = res?.data || res?.config || {}
     // 后端永远不回传 token 的值，只回 update_token_set 这个布尔。
     tokenSet.value = !!cfg.update_token_set
+    // 代理不是密钥，回传明文（界面要能编辑/回显）。
+    proxySet.value = !!String(cfg.update_proxy || '').trim()
+    // 镜像清单：后端把内置官方源也算在返回里（不会被写进配置），原样回显即可。
+    if (Array.isArray(cfg.update_mirrors)) {
+      mirrors.value = cfg.update_mirrors.map((m) => ({ name: m.name || '', url: m.url, disabled: !!m.disabled }))
+    } else if (cfg.update_mirrors === undefined) {
+      mirrors.value = DEFAULT_MIRRORS.map((m) => ({ ...m }))
+    }
   } catch {
     // 读失败就当默认：不要为了一个可选设置弹错误。
   }
 }
+
+// 连不上 GitHub 时把用户直接指向「网络代理」。这里只按**传输层**特征判，
+// 不猜业务原因：403/404 是权限或版本问题，代理救不了，不该提示。
+const proxyHintNeeded = computed(() => {
+  const text = [error.value, checkError.value].filter(Boolean).join(' ')
+  if (!text) return false
+  return /i\/o timeout|timeout awaiting response headers|connection refused|connection reset|no such host|dial tcp|EOF|network is unreachable/i.test(text)
+})
 
 async function saveToken() {
   const v = tokenInput.value.trim()

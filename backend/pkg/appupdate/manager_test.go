@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"fn-lx-player/pkg/config"
 )
 
 // fakeGitHub 起一个很小的假 GitHub：/release 返回 release JSON，/fpk 返回安装包字节。
@@ -354,7 +356,9 @@ func TestDownloadRetriesTransientNetworkError(t *testing.T) {
 	})
 	m.dl = DownloadState{Status: StatusDownloading, Version: "1.0.1"}
 
-	m.download(context.Background(), srv.URL+"/app.fpk", "app.fpk")
+	// 传一个「当前源」= 这台测试服务器本身：不这样的话 openAsset 会把官方源
+	// 也当成候选去试真 GitHub（测试里 Client 是 srv.Client()，但 URL 是拼出来的）。
+	m.download(context.Background(), srv.URL+"/app.fpk", "app.fpk", testSource(srv.URL, "/app.fpk"))
 
 	m.mu.Lock()
 	st := m.dl
@@ -403,7 +407,9 @@ func TestDownloadFailsAfterRetries(t *testing.T) {
 	})
 	m.dl = DownloadState{Status: StatusDownloading, Version: "1.0.1"}
 
-	m.download(context.Background(), srv.URL+"/app.fpk", "app.fpk")
+	// 传一个「当前源」= 这台测试服务器本身：不这样的话 openAsset 会把官方源
+	// 也当成候选去试真 GitHub（测试里 Client 是 srv.Client()，但 URL 是拼出来的）。
+	m.download(context.Background(), srv.URL+"/app.fpk", "app.fpk", testSource(srv.URL, "/app.fpk"))
 
 	m.mu.Lock()
 	st := m.dl
@@ -411,10 +417,27 @@ func TestDownloadFailsAfterRetries(t *testing.T) {
 	if st.Status != StatusError {
 		t.Fatalf("一直断就该报错，实得 status=%s", st.Status)
 	}
-	if n := atomic.LoadInt32(&hits); n != downloadRetries {
-		t.Fatalf("尝试次数应为 %d，实得 %d", downloadRetries, n)
+	// 每个源内部重试 downloadRetries 次；源用尽后**换下一台**再重试一轮，
+	// 所以总次数是「源数 × downloadRetries」。测试没配镜像、官方源也没停用，
+	// 候选 = 注入的测试源 + 官方源兜底 = 2 台。
+	wantHits := int32(downloadRetries * 2)
+	if n := atomic.LoadInt32(&hits); n != wantHits {
+		t.Fatalf("尝试次数应为 %d（2 台源 × %d 次），实得 %d", wantHits, downloadRetries, n)
 	}
-	if !strings.Contains(st.Error, "下载请求失败") {
+	if !strings.Contains(st.Error, "下载请求失败") && !strings.Contains(st.Error, "已尝试") {
 		t.Fatalf("错误文案要说明是下载请求失败，实得 %q", st.Error)
+	}
+}
+
+// testSource 构造一个「当前源」，它的前缀就是测试服务器的 scheme://host。
+//
+// 为什么要它：download 现在会为「换源」现算候选地址，若不给当前源，它会
+// 把 官方 GitHub 地址也当成候选（测试环境里没人希望真去连外网）。
+func testSource(srvURL, path string) sourceEntry {
+	prefix := strings.TrimSuffix(srvURL, path)
+	return sourceEntry{
+		name:       "测试源",
+		releaseURL: srvURL,
+		mirror:     config.UpdateMirror{Name: "测试源", URL: prefix},
 	}
 }
