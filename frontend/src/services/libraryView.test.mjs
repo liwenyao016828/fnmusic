@@ -198,21 +198,27 @@ test('completeDoneText：停止单独说，跑完报六个字段，没搜到才�
 
 // ── 补全整理的三步流程 ──
 // 用户反馈的原话：「我点击了扫描缺失，也正常出现了缺失的歌曲数量。但是，下一步怎么做呢？」
-// 这三步必须和界面上的按钮一一对上，且只由 gaps / plan 两个已有状态推出。
+// 这三步必须和界面上的按钮一一对上，且只由 gaps / 预览是否拿到 plan_id 推出。
 test('三步流程：没扫过缺口停在第 1 步，扫过停在第 2 步，出了预览计划停在第 3 步', () => {
   assert.equal(completeStep(null, null), 1)
   // 缺口是持久化恢复的（刷新页面后还在），所以刷新后仍应停在第 2 步
   assert.equal(completeStep({ total: 10 }, null), 2)
   // 预览出来了就一定要跳到第 3 步 —— 否则界面会一边让用户「勾字段」一边已经能写入了
-  assert.equal(completeStep({ total: 10 }, { plan_id: 'p1', matched: 3 }), 3)
+  assert.equal(completeStep({ total: 10 }, true), 3)
   // 没有缺口统计也能直接预览（后端自己会扫），此时仍算第 3 步
-  assert.equal(completeStep(null, { plan_id: 'p1', matched: 0 }), 3)
+  assert.equal(completeStep(null, true), 3)
+  // 流式预览「停了」= 没拿到 plan_id，必须退回第 2 步 —— 那份清单不完整、不能写
+  assert.equal(completeStep({ total: 10 }, false), 2)
+  // 正在预览（还没出 plan_id）也不能退回第 1 步：否则跑到一半「扫描缺失」按钮又冒出来
+  assert.equal(completeStep(null, false, true), 2)
 })
 
 test('三步流程：每一步都要有一句「下一步点哪」，且不能指错按钮', () => {
   assert.match(completeHint(null, null), /扫描缺失/)
   assert.match(completeHint({ total: 10 }, null), /预览要写的内容/)
-  assert.match(completeHint({ total: 10 }, { plan_id: 'p1' }), /确认写入/)
+  assert.match(completeHint({ total: 10 }, true), /确认写入/)
+  // 正在预览时提示「可以停止」，而不是叫人在跑的时候再点一次预览
+  assert.match(completeHint(null, false, true), /停止预览/)
   // 第 1 步那句不能提前叫人点「预览」—— 字段还没勾，点了也白点
   assert.ok(!/预览/.test(completeHint(null, null)))
 })

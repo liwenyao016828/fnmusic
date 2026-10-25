@@ -121,8 +121,13 @@ export function normalizeStatus(res) {
     ready: body.ready === undefined ? (body.available === undefined ? true : !!body.available) : !!body.ready,
     reason: String(body.reason || ''),
     paused: !!body.paused,
-    channels: Array.isArray(body.channels) ? body.channels : [],
+    // optional=true 的是「有更好、没有也能下」的渠道（目前只有服务端洛雪宿主）。
+    // 下载页只用必需渠道判断能力，可选渠道的状态归音源管理页展示。
+    channels: Array.isArray(body.channels)
+      ? body.channels.map(c => ({ ...c, optional: !!c?.optional }))
+      : [],
     lxHost: String(body.lx_host ?? body.lxHost ?? ''),
+    dir: String(body.dir ?? body.download_dir ?? ''),
     managed,
     subscriptionsReason: String(sub.reason ?? body.subscriptions_reason ?? ''),
   }
@@ -198,6 +203,9 @@ const ready = ref(null)            // 能不能真的下（status.ready）
 const unavailableReason = ref('')
 const channels = ref([])           // [{id,enabled,ready,reason}] 给用户看「哪条渠道能用」
 const lxHost = ref('')             // 'off' | 'starting' | 'ready' | ''
+// 后台队列**实际**落盘目录（后端 status.dir）。只读：队列页不再提供改目录入口，
+// 入口统一在「系统 -> 设置 -> 存储目录」。空串 = 老后端没这个字段，界面回退本地记忆值。
+const backendDir = ref('')
 const subscriptionsManaged = ref(false)
 const subscriptionsReason = ref('')
 const paused = ref(false)          // 整队暂停（后端 pause/resume 不带 ids）
@@ -219,7 +227,10 @@ const activeCount = computed(() => stats.value.pending + stats.value.downloading
 const usable = computed(() => reachable.value === true && ready.value === true)
 // 洛雪宿主没开、只剩平台直链时，音质/音源覆盖会明显变窄：界面要给一句提示，
 // 别让用户以为「后台能下」就等于「和浏览器一样能下」。
-const lxWeakHint = computed(() => ready.value === true && lxHost.value === 'off')
+// 2026-10-25：原本这里有 lxWeakHint（「就绪但宿主没开」→ 下载页提示「洛雪宿主未开启」）。
+// 用户反馈「下载界面显示落雪宿主未开启，检查有问题」—— 后台下载并不需要宿主，
+// 拿它当提示等于把可选音源能力说成下载故障。宿主状态改在音源管理页展示，
+// 这里不再产生任何提示。
 
 // ── 请求 ──
 
@@ -249,6 +260,7 @@ async function checkStatus() {
     paused.value = st.paused
     channels.value = st.channels
     lxHost.value = st.lxHost
+    backendDir.value = st.dir || ''
     subscriptionsManaged.value = st.managed
     subscriptionsReason.value = st.subscriptionsReason || (st.managed ? '' : st.reason)
     unavailableReason.value = st.ready ? '' : (st.reason || '后台下载不可用（后端没有可用取音渠道）')
@@ -439,9 +451,9 @@ export const backendDownload = {
   unavailableReason,
   channels,
   lxHost,
+  backendDir,
   subscriptionsManaged,
   subscriptionsReason,
-  lxWeakHint,
   unavailableReason,
   // 队列
   items,

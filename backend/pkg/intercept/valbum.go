@@ -740,7 +740,11 @@ func (i *Interceptor) albumTracks(ctx context.Context, anchor online.Track, user
 
 	rctx, cancel := context.WithTimeout(context.Background(), albumResolveBudget)
 	defer cancel()
-	out := i.playableOnly(rctx, anchor.Platform, cands)
+	// 先把「能播的」排到前面，但**不丢**解析不出直链的（2026-10-24 与榜单同一条口径）：
+	// 专辑条目原来在这里被 playableOnly 砍到只剩能播的，于是「这张专辑 30 首」
+	// 打开只有 20 首，像是漏了曲目。现在只是排序 —— 首屏先给能播的，播不响的
+	// 留在后面，由取音层跨源兜底。
+	out := i.preferPlayable(rctx, anchor.Platform, cands)
 	if len(out) > albumTrackMax {
 		out = out[:albumTrackMax]
 	}

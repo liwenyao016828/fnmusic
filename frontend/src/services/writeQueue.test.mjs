@@ -108,7 +108,7 @@ test('音质下载：adq 是队列的方法，且真的会被写出去', async (
   assert.equal(typeof q.adq, 'function', 'writes.adq 必须存在 —— 缺了就是改音质静默不生效')
   await q.adq('320k')
   await settle(q)
-  assert.deepEqual(writes, [{ ids: undefined, enabled: undefined, ui: undefined, adq: '320k' }])
+  assert.deepEqual(writes, [{ ids: undefined, enabled: undefined, ui: undefined, adq: '320k', size: undefined }])
 })
 
 test('音质下载：空串（「跟随」）是合法取值，不能被当成「没有待写」吃掉', async () => {
@@ -118,6 +118,17 @@ test('音质下载：空串（「跟随」）是合法取值，不能被当成�
   await settle(q)
   assert.equal(writes.length, 1, '写「跟随」也必须发一次 —— 用真假值判会把它吃掉')
   assert.equal(writes[0].adq, '')
+})
+
+test('首数：size 是队列的方法，null（「跟随默认」）也要真的写出去', async () => {
+  const writes = []
+  const q = createWriteQueue({ send: async (w) => { writes.push(w) } })
+  assert.equal(typeof q.size, 'function', 'writes.size 必须存在 —— 缺了就是改首数静默不生效')
+  await q.size({ global: null })
+  await settle(q)
+  assert.equal(writes.length, 1, '写「跟随默认」也必须发一次 —— 用真假值判会把它吃掉')
+  assert.deepEqual(writes[0].size, { global: null })
+  assert.equal(writes[0].ids, undefined, '没动的键必须还是 undefined')
 })
 
 test('四个键互不干扰：改音质不会顺手把勾选/开关写一遍', async () => {

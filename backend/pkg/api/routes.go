@@ -171,12 +171,36 @@ var routeTable = []routeSpec{
 	// POST 启动异步任务，GET 读进度与结果，/cancel 停止正在跑的（不再派发新曲目）。
 	{Path: "/api/library/complete", Handler: func(s *Server) http.HandlerFunc { return s.HandleLibraryComplete }},
 	{Path: "/api/library/complete/cancel", Handler: func(s *Server) http.HandlerFunc { return s.HandleLibraryCompleteCancel }},
+	// 流式预览（NDJSON 逐条下发）：用户 2026-10-24「预览改成流式显示，加暂停 / 继续 / 停止」。
+	// 与上面 /complete 的 dry_run 是同一套挑活与匹配逻辑，只是把结果一条条推出来。
+	{Path: "/api/library/complete/preview/stream", Handler: func(s *Server) http.HandlerFunc { return s.HandleLibraryCompletePreviewStream }},
 
 	// 用户自定义的命名解析规则（AI 生成正则 / 手写正则）
 	{Path: "/api/library/name-rules", Handler: func(s *Server) http.HandlerFunc { return s.HandleNameRules }},
 
 	// 撤销最近一次补全（把改过的文件从备份还原）
 	{Path: "/api/library/complete/undo", Handler: func(s *Server) http.HandlerFunc { return s.HandleCompleteUndo }},
+
+	// 歌名修复：扫出歌名可疑的曲目，交给 AI 在「文件名 + 现有标签」之间给出结论后写回
+	{Path: "/api/library/title-fix/scan", Handler: func(s *Server) http.HandlerFunc { return s.HandleTitleFixScan }},
+	{Path: "/api/library/title-fix/fix", Handler: func(s *Server) http.HandlerFunc { return s.HandleTitleFixFix }},
+	// 手动歌名体检：随机抽 N 首让 AI 判断能不能修（只读，不写文件）
+	{Path: "/api/library/title-fix/audit", Handler: func(s *Server) http.HandlerFunc { return s.HandleTitleFixAudit }},
+	// 手写歌名回写（修复记录里的「修改」/ 撤回到指定标题）
+	{Path: "/api/library/title-fix/apply", Handler: func(s *Server) http.HandlerFunc { return s.HandleTitleFixApply }},
+	// 缺歌词的文件：列清单 / 只取词预览 / 取词并写盘（用户 2026-10-25 需求 N）
+	{Path: "/api/library/lyric/gaps", Handler: func(s *Server) http.HandlerFunc { return s.HandleLibraryLyricGaps }},
+	{Path: "/api/library/lyric/fetch", Handler: func(s *Server) http.HandlerFunc { return s.HandleLibraryLyricFetch }},
+	{Path: "/api/library/lyric/write", Handler: func(s *Server) http.HandlerFunc { return s.HandleLibraryLyricWrite }},
+
+	// 补全记录：查每一首补了什么、撤回单条/多条、修正标题歌手（数据快照 / 歌名修复用）
+	{Path: "/api/library/complete/records", Handler: func(s *Server) http.HandlerFunc { return s.HandleCompleteRecords }},
+
+	// 数据快照（原「记录」段改名）：列表 / 明细 / 手动快照 / 整份恢复
+	// 2026-10-27 数据快照改成「曲库元数据快照」（只存标签，不复制音频），见 meta_snapshot.go
+	{Path: "/api/library/meta-snapshots", Handler: func(s *Server) http.HandlerFunc { return s.HandleMetaSnapshots }},
+	// 旧路径只保留定时开关的写入（op=schedule），其余动作一律提示改走新接口
+	{Path: "/api/library/snapshots", Handler: func(s *Server) http.HandlerFunc { return s.handleSnapshotSchedule }},
 	{Path: "/api/duplicates", Handler: func(s *Server) http.HandlerFunc { return s.HandleDuplicates }},
 	{Path: "/api/duplicates/resolve", Handler: func(s *Server) http.HandlerFunc { return s.HandleDuplicatesResolve }},
 
@@ -241,6 +265,8 @@ var routeTable = []routeSpec{
 	// 扫描只读；修复要用户在前端确认后才逐条传上来，不做「一键全自动改盘」。
 	{Path: "/api/nas/health/scan", Handler: func(s *Server) http.HandlerFunc { return nas.HandleHealthScan }},
 	{Path: "/api/nas/health/fix", Handler: func(s *Server) http.HandlerFunc { return nas.HandleHealthFix }},
+	// 删除单个/多个本地文件：默认挪进回收站，mode=delete 才真删（真删也先整文件备份）
+	{Path: "/api/nas/delete", Handler: func(s *Server) http.HandlerFunc { return s.HandleNASDelete }},
 
 	// 3.5 音频标签（歌词内嵌 / 封面 / 元数据）
 	{

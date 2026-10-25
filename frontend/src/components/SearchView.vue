@@ -392,6 +392,21 @@
               </span>
             </label>
 
+            <!-- 显示首数（用户 2026-10-24：榜单首数可设）。
+                 这里只设**全局**的；单个榜要在卡片上单独调（见卡片右上角的下拉）。
+                 后端 0 = 跟随内置默认（100），所以「默认」这一档发的是 clear。 -->
+            <div class="flex flex-wrap items-center gap-2 rounded-lg bg-gray-50 px-3 py-2"
+                 title="每个注入的榜单在飞牛音乐里显示多少首；单个榜单可以在卡片上单独改">
+              <span class="text-[11px] font-bold text-gray-700 whitespace-nowrap">显示首数</span>
+              <SelectField
+                class="w-36"
+                :model-value="chartSizeModelValue"
+                :options="CHART_SIZE_OPTIONS"
+                @update:model-value="onPickGlobalChartSize"
+              />
+              <span class="text-[10px] text-gray-400">{{ chartSizeHint }}</span>
+            </div>
+
             <!-- 音质：勾选的榜单在飞牛里点播放/下载时用哪一档（后端拦截层读它） -->
             <div class="flex flex-wrap items-center gap-2 rounded-lg bg-gray-50 px-3 py-2" :title="autoDownloadQualityHint">
               <span class="text-[11px] font-bold text-gray-700 whitespace-nowrap">音质下载</span>
@@ -431,6 +446,16 @@
                 ? 'bg-emerald-500 text-white shadow-sm'
                 : 'bg-gray-100/90 text-gray-400 opacity-60 group-hover:opacity-100 group-hover:bg-emerald-50 group-hover:text-emerald-600'"
             >{{ isChartInjected(chart) ? '★ 已注入' : '+ 注入' }}</button>
+            <!-- 已注入的榜：右下角标出「这个榜显示几首」，点一下改成别的数（只改这一个榜）。
+                 未注入时不显示 —— 那是配置噪音。 -->
+            <button
+              v-if="isChartInjected(chart)"
+              type="button"
+              :disabled="chartInjectBusy"
+              title="点一下改这个榜显示多少首（只影响这一个榜）"
+              @click.stop="cycleChartSize(chart)"
+              class="absolute bottom-2 right-2 z-10 rounded-full bg-gray-100/90 px-2 py-0.5 text-[10px] font-bold text-gray-500 transition-colors hover:bg-emerald-50 hover:text-emerald-600 disabled:opacity-40 whitespace-nowrap"
+            >{{ chartSizeOf(chart) }} 首</button>
             <!-- 固定 76x76px 尺寸封面，杜绝撑大 -->
             <div
               class="relative rounded-lg overflow-hidden bg-gray-100 shrink-0 shadow-2xs"
@@ -904,6 +929,9 @@ import {
   setEnabled as setInjectEnabled,
   setUIInject as setUIInjectEnabled,
   setAutoDownloadQuality,
+  setChartSize,
+  setChartSizeFor,
+  DEFAULT_CHART_SIZE,
   loadConfig as loadInjectConfig,
 } from '../services/chartInject'
 import { fail, apiError, describeError } from '../services/userMsg'
@@ -1322,6 +1350,54 @@ function selectOnlyChartPlatform(platformId) {
   const kept = chartInjectIds.value.filter((k) => !CHART_PLATFORMS.some((p) => k.startsWith(`${p}_`)))
   const mine = toplists.value.map((c) => chartInjectKeyOf(c))
   replaceInjectIds([...kept, ...mine])
+}
+
+// ── 显示首数（可选值由后端 pkg/config 的区间决定，这里只是把常用档位摆出来）──
+//
+// 为什么不给一个自由输入框：首数是「浏览体验」的旋钮，不是精确配置，几个档位足够；
+// 真要写别的数，直接改配置文件也会被 NormalizeChartSize 夹到 [10,300]。
+const CHART_SIZE_OPTIONS = [
+  { value: 'default', label: `默认（${DEFAULT_CHART_SIZE} 首）` },
+  { value: '20', label: '20 首' },
+  { value: '30', label: '30 首' },
+  { value: '50', label: '50 首' },
+  { value: '100', label: '100 首' },
+  { value: '200', label: '200 首' },
+]
+
+/** 下拉显示的是「全局首数」，0 = 默认 → 用 'default' 这个字符串值（SelectField 只认字符串） */
+const chartSizeModelValue = computed(() => {
+  const n = Number(chartInject.chartSize?.value) || 0
+  return n > 0 ? String(n) : 'default'
+})
+
+const chartSizeHint = computed(() => {
+  const per = Object.keys(chartInject.chartSizes?.value || {}).length
+  if (per) return `另有 ${per} 个榜单独设了首数`
+  return '单个榜可在卡片上单独调'
+})
+
+function onPickGlobalChartSize(v) {
+  setChartSize(v === 'default' ? null : Number(v))
+}
+
+/** 这张榜实际显示几首（单榜覆盖 > 全局 > 默认，与后端同一套优先级） */
+function chartSizeOf(chart) {
+  const key = chartInjectKeyOf(chart)
+  const per = chartInject.chartSizes?.value?.[key]
+  if (Number(per) > 0) return Number(per)
+  const g = Number(chartInject.chartSize?.value) || 0
+  return g > 0 ? g : DEFAULT_CHART_SIZE
+}
+
+/** 点卡片上的「N 首」：在常用档位里循环，走到头回到「跟随全局」 */
+function cycleChartSize(chart) {
+  const key = chartInjectKeyOf(chart)
+  const ladder = [20, 30, 50, 100, 200, 0]
+  const cur = Number(chartInject.chartSizes?.value?.[key]) || 0
+  const idx = ladder.indexOf(cur)
+  const next = ladder[(idx + 1) % ladder.length]
+  return setChartSizeFor(key, next || null)
 }
 
 // 音质下载（这几个选项与后端 backend/pkg/downloader 的档位一一对应）
@@ -2110,6 +2186,10 @@ function playAllSongs() {
 const toastMessage = ref('')
 let toastTimer = null
 
+// 单曲下载前的音质选择（用户取消掉的只是「下载页面的默认音质设置」，不是这里）
+const showQualityModal = ref(false)
+const qualityTargetSong = ref(null)
+
 function showToast(msg) {
   toastMessage.value = msg
   if (toastTimer) clearTimeout(toastTimer)
@@ -2121,10 +2201,6 @@ function showToast(msg) {
 function checkSongsDownloaded(songs) {
   downloadManager.checkSongsDownloaded(songs)
 }
-
-// 音质选择弹窗状态（在线曲目单曲下载前弹出，让用户选该曲真实可用档位）
-const showQualityModal = ref(false)
-const qualityTargetSong = ref(null)
 
 function downloadSingleSong(song) {
   if (!props.activeSource?.id && song.source !== 'nas') {
@@ -2144,6 +2220,8 @@ function downloadSingleSong(song) {
     return
   }
   // 在线曲目：先让用户确认音质（档位来自官方协议的真实查询结果）
+  // 2026-10-26 复查：这是「这一首用什么音质」的一次性选择，不是「下载页面的默认音质设置」——
+  // 用户要去掉的是后者（与系统设置重复），所以这里保留。
   qualityTargetSong.value = song
   showQualityModal.value = true
 }

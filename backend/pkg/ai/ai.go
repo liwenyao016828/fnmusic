@@ -518,6 +518,10 @@ func (c *Client) JudgeName(ctx context.Context, filename string, candidates []Na
 //
 // 之所以要归一化：文件名可能是 "Jay Chou - 晴天"，模型回 "JayChou" ——
 // 字面不等但确实是文件里的内容。空串视为通过（表示「这一项判不出来」）。
+// NameAppearsIn 是 nameAppearsIn 的导出版本：凡是「AI 给的字符串必须出自原文件名」
+// 这条防幻觉校验，都应该用同一个实现 —— 各处自己写一份必然会有宽严不一的那天。
+func NameAppearsIn(filename, s string) bool { return nameAppearsIn(filename, s) }
+
 func nameAppearsIn(filename, s string) bool {
 	s = strings.TrimSpace(s)
 	if s == "" {

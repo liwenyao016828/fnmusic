@@ -131,7 +131,41 @@
             title="当前请求返回后停止提交，已开始的后台任务会继续"
             @click="stopRunAll"
           >{{ runAllStopRequested ? '停止中…' : '停止' }}</button>
-          <span class="inline-flex" :title="runAllTitle">
+          <!--
+            用户 2026-10-25：「多选后右上角展示删除」—— 删除按钮就落在这行工具栏的最右，
+            也就是页面右上角；没勾任何订阅时不出现，避免一个点了没用的红按钮常驻。
+            进入选择态用「多选」按钮（与飞牛同步历史的勾选式多选同一套习惯：勾选框 + 全选 + 批量按钮）。
+          -->
+          <template v-if="subSelectMode">
+            <span class="mr-auto text-[11px] text-gray-400">
+              已选 <b class="text-gray-700">{{ subSelected.size }}</b> / {{ subscriptions.length }}
+            </span>
+            <button
+              class="rounded-lg px-2.5 py-1 text-[12px] text-gray-500 transition-colors hover:bg-gray-100 disabled:opacity-50"
+              :disabled="subDeleting"
+              @click="toggleAllSubs"
+            >{{ subAllSelected ? '全不选' : '全选' }}</button>
+            <button
+              class="rounded-lg px-2.5 py-1 text-[12px] text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600 disabled:opacity-50"
+              :disabled="subDeleting"
+              @click="exitSubSelect"
+            >取消</button>
+            <button
+              v-if="subSelected.size"
+              class="rounded-lg bg-rose-50 px-3 py-2 text-[13px] font-semibold text-rose-600 transition-colors hover:bg-rose-100 disabled:opacity-50"
+              :disabled="subDeleting"
+              title="删除选中的订阅：两侧任务记录一起删；已下载的文件和飞牛歌单里的歌不受影响"
+              @click="batchRemoveRows"
+            >{{ subDeleting ? '删除中…' : `删除（${subSelected.size}）` }}</button>
+          </template>
+          <button
+            v-else
+            class="rounded-lg border border-gray-200 px-3 py-2 text-[12px] text-gray-600 transition-colors hover:bg-gray-50 disabled:opacity-40"
+            :disabled="!subscriptions.length"
+            title="进入多选：勾选多条订阅后一次删掉"
+            @click="enterSubSelect"
+          >多选</button>
+          <span v-if="!subSelectMode" class="inline-flex" :title="runAllTitle">
             <button
               class="rounded-lg border px-4 py-2 text-[13px] font-semibold transition-all disabled:opacity-50"
               :class="runnableRows.length
@@ -142,6 +176,7 @@
             >{{ runAllText }}</button>
           </span>
           <button
+            v-if="!subSelectMode"
             class="flex shrink-0 items-center justify-center rounded-lg bg-emerald-500 px-4 py-2 text-[13px] font-semibold text-white transition-all hover:bg-emerald-600"
             @click="openCreate"
           >
@@ -177,11 +212,31 @@
         </div>
 
         <div v-else class="space-y-2.5">
+          <!--
+            用户 2026-10-25：「订阅更新。列表增加卡片点击，多选，右上角展示删除。」
+            - 整张卡片可点（以前只有「设置」按钮能点）：平时点卡片 = 展开/收起这一行的设置，
+              多选态点卡片 = 勾选/取消 —— 那样选择态里点哪儿都行，不用瞄准那个小方框。
+            - 多选态的勾选框放卡片最左（与下面的「飞牛同步历史」同一个位置），
+              选中行整卡染一层淡绿底，一眼看出勾了哪几张。
+          -->
           <div
             v-for="row in subscriptions" :key="row.key"
-            class="rounded-[18px] border border-gray-200 bg-white p-4"
+            class="rounded-[18px] border bg-white p-4 transition-colors"
+            :class="[
+              subSelected.has(row.key) ? 'border-emerald-300 bg-emerald-50/40' : 'border-gray-200',
+              subSelectMode ? 'cursor-pointer hover:border-emerald-200' : 'hover:border-gray-300',
+            ]"
+            @click="onSubCardClick(row, $event)"
           >
             <div class="flex items-start justify-between gap-3">
+              <input
+                v-if="subSelectMode"
+                type="checkbox"
+                class="mt-1 h-3.5 w-3.5 shrink-0 accent-emerald-500"
+                :checked="subSelected.has(row.key)"
+                :aria-label="`选择 ${row.name}`"
+                @change="toggleSubSelect(row.key)"
+              />
               <div class="min-w-0 flex-1">
                 <div class="flex flex-wrap items-center gap-2">
                   <span class="text-sm font-semibold text-gray-800">{{ row.name }}</span>
@@ -189,6 +244,21 @@
                   <span v-if="row.hasDownload && !row.baselineDone" class="rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] text-amber-700" title="第一次检查还没跑完。跑完就会开始记录「以后新增了哪些歌」">还没开始追新</span>
                   <span v-if="row.pendingCount" class="rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] text-amber-700">待下载 {{ row.pendingCount }}</span>
                   <span v-if="row.missingCount" class="rounded border border-gray-200 bg-gray-50 px-1.5 py-0.5 text-[10px] text-gray-500">飞牛缺 {{ row.missingCount }}</span>
+                  <!--
+                    2026-10-24 P1：用户手动从飞牛歌单里删掉的歌，以后不再加回。
+                    这事必须让用户**看得见**，否则他只是发现「删了没回来」，
+                    会以为同步坏了。灰色不是警告色 —— 这是他主动要的结果。
+                  -->
+                  <span
+                    v-if="row.removedCount"
+                    class="rounded border border-gray-200 bg-gray-50 px-1.5 py-0.5 text-[10px] text-gray-500"
+                    :title="`这些歌你从飞牛歌单里删过，同步时不会再自动加回：\n${(row.removedTitles || []).join('\n') || `${row.removedCount} 首`}`"
+                  >已删不补 {{ row.removedCount }}</span>
+                  <span
+                    v-if="row.revivedCount"
+                    class="rounded border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] text-emerald-600"
+                    :title="'你自己又把这些歌加回歌单了，已恢复成正常曲目'"
+                  >已恢复 {{ row.revivedCount }}</span>
                   <span v-if="rowBusy(row)" class="animate-pulse rounded bg-blue-50 px-1.5 py-0.5 text-[10px] text-blue-600">处理中</span>
                   <span v-else-if="!row.download && !row.fnos" class="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-400">已停止</span>
                 </div>
@@ -305,6 +375,7 @@
             <div
               v-if="row.localConflicts && row.localConflicts.length"
               class="mt-3 rounded-lg border border-amber-200 bg-amber-50/70 p-3"
+              @click.stop
             >
               <p class="text-[12px] font-bold text-amber-800">
                 有 {{ row.localConflicts.length }} 首本地已有、但版本对不上
@@ -341,7 +412,7 @@
             </div>
 
             <!-- 设置：只展开当前行（订阅多起来时整页会被撑得很长） -->
-            <div v-if="expandedKey === row.key" class="mt-3 space-y-3 rounded-lg border border-gray-100 bg-gray-50/60 p-3">
+            <div v-if="expandedKey === row.key" class="mt-3 space-y-3 rounded-lg border border-gray-100 bg-gray-50/60 p-3" @click.stop>
               <!--
                 两个能力位**并排成卡片**（用户 2026-10-07：「可以用一行多个，每个按照
                 卡片形式展示按钮和文字标题，简介就可以」）。以前它们各自整行、第二个靠
@@ -461,34 +532,63 @@
           <div class="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-gray-100 px-4 py-3">
             <h3 class="text-sm font-semibold text-gray-800">飞牛同步历史</h3>
             <span class="text-[11px] text-gray-400">最近 {{ pushRuns.length }} 条</span>
+            <!-- 批量按钮固定在卡片右上（与订阅列表的「删除」同一个位置习惯） -->
             <div class="ml-auto flex flex-wrap items-center gap-1.5">
-              <label class="mr-1 flex cursor-pointer select-none items-center gap-1 text-[11px] text-gray-500">
-                <input type="checkbox" class="align-middle accent-emerald-500" :checked="allPushRunsSelected" @change="toggleAllPushRuns" />
-                <span>全选</span>
-              </label>
               <button
                 v-if="pushRunSelected.size"
+                :disabled="clearingRuns"
                 @click="clearPushRuns(Array.from(pushRunSelected))"
-                class="rounded-lg bg-rose-50 px-2.5 py-1 text-[11px] font-bold text-rose-600 transition-colors hover:bg-rose-100"
+                class="rounded-lg bg-rose-50 px-2.5 py-1 text-[11px] font-bold text-rose-600 transition-colors hover:bg-rose-100 disabled:opacity-50"
               >清除选中（{{ pushRunSelected.size }}）</button>
               <button
+                :disabled="clearingRuns"
                 @click="clearPushRuns([])"
-                class="rounded-lg px-2.5 py-1 text-[11px] font-bold text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600"
+                class="rounded-lg px-2.5 py-1 text-[11px] font-bold text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600 disabled:opacity-50"
                 title="清除全部同步历史（不动订阅任务本身）"
-              >一键清除记录</button>
+              >{{ clearingRuns ? '清除中…' : '一键清除记录' }}</button>
             </div>
+          </div>
+          <!--
+            用户 2026-10-25：「飞牛同步历史，列表多选样式修改为全局统一的多选样式。」
+            全局统一的那套写法在 TidyView.vue（歌名修复的修复记录行、缺歌词的表格）：
+            **勾选框在行首 + 单独一条「全选行」（全选 / 共 N 条 / 已勾 N 条）+
+            批量按钮在卡片右上 + 选中行有底色、未选中行 hover 有浅底**。
+            所以这里把原来挤在标题行的全选标签挪下来单独成行，行也改成圆角可点行
+            —— 点一行就等于勾这一行（和上面订阅卡片的整卡点击一致）。
+          -->
+          <div class="flex flex-wrap items-center gap-3 border-b border-gray-50 px-4 py-2 text-[11px] text-gray-400">
+            <label class="flex cursor-pointer select-none items-center gap-1.5">
+              <input
+                type="checkbox"
+                class="h-3.5 w-3.5 accent-emerald-500"
+                :checked="allPushRunsSelected"
+                @change="toggleAllPushRuns"
+              />
+              <span>全选</span>
+            </label>
+            <span>共 {{ pushRuns.length }} 条</span>
+            <span v-if="pushRunSelected.size">已勾 {{ pushRunSelected.size }} 条</span>
+            <button
+              v-if="pushRunSelected.size"
+              class="ml-auto text-[11px] text-gray-400 transition-colors hover:text-gray-600"
+              @click="pushRunSelected = new Set()"
+            >取消选择</button>
           </div>
           <!--
             卡片行而不是表格（2026-10-08 实测：5 列 `<table>` 在 390px 手机视口下宽 **596px**，
             把「结果」那列整个推出屏幕 —— 横向滚动的表在手机上没人会去滑）。
             卡片行是**换行**而不是溢出：窄屏时时间与状态掉到第二行。
           -->
-          <div class="max-h-[260px] overflow-y-auto">
+          <div class="max-h-[260px] space-y-1 overflow-y-auto p-2">
+            <!-- 行 = 圆角可点行：点整行勾选/取消（勾选框只是它的可见状态），与上面订阅卡片一致 -->
             <div
               v-for="r in pushRuns" :key="r.id"
-              class="flex items-start gap-2 border-b border-gray-50 px-3 py-2 last:border-0"
+              class="flex cursor-pointer items-start gap-2 rounded-[8px] px-2 py-1.5 transition-colors"
+              :class="pushRunSelected.has(r.id) ? 'bg-emerald-50/70' : 'hover:bg-gray-50'"
+              @click="togglePushRunSelect(r.id)"
             >
-              <input type="checkbox" class="mt-0.5 shrink-0 accent-emerald-500" :checked="pushRunSelected.has(r.id)"
+              <input type="checkbox" class="mt-0.5 h-3.5 w-3.5 shrink-0 accent-emerald-500" :checked="pushRunSelected.has(r.id)"
+                @click.stop
                 @change="togglePushRunSelect(r.id)" />
               <div class="min-w-0 flex-1">
                 <div class="flex flex-wrap items-center gap-x-2 gap-y-0.5">
@@ -651,7 +751,7 @@ import { computed, onMounted, ref } from 'vue'
 import { Check, Download, Send, Trash2 } from 'lucide-vue-next'
 import PageShell from './PageShell.vue'
 import InlineNotice from './InlineNotice.vue'
-import { PushAPI } from '../api/client'
+import { PushAPI, MonitorAPI } from '../api/client'
 import { fail } from '../services/userMsg'
 import { ok as flashOk, warn as flashWarn, fail as flashFail } from '../services/feedback'
 import { fail as flashErrorText } from '../services/userMsg'
@@ -672,7 +772,6 @@ const {
   fillRow, fillHint,
   toggleCapability, stopPushOnly, runRow, removeRow, saveRowSettings,
   createLinkSubscriptions, createAccountTask,
-  clearPushRuns: engineClearRuns,
   reloadAll, loadPushRuns, loadFnosStatus, loadApiSourceCount,
 } = pushEngine
 
@@ -969,6 +1068,98 @@ async function onSaveSettings(row) {
   if (ok) expandedKey.value = ''
 }
 
+// ── 订阅任务多选 + 批量删除（用户 2026-10-25）──
+//
+// 「列表增加卡片点击，多选，右上角展示删除」：
+// 选择态是一个显式开关（工具栏「多选」），进了选择态才出现勾选框与删除按钮 ——
+// 常驻勾选框会让每张卡片都多一个用不到的小方框，而删除是低频危险动作。
+// 状态只存 row.key（不是下标），列表轮询刷新后勾选仍然对得上。
+const subSelectMode = ref(false)
+const subSelected = ref(new Set())
+const subDeleting = ref(false)
+const subAllSelected = computed(() =>
+  subscriptions.value.length > 0 && subscriptions.value.every((r) => subSelected.value.has(r.key)))
+
+/** 进入多选：顺手收起已展开的设置行 —— 多选态点卡片是「勾选」，不是「展开」 */
+function enterSubSelect() {
+  subSelectMode.value = true
+  expandedKey.value = ''
+}
+
+function exitSubSelect() {
+  subSelectMode.value = false
+  subSelected.value = new Set()
+}
+
+function toggleSubSelect(key) {
+  const next = new Set(subSelected.value)
+  if (next.has(key)) next.delete(key)
+  else next.add(key)
+  subSelected.value = next
+}
+
+function toggleAllSubs() {
+  subSelected.value = subAllSelected.value
+    ? new Set()
+    : new Set(subscriptions.value.map((r) => r.key))
+}
+
+/**
+ * 整卡点击。用户要求「与文件里已有的交互保持一致」，所以：
+ * - 平时 = 展开/收起这一行的设置（原来只有「设置」按钮能点，整张卡片点不动）；
+ * - 多选态 = 勾选/取消这一条订阅。
+ * 卡片内部的按钮、输入框、药丸按钮一律放过（否则点「立即执行」会顺带把设置面板折叠、
+ * 或者把用户没想勾的订阅勾上）。
+ */
+function onSubCardClick(row, ev) {
+  const el = ev?.target
+  if (el && typeof el.closest === 'function' && el.closest('button, a, input, select, textarea, label')) return
+  if (subSelectMode.value) toggleSubSelect(row.key)
+  else toggleExpand(row)
+}
+
+/**
+ * 批量删除选中的订阅。走的就是行内单删那条既有路径 ——
+ * 两侧记录各删各的（MonitorAPI.remove / PushAPI.deleteTask），
+ * 已下载的文件、飞牛歌单里的歌都不动（与 removeRow 的语义一致）。
+ * 一条失败不影响其它条，最后按成功/失败分别回报，不静默。
+ */
+async function batchRemoveRows() {
+  if (subDeleting.value) return
+  if (runAllBusy.value) { flashWarn('全部执行进行中，跑完再删'); return }
+  const rows = subscriptions.value.filter((r) => subSelected.value.has(r.key))
+  if (!rows.length) { flashWarn('还没有勾选订阅'); return }
+  if (!confirm(`删除选中的 ${rows.length} 条订阅？两侧任务记录都会删掉。已下载的文件和飞牛歌单里的歌不受影响。`)) return
+
+  subDeleting.value = true
+  let okCount = 0
+  const failed = []
+  try {
+    for (const row of rows) {
+      try {
+        const jobs = []
+        for (const m of row.monitors) jobs.push(MonitorAPI.remove(m.id))
+        for (const t of row.tasks) jobs.push(PushAPI.deleteTask(t.id))
+        await Promise.all(jobs)
+        okCount++
+      } catch (e) {
+        failed.push(`${row.name}：${flashErrorText('删除订阅', e)}`)
+      }
+    }
+    subSelected.value = new Set()
+    if (failed.length) {
+      flashFail(`已删除 ${okCount} 条，失败 ${failed.length} 条`, { scope: '批量删除订阅', detail: failed.join('；') })
+    } else {
+      flashOk(`已删除 ${okCount} 条订阅`)
+    }
+    // 先按后端的账刷新，再决定要不要退出多选态：全删光了就没得选了，直接退出
+    await reloadAll()
+    if (!subscriptions.value.length) exitSubSelect()
+  } finally {
+    subDeleting.value = false
+  }
+}
+
 // ── 新建订阅弹窗 ──
 const showCreate = ref(false)
 const creating = ref(false)
@@ -1113,11 +1304,48 @@ function toggleAllPushRuns() {
     : new Set(pushRuns.value.map((r) => r.id))
 }
 
+/**
+ * 清除同步历史（用户 2026-10-25：「修复一键清除记录按钮」）。
+ *
+ * 原来坏在哪（curl 实测 http://127.0.0.1:8900/api/push/runs）：
+ *  - 后端 `clearPushRuns` 的 body 是 `{"ids":[]string}`（backend/pkg/api/push.go），
+ *    而这里「清除选中」把 `r.id`（数字）直接传过去 → `[12,13]` 解不进 []string，
+ *    Go 那边只把切片长度拉到 1 就报错，落下来是 `[""]`，解析不出 id → **removed: 0**，
+ *    接口 200 正常返回。于是界面弹一句「已清除 0 条同步历史」，一条没删 —— 就是
+ *    「点了没反应」。实测：`{"ids":[12]}` → removed:0；`{"ids":["12"]}` → removed:1；
+ *    `{"ids":[]}` → 全清。
+ *  - 而且旧逻辑不看返回值：删到 0 条也报成功；失败只有引擎层的 toast，列表不刷新。
+ *
+ * 现在：id 一律 String() 再传（后端本就是 []string）；用后端回的 removed 数回报
+ * 「已清除 N 条」；0 条明确说没删到；失败给错误提示并仍然刷新列表（否则界面上
+ * 还挂着已经不存在的历史）。清完立刻按后端的账刷新，不信本地猜的。
+ */
+const clearingRuns = ref(false)
+
 async function clearPushRuns(ids) {
-  const n = ids.length
-  if (!confirm(n ? `确定清除选中的 ${n} 条同步历史？` : '确定清除全部同步历史？（订阅任务本身不受影响）')) return
-  await engineClearRuns(ids)
-  pushRunSelected.value = new Set()
+  if (clearingRuns.value) return
+  const list = (ids || []).map((v) => String(v))
+  const total = pushRuns.value.length
+  const n = list.length
+  if (!n && !total) { flashWarn('没有可清除的同步历史'); return }
+  if (!confirm(n
+    ? `确定清除选中的 ${n} 条同步历史？`
+    : `确定清除全部 ${total} 条同步历史？（订阅任务本身不受影响）`)) return
+
+  clearingRuns.value = true
+  try {
+    const res = await PushAPI.clearRuns(list)
+    const removed = Number(res?.data?.removed ?? 0) || 0
+    pushRunSelected.value = new Set()
+    await loadPushRuns()
+    if (removed > 0) flashOk(`已清除 ${removed} 条同步历史`)
+    else flashWarn('后端没有删除任何记录 —— 列表可能已被清空，已刷新')
+  } catch (e) {
+    flashFail(flashErrorText('清除同步历史', e))
+    try { await loadPushRuns() } catch { /* 刷新也失败就不再叠一条提示，上一条已经说了原因 */ }
+  } finally {
+    clearingRuns.value = false
+  }
 }
 
 onMounted(() => {

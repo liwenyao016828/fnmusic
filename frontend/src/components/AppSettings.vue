@@ -135,13 +135,21 @@
         <div class="grid gap-3 sm:grid-cols-2">
           <label class="block">
             <span class="text-[12px] font-medium text-gray-700">下载目录（曲库）</span>
-            <input
-              v-model.trim="downloadDir"
-              type="text"
-              spellcheck="false"
-              placeholder="/vol1/Music"
-              class="mt-1 w-full rounded-xl border border-gray-200 px-3 py-2 text-[13px] focus:border-emerald-500 focus:outline-none"
-            />
+            <div class="mt-1 flex gap-2">
+              <input
+                v-model.trim="downloadDir"
+                type="text"
+                spellcheck="false"
+                placeholder="/vol1/Music"
+                class="w-full rounded-xl border border-gray-200 px-3 py-2 text-[13px] focus:border-emerald-500 focus:outline-none"
+              />
+              <!-- 用户 2026-10-25：不要「必须手输」，点一下就从目录树里选 -->
+              <button
+                type="button"
+                class="shrink-0 rounded-xl border border-emerald-200 bg-emerald-50 px-3 text-[12px] font-medium text-emerald-700 hover:bg-emerald-100"
+                @click="dirPicker = { open: true, field: 'download', start: downloadDir }"
+              >选择</button>
+            </div>
           </label>
           <label class="block">
             <span class="text-[12px] font-medium text-gray-700">缓存目录（留空 = 默认位置）</span>
@@ -153,6 +161,11 @@
                 placeholder="/vol2/MediaCache"
                 class="w-full rounded-xl border border-gray-200 px-3 py-2 text-[13px] focus:border-emerald-500 focus:outline-none"
               />
+              <button
+                type="button"
+                class="shrink-0 rounded-xl border border-emerald-200 bg-emerald-50 px-3 text-[12px] font-medium text-emerald-700 hover:bg-emerald-100"
+                @click="dirPicker = { open: true, field: 'cache', start: cacheDir || downloadDir }"
+              >选择</button>
               <button
                 type="button"
                 class="shrink-0 rounded-xl border border-gray-200 px-3 text-[12px] text-gray-600 hover:border-gray-300"
@@ -171,6 +184,12 @@
           >{{ savingDirs ? '保存中…' : '保存目录' }}</button>
           <span v-if="dirError" class="text-[12px] text-red-500">{{ dirError }}</span>
         </div>
+        <NasDirPicker
+          v-model:open="dirPicker.open"
+          :title="dirPicker.field === 'cache' ? '选择缓存目录' : '选择下载目录（曲库）'"
+          :start="dirPicker.start"
+          @pick="onPickDir"
+        />
       </DisclosureSection>
 
       <!-- 下载行为（v2.5.0 从旧「曲库管家 → 下载」标签搬来；四个开关行为原样未动） -->
@@ -330,6 +349,7 @@ import { ConfigAPI, DownloadAPI, LogsAPI, AppAPI, ChartInjectAPI, SourcesAPI, DE
 import { QUALITY_OVERRIDE_OPTIONS } from '../services/qualityOverride'
 import { fail, apiError } from '../services/userMsg'
 import InlineNotice from './InlineNotice.vue'
+import NasDirPicker from './NasDirPicker.vue'
 import UpdateCard from './UpdateCard.vue'
 
 /** 条款弹窗由 App.vue 持有（openDisclaimer），这里只负责把「想看条款」这件事报上去。 */
@@ -394,6 +414,14 @@ const namingOptions = [
 const namingValue = ref('artist-title')
 
 const downloadDir = ref('')
+/** 目录选择弹窗：{ open, field: 'download'|'cache', start } */
+const dirPicker = ref({ open: false, field: 'download', start: '' })
+
+function onPickDir(p) {
+  if (!p) return
+  if (dirPicker.value.field === 'cache') cacheDir.value = p
+  else downloadDir.value = p
+}
 const cacheDir = ref('')
 const savingDirs = ref(false)
 const dirError = ref('')

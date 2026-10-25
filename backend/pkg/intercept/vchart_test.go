@@ -66,7 +66,7 @@ func TestChartPlaylistsInjectedWhenEnabled(t *testing.T) {
 	h.setChartTracks(
 		chartTrack("wy", "501", "甲", "A"),
 		chartTrack("wy", "502", "乙", "B"),
-		chartTrack("wy", "503", "丙", "C"), // 解析不出来 → 不许进榜
+		chartTrack("wy", "503", "丙", "C"), // 本平台解析不出直链 → 照样进榜，取音时跨源兜底
 	)
 	h.it.pool = chartResolverPool(map[string]map[string]bool{
 		"wy": {"501": true, "502": true, "503": false},
@@ -98,9 +98,13 @@ func TestChartPlaylistsInjectedWhenEnabled(t *testing.T) {
 	if got := asString(asMap(list[1])["name"]); got != "我的歌单" {
 		t.Errorf("官方歌单应排在榜单之后，得到 %q", got)
 	}
-	// 关键：解析不出直链的那首不许进榜 —— 「点开能看、点了不响」比没有更糟。
-	if got := asInt(first["trackCount"]); got != 2 {
-		t.Errorf("不可播的曲目不该进榜，应有 2 首，得到 %d", got)
+	// 关键：本平台解析不出直链的曲目**照样进榜**。
+	//
+	// 2026-10-24 用户拍板：「100 首就显示 100 首源歌单，网易有 36 能播，还有 64
+	// 就用其他源去补充」。所以榜单按上游原样给满，能不能响交给取音层
+	// （playback_fallback.go 的跨源兜底），**不**在这里提前删歌。
+	if got := asInt(first["trackCount"]); got != 3 {
+		t.Errorf("榜单应按上游原样给满，应有 3 首，得到 %d", got)
 	}
 	if got := asString(first["coverId"]); !hex32.MatchString(got) {
 		t.Errorf("榜单封面应借某首曲目的虚拟 id（32 位 hex），得到 %q", got)
@@ -178,18 +182,28 @@ func TestChartPlatformsWithoutResolverAreIgnored(t *testing.T) {
 	}
 }
 
-func TestChartPlaylistWithNoPlayableTrackIsHidden(t *testing.T) {
+func TestChartPlaylistShownEvenWhenNoTrackIsPlayable(t *testing.T) {
 	h := newHarness(t)
 	h.setCharts("tx_26")
 	h.setChartTracks(chartTrack("tx", "901", "甲", "A"))
-	// QQ 侧只给 wy 解析器 → 整榜不可播。
+	// QQ 侧只给 wy 解析器 → 本平台整榜都解析不出直链。
 	h.it.pool = chartResolverPool(map[string]map[string]bool{"wy": {"501": true}})
 	h.setOfficial("GET /music/api/v1/playlist/list", http.StatusOK, chartListBody)
 
+	// 旧行为是「整榜不可播就把卡片藏起来，别给用户一个空卡片」。
+	// 2026-10-24 起不再藏：卡片按上游原样出来，歌也在列表里，
+	// 点播时由取音层跨源兜底 —— 藏起来等于用户根本不知道这个榜有哪些歌。
 	w, _ := h.do(http.MethodGet, "/music/api/v1/playlist/list", "", nil)
 	list, _ := dataOf(t, w)["list"].([]any)
-	if len(list) != 1 {
-		t.Fatalf("整榜都不可播时不该出现空卡片，应有 1 个歌单，得到 %d", len(list))
+	if len(list) != 2 {
+		t.Fatalf("整榜不可播也应照常出现，应有 2 个歌单（1 榜单 + 1 官方），得到 %d", len(list))
+	}
+	first, _ := list[0].(map[string]any)
+	if got := asString(first["guid"]); got != vChartPrefix+"tx_26" {
+		t.Errorf("榜单卡片 guid 应为 %q，得到 %q", vChartPrefix+"tx_26", got)
+	}
+	if got := asInt(first["trackCount"]); got != 1 {
+		t.Errorf("曲目数应按上游原样，应有 1 首，得到 %d", got)
 	}
 }
 
@@ -232,16 +246,16 @@ func TestChartTracksAreCappedAtVChartSize(t *testing.T) {
 	}
 }
 
-// TestChartFiltersBeforeTruncating 钉住「先过滤、后截断」的顺序。
+// TestChartKeepsSourceOrderWhenTruncating 钉住「按源榜单的原顺序截断」。
 //
-// 这条顺序是**真机实测倒逼出来的**：网易云「热歌榜」100 首候选里只有 36 首能播
-// （榜单越热门 VIP 越多），QQ「巅峰榜·热歌」更低到个位数。所以候选必须多取
-// （vChartFetchMax），**过滤完再截到 vChartSize**；反过来「先截 100 再过滤」
-// 会把榜单砍成个位数 —— 那正是 v2.1.76 第一版真机跑出来的 36 / 3。
+// 这条以前叫「先过滤、后截断」：那时候选要先过 playableOnly，所以必须多取候选
+// （vChartFetchMax）再过滤，否则榜单会被砍成个位数。2026-10-24 用户拍板后
+// **不再过滤**，只剩一个真问题：截断必须从第 1 首往下取，不许因为「解析得快」
+// 把榜单后段的歌提到前面 —— 榜单的顺序本身就是内容（第 1 首和第 50 首意义不同）。
 //
-// 用例把能播的 100 首**全放在候选尾部**：只要顺序写反，尾部先被截掉，
-// 就只剩前 100 首里能播的那 50 首（按 50 失败，而不是 100）。
-func TestChartFiltersBeforeTruncating(t *testing.T) {
+// 用例把「能播的」全放在候选尾部：如果实现按可播性重排，trackCount 仍然对，
+// 但首曲目会变成尾段那首，所以这里连**首曲目**一起验。
+func TestChartKeepsSourceOrderWhenTruncating(t *testing.T) {
 	h := newHarness(t)
 	h.setCharts("wy_19723756")
 
@@ -267,8 +281,100 @@ func TestChartFiltersBeforeTruncating(t *testing.T) {
 		t.Fatal("榜单卡片没出现")
 	}
 	if got := asInt(asMap(list[0])["trackCount"]); got != want {
-		t.Errorf("能播的有 100 首，截断必须发生在过滤之后（应得 %d，得到 %d）—— "+
-			"反过来的话榜单只剩前段里能播的那几首", want, got)
+		t.Errorf("应截到 %d 首（不可播的**不占**名额也不再被删），得到 %d", want, got)
+	}
+
+	// 曲目列表看到的就是最终列表：第 1 首必须是源榜单的第 1 首。
+	// （走 track/playlist-detail/list 而不是 playlist/detail —— 后者只回 trackCount，
+	//   曲目在分页列表接口里，两者分工见 vplaylist.go 的本地应答。）
+	lw, handled := h.do(http.MethodGet,
+		"/music/api/v1/track/playlist-detail/list?page=1&size=100&playlistGUID="+vChartPrefix+"wy_19723756", "", nil)
+	if !handled {
+		t.Fatal("榜单曲目列表应被拦截层本地应答")
+	}
+	page, _ := dataOf(t, lw)["list"].([]any)
+	if len(page) != want {
+		t.Fatalf("曲目列表应有 %d 首，得到 %d", want, len(page))
+	}
+	if got := asString(asMap(page[0])["title"]); got != "曲0" {
+		t.Errorf("首曲目应是源榜单第 1 首（曲0），得到 %q —— 截断前被重排过", got)
+	}
+}
+
+// TestChartSizeIsConfigurable 钉住「榜单显示首数可设」（用户 2026-10-24 第①条）。
+//
+// 两种粒度都要能生效：全局默认改小、以及单个榜单独改大／改小。
+// 这里故意让配置函数对**不同榜单**返回不同值，写法上「把 limit 写死」就会红。
+func TestChartSizeIsConfigurable(t *testing.T) {
+	h := newHarness(t)
+	h.setCharts("wy_19723756", "tx_26")
+
+	many := make([]online.Track, 0, 150)
+	for n := 0; n < 150; n++ {
+		many = append(many, chartTrack("wy", "id"+itoa(n), "曲"+itoa(n), "A"))
+	}
+	h.it.chartFetch = func(_ context.Context, source, _ string, _ int) (string, string, []online.Track, error) {
+		out := make([]online.Track, 0, len(many))
+		for _, t := range many {
+			t.Platform = source
+			out = append(out, t)
+		}
+		return "榜 " + source, "", out, nil
+	}
+	// 网易榜 25 首、QQ 榜跟随默认（返回 0 = 没配）。
+	h.it.chartSize = func(key string) int {
+		if key == "wy_19723756" {
+			return 25
+		}
+		return 0
+	}
+	h.setOfficial("GET /music/api/v1/playlist/list", http.StatusOK, chartListBody)
+
+	w, _ := h.do(http.MethodGet, "/music/api/v1/playlist/list", "", nil)
+	list, _ := dataOf(t, w)["list"].([]any)
+	if len(list) != 3 {
+		t.Fatalf("应有 3 个歌单（2 榜单 + 1 官方），得到 %d", len(list))
+	}
+	byGUID := map[string]int{}
+	for _, it := range list {
+		m := asMap(it)
+		byGUID[asString(m["guid"])] = asInt(m["trackCount"])
+	}
+	if got := byGUID[vChartPrefix+"wy_19723756"]; got != 25 {
+		t.Errorf("配成 25 首的榜应显示 25 首，得到 %d", got)
+	}
+	if got := byGUID[vChartPrefix+"tx_26"]; got != vChartSize {
+		t.Errorf("没配的榜应跟默认 %d 首，得到 %d", vChartSize, got)
+	}
+}
+
+// TestChartSizeBeyondFetchMaxIsClamped 钉住「配得比一次能取回的还多」时的行为：
+// 显示数不会被配到超过 vChartFetchMax —— 那只会是一个永远填不满的数字。
+//
+// 期望值用字面量 300（= vChartFetchMax 的产品决定），不用变量：这样把两个常量
+// 一起改动时测试会红，而不是跟着一起漂。
+func TestChartSizeBeyondFetchMaxIsClamped(t *testing.T) {
+	h := newHarness(t)
+	h.setCharts("wy_19723756")
+	h.it.chartSize = func(string) int { return 999 }
+
+	many := make([]online.Track, 0, vChartFetchMax+50)
+	for n := 0; n < vChartFetchMax+50; n++ {
+		many = append(many, chartTrack("wy", "id"+itoa(n), "曲"+itoa(n), "A"))
+	}
+	h.it.chartFetch = func(context.Context, string, string, int) (string, string, []online.Track, error) {
+		return "超长榜", "", many, nil
+	}
+	h.setOfficial("GET /music/api/v1/playlist/list", http.StatusOK, chartListBody)
+
+	w, _ := h.do(http.MethodGet, "/music/api/v1/playlist/list", "", nil)
+	list, _ := dataOf(t, w)["list"].([]any)
+	if len(list) == 0 {
+		t.Fatal("榜单卡片没出现")
+	}
+	const wantLimit = 300
+	if got := asInt(asMap(list[0])["trackCount"]); got != wantLimit {
+		t.Errorf("配了 999 首时应夹到 %d，得到 %d", wantLimit, got)
 	}
 }
 

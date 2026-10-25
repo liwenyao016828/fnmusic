@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -85,10 +86,28 @@ type Result struct {
 
 	// Expired 本轮因超出保留期而从歌单移除的曲目数（见 retention.go）
 	Expired int `json:"expired,omitempty"`
+	// SkippedManual 本轮**故意没加回去**的曲目数：用户在歌单里手动删过它们。
+	SkippedManual int `json:"skipped_manual,omitempty"`
+	// ManualRemoved / ManualRemovedTitles 本轮新认出「用户手动删掉」的曲目数与歌名，
+	// 给界面一句说明（「你删掉的这 3 首以后不会再自动加回来」）。
+	ManualRemoved       int      `json:"manual_removed,omitempty"`
+	ManualRemovedTitles []string `json:"manual_removed_titles,omitempty"`
+	// Revived 用户删掉后又在网页端自己加回来的曲目数（本轮已清掉标记）。
+	Revived int `json:"revived,omitempty"`
 	// Pushed 清理后仍保留的「本任务推送过」清单，调用方需覆盖回任务持久化
 	Pushed []PushedTrack `json:"pushed,omitempty"`
 	// PruneWarning 保留期清理失败的原因（不影响本轮推送结果）
 	PruneWarning string `json:"prune_warning,omitempty"`
+
+	// ── 下面几个是给界面看的「清单快照」，也用于排查 ──
+
+	// ManualRemovedGUIDs 当前仍处于「用户手动删掉、以后不再加回」状态的曲目 guid。
+	// 界面拿它列出黑名单，也给「恢复这些曲目」的入口做依据。
+	ManualRemovedGUIDs []string `json:"manual_removed_guids,omitempty"`
+	// RevivedTitles 本轮因为用户自己又加回歌单而清掉删除标记的曲目名。
+	RevivedTitles []string `json:"revived_titles,omitempty"`
+	// PushedTotal 本轮结束时推送清单（Pushed）的总条数。
+	PushedTotal int `json:"pushed_total,omitempty"`
 }
 
 // Options 推送选项。
@@ -263,7 +282,7 @@ func PushTracks(m *fnos.Music, tracks []Track, opts Options) (*Result, error) {
 		return res, nil
 	}
 
-	// 4. 写入歌单（跳过已存在的）
+	// 4. 写入歌单（跳过已存在的、跳过用户手动删掉的）
 	existing, err := m.PlaylistTracks(guid)
 	if err != nil {
 		return nil, fmt.Errorf("读取目标歌单失败: %w", err)
@@ -274,8 +293,54 @@ func PushTracks(m *fnos.Music, tracks []Track, opts Options) (*Result, error) {
 			current[g] = true
 		}
 	}
+
+	// 4.1 用户手动删掉的曲目：认出来 → 记进清单 → 本轮及以后都不再加回。
+	//
+	// 用户 2026-10-24：「歌单里我手动删掉的歌，下次同步不要再加回来」。
+	// 之前 toAdd = matched - current 的算法把「不在歌单里」一律当成「还没推」，
+	// 于是用户每删一次、下一轮就补一次 —— 等于删不掉。
+	//
+	// 只认**我们推送过**、且过了宽限期（防止刚推上去还没读到的竞态）；
+	// 用户后来又自己加回来的，清掉标记恢复成正常曲目。
+	pushedBase := opts.Pushed
+	if idx := PushedIndex(opts.Pushed); len(idx) > 0 {
+		if revived := RevivedManuallyAdded(opts.Pushed, current); len(revived) > 0 {
+			pushedBase = ClearRemovals(opts.Pushed, revived)
+			res.Revived = len(revived)
+			byGUID := make(map[string]string, len(opts.Pushed))
+			for _, p := range opts.Pushed {
+				byGUID[p.GUID] = p.Title
+			}
+			for g := range revived {
+				if t := byGUID[g]; t != "" {
+					res.RevivedTitles = append(res.RevivedTitles, t)
+				}
+			}
+			sort.Strings(res.RevivedTitles)
+		}
+		if gone := DetectManualRemovals(pushedBase, current, time.Now()); len(gone) > 0 {
+			pushedBase = MergePushed(pushedBase, gone)
+			res.ManualRemoved = len(gone)
+			for _, p := range gone {
+				if p.Title != "" {
+					res.ManualRemovedTitles = append(res.ManualRemovedTitles, p.Title)
+				}
+			}
+		}
+	}
+	skip := ManualRemovals(pushedBase)
+	for g := range skip {
+		res.ManualRemovedGUIDs = append(res.ManualRemovedGUIDs, g)
+	}
+	sort.Strings(res.ManualRemovedGUIDs)
+	res.PushedTotal = len(pushedBase)
+
 	toAdd := make([]string, 0, len(matched))
 	for _, g := range matched {
+		if skip[g] {
+			res.SkippedManual++
+			continue
+		}
 		if !current[g] {
 			toAdd = append(toAdd, g)
 		}
@@ -321,7 +386,9 @@ func PushTracks(m *fnos.Music, tracks []Track, opts Options) (*Result, error) {
 	}
 	// 注意：第 4.5 步收编的曲目已经写进 res.Pushed 了，这里要在它的基础上
 	// 并进任务历史与新增 —— 直接用 opts.Pushed 会把收编清单整个抹掉。
-	res.Pushed = MergePushed(append(append(opts.Pushed, res.Pushed...), added...), nil)
+	// pushedBase 而不是 opts.Pushed：第 4.1 步刚认出的「用户手动删掉的」
+	// 与「又加回来的」都在 pushedBase 里，用 opts.Pushed 会把它们冲掉。
+	res.Pushed = MergePushed(append(append(pushedBase, res.Pushed...), added...), nil)
 
 	if NormalizeRetentionMode(opts.RetentionMode) == RetentionDays {
 		removed, kept, pruneErr := PruneExpired(m, guid, res.Pushed, opts.RetentionDays)

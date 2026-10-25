@@ -517,6 +517,27 @@ async function runAction(action, ids) {
 const pauseTask = (id) => runAction('pause', [id])
 const resumeTask = (id) => runAction('resume', [id])
 const cancelTask = (id) => runAction('stop', [id])
+
+/**
+ * 按 id 批量暂停 / 停止（2026-10-25 #4 新增）。
+ *
+ * 以前只有整队操作（`pauseAll` 是后端不带 ids 的整队开关，`stopAll` 停的是**全部**
+ * 在跑任务）和逐条操作两条路，中间缺了「只动我勾的这几条」—— 挑几首正在下的歌暂停
+ * 只能一首一首点右侧小按钮。这两个函数就是这个缺口，走的仍是 `runAction`，
+ * 所以「任务还没同步到后台」之类的判断与单条完全一致。
+ */
+async function pauseTasksByIds(ids) {
+  const list = (Array.isArray(ids) ? ids : []).map(taskById).filter(Boolean)
+  const targets = list.filter(t => ['pending', 'downloading'].includes(t.status))
+  return targets.length ? runAction('pause', targets.map(t => t.id)) : 0
+}
+
+async function stopTasksByIds(ids) {
+  const list = (Array.isArray(ids) ? ids : []).map(taskById).filter(Boolean)
+  const targets = list.filter(t => ['pending', 'downloading', 'paused'].includes(t.status))
+  return targets.length ? runAction('stop', targets.map(t => t.id)) : 0
+}
+
 const removeTask = (id) => removeTasks([id])
 async function removeTasks(ids) {
   const list = (Array.isArray(ids) ? ids : [ids]).map(taskById).filter(Boolean)
@@ -998,6 +1019,8 @@ export const downloadManager = {
   pauseTask,
   resumeTask,
   cancelTask,
+  pauseTasksByIds,
+  stopTasksByIds,
   removeTask,
   removeTasks,
   retryTask,

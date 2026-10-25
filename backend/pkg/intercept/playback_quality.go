@@ -149,8 +149,9 @@ func (i *Interceptor) nowPlayingOf(fake string) (nowPlaying, bool) {
 // resolvePlayback 按「试听音质」偏好解析一条可播直链。
 //
 // 返回的第二个值 `used` 是**实际取音**的那条曲目：默认就是入参本身，只有
-// 「无损优先」换源成功时才会不同。调用方要用它如实记录「从哪儿、什么音质」，
-// 不能拿入参糊弄界面（与下载那条路的 resolveForDownload 同一个口径）。
+// 「无损优先」换源或「跨源兜底」换源成功时才会不同。调用方要用它如实记录
+// 「从哪儿、什么音质」，不能拿入参糊弄界面（与下载那条路的 resolveForDownload
+// 同一个口径）。
 func (i *Interceptor) resolvePlayback(ctx context.Context, t online.Track) (*online.Resolved, online.Track, error) {
 	res, err := i.pool.ResolveLadder(ctx, t.Platform, t.PlatformID, i.playbackTiers())
 
@@ -183,6 +184,17 @@ func (i *Interceptor) resolvePlayback(ctx context.Context, t online.Track) (*onl
 	if err == nil && res != nil {
 		return res, t, nil
 	}
+
+	// 本平台彻底解析不出直链 → **跨源兜底**（2026-10-24）。
+	//
+	// 榜单与在线歌单不再按「能不能播」过滤（见 vchart.go），所以列表里必然有
+	// 一批本平台拿不到直链的曲目（网易热歌榜 100 首里约 36 首能播）。它们能不能
+	// 响，全靠这一步：拿歌名 + 歌手 + 时长去下载源池 / 洛雪里找同名同版录音。
+	// 判据与下载那条路共用 rankedSources，不会出现「下载找得到、试听找不到」。
+	if used, fres, ok := i.resolvePlaybackFallback(ctx, t); ok {
+		return fres, used, nil
+	}
+
 	if err == nil {
 		err = online.ErrTierUnavailable
 	}

@@ -29,6 +29,7 @@ export function createWriteQueue({ send, onBusy = () => {}, onError = () => {} }
   let pendingEnabled
   let pendingUI
   let pendingAdq
+  let pendingSize
   let running = false
 
   async function pump() {
@@ -38,14 +39,18 @@ export function createWriteQueue({ send, onBusy = () => {}, onError = () => {} }
     try {
       while (
         pendingIds !== undefined || pendingEnabled !== undefined ||
-        pendingUI !== undefined || pendingAdq !== undefined
+        pendingUI !== undefined || pendingAdq !== undefined || pendingSize !== undefined
       ) {
         // 取走「当下的意图」；取值之后到的改动会记进下一轮
-        const writes = { ids: pendingIds, enabled: pendingEnabled, ui: pendingUI, adq: pendingAdq }
+        const writes = {
+          ids: pendingIds, enabled: pendingEnabled, ui: pendingUI,
+          adq: pendingAdq, size: pendingSize,
+        }
         pendingIds = undefined
         pendingEnabled = undefined
         pendingUI = undefined
         pendingAdq = undefined
+        pendingSize = undefined
         try {
           await send(writes)
         } catch (e) {
@@ -81,6 +86,14 @@ export function createWriteQueue({ send, onBusy = () => {}, onError = () => {} }
     /** 音质下载（`highest` / `flac` / `320k` / `128k`）。空串是合法值（「跟随」），别用真假值判。 */
     adq(q) {
       pendingAdq = q === undefined ? '' : String(q)
+      return pump()
+    },
+    /**
+     * 榜单显示首数（`{ global, per }`）。
+     * `{ global: null }` 是合法取值（「跟随默认」），所以判待写只能用 `!== undefined`。
+     */
+    size(v) {
+      pendingSize = v === undefined ? { global: null } : v
       return pump()
     },
     get running() {

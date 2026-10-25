@@ -38,7 +38,7 @@ import (
 )
 
 // CurrentVersion 应用版本号。发布新版本时与 fpk-package/manifest 的 version 同步修改。
-const CurrentVersion = "2.19.2"
+const CurrentVersion = "2.21.0"
 
 // CurrentAppName 对外暴露的应用标识，必须与 fpk-package/manifest 的 appname 一致。
 //
@@ -88,6 +88,8 @@ type Server struct {
 	// 推送任务：账号歌单 → 飞牛音乐歌单
 	pushStore  *push.Store
 	pushRunner *push.Runner
+	// snapSched 定时快照调度（用户 2026-10-24「增加定时快照」）。nil = 没启动。
+	snapSched *snapshotScheduler
 
 	// 网页端下载队列的持久化（原来只存浏览器 localStorage，换设备就没了）
 	downloadQueue *downloadqueue.Store
@@ -238,8 +240,12 @@ func NewServer(cfgMgr *config.ConfigManager, sourcesMgr *sources.Manager, static
 	s.pushStore = push.NewStore(cfgMgr.DataDir())
 	s.pushRunner = push.NewRunner(s.pushStore, s.accountStore)
 	s.downloadQueue = downloadqueue.NewStore(cfgMgr.DataDir())
-	s.appUpdate = newAppUpdateManager(cfgMgr.DataDir())
+	s.appUpdate = newAppUpdateManager(cfgMgr)
 	s.pushRunner.Start(time.Minute)
+
+	// 定时快照：默认关，开着时按配置的间隔自动拍（见 library_snapshot_schedule.go）。
+	s.snapSched = newSnapshotScheduler(s)
+	s.snapSched.Start()
 
 	// 曲库重扫的节流状态落盘：`lastRun` 只存内存的话进程重启就归零，
 	// 重启后 30 秒又能扫一次（真机「音乐任务一直在扫」的成因之一）。
@@ -263,6 +269,9 @@ func (s *Server) StopScheduler() {
 	}
 	if s.pushRunner != nil {
 		s.pushRunner.Stop()
+	}
+	if s.snapSched != nil {
+		s.snapSched.Stop()
 	}
 	// 待执行的重扫定时器一并取消（`StopLibraryRescan` 以前是没人调的死代码）
 	fnos.StopLibraryRescan()
@@ -466,11 +475,61 @@ func (s *Server) handleMonitorSubroutes(w http.ResponseWriter, r *http.Request) 
 	}
 }
 
+// derefIntOrZero 取指针指向的值，nil 当成 0（「没给」）。
+// 用在 /api/config 的 overwrite 键上：`null` 与「不发这个键」同义，都表示回到默认。
+func derefIntOrZero(p *int) int {
+	if p == nil {
+		return 0
+	}
+	return *p
+}
+
+// mergeConfigPatch 把「本次请求的 patch」叠到「当前完整配置 next」上。
+//
+// 为什么需要它：overwrite 分支要求把整份配置交给 Update（否则 0 / 空表会被
+// 补丁语义当成「没传」），但整份配置是从 Get() 读的**旧值**，同一个请求里
+// 带的其它字段（比如 update_github_token）就会一起丢掉 —— 实测过。
+//
+// 合并规则：patch 里「有内容」的字段覆盖 next，其余保持 next。
+// 用 JSON 往返判别「有没有内容」，和 Update 的补丁语义同一套口径：
+// 带 omitempty 的零值 / 空串 / nil 都算没传。
+func mergeConfigPatch(next, patch config.AppConfig) config.AppConfig {
+	// 只取 patch 里有内容的键，再解回结构体；解出来的零值项不会覆盖任何东西。
+	raw, err := json.Marshal(patch)
+	if err != nil {
+		return next
+	}
+	var only map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &only); err != nil {
+		return next
+	}
+	base, err := json.Marshal(next)
+	if err != nil {
+		return next
+	}
+	var merged map[string]json.RawMessage
+	if err := json.Unmarshal(base, &merged); err != nil {
+		return next
+	}
+	for k, v := range only {
+		merged[k] = v
+	}
+	out, err := json.Marshal(merged)
+	if err != nil {
+		return next
+	}
+	var res config.AppConfig
+	if err := json.Unmarshal(out, &res); err != nil {
+		return next
+	}
+	return res
+}
+
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	switch r.Method {
 	case http.MethodGet:
-		cfg := s.cfgMgr.Get()
+		cfg := redactConfig(s.cfgMgr.Get())
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"code":    200,
 			"message": "ok",
@@ -513,11 +572,53 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// ── overwrite 钥匙：榜单显示首数、清空 GitHub token ──
+		//
+		// 为什么要专门一套：ChartSize / ChartSizes 带 omitempty，0 和空表在 Go 的
+		// 解码里和「没传这个键」长得一模一样，补丁语义会把「改回默认」永远吃掉；
+		// UpdateGitHubToken 也是同理（空串 = 「没传」）。所以前端在这些情况下改发
+		// `*_overwrite` 键，这里翻译成「整份配置 + 显式覆盖意图」再交给 Update。
+		//
+		// 关键：**所有覆盖意图必须在同一块里组装同一份 next**。曾经拆成两个 if，
+		// 后一个 `patch = next` 用 Get() 的旧值把前一个的修改整个盖掉，
+		// 表现为「同一次请求里只生效最后一个」（实测过：token 丢失、首数清不掉）。
+		if err := json.Unmarshal(raw, &keys); err == nil {
+			_, hasSize := keys["chart_size_overwrite"]
+			_, hasSizes := keys["chart_sizes_overwrite"]
+			_, hasClearTok := keys["update_token_clear"]
+			if hasSize || hasSizes || hasClearTok {
+				var ov struct {
+					ChartSizeOverwrite  *int           `json:"chart_size_overwrite"`
+					ChartSizesOverwrite map[string]int `json:"chart_sizes_overwrite"`
+					UpdateTokenClear    bool           `json:"update_token_clear"`
+				}
+				if err := json.Unmarshal(raw, &ov); err != nil {
+					w.WriteHeader(http.StatusBadRequest)
+					_ = json.NewEncoder(w).Encode(map[string]interface{}{"code": 400, "message": "参数格式不正确: " + err.Error()})
+					return
+				}
+				// 从当前生效配置出发，先叠本次 patch 里其它字段，再叠这些 overwrite 键。
+				next := mergeConfigPatch(s.cfgMgr.Get(), patch)
+				if hasSize {
+					next.ChartSize = config.NormalizeChartSize(derefIntOrZero(ov.ChartSizeOverwrite))
+				}
+				if hasSizes {
+					next.ChartSizes = config.NormalizeChartSizes(ov.ChartSizesOverwrite)
+				}
+				patch = next
+				// 显式告诉 Update「首数按整体覆盖算」：否则 0 / 空表会被当成没传。
+				patch.ChartSizeOverride = hasSize || hasSizes
+				if hasClearTok && ov.UpdateTokenClear {
+					patch.UpdateClearToken = true
+				}
+			}
+		}
+
 		if err := s.cfgMgr.Update(patch); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		cfg := s.cfgMgr.Get()
+		cfg := redactConfig(s.cfgMgr.Get())
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"code":    200,
 			"message": "ok",
@@ -673,4 +774,18 @@ func handlePlayerCheck(w http.ResponseWriter, r *http.Request) {
 			"note":         note,
 		},
 	})
+}
+
+// redactConfig 把配置里**不能回传给浏览器**的字段抹掉。
+//
+// 为什么必须在这里做而不是靠前端不显示：GET /api/config 的响应会进浏览器、
+// 进开发者工具、进任何抓包工具。GitHub token 一旦泄出去，别人就能用它跑
+// 私有仓库和 5000 次/小时的配额；而 AI key 早就在同一份结构体里，属于同一类风险。
+// 这里统一「只回一个布尔、不回值」，前端据此显示「已设置 / 未设置」。
+//
+// 注意：只做展示层副本，**不改磁盘上的值** —— AppConfig 是值类型，改的是拷贝。
+func redactConfig(cfg config.AppConfig) config.AppConfig {
+	cfg.UpdateTokenSet = cfg.HasUpdateToken()
+	cfg.UpdateGitHubToken = ""
+	return cfg
 }

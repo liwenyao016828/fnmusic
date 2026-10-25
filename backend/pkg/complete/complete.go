@@ -194,6 +194,10 @@ type Progress struct {
 	Done    int    `json:"done"`
 	Total   int    `json:"total"`
 	Current string `json:"current"`
+	// Item / Index 刚解析完的那一首（可选，只有 Resolve 会填）。
+	// 流式预览靠它「匹配完一首就推一行」；不填的调用方（进度轮询）行为不变。
+	Item  *PlanItem `json:"item,omitempty"`
+	Index int       `json:"index"`
 	// Phase 当前阶段。补全分两步跑（先解析、后写入），
 	// 进度条要能区分「在搜」和「在写」—— 两者的耗时与失败原因完全不同。
 	Phase string `json:"phase,omitempty"`
@@ -382,14 +386,14 @@ func Resolve(ctx context.Context, targets []Target, opts Options, onProgress fun
 	done := 0
 	dispatched := 0
 
-	for _, t := range targets {
+	for idx, t := range targets {
 		if ctx.Err() != nil {
 			break
 		}
 		wg.Add(1)
 		sem <- struct{}{}
 		dispatched++
-		go func(t Target) {
+		go func(idx int, t Target) {
 			defer wg.Done()
 			defer func() { <-sem }()
 
@@ -399,12 +403,17 @@ func Resolve(ctx context.Context, targets []Target, opts Options, onProgress fun
 			plan.Items = append(plan.Items, item)
 			done++
 			snap := Progress{Done: done, Total: len(targets), Current: displayName(t), Phase: PhaseResolve}
+			// 指向本次解析结果的副本：plan.Items 之后还要排序，
+			// 回调方（流式预览）拿到的东西必须与排序无关。
+			it := item
+			snap.Item = &it
+			snap.Index = idx
 			mu.Unlock()
 
 			if onProgress != nil {
 				onProgress(snap)
 			}
-		}(t)
+		}(idx, t)
 	}
 	wg.Wait()
 
@@ -897,7 +906,42 @@ func writeOne(ctx context.Context, it PlanItem, opts Options) ItemResult {
 	r.YearFilled = item.Year > 0 && res.MetaWritten
 	r.TrackFilled = item.Track > 0 && res.MetaWritten
 	r.DiscFilled = item.Disc > 0 && res.MetaWritten
+
+	// 记进备份清单「这首歌这次写了什么」，供「记录」页做前后对照与单条撤回。
+	// 只记真正写成功的字段 —— 界面上不该出现「写了年份」却查不到年份的情况。
+	if opts.Backup != nil && r.OK {
+		var written []string
+		if r.LyricFilled {
+			written = append(written, "lyric")
+		}
+		if r.CoverFilled {
+			written = append(written, "cover")
+		}
+		if r.GenreFilled {
+			written = append(written, "genre")
+		}
+		if r.YearFilled {
+			written = append(written, "year")
+		}
+		if r.TrackFilled {
+			written = append(written, "track")
+		}
+		if r.DiscFilled {
+			written = append(written, "disc")
+		}
+		opts.Backup.Note(it.Path, firstText(r.Title, it.Title), firstText(r.Artist, it.Artist), written)
+	}
 	return r
+}
+
+// firstText 取第一个非空字符串（记录页展示用；两个都没有就留空）
+func firstText(vals ...string) string {
+	for _, v := range vals {
+		if s := strings.TrimSpace(v); s != "" {
+			return s
+		}
+	}
+	return ""
 }
 
 // ── AI 兜底：只用于 genre ──

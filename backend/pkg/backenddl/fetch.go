@@ -56,6 +56,10 @@ type FetcherConfig struct {
 	Token string
 	// Prefs 返回下载偏好（要不要内嵌封面/写同名 .lrc），与手动下载同一套开关。
 	Prefs func() map[string]any
+	// SavedDir 返回下载落盘目录（只用于在 status 里如实回报，队列不读它）。
+	// 真正的目录由 `/api/download/song` 按系统设置解析 —— 队列**不应该**
+	// 自己维护一份目录真相，所以这里只读。
+	SavedDir func() string
 	// Client 可 nil（用带超时的默认值）。
 	Client *http.Client
 	Logf   func(string, ...any)
@@ -67,6 +71,15 @@ type ChannelStatus struct {
 	Enabled bool   `json:"enabled"`
 	Ready   bool   `json:"ready"`
 	Reason  string `json:"reason,omitempty"`
+	// Optional 标记「有更好、没有也能下」的渠道（目前只有服务端洛雪宿主）。
+	// 2026-10-25 用户：「下载界面显示落雪宿主未开启，检查有问题」——宿主属于**音源侧**
+	// 的可选能力，前端不该把它当成下载故障摆在渠道列表里，所以这里显式标可选，
+	// 由前端决定折叠（下载页只显示必需渠道，音源管理页展示宿主状态）。
+	Optional bool `json:"optional,omitempty"`
+	// SavedDir 是下载落盘目录（后端真正使用的那个，不是前端记忆值）。
+	// 2026-10-25 用户：「下载-队列-去掉目录选择」—— 队列页不再给入口，
+	// 目录只在「系统 → 设置 → 存储目录」改；这里回报实际值，队列页只做只读展示。
+	SavedDir string `json:"dir,omitempty"`
 }
 
 // Availability 是「后台下载现在到底能不能用」的自述。
@@ -80,6 +93,8 @@ type Availability struct {
 	Channels []ChannelStatus `json:"channels"`
 	// LxHost 是宿主的原始状态（off / starting / ready / failed）。
 	LxHost string `json:"lx_host"`
+	// Dir 是后台队列实际落盘目录（前端只读展示）。
+	Dir string `json:"dir,omitempty"`
 }
 
 // channelsOf 返回清洗后的渠道顺序（与自动下载共用同一套配置语义）。
@@ -88,6 +103,14 @@ func (cfg FetcherConfig) channelsOf() []string {
 		return append([]string(nil), config.DefaultDownloadChannels...)
 	}
 	return config.NormalizeDownloadChannels(cfg.Channels())
+}
+
+// savedDir 安全读 SavedDir（nil 时返回空串，接口里字段即省略）。
+func (cfg FetcherConfig) savedDir() string {
+	if cfg.SavedDir == nil {
+		return ""
+	}
+	return strings.TrimSpace(cfg.SavedDir())
 }
 
 func (cfg FetcherConfig) dlSources() []string {
@@ -168,6 +191,7 @@ func (cfg FetcherConfig) Availability() Availability {
 				cs.Ready = true
 			}
 		case config.DLChannelLx:
+			cs.Optional = true
 			if cfg.Lx != nil && lx == "ready" {
 				cs.Ready = true
 			} else {
@@ -179,6 +203,7 @@ func (cfg FetcherConfig) Availability() Availability {
 		}
 		out.Channels = append(out.Channels, cs)
 	}
+	out.Dir = cfg.savedDir()
 	out.Ready = anyReady
 	if !anyReady {
 		out.Reason = "没有任何可用的取音渠道"

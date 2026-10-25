@@ -1,5 +1,97 @@
 import axios from 'axios'
 
+// ── NDJSON 流 ──
+//
+// 有些接口（目前只有补全预览）是「跑着出结果」的：一行一个 JSON，服务端
+// 匹配完一首就推一条。用 axios 拿不到这种增量输出，只能走 fetch + 读 body。
+//
+// 约定：
+//   · onEvent 每收一条就同步回调一次（不缓冲到结束）；
+//   · 正常收到 `done` / `cancelled` / `error` 事件、或流结束时由**服务端**说明
+//     结果；调用方不用自己拼终态；
+//   · 网络异常或 HTTP 非 2xx 也会合成一条 `error` 事件，调用方只需要处理事件；
+//   · opts.signal 触发 abort() 时**不**再回调（那是调用方自己停的，不是失败）。
+//
+// 返回 Promise，在流结束（或中止）后 resolve，永不 reject —— 失败也只以
+// `error` 事件的形式出现，这样界面只需一套收尾逻辑。
+async function streamNDJSON(path, payload = {}, opts = {}) {
+  const { signal, onEvent } = opts
+  const emitted = new Set()
+  const emit = (ev) => {
+    if (!ev || !ev.type) return
+    emitted.add(ev.type)
+    if (typeof onEvent === 'function') {
+      try {
+        onEvent(ev)
+      } catch (e) {
+        // 回调自己炸了不该影响读取；留给控制台
+        console.error('[streamNDJSON] onEvent failed', e)
+      }
+    }
+  }
+
+  try {
+    const res = await fetch(`/api${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' },
+      body: JSON.stringify(payload),
+      signal,
+    })
+
+    if (!res.ok) {
+      // 后端在非流式失败时回的是普通 JSON（比如 409 槽位被占）
+      let msg = `HTTP ${res.status}`
+      try {
+        const body = await res.json()
+        if (body && body.error) msg = body.error
+      } catch (e) {
+        /* 不是 JSON 就用状态码 */
+      }
+      emit({ type: 'error', error: msg })
+      return
+    }
+
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buf = ''
+
+    const handleLine = (line) => {
+      const text = line.trim()
+      if (!text) return
+      let ev
+      try {
+        ev = JSON.parse(text)
+      } catch (e) {
+        // 半个 JSON 只可能来自「服务端崩了」，如实报出来比静默吞掉好
+        emit({ type: 'error', error: '预览流返回了无法解析的数据' })
+        return
+      }
+      emit(ev)
+    }
+
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buf += decoder.decode(value, { stream: true })
+      let idx
+      while ((idx = buf.indexOf('\n')) >= 0) {
+        handleLine(buf.slice(0, idx))
+        buf = buf.slice(idx + 1)
+      }
+    }
+    buf += decoder.decode()
+    if (buf.trim()) handleLine(buf)
+
+    // 服务端正常结束却没发终态（比如连接被中间层掐了）：补一条，别让界面一直转
+    if (!emitted.has('done') && !emitted.has('cancelled') && !emitted.has('error')) {
+      emit({ type: 'cancelled', reason: '连接提前结束，结果不完整' })
+    }
+  } catch (e) {
+    if (e && (e.name === 'AbortError' || signal?.aborted)) return // 调用方自己停的
+    emit({ type: 'error', error: (e && e.message) || '预览流中断' })
+  }
+}
+
 const api = axios.create({
   baseURL: '/api',
   timeout: 30000,
@@ -103,6 +195,10 @@ export const ChartInjectAPI = {
       // 「取音渠道」：顺序=优先级。缺省/空数组都按后端默认 lx→dl→native 显示。
       autoDownloadChannels: Array.isArray(cfg.auto_download_channels) && cfg.auto_download_channels.length
         ? cfg.auto_download_channels : [...DEFAULT_AUTO_DOWNLOAD_CHANNELS],
+      // 「显示首数」：0 / 缺省 = 跟随后端默认（100）。per 是按榜单单独设的表，
+      // 有这个键就用它，否则跟着 global 走 —— 与 AppConfig.ChartSizeFor 同一优先级。
+      chartSize: Number(cfg.chart_size) || 0,
+      chartSizes: cfg.chart_sizes && typeof cfg.chart_sizes === 'object' ? cfg.chart_sizes : {},
     }
   },
   saveIds: (ids) => api.post('/config', { chart_playlists: ids }).then(res => res.data),
@@ -115,6 +211,10 @@ export const ChartInjectAPI = {
   // 「取音渠道」：这个**数组顺序**决定收藏自动下载先去哪条渠道取音（见 pkg/config/channels.go）。
   // 传空数组 = 后端回落默认 lx→dl→native，所以界面要在剩最后一条被取消时拦住并说清楚。
   saveAutoDownloadChannels: (list) => api.post('/config', { auto_download_channels: list }).then(res => res.data),
+  // 「榜单显示首数」：全局 + 按榜单覆盖。`global: null` 表示清掉、回到内置默认。
+  // 这两个键分开写，所以改一个榜单的首数不会顺手把全局那一栏也重写一遍。
+  saveChartSize: (global) => api.post('/config', { chart_size_overwrite: global }).then(res => res.data),
+  saveChartSizes: (per) => api.post('/config', { chart_sizes_overwrite: per || {} }).then(res => res.data),
 }
 
 // ── 替换音质（后端 pkg/intercept/quality.go，需求 m02757/m02848）──
@@ -232,6 +332,14 @@ export const NasAPI = {
   streamUrl: (path) => `/api/nas/stream?path=${encodeURIComponent(path)}`,
   coverUrl: (path) => `/api/nas/cover?path=${encodeURIComponent(path)}`,
   lyric: (path) => api.get('/nas/lyric', { params: { path } }).then(res => res.data),
+  /**
+   * 删除本地文件（可批量）。
+   *
+   * **默认挪进回收站**（曲库根目录的 `.tidy_trash`），只有显式 `mode:'delete'` 才真删。
+   * 两种模式后端都会先整份备份，删错了能在「补全整理 → 数据快照」里恢复 ——
+   * 所以界面上不需要「删不掉就没了」这种二次确认。
+   */
+  deleteFiles: (payload) => api.post('/nas/delete', payload).then(res => res.data),
 }
 
 export const ProxyAPI = {
@@ -420,6 +528,21 @@ export const TidyAPI = {
    */
   previewComplete: (payload) =>
     api.post('/library/complete', { ...payload, dry_run: true }).then(res => res.data),
+  /**
+   * 流式预览：逐条把「文件 → 匹配到的歌」推回来，界面可以边跑边显示。
+   *
+   * 用户 2026-10-24：「预览改成流式显示，加暂停 / 继续 / 停止」。
+   * 与 previewComplete 是**同一套挑活与匹配**，区别只是结果按行（NDJSON）下发。
+   *
+   * 停止 = abort()（断开连接，服务端 ctx 取消、不再打外网）；
+   * ⚠️ 没有「服务端暂停」——暂停也走 abort()，继续就是重新 previewStream 一次。
+   * 中途停掉的那份清单**没有 plan_id**（不完整，不能执行）。
+   *
+   * @param {object} payload 与 previewComplete 相同
+   * @param {object} [opts] { signal, onEvent(ev) }
+   */
+  previewStream: (payload, opts = {}) =>
+    streamNDJSON('/library/complete/preview/stream', payload, opts),
   /** 执行已确认的计划（计划只能用一次） */
   executeComplete: (planId) =>
     api.post('/library/complete', { plan_id: planId }).then(res => res.data),
@@ -442,6 +565,22 @@ export const TidyAPI = {
   undoComplete: () => api.post('/library/complete/undo').then(res => res.data),
   discardCompleteBackup: () => api.delete('/library/complete/undo').then(res => res.data),
   /**
+   * 补全记录：每次都补了什么，逐首前后对照。
+   *
+   * 不带 id 返回全部记录（每次补全一条，最新在前）；带 id 返回这次的 `entries` 明细。
+   * 数据源就是补全时的整文件备份清单 —— 「记录还在」就等于「还能撤回」，
+   * 所以这里不需要第二套记录表。
+   */
+  completeRecords: () => api.get('/library/complete/records').then(res => res.data),
+  completeRecord: (id) => api.get('/library/complete/records', { params: { id } }).then(res => res.data),
+  /**
+   * 对补全记录里的勾选项做动作。
+   *
+   * `op: 'restore'` 撤回（比 undoComplete 细：只动勾选的几首，撤回成功的条目会
+   * 从记录里移除，剩下的还能再撤）；`op: 'edit'` 把标题/歌手改成新值并写回文件。
+   */
+  editCompleteRecords: (payload) => api.post('/library/complete/records', payload).then(res => res.data),
+  /**
    * 命名解析规则。
    *
    * `saveNameRule` 有三种用法，靠 body 里有没有 `regex` 区分：
@@ -449,6 +588,43 @@ export const TidyAPI = {
    *   ② { regex, sample, dry_run }  → 只回测
    *   ③ { regex, sample, ... }      → 校验通过才保存
    */
+  /**
+   * 歌名修复（体检段改名后的主功能）。
+   *
+   * 扫的是**曲库索引**里标题为空 / 标题就是文件名 / 标题是占位词的那些曲目；
+   * 修复只改标签里的标题（顺带歌手），每次修改都会落一条**补全记录**（备份清单），
+   * 所以「修错了」可以在记录里单条撤回 —— 前端不必自己维护撤销栈。
+   */
+  titleFixScan: (dir) => api.get('/library/title-fix/scan', { params: { dir } }).then(res => res.data),
+  titleFixFix: (payload) => api.post('/library/title-fix/fix', payload).then(res => res.data),
+  /**
+   * 缺歌词（用户 2026-10-25 需求 N）。
+   *
+   * gaps 列清单；fetch 只取词给用户看（不写盘）；write 才真的落内嵌标签 + 同名 .lrc。
+   * 分两步是刻意的：歌词命中率不高，先让用户看清哪些找得到再决定写哪几首。
+   */
+  lyricGaps: (payload) => api.post('/library/lyric/gaps', payload).then(res => res.data),
+  lyricFetch: (payload) => api.post('/library/lyric/fetch', payload).then(res => res.data),
+  lyricWrite: (payload) => api.post('/library/lyric/write', payload).then(res => res.data),
+  /**
+   * 数据快照 —— 现在专指「曲库元数据快照」。
+   *
+   * 2026-10-27 用户纠正：「我要快照的是歌曲的元数据，目的是保留我的曲库中数据被误操作」。
+   * 所以快照存的是每首歌的标签（几 MB），不是音频文件本身（几十 GB）；
+   * 恢复也只写标签，恢复前自动再留一份，恢复本身也能撤。
+   */
+  metaSnapshots: () => api.get('/library/meta-snapshots').then(res => res.data),
+  metaSnapshotDetail: (id) => api.get('/library/meta-snapshots', { params: { id } }).then(res => res.data),
+  takeMetaSnapshot: (dir) => api.post('/library/meta-snapshots', { op: 'create', dir: dir || '' }).then(res => res.data),
+  restoreMetaSnapshot: (id) => api.post('/library/meta-snapshots', { op: 'restore', id }).then(res => res.data),
+  deleteMetaSnapshot: (id) => api.post('/library/meta-snapshots', { op: 'delete', id }).then(res => res.data),
+  /** 定时快照：patch 里只放要改的键（enabled / interval_hours / keep），后端按补丁语义合并 */
+  saveSnapshotSchedule: (patch) => api.post('/library/snapshots', { op: 'schedule', ...patch }).then(res => res.data),
+  snapshotSchedule: () => api.get('/library/meta-snapshots').then(res => res.data),
+  /** 手动歌名体检：随机抽 count 首让 AI 判断能不能修（只读） */
+  titleFixAudit: (dir, count) => api.post('/library/title-fix/audit', { dir: dir || '', count: count || 10 }).then(res => res.data),
+  /** 手写歌名写回（修复记录的「修改」/ 改回自己填的名字） */
+  titleFixApply: (items) => api.post('/library/title-fix/apply', { items }).then(res => res.data),
   nameRules: () => api.get('/library/name-rules').then(res => res.data),
   saveNameRule: (payload) => api.post('/library/name-rules', payload).then(res => res.data),
   removeNameRule: (id) => api.delete('/library/name-rules', { params: { id } }).then(res => res.data),

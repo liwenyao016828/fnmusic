@@ -20,6 +20,11 @@ import (
 func newUpdateClient() *http.Client {
 	opts := security.DefaultOptions()
 	opts.MaxBodyBytes = 512 << 20 // 只影响 LimitedRead；transport 不读它，留作语义完整
+	// 「等响应头」放宽到 2 分钟：Release 资产会 302 到 objects.githubusercontent.com，
+	// 经代理回源时首字节经常 >20s，默认值会把整条下载判死
+	// （`net/http: timeout awaiting response headers`，2026-10-24 用户截图）。
+	// 只放宽**首字节**，总时长仍由 downloadTimeout（30 分钟）兜着。
+	opts.ResponseHeaderTimeout = 2 * time.Minute
 	return &http.Client{
 		Transport: security.NewSafeStreamRoundTripper(opts),
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {

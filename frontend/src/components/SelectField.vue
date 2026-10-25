@@ -97,7 +97,9 @@ const props = defineProps({
   compact: { type: Boolean, default: false },
 })
 
-const emit = defineEmits(['update:modelValue'])
+// change 是「用户真的选了一个值」的回调：只有点击/回车选中才发，
+// 外部代码改 modelValue 不会触发 —— 用来区分「我要保存」和「值被同步回来」。
+const emit = defineEmits(['update:modelValue', 'change'])
 
 const open = ref(false)
 const activeIndex = ref(0)
@@ -154,7 +156,9 @@ function toggle() {
 }
 
 function pick(v) {
-  emit('update:modelValue', props.numeric ? Number(v) : v)
+  const val = props.numeric ? Number(v) : v
+  emit('update:modelValue', val)
+  emit('change', val)
   close()
 }
 

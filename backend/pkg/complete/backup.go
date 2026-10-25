@@ -38,6 +38,17 @@ type BackupEntry struct {
 	Copy     string   `json:"copy"`     // 备份文件路径
 	Size     int64    `json:"size"`
 	Created  []string `json:"created,omitempty"` // 本次新建的 sidecar，撤销时删掉
+
+	// 下面三项是「这次补全对这首歌写了什么」，供记录页直接展示前后对照。
+	// 只记录**写成功的字段**；没写的字段留空（界面上就不显示那一行）。
+	Title  string `json:"title,omitempty"`
+	Artist string `json:"artist,omitempty"`
+	// OldTitle 改写**之前**的标题/歌手 —— 记录页要显示「旧 → 新」的前后对照，
+	// 光有新值看不出到底改了什么（用户 2026-10-24：歌名修复记录要能看改前改后）。
+	OldTitle  string   `json:"old_title,omitempty"`
+	OldArtist string   `json:"old_artist,omitempty"`
+	Fields    []string `json:"fields,omitempty"`     // 写进了哪些字段：lyric/cover/genre/year/track/disc/title/artist
+	WrittenAt int64    `json:"written_at,omitempty"` // 写入时间（unix 秒）
 }
 
 // Backup 一次补全任务的备份。
@@ -141,6 +152,48 @@ func (b *Backup) AfterWrite(path string) {
 	}
 }
 
+// Note 记下「这首歌这次写了什么」，供记录页展示前后对照。
+//
+// 必须由调用方在**写完标签之后**调用（写入成功才有意义）。path 不在清单里就
+// 忽略 —— 没备份的文件本来也撤不了，记了只会让界面上的「可撤销」骗人。
+func (b *Backup) Note(path, title, artist string, fields []string) {
+	b.NoteWithOld(path, "", "", title, artist, fields)
+}
+
+// NoteWithOld 与 Note 相同，但额外记下改写**之前**的标题/歌手。
+//
+// 歌名修复要靠它显示「《未知》→《晴天》」；补全路径不需要旧值，继续用 Note。
+func (b *Backup) NoteWithOld(path, oldTitle, oldArtist, title, artist string, fields []string) {
+	if b == nil || b.dir == "" || len(fields) == 0 {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for i := range b.entries {
+		if b.entries[i].Original != path {
+			continue
+		}
+		b.entries[i].OldTitle = oldTitle
+		b.entries[i].OldArtist = oldArtist
+		b.entries[i].Title = title
+		b.entries[i].Artist = artist
+		b.entries[i].WrittenAt = time.Now().Unix()
+		// 同一字段被写两次（理论上不会）也只记一条
+		seen := map[string]bool{}
+		for _, f := range b.entries[i].Fields {
+			seen[f] = true
+		}
+		for _, f := range fields {
+			if f == "" || seen[f] {
+				continue
+			}
+			seen[f] = true
+			b.entries[i].Fields = append(b.entries[i].Fields, f)
+		}
+		return
+	}
+}
+
 // Commit 落盘清单。没备份任何文件时什么都不做（不留空目录）。
 func (b *Backup) Commit() error {
 	if b == nil || b.dir == "" {
@@ -153,6 +206,18 @@ func (b *Backup) Commit() error {
 		return nil
 	}
 	return writeManifest(b.dir, b.entries)
+}
+
+// Entries 当前清单的副本（提交前也能读，供调用方事后统计本次改了哪些文件）
+func (b *Backup) Entries() []BackupEntry {
+	if b == nil {
+		return nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make([]BackupEntry, len(b.entries))
+	copy(out, b.entries)
+	return out
 }
 
 // Count 备份了几个文件
@@ -319,4 +384,131 @@ func copyFile(src, dst string) error {
 		_ = os.Chmod(tmp, fi.Mode().Perm())
 	}
 	return os.Rename(tmp, dst)
+}
+
+// ── 单条撤销 / 只读查看（2026-10-24 起） ──
+//
+// 上面那套 Restore 是「整批撤销」：一次补全的所有文件一起还原，然后备份目录整个删掉。
+// 但用户真正想要的是「这一首补错了，就撤这一首」—— 于是记录里要能下钻到单条：
+//
+//   ListEntries  读某次备份的清单（界面上「补全结果 / 快照」列表的数据源）
+//   RestoreEntry 只还原清单里的某几条，其余的不动
+//
+// RestoreEntry 还原成功的条目会从清单里**移除**；清单空了才删整个备份目录。
+// 这样「撤了一首」之后剩下的还能再撤，而不会因为「撤过一次」就整批失效。
+
+// ListEntries 读某次备份的清单。dir 为空或读不到时返回空列表（不是错误 ——
+// 界面上「这次补全没备份任何文件」是正常状态，不该让调用方当成失败）。
+func ListEntries(dir string) []BackupEntry {
+	entries, err := readManifest(dir)
+	if err != nil {
+		return nil
+	}
+	return entries
+}
+
+// ListBackups 列出 root 下全部备份目录（按时间倒序，最新的在前），供「记录」页选。
+func ListBackups(root string) []string {
+	dirs, err := os.ReadDir(root)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, e := range dirs {
+		if !e.IsDir() {
+			continue
+		}
+		p := filepath.Join(root, e.Name())
+		if _, err := os.Stat(filepath.Join(p, ManifestName)); err != nil {
+			continue
+		}
+		out = append(out, p)
+	}
+	sort.Sort(sort.Reverse(sort.StringSlice(out)))
+	return out
+}
+
+// BackupInfo 一次备份的概览（记录页列表用）
+type BackupInfo struct {
+	Dir     string        `json:"dir"`
+	ID      string        `json:"id"` // 目录名（时间戳），接口里用它指代这次备份
+	At      int64         `json:"at"` // 备份时间（unix 秒）
+	Count   int           `json:"count"`
+	Size    int64         `json:"size"`
+	Entries []BackupEntry `json:"entries,omitempty"`
+}
+
+// Describe 读某次备份的概览；withEntries 为真时把逐条清单也带上。
+func Describe(dir string, withEntries bool) BackupInfo {
+	info := BackupInfo{Dir: dir, ID: filepath.Base(dir)}
+	if ts, err := time.Parse("20060102-150405", info.ID); err == nil {
+		info.At = ts.Unix()
+	}
+	entries := ListEntries(dir)
+	info.Count = len(entries)
+	for _, e := range entries {
+		info.Size += e.Size
+	}
+	if withEntries {
+		info.Entries = entries
+	}
+	return info
+}
+
+// RestoreEntry 只还原清单里 original 命中 keep 的那些条目。
+//
+// keep 用**原文件路径**匹配（调用方从 ListEntries 拿到路径原样传回来即可）。
+// 返回的 RestoredPaths 同样给调用方刷索引；清单里没命中的条目原样保留。
+func RestoreEntry(dir string, keep []string) RestoreResult {
+	res := RestoreResult{Dir: dir}
+	if dir == "" {
+		res.Errors = append(res.Errors, "没有可撤销的备份")
+		return res
+	}
+	entries, err := readManifest(dir)
+	if err != nil {
+		res.Errors = append(res.Errors, "读取备份清单失败: "+err.Error())
+		return res
+	}
+	want := make(map[string]bool, len(keep))
+	for _, p := range keep {
+		want[p] = true
+	}
+
+	kept := make([]BackupEntry, 0, len(entries))
+	hit := 0
+	for _, e := range entries {
+		if !want[e.Original] {
+			kept = append(kept, e)
+			continue
+		}
+		hit++
+		for _, p := range e.Created {
+			if err := os.Remove(p); err == nil {
+				res.Removed++
+			}
+		}
+		if err := copyFile(e.Copy, e.Original); err != nil {
+			res.Failed++
+			res.Errors = append(res.Errors, fmt.Sprintf("%s: %v", filepath.Base(e.Original), err))
+			kept = append(kept, e) // 没还原成功就留在清单里，允许重试
+			continue
+		}
+		res.Restored++
+		res.RestoredPaths = append(res.RestoredPaths, e.Original)
+	}
+	if hit == 0 {
+		res.Errors = append(res.Errors, "清单里没有匹配的条目（可能已经撤过了）")
+		return res
+	}
+
+	if len(kept) == 0 {
+		_ = os.RemoveAll(dir)
+		return res
+	}
+	// 只把「已还原」的条目从清单里去掉，剩下的重写清单
+	if err := writeManifest(dir, kept); err != nil {
+		res.Errors = append(res.Errors, "更新备份清单失败: "+err.Error())
+	}
+	return res
 }

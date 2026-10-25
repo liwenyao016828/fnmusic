@@ -30,11 +30,20 @@ type EmbedTagsRequest struct {
 	Lyric    string `json:"lyric"`
 	Cover    string `json:"cover"`
 	WriteLrc bool   `json:"write_lrc"` // 同时写出同名 .lrc
-	Fetch    bool   `json:"fetch"`     // 未直接给 lyric 时联网抓取
-	Source   string `json:"source"`
-	Songmid  string `json:"songmid"`
-	Hash     string `json:"hash"`
-	Duration int    `json:"duration"`
+	// EmbedLyric / EmbedCover 是「这次到底写不写进去」的显式开关（**nil = 写**）。
+	//
+	// 为什么要有：设置里的 `lyric_auto_download` / `cover_embed` 以前只管
+	// **自动下载**那一条路，而「补全整理」「替换音质」「手动写入标签」全都无条件
+	// 内嵌 —— 用户关掉设置，别的路径照样往文件里塞歌词封面，看起来就像开关失灵
+	// （2026-10-25 用户反馈：关掉内嵌歌词，试听时还在抓歌词）。
+	// 现在统一由调用方按设置把这两个字段传进来，nil 保留老调用方的「照写」语义。
+	EmbedLyric *bool  `json:"embed_lyric"`
+	EmbedCover *bool  `json:"embed_cover"`
+	Fetch      bool   `json:"fetch"` // 未直接给 lyric 时联网抓取
+	Source     string `json:"source"`
+	Songmid    string `json:"songmid"`
+	Hash       string `json:"hash"`
+	Duration   int    `json:"duration"`
 }
 
 // safeAudioPath 校验并规范化待写入的音频路径。
@@ -102,10 +111,17 @@ func HandleEmbedTags(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 歌词：优先使用请求携带的文本，其次按需联网抓取
-	lyric := strings.TrimSpace(req.Lyric)
+	// 歌词：先看「这次要不要写歌词」，不要就**连抓都不抓**
+	// （关掉内嵌却仍然联网抓一遍歌词，既慢又白花流量，用户正是这么反馈的）
+	wantLyric := req.EmbedLyric == nil || *req.EmbedLyric
+	wantCover := req.EmbedCover == nil || *req.EmbedCover
+
+	lyric := ""
+	if wantLyric {
+		lyric = strings.TrimSpace(req.Lyric)
+	}
 	lyricFetched := false
-	if lyric == "" && req.Fetch {
+	if wantLyric && lyric == "" && req.Fetch {
 		source := strings.ToLower(strings.TrimSpace(req.Source))
 		songmid := strings.TrimSpace(req.Songmid)
 		lrc, _ := search.FetchLyric(source, songmid, req.Title, req.Artist, req.Duration, req.Hash)
@@ -127,7 +143,7 @@ func HandleEmbedTags(w http.ResponseWriter, r *http.Request) {
 
 	coverEmbedded := false
 	coverError := ""
-	if strings.TrimSpace(req.Cover) != "" {
+	if wantCover && strings.TrimSpace(req.Cover) != "" {
 		data, mime, cerr := fetchTagCover(req.Cover)
 		if cerr != nil {
 			// 封面失败**不阻塞**标签写入（歌词/标题照样写），但要把原因如实回报 ——

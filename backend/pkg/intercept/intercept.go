@@ -118,6 +118,12 @@ type Config struct {
 	// 与 ChartPlaylists 同样是函数：用户随时可能关掉。关掉时名单**不会丢**，
 	// 只是这次不注入 —— 所以它是独立的一个开关，而不是「把名单清空」。
 	ChartPlaylistsEnabled func() bool
+	// ChartSizeOf 返回某个榜单**实际显示多少首**，入参形如 `wy_19723756`。
+	//
+	// 同上也是函数：用户改完首数要立刻生效。返回 <=0 表示「没配」，
+	// 拦截层回落到内置默认（vChartSize）。键与 guid 后缀同形，
+	// 所以配置层只需要知道「平台_id」，不必知道 guid 长什么样。
+	ChartSizeOf func(chartID string) int
 	// UIInjectEnabled 是「往飞牛官方页面注入脚本」的开关，nil = 一律视为开。
 	//
 	// 与上面两个同样是函数：用户在设置里关掉就该立刻生效。关掉的效果是
@@ -401,6 +407,14 @@ type Interceptor struct {
 	// 零值可用 —— 只有真的起过一次续传才会建父 ctx 与登记表。
 	tee teePool
 
+	// fbMu/fbCache 是「试听跨源兜底」的候选缓存（见 playback_fallback.go）。
+	//
+	// 键是原曲目的真实 id，值是「去哪儿找得到这首歌」的候选（可能为空 = 找不到，
+	// 空结果也要缓存，否则一首全平台都没有的歌会让每次播放都白搜一遍）。
+	// 内存态、有过期、有上限：它是**加速**不是记录，重启即失无所谓。
+	fbMu    sync.Mutex
+	fbCache map[string]fbEntry
+
 	searcher      func(keyword, platform string, page, size int) []search.UnifiedSong
 	lxSearch      func(ctx context.Context, keyword string, limit int) ([]lxnode.Song, error)
 	lxResolve     func(ctx context.Context, source string, info map[string]any, quality string) (string, int64, error)
@@ -419,6 +433,7 @@ type Interceptor struct {
 	chartFetch   func(ctx context.Context, source, id string, limit int) (string, string, []online.Track, error)
 	chartList    func() []string
 	chartEnabled func() bool
+	chartSize    func(chartID string) int
 	uiInject     func() bool
 	localAPI     string
 
@@ -498,6 +513,7 @@ func New(cfg Config) *Interceptor {
 		llmCache:        make(map[string]*llmEntry, 8),
 		albumCache:      make(map[string]albumEntry, 8),
 		albumLogged:     map[string]bool{},
+		fbCache:         make(map[string]fbEntry, 16),
 		stats:           make(map[string]int, 32),
 		quality:         &qualityScanState{status: QualityStatus{State: QualityStateIdle, Entries: []QualityEntry{}}},
 	}
@@ -517,6 +533,7 @@ func New(cfg Config) *Interceptor {
 	}
 	// 勾选了哪些榜单由配置层现取 —— 榜单管理页保存后立刻生效，不需要重启。
 	i.chartList = cfg.ChartPlaylists
+	i.chartSize = cfg.ChartSizeOf
 	// 总开关同样是现取。nil（没接线）保持 nil —— 读取处按「一律视为开」处理。
 	i.chartEnabled = cfg.ChartPlaylistsEnabled
 	// 页面注入开关：同样是现取（设置里关掉立刻生效，官方页面立刻回到原样）。

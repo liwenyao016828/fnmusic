@@ -22,6 +22,10 @@ const uiInject = ref(true)  // 页面注入（飞牛自带音乐页里曲率补�
 // 「音质下载」：飞牛页面里收藏 / 加歌单 / 点「下载到曲率」时取什么音质。
 // 与「试听音质」（注入面板里那个切换）分开：一个管**存**、一个管**听**。
 const autoDownloadQuality = ref('highest')
+// 「榜单显示首数」：全局 0 = 跟随后端默认（100）；per 是 `wy_19723756` → 50 的单榜覆盖。
+// 这两个值**一起**决定某个榜实际显示几首，优先级与后端 AppConfig.ChartSizeFor 一致。
+const chartSize = ref(0)
+const chartSizes = ref({})
 const busy = ref(false)     // 有写请求在飞（按钮禁用 + 转圈）
 const error = ref('')
 const savedAt = ref(0)      // 最近一次写成功的时刻（ms）
@@ -30,6 +34,9 @@ const loading = ref(false)
 let attempted = false       // 读过一次就够了；读失败时也不该每次切页都重打（重试走 force）
 let reading = null          // 读请求去重
 let writeEpoch = 0          // 每次写入成功 +1，用来作废「写之前发出的」读响应
+
+/** 「跟随默认」时单个榜单显示几首 —— 与后端 intercept 包的 vChartSize 对齐。 */
+export const DEFAULT_CHART_SIZE = 100
 
 function describe(e) {
   return e?.response?.data?.message || e?.message || '未知错误'
@@ -74,6 +81,8 @@ export async function loadConfig(force = false) {
       enabled.value = cfg.enabled
       uiInject.value = cfg.uiInject
       autoDownloadQuality.value = cfg.autoDownloadQuality || 'highest'
+      chartSize.value = Number(cfg.chartSize) || 0
+      chartSizes.value = cfg.chartSizes || {}
       error.value = ''
     } catch (e) {
       error.value = '读取配置失败：' + describe(e)
@@ -88,12 +97,17 @@ export async function loadConfig(force = false) {
 
 /** 真正发请求的动作（队列只管「什么时候写、写什么」，不关心怎么发） */
 const writes = createWriteQueue({
-  send: async ({ ids: wIds, enabled: wEnabled, ui: wUI, adq: wAdq }) => {
+  send: async ({ ids: wIds, enabled: wEnabled, ui: wUI, adq: wAdq, size: wSize }) => {
     // 四个键分开 patch：后端是选择性合并，没出现的键一律不动
     if (wIds !== undefined) await ChartInjectAPI.saveIds(wIds)
     if (wEnabled !== undefined) await ChartInjectAPI.saveEnabled(wEnabled)
     if (wUI !== undefined) await ChartInjectAPI.saveUIInject(wUI)
     if (wAdq !== undefined) await ChartInjectAPI.saveAutoDownloadQuality(wAdq)
+    // 首数两个键分开写：改一个榜的首数不该把全局那栏重发一遍（何况全局是 0 时也要能「清回去」）
+    if (wSize !== undefined) {
+      if (wSize.global !== undefined) await ChartInjectAPI.saveChartSize(wSize.global)
+      if (wSize.per !== undefined) await ChartInjectAPI.saveChartSizes(wSize.per)
+    }
     writeEpoch++
     savedAt.value = Date.now()
     error.value = ''
@@ -133,6 +147,36 @@ export function setUIInject(on) {
   return writes.ui(on)
 }
 
+/**
+ * 某个榜单**实际显示几首**（界面显示用，与后端同一套优先级）。
+ * 只对 display 说话，不代表服务端已经写进去了。
+ */
+export function effectiveChartSize(key) {
+  const per = chartSizes.value?.[String(key || '').toLowerCase()]
+  if (Number(per) > 0) return Number(per)
+  if (Number(chartSize.value) > 0) return Number(chartSize.value)
+  return DEFAULT_CHART_SIZE
+}
+
+/** 全局显示首数；`null`/0 = 跟随默认。 */
+export function setChartSize(n) {
+  const v = Number(n) > 0 ? Number(n) : null
+  chartSize.value = v || 0
+  return writes.size({ global: v })
+}
+
+/** 单个榜单的显示首数；`null` = 清掉覆盖、跟着全局走。 */
+export function setChartSizeFor(key, n) {
+  const k = String(key || '').toLowerCase()
+  if (!k) return Promise.resolve()
+  const next = { ...(chartSizes.value || {}) }
+  const v = Number(n) > 0 ? Number(n) : 0
+  if (v) next[k] = v
+  else delete next[k]
+  chartSizes.value = next
+  return writes.size({ per: next })
+}
+
 /** 音质下载：飞牛页面触发的下载取什么音质（见 pkg/intercept/autodownload.go）。 */
 export function setAutoDownloadQuality(q) {
   autoDownloadQuality.value = q || 'highest'
@@ -141,6 +185,7 @@ export function setAutoDownloadQuality(q) {
 
 export const chartInject = {
   ids, enabled, uiInject, autoDownloadQuality, busy, error, savedAt, loading,
+  chartSize, chartSizes,
   load: loadConfig,
   isInjected,
   replaceIds,
@@ -148,4 +193,6 @@ export const chartInject = {
   setEnabled,
   setUIInject,
   setAutoDownloadQuality,
+  setChartSize,
+  setChartSizeFor,
 }

@@ -12,52 +12,112 @@
         · ⋯：全部恢复 / 重试失败 / 停止全部 / 一键清除记录（下载设置已搬成工具栏上的齿轮按钮）
         · 勾选了任务才浮出底部操作条（清除选中 / 全选当前筛选）
     -->
-    <div class="flex shrink-0 flex-wrap items-center gap-2 border-b border-[var(--ys-border)] bg-white px-4 py-2.5">
-      <button
-        type="button"
-        class="flex min-w-0 max-w-[340px] items-center gap-1.5 rounded-[8px] px-1.5 py-1 text-[11px] text-[var(--ys-text-muted)] transition-colors hover:bg-black/[0.04] hover:text-[var(--ys-text)]"
-        :title="`存储位置：${downloadManager.currentDownloadDir.value}（点击更改）`"
-        @click="downloadManager.openDirModal()"
-      >
-        <Folder class="h-3.5 w-3.5 shrink-0 text-[var(--ys-text-faint)]" :stroke-width="1.8" />
-        <span class="truncate font-mono text-[11px]">{{ downloadManager.currentDownloadDir.value }}</span>
-      </button>
+    <div class="flex shrink-0 flex-col gap-2 border-b border-[var(--ys-border)] bg-white px-3 py-2.5 sm:px-4">
+      <!--
+        2026-10-25 用户：「下载-队列-去掉目录选择。移除三小点下拉框，全部恢复、重试失败、
+        停止全部、去除记录都移出来。并根据屏幕大小适配图标与文字精简效果。」
 
-      <!-- 筛选：分段控件（沉底轨道 + 白色药丸），与全站其它分段同款 -->
-      <div class="flex min-w-0 flex-wrap items-center gap-0.5 rounded-[10px] bg-[var(--ys-surface-sunken)] p-1">
-        <button
-          v-for="tab in filterTabs" :key="tab.id"
-          @click="currentFilter = tab.id"
-          :class="[
-            'ys-press whitespace-nowrap rounded-[8px] px-2.5 py-1 text-[11.5px] font-medium transition-colors',
-            currentFilter === tab.id
-              ? 'bg-white text-[var(--ys-text)] shadow-[0_1px_2px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.04]'
-              : 'text-[var(--ys-text-muted)] hover:text-[var(--ys-text)]',
-          ]"
-        >
-          {{ tab.name }}
-          <span class="ml-0.5 text-[10px] opacity-60">{{ tab.count }}</span>
-        </button>
+        所以这一行现在是两层（原来是「路径 + 筛选 + 图标 + ⋯」挤在一行）：
+          第一层：筛选分段（可横向滚）+ 批量动作（按断点精简）
+          第二层：勾选后的批量条（选中了才出现，单独一行，不再和上面的按钮抢位置）
+        **队列页不再有目录入口**：落盘目录在「系统 → 设置 → 存储目录」唯一一处修改，
+        这里连只读路径也不摆了 —— 用户点名「去掉目录选择」，留着只读路径仍会让人误以为能点。
+      -->
+      <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
+        <!-- 筛选：分段控件（沉底轨道 + 白色药丸），窄屏可横向滚动，不再换行挤成两行 -->
+        <div class="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto rounded-[10px] bg-[var(--ys-surface-sunken)] p-1 no-scrollbar">
+          <button
+            v-for="tab in filterTabs" :key="tab.id"
+            @click="currentFilter = tab.id"
+            :class="[
+              'ys-press shrink-0 whitespace-nowrap rounded-[8px] px-2.5 py-1 text-[11.5px] font-medium transition-colors',
+              currentFilter === tab.id
+                ? 'bg-white text-[var(--ys-text)] shadow-[0_1px_2px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.04]'
+                : 'text-[var(--ys-text-muted)] hover:text-[var(--ys-text)]',
+            ]"
+          >
+            {{ tab.name }}
+            <span class="ml-0.5 text-[10px] opacity-60">{{ tab.count }}</span>
+          </button>
+        </div>
+
+        <div class="flex shrink-0 items-center gap-0.5">
+          <!--
+            队列的「暂停 / 继续」合成**一个常显的切换按钮**：此刻能做什么就画什么。
+            用户 2026-10-25：「下载页面我怎么看到的还是没有继续的三角形图标」——
+            根因不是图标错了，而是原来两个按钮都带 `v-if`（队列暂停 / 有暂停任务），
+            队列正常跑着、也没人暂停过时**一个都不渲染**，用户永远等不到那个三角形。
+            结果态图标会让人以为「有任务在跑」＝暂停图标，其实是「点了会暂停」；
+            所以 title 必须写清动作，不能只写状态。
+          -->
+          <button
+            @click="onToggleQueue"
+            class="ys-press grid h-8 w-8 place-items-center rounded-full transition-colors hover:bg-black/[0.05]"
+            :class="queueNeedsResume
+              ? 'text-emerald-600 hover:text-emerald-700'
+              : 'text-[var(--ys-text-muted)] hover:text-[var(--ys-text)]'"
+            :title="queueNeedsResume ? '继续下载（队列已暂停或有暂停的任务）' : '暂停下载（不会删任务）'"
+            :aria-label="queueNeedsResume ? '继续下载' : '暂停下载'"
+          >
+            <PlayCircle v-if="queueNeedsResume" class="h-4 w-4" :stroke-width="1.9" />
+            <Pause v-else class="h-4 w-4" :stroke-width="1.9" />
+          </button>
+
+          <span class="mx-0.5 h-4 w-px bg-[var(--ys-border)]" aria-hidden="true"></span>
+          <!--
+            原来藏在右侧「⋯」里的四件事，现在摆在明面上。
+            自适应两级：≥lg 图标 + 文字（lg 以下空间紧，中屏也只剩图标，
+            档位比上一版（sm 就出文字）后移一档，避免 640–900px 区间文字挤爆）。
+          -->
+          <button
+            v-for="act in queueActions" :key="act.id"
+            type="button"
+            :disabled="act.disabled"
+            :title="act.hint || act.label"
+            :aria-label="act.label"
+            :class="[
+              'ys-press flex items-center gap-1 rounded-full px-1.5 py-1.5 text-[11.5px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-35 lg:px-2 lg:gap-1.5',
+              act.highlight
+                ? 'text-emerald-600 hover:bg-emerald-50'
+                : act.danger
+                  ? 'text-rose-600 hover:bg-rose-50'
+                  : 'text-[var(--ys-text-muted)] hover:bg-black/[0.05] hover:text-[var(--ys-text)]',
+            ]"
+            @click="onQueueMenu(act.id)"
+          >
+            <component :is="act.icon" class="h-4 w-4 shrink-0" :stroke-width="1.9" />
+            <!--
+              ⚠️ Issue #8 真正的坑在这里（2026-10-25 复测才发现）。
+              以前这一行是写死的 `hidden lg:inline`：小于 1024px 时**所有**批量按钮
+              都只剩一个图标。用户在手机（420px）上看到的是四个无字圆形图标，
+              自然一直在问「一键重试到底做了没有」—— 功能是好的，只是没有字。
+              现在：`act.highlight`（失败数 > 0 的重试失败）**任何宽度都出文字**，
+              因为它正是用户要找的那个按钮；其余按钮维持 lg 起出文字，窄屏靠 aria-label。
+            -->
+            <span :class="act.highlight ? 'inline' : 'hidden lg:inline'">{{ act.label }}</span>
+          </button>
+        </div>
       </div>
 
       <!--
-        勾选后的批量动作（用户 2026-10-23：「多选歌曲后，没有出现相应的按钮，比如继续、
-        重新下载、删除记录等等，可以放在右上角」）。
+        勾选后的批量动作（用户 2026-10-23：「多选歌曲后，没有出现相应的按钮」）。
+        单独一行、左侧对齐：挤在第一层会和上面的批量动作抢宽度，窄屏直接被推出去。
 
-        放在工具栏右上角而不是只靠底部浮条：浮条是「选中了才浮出来」的全局约定，
-        但它离行远，批量动作挤在一个胶囊里也放不下四五个。这里用**文字按钮**，
-        而且只在选中的任务里确实存在那种状态时才出现（没选失败就不摆「重新下载」）——
-        点了得到「0 首」的反馈，和按钮坏了没区别。
+        2026-10-25 #4：**没勾选时也常驻一条「全选当前（N）」**。以前全选只藏在这里，
+        必须先勾上一行才浮出来 —— 用户进页面找不到全选按钮（Issue 原文：
+        「下载里边儿增加全选功能方便操作省时间」）。勾选与否只影响后面的批量动作。
+        `pt-0.5` + 负边距是为了让空状态这一行不把工具栏撑高太多。
       -->
-      <div v-if="selectedIds.length" class="ml-auto flex flex-wrap items-center gap-1">
-        <span class="px-1 text-[11px] text-[var(--ys-text-muted)]">
+      <div class="flex flex-wrap items-center gap-1">
+        <span v-if="selectedIds.length" class="px-1 text-[11px] text-[var(--ys-text-muted)]">
           已选 <b class="text-[var(--ys-text)]">{{ selectedIds.length }}</b>
         </span>
         <button
-          v-for="a in selectionActions" :key="a.key"
+          v-for="a in (selectedIds.length ? selectionActions : idleActions)" :key="a.key"
           type="button"
+          :disabled="a.disabled"
           :class="[
-            'ys-press flex items-center gap-1 rounded-full px-2.5 py-1 text-[11.5px] font-medium transition-colors',
+            'ys-press flex items-center gap-1 rounded-full px-2.5 py-1 text-[11.5px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-35',
             a.danger
               ? 'text-rose-600 hover:bg-rose-50'
               : 'text-[var(--ys-text-muted)] hover:bg-black/[0.05] hover:text-[var(--ys-text)]',
@@ -69,6 +129,7 @@
           {{ a.label }}
         </button>
         <button
+          v-if="selectedIds.length"
           type="button"
           class="ys-press grid h-7 w-7 place-items-center rounded-full text-[var(--ys-text-faint)] transition-colors hover:bg-black/[0.05] hover:text-[var(--ys-text)]"
           title="取消选择"
@@ -77,56 +138,31 @@
           <X class="h-3.5 w-3.5" :stroke-width="2" />
         </button>
       </div>
-
-      <div class="ml-auto flex items-center gap-1" :class="selectedIds.length ? 'ml-0' : ''">
-        <!-- 这两个是「此刻真能做的事」：暂停/继续，图标化后不占文字空间 -->
-        <button
-          v-if="downloadManager.queuePaused.value"
-          @click="downloadManager.resumeAll()"
-          class="ys-press grid h-8 w-8 place-items-center rounded-full text-[var(--ys-text-muted)] transition-colors hover:bg-black/[0.05] hover:text-[var(--ys-text)]"
-          title="后台队列已暂停，点此继续"
-        >
-          <Play class="h-4 w-4" :stroke-width="1.9" />
-        </button>
-        <button
-          v-else-if="downloadManager.activeCount.value > 0"
-          @click="downloadManager.pauseAll()"
-          class="ys-press grid h-8 w-8 place-items-center rounded-full text-[var(--ys-text-muted)] transition-colors hover:bg-black/[0.05] hover:text-[var(--ys-text)]"
-          title="暂停后台队列（不会删任务）"
-        >
-          <Pause class="h-4 w-4" :stroke-width="1.9" />
-        </button>
-        <button
-          v-if="downloadManager.pausedCount.value > 0"
-          @click="downloadManager.resumeAll()"
-          class="ys-press grid h-8 w-8 place-items-center rounded-full text-[var(--ys-text-muted)] transition-colors hover:bg-black/[0.05] hover:text-[var(--ys-text)]"
-          title="继续所有已暂停的任务（并恢复后台队列）"
-        >
-          <Play class="h-4 w-4" :stroke-width="1.9" />
-        </button>
-        <!--
-          下载设置从 ⋯ 里搬了出来（用户 2026-10-23：「下载列表的下载设置移出来」）。
-          ⋯ 里放的是「偶尔用一次的批量动作」，而这一项是**这一页的策略旋钮**
-          （新任务的默认音质）—— 藏在 ⋯ 里，用户会以为默认策略改不了。
-          摆成图标而不是文字，是为了不把这条 40px 的行重新塞满。
-        -->
-        <button
-          type="button"
-          class="ys-press grid h-8 w-8 place-items-center rounded-full text-[var(--ys-text-muted)] transition-colors hover:bg-black/[0.05] hover:text-[var(--ys-text)]"
-          title="下载设置（新任务的默认音质）"
-          @click="showSettings = true"
-        >
-          <Settings2 class="h-4 w-4" :stroke-width="1.9" />
-        </button>
-        <OverflowMenu :items="queueMenu" @select="onQueueMenu" />
-      </div>
     </div>
 
   <!--
-    后台下载状态条（NAS 端执行）。下载是后台做的，这里只如实报告「能不能下 / 在跑什么」，
-    任务明细与全部动作在下面的列表里（一条调用链，不在两处各写一套按钮）。
+    后台能力提示（2026-10-26 用户：「后台下载组件是不是多余了」后合并进来）。
+
+    原来这里是独立的 `<BackendDownloadPanel />` 状态条（239 行）：它把「排队 X / 下载中 Y /
+    失败 Z」再数一遍（下面筛选标签已经有了）、暂停/继续按钮再摆一组（右上角已经有了）、
+    展开还给一份只读任务对照（和下面列表一模一样）。三处重复，只为一个真需求：
+
+      · 后台现在**能不能真的下**（ready）—— 洛雪宿主没开 / 没渠道时必须明说 + 原因，
+        否则用户点下载，任务会一直 pending 到超时。
+
+    那个需求一行提示就够，于是并进队列头。任务明细与全部动作只保留下面一份，沿用
+    「一条调用链，不在两处各写一套按钮」的原意。
   -->
-  <BackendDownloadPanel />
+  <div
+    v-if="backendNotice"
+    class="flex shrink-0 items-start gap-1.5 border-b border-[var(--ys-border)] bg-[var(--ys-surface-sunken)] px-4 py-2 text-[11px] leading-relaxed text-[var(--ys-text-muted)]"
+  >
+    <Info class="mt-[1px] h-3.5 w-3.5 shrink-0 text-[var(--ys-text-faint)]" :stroke-width="1.8" />
+    <div class="min-w-0">
+      <b class="text-[var(--ys-text)]">{{ backendNotice.title }}</b>
+      <span class="whitespace-pre-wrap"> —— {{ backendNotice.body }}</span>
+    </div>
+  </div>
 
   <!-- 旧浏览器队列 → 后台队列的一次性迁移：逐条确认，没确认的下次再试，绝不静默丢 -->
   <div
@@ -152,7 +188,7 @@
       v-if="filteredTasks.length"
       :total="filteredTasks.length"
       :has-selection="selectedIds.length > 0"
-      :label="`按序号选（共 ${terminalTasks.length} 行可勾）`"
+      :label="`按序号选（共 ${filteredTasks.length} 行可勾）`"
       @apply="onRangeApply"
       @clear="selected = new Set()"
     />
@@ -183,20 +219,20 @@
       现在：**点整行就是勾选**，选中的行整张卡描绿边 + 极浅绿底，左边一个绿色勾。
       勾只是**状态显示**，不再是唯一的命中区（pointer-events-none），
       所以点它等于点卡片，不会出现「点了勾没反应」。
-      在跑/排队的行不可选，它们的卡片保持原样（没有勾、也不会被点选中）。
+      ⚠️ 2026-10-25 #4：以前「在跑/排队的行不可选」，于是「全选」在下载中/排队时形同虚设，
+      也没法批量暂停。现在**所有行都能勾**，能不能暂停/停止由选中后浮出的批量条按状态决定。
     -->
     <div
       v-for="(task, rowIndex) in filteredTasks"
       :key="task.id"
       :class="[
-        'group flex items-center gap-3 rounded-[12px] border bg-white p-3 transition-all',
-        isTerminal(task.status) ? 'cursor-pointer select-none' : '',
+        'group flex items-center gap-3 rounded-[12px] border bg-white p-3 transition-all select-none cursor-pointer',
         selected.has(task.id)
           ? 'border-transparent ring-2 ring-emerald-500/40 bg-emerald-50/30'
           : 'border-[var(--ys-border)] hover:border-[var(--ys-border-strong)]',
       ]"
-      :title="isTerminal(task.status) ? (selected.has(task.id) ? '点击取消选中' : '点击选中这一行') : ''"
-      @click="isTerminal(task.status) && toggleSelect(task.id)"
+      :title="selected.has(task.id) ? '点击取消选中' : '点击选中这一行'"
+      @click="toggleSelect(task.id)"
     >
       <!--
         行号：与上面「按序号选」的输入是同一套口径（当前可见列表里的第几行）。
@@ -206,9 +242,8 @@
         {{ rowIndex + 1 }}
       </span>
 
-      <!-- 选中状态指示：已结束的行才有；绿勾 = 已选，灰圈 = 可点但未选 -->
+      <!-- 选中状态指示：所有行都有（2026-10-25 #4 起在跑/排队的行也能勾）；绿勾 = 已选，灰圈 = 可点但未选 -->
       <span
-        v-if="isTerminal(task.status)"
         class="pointer-events-none grid h-4 w-4 shrink-0 place-items-center rounded-[5px] border transition-colors"
         :class="selected.has(task.id)
           ? 'border-emerald-500 bg-emerald-500 text-white'
@@ -217,8 +252,6 @@
       >
         <Check class="h-3 w-3" :stroke-width="3" />
       </span>
-      <!-- 不可勾的行也要占住这一格，否则整列会左右错开 -->
-      <span v-else class="w-4 shrink-0" aria-hidden="true"></span>
 
       <!-- 封面 -->
       <div class="w-10 h-10 rounded-lg overflow-hidden bg-gray-100 shrink-0 relative flex items-center justify-center shadow-2xs">
@@ -374,7 +407,7 @@
           class="p-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-600 transition-colors"
           title="继续下载"
         >
-          <Play class="w-3.5 h-3.5" />
+          <PlayCircle class="w-3.5 h-3.5" :stroke-width="1.9" />
         </button>
 
         <!--
@@ -388,7 +421,7 @@
           class="px-2 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-600 text-[10px] font-medium transition-colors flex items-center gap-1"
           title="恢复下载（重新排队并继续）"
         >
-          <Play class="w-3 h-3" />
+          <PlayCircle class="w-3 h-3" :stroke-width="1.9" />
           <span>恢复下载</span>
         </button>
 
@@ -446,48 +479,12 @@
   </div>
   </div>
 
-<!-- ── 下载设置弹窗（入口：工具栏右侧的齿轮按钮） ── -->
-<Teleport to="body">
-  <div
-    v-if="showSettings"
-    class="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs"
-    @click.self="showSettings = false"
-  >
-    <div class="max-h-[85vh] w-full max-w-[560px] overflow-y-auto rounded-2xl bg-white shadow-2xl">
-      <div class="flex items-center justify-between border-b border-gray-100 px-5 py-3.5">
-        <h3 class="text-sm font-bold text-gray-800 flex items-center gap-1.5">
-          <Settings2 class="w-4 h-4 text-emerald-500" />
-          <span>下载设置</span>
-        </h3>
-        <button class="text-gray-400 hover:text-gray-600" @click="showSettings = false">
-          <X class="w-4 h-4" />
-        </button>
-      </div>
-
-      <div class="space-y-4 px-5 py-4">
-        <SelectField
-          v-model="qualityModel"
-          label="默认音质"
-          :options="downloadManager.QUALITY_OPTIONS"
-          hint="只影响新提交的任务；已在后台队列里的任务按当初的档位走"
-        />
-        <p class="text-[11px] leading-relaxed text-gray-400">
-          下载由 NAS 后台队列统一调度：并发、重试和取音渠道都由后端策略决定，
-          不再由浏览器逐首执行。这里只保留「新任务要什么音质」。
-        </p>
-      </div>
-
-    </div>
-  </div>
-</Teleport>
-
   <!--
     勾选了任务才浮出的操作条：清除选中 / 全选当前筛选。
 
-    ⚠️ 这一条**必须留在「下载设置」弹窗外面**。以前它被写在
-    `<Teleport><div v-if="showSettings">` 里面，于是只有在设置弹窗打开时
-    才存在 —— 平时勾了行什么都不浮出来，看起来就像「多选失效了」
-    （用户 2026-10-23：「多选框上方增加多选功能……这些都失效了」）。
+    ⚠️ 这一条必须留在任何弹窗外面。以前它被写在 `Teleport + v-if` 的弹窗里，
+    于是只有在那个弹窗打开时才存在 —— 平时勾了行什么都不浮出来，
+    看起来就像「多选失效了」（用户 2026-10-23：「多选框上方增加多选功能……这些都失效了」）。
   -->
   <SelectionBar
     :count="selectedIds.length"
@@ -499,24 +496,61 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { downloadManager } from '../services/downloadManager'
 import SelectField from './SelectField.vue'
-import OverflowMenu from './OverflowMenu.vue'
+import { backendDownload } from '../services/backendDownload.js'
 import SelectionBar from './SelectionBar.vue'
 import RangeSelectBar from './RangeSelectBar.vue'
-import BackendDownloadPanel from './BackendDownloadPanel.vue'
 import { pickByIndexes } from '../services/rangeSelect'
 import { ok as notifyOk, warn as notifyWarn } from '../services/feedback'
 import {
-  X, Folder, RotateCw, Trash2, Check,
-  AlertCircle, Loader2, Music2, Clock, Pause, Play, Square,
-  Settings2, ListChecks, Eraser, RotateCcw
+  X, RotateCw, Trash2, Check,
+  AlertCircle, Loader2, Music2, Clock, Pause, PlayCircle, Square,
+  ListChecks, Eraser, RotateCcw, Info
 } from 'lucide-vue-next'
 
 const props = defineProps({
   activeSource: Object
 })
+
+/**
+ * 后台能力提示：只在前端**得说话**的时候才显示（正常情况下整行不占位）。
+ *
+ * 优先级与原状态条一致：接口没有 > 能力不可用 > 请求报错。
+ * 「就绪」这件事不再写进界面 —— 队列能显示出来、下载能入队，本身就是就绪的证据，
+ * 单独挂一个绿色「就绪」胶囊属于自证清白式的噪音。
+ *
+ * 挂载即探一次能力、卸载时归还共享轮询的引用计数（原 BackendDownloadPanel 负责的
+ * 两件事，组件删了不能丢，否则队列计数只在别处挂着时才准）。
+ */
+const backendNotice = computed(() => {
+  const { available, ready, reason, errorText } = backendDownload
+  if (available.value === false) {
+    return {
+      title: '当前后端版本没有后台下载接口',
+      body: `${reason.value || '升级后端后就能用'}；现在点下载会失败，请先升级。`,
+    }
+  }
+  if (ready.value === false) {
+    return {
+      title: '后台下载当前不可用',
+      body: `${reason.value || '后端没有可用的取音渠道'}`,
+    }
+  }
+  if (errorText.value) return { title: '后台状态没取到', body: errorText.value }
+  return null
+})
+
+onMounted(() => backendDownload.start())
+onUnmounted(() => backendDownload.stop())
+
+/**
+ * 2026-10-25 用户：「下载-队列-去掉目录选择。」
+ * → 工具栏里那条只读路径条也一起撤了（模板已无引用），落盘目录只在
+ *   「系统 → 设置 → 存储目录」修改。原来这里还有个 `const backendDir = backendDownload.backendDir`，
+ *   现在模板不用了，留着就是未使用变量，一并删掉。
+ */
 
 /**
  * ⚠️ `<script setup>` 里，props 只有**在模板中**才能当裸变量用（编译器会把模板里的
@@ -527,18 +561,46 @@ const props = defineProps({
  * 统一走下面这个取值函数，别再在脚本里裸写。
  */
 // 下载设置面板默认折叠，避免一屏挤满控件
-const showSettings = ref(false)
 
 /**
- * 队列页右上角 ⋯。
- * 判定标准：这个动作**不需要先勾选**、也不是此刻正在发生的事 → 进菜单。
- * 「全部恢复 / 重试失败 / 停止全部」三个批量动作只在对应状态存在时才出现。
+ * 队列此刻该「继续」还是「暂停」。
+ *
+ * 只要队列被暂停、或者有任何一条任务处于暂停态，下一步该做的就是继续；
+ * 否则就是暂停队列（有在跑的任务时）。两者都不成立（队列空且没暂停任务）
+ * 时仍显示暂停图标并禁用语义更含糊，所以这里退化为「播放」——按下会调
+ * resumeAll()，后端无事可做也不会报错。
  */
-const queueMenu = computed(() => [
-  { key: 'resumeStopped', label: '全部恢复', icon: Play, disabled: stoppedCount.value === 0, hint: `${stoppedCount.value} 首已停止` },
-  { key: 'retryFailed', label: '重试失败', icon: RotateCcw, disabled: downloadManager.failedCount.value === 0, hint: `${downloadManager.failedCount.value} 首失败` },
-  { key: 'stopAll', label: '停止全部', icon: Square, danger: true, disabled: downloadManager.activeCount.value + downloadManager.pausedCount.value === 0 },
-  { key: 'clearRecords', label: '清除所有记录', icon: Eraser, danger: true, disabled: terminalCount.value === 0, hint: '已完成 / 失败 / 已停止' },
+const queueNeedsResume = computed(
+  () => downloadManager.queuePaused.value || downloadManager.pausedCount.value > 0,
+)
+
+function onToggleQueue() {
+  if (queueNeedsResume.value) downloadManager.resumeAll()
+  else downloadManager.pauseAll()
+}
+
+/**
+ * 队列页工具栏的四个批量动作（2026-10-25 从「⋯」里移出来，见模板注释）。
+ *
+ * 判定标准不变：这些动作**不需要先勾选**、也不是此刻正在发生的事。
+ * 数量为 0 时禁用而不是隐藏 —— 按钮位置固定，用户才不会觉得「少了一项」。
+ */
+const queueActions = computed(() => [
+  { id: 'resumeStopped', label: '全部恢复', icon: RotateCw, disabled: stoppedCount.value === 0, hint: `继续 ${stoppedCount.value} 首已停止的任务（重新排队）` },
+  {
+    id: 'retryFailed',
+    // Issue #8：用户要的是「一键重试」**能看见**。失败时标签直接带数字，
+    // 不再只靠悬停提示；同时加 emerald 高亮，与旁边灰按钮区分开。
+    label: downloadManager.failedCount.value > 0 ? `重试失败（${downloadManager.failedCount.value}）` : '重试失败',
+    icon: RotateCcw,
+    highlight: downloadManager.failedCount.value > 0,
+    disabled: downloadManager.failedCount.value === 0,
+    hint: downloadManager.failedCount.value > 0
+      ? `${downloadManager.failedCount.value} 首失败，点一下全部重新排队`
+      : '没有失败的任务',
+  },
+  { id: 'stopAll', label: '停止全部', icon: Square, danger: true, disabled: downloadManager.activeCount.value + downloadManager.pausedCount.value === 0, hint: '停掉正在下载与排队中的任务（已完成的不受影响）' },
+  { id: 'clearRecords', label: '清除记录', icon: Eraser, danger: true, disabled: terminalCount.value === 0, hint: `清除已完成 / 失败 / 已停止的 ${terminalCount.value} 条记录` },
 ])
 
 /**
@@ -555,9 +617,12 @@ async function onQueueMenu(key) {
       if (n > 0) notifyOk(`已恢复 ${n} 首重新排队`)
       else notifyWarn('没有可恢复的任务（已结束的请用「重新下载」）')
     } else if (key === 'retryFailed') {
+      // Issue #8：用户在问「一键重试好了吗」—— 所以这里必须把结果说清楚，
+      // 包括「几首里重试了几首、剩下的为什么没动」，不能只丢一句「已重试 N 首」。
+      const before = downloadManager.failedCount.value
       const n = await downloadManager.retryAllFailed()
-      if (n > 0) notifyOk(`已重试 ${n} 首失败任务`)
-      else notifyWarn('没有失败任务可重试')
+      if (n > 0) notifyOk(`已把 ${n} 首重新排进队列（原失败 ${before} 首）`)
+      else notifyWarn(before > 0 ? `有 ${before} 首失败，但后端一条都没接（稍后再试或看日志）` : '没有失败任务可重试')
     } else if (key === 'stopAll') {
       const n = await downloadManager.stopAll()
       if (n > 0) notifyOk(`已停止 ${n} 首`)
@@ -570,11 +635,6 @@ async function onQueueMenu(key) {
   }
 }
 
-// ── 下载策略设置的读写模型 ──
-const qualityModel = computed({
-  get: () => downloadManager.defaultQuality.value,
-  set: v => downloadManager.updateSettings({ defaultQuality: v }),
-})
 /** 为单个失败任务指定音质并立即重试（SelectField 直接给出值，不再是 DOM event） */
 function onTaskQualityPick(task, quality) {
   if (!quality) return
@@ -583,18 +643,27 @@ function onTaskQualityPick(task, quality) {
 
 // ── 多选与清除记录 ──
 //
-// 「已结束」= 记录可以清掉的那些。它同时决定三件事：勾选框出现在哪些行上、
-// 「全选」圈哪些、「一键清除记录」清哪些 —— 一处定义，三处共用。
+// 「已结束」= 记录可以清掉的那些。它现在只剩「一键清除记录」这一个用途。
+//
+// ⚠️ 2026-10-25 #4 修正：它**不再**决定「哪些行能勾」。以前能勾的前提是 isTerminal，
+// 于是「下载中 / 后台排队中」的行根本没有勾选框 —— 用户想批量暂停一批正在下的歌，
+// 只能一首一首点右侧小按钮，「全选」在那些筛选下永远是灰的（Issue #4）。现在所有行都能勾，
+// 批量条按选中行的实际状态给出「暂停选中 / 继续 / 停止选中 / 删除记录」。
 function isTerminal(status) {
   return status === 'success' || status === 'failed' || status === 'stopped'
+}
+
+/** 还没结束的行（排队 / 下载中 / 已暂停）—— 它们能批量暂停、停止。 */
+function isActive(status) {
+  return status === 'pending' || status === 'downloading' || status === 'paused'
 }
 
 /** 勾选的 id。用 Set 而不是数组：勾/取消是 O(1)，且天然去重。 */
 const selected = ref(new Set())
 const selectedIds = computed(() => Array.from(selected.value))
-const terminalTasks = computed(() => filteredTasks.value.filter(t => isTerminal(t.status)))
+/** 当前筛选下所有行 —— 「全选」圈的就是这一批（Issue #4：以前只圈已结束的，等于没用）。 */
 const allSelected = computed(() =>
-  terminalTasks.value.length > 0 && terminalTasks.value.every(t => selected.value.has(t.id)))
+  filteredTasks.value.length > 0 && filteredTasks.value.every(t => selected.value.has(t.id)))
 /** 全部任务里已结束的条数（决定「一键清除记录」显不显示 —— 没有可清的就不摆按钮） */
 const terminalCount = computed(() => downloadManager.tasks.value.filter(t => isTerminal(t.status)).length)
 
@@ -608,7 +677,7 @@ function toggleSelect(id) {
 function toggleSelectAll() {
   selected.value = allSelected.value
     ? new Set()
-    : new Set(terminalTasks.value.map(t => t.id))
+    : new Set(filteredTasks.value.map(t => t.id))
 }
 
 /**
@@ -618,22 +687,17 @@ function toggleSelectAll() {
  * 而不是往已有选择上叠加 —— 叠加的话用户填完 100 再填 11-200，会得到 1-200，
  * 而他想要的其实是「只有 11-200」。想清空重来用右侧「清空选择」。
  *
- * 只有「已结束」的行能勾（在跑/排队的行没有勾选框，见 isTerminal 那段注释），
- * 所以命中里要摘掉不可勾的那些，并把摘掉多少首说给用户 —— 不然他会以为全选上了。
+ * 2026-10-25 #4：**所有行都能勾了**（以前只圈已结束的，正在下的圈不上）。
+ * 所以这里不再需要「摘掉不可勾的那些」，也不再需要那句「另有 N 行不能勾」的提示。
  */
 function onRangeApply(indexes) {
   const rows = pickByIndexes(filteredTasks.value, indexes)
-  const selectable = rows.filter(t => isTerminal(t.status))
-  if (!selectable.length) {
-    notifyWarn(`命中的 ${rows.length} 行都还在跑或排队，没有可勾选的记录（换个筛选试试）`)
+  if (!rows.length) {
+    notifyWarn('没有命中任何行（序号从 1 开始，数的是当前筛选下可见的行）')
     return
   }
-  selected.value = new Set(selectable.map(t => t.id))
-  const skipped = rows.length - selectable.length
-  notifyOk(
-    `已选中 ${selectable.length} 行` +
-      (skipped > 0 ? `，另有 ${skipped} 行在跑/排队不能勾` : ''),
-  )
+  selected.value = new Set(rows.map(t => t.id))
+  notifyOk(`已选中 ${rows.length} 行`)
 }
 
 async function clearSelected() {
@@ -657,15 +721,27 @@ const selectedResumableCount = computed(() =>
 
 const selectedDoneCount = computed(() => selectedTasks.value.filter(t => t.status === 'success').length)
 const selectedRetryableCount = computed(() => selectedFailedCount.value + selectedDoneCount.value)
+/** 选中里「还在队列中、能暂停/停止」的条数（Issue #4：以前这些行勾不上，也就没有批量暂停）。 */
+const selectedActiveCount = computed(() => selectedTasks.value.filter(t => isActive(t.status)).length)
 
 const selectionActions = computed(() => {
   const acts = []
+  // 批量暂停放在最前：Issue #4 里用户真正的需求就是「一次暂停一批正在下的」。
+  // 后端 pause 带 ids 时只动这几条，不影响整队开关。
+  if (selectedActiveCount.value > 0) {
+    acts.push({
+      key: 'pause',
+      label: `暂停选中（${selectedActiveCount.value}）`,
+      icon: Pause,
+      hint: '把选中的排队中 / 下载中 / 已暂停任务暂停（已暂停的保持不动）',
+    })
+  }
   // 「继续」覆盖在跑之外的一切（失败要重试、停止要恢复），所以它是第一条
   if (selectedRetryableCount.value > 0 || selectedResumableCount.value > 0) {
     acts.push({
       key: 'continue',
       label: '继续',
-      icon: Play,
+      icon: PlayCircle,
       hint: '选中的任务重新排队：失败的会重试、停止/暂停的会接着下',
     })
   }
@@ -678,10 +754,41 @@ const selectionActions = computed(() => {
       hint: '把选中的已完成任务重新下一次（盘上那份不会被更差的覆盖）',
     })
   }
-  acts.push({ key: 'all', label: allSelected.value ? '取消全选' : '全选已结束', icon: ListChecks })
+  if (selectedActiveCount.value > 0) {
+    acts.push({
+      key: 'stop',
+      label: `停止选中（${selectedActiveCount.value}）`,
+      icon: Square,
+      danger: true,
+      hint: '停掉选中的排队中 / 下载中 / 已暂停任务（已完成的不受影响）',
+    })
+  }
+  // 全选口径 2026-10-25 改：圈「当前筛选下的全部行」，不只是已结束的。
+  acts.push({
+    key: 'all',
+    label: allSelected.value ? '取消全选' : `全选当前（${filteredTasks.value.length}）`,
+    icon: ListChecks,
+    hint: '把当前筛选下的所有行都勾上（含下载中 / 排队中），再点一次取消',
+  })
   acts.push({ key: 'clear', label: `删除记录（${selectedIds.value.length}）`, icon: Trash2, danger: true, hint: '只从队列里移除记录，不删 NAS 上的文件' })
   return acts
 })
+
+/**
+ * 没勾选时那一行只摆一个「全选当前（N）」—— 全选不该藏在勾选之后才出现。
+ * 行数为 0 时禁用（列表空着，全选没有意义），但**仍占位**，避免它忽隐忽现。
+ */
+const idleActions = computed(() => [
+  {
+    key: 'all',
+    label: allSelected.value
+      ? '取消全选'
+      : `全选当前（${filteredTasks.value.length}）`,
+    icon: ListChecks,
+    disabled: filteredTasks.value.length === 0,
+    hint: '把当前筛选下的所有行都勾上（含下载中 / 排队中），再点一次取消',
+  },
+])
 
 async function onSelectionAction(key) {
   try {
@@ -694,6 +801,27 @@ async function onSelectionAction(key) {
 async function runSelectionAction(key) {
   if (key === 'clear') return clearSelected()
   if (key === 'all') return toggleSelectAll()
+  if (key === 'pause') {
+    const ids = selectedTasks.value.filter(t => t.status === 'pending' || t.status === 'downloading').map(t => t.id)
+    if (!ids.length) {
+      notifyWarn('选中的任务里没有正在下载或排队中的（已暂停的保持不动）')
+      return
+    }
+    const n = await downloadManager.pauseTasksByIds(ids)
+    notifyOk(n > 0 ? `已暂停 ${n} 首` : '没有可暂停的任务')
+    return
+  }
+  if (key === 'stop') {
+    const ids = selectedTasks.value.filter(t => isActive(t.status)).map(t => t.id)
+    if (!ids.length) {
+      notifyWarn('选中的任务里没有可停止的（已完成 / 失败 / 已停止的不受影响）')
+      return
+    }
+    const n = await downloadManager.stopTasksByIds(ids)
+    selected.value = new Set()
+    notifyOk(n > 0 ? `已停止 ${n} 首` : '没有可停止的任务')
+    return
+  }
   if (key === 'continue') {
     // 一个「继续」把两档都管了：失败的要重试、停止/暂停的要接着下。
     // 用户勾了一段按「继续」，不该还要先分辨哪几行当初是被停掉的。

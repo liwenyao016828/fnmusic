@@ -308,3 +308,113 @@ func TestStateReadyTurnsIdleWhenFileDisappears(t *testing.T) {
 		t.Fatalf("文件没了状态应回到 idle：%+v", st)
 	}
 }
+
+// TestDownloadRetriesTransientNetworkError 钉住 2026-10-24 修的那个坑：
+// GitHub Release 资产会 302 到 objects.githubusercontent.com，经代理回源时首字节
+// 经常超过 20s，transport 直接报 `net/http: timeout awaiting response headers`，
+// 整个更新就这么失败 —— 而它其实只是一次抖动。
+//
+// 这里用「第一次请求把连接掐断、第二次正常返回」的假服务器复现抖动，要求：
+// ① 下载最终成功（不是报错）；② 真的重试过（命中 2 次）；③ 成功状态里不留
+// 重试期间写下的「正在重试」残文。
+func TestDownloadRetriesTransientNetworkError(t *testing.T) {
+	wait := downloadRetryWait
+	downloadRetryWait = 10 * time.Millisecond
+	t.Cleanup(func() { downloadRetryWait = wait })
+
+	var hits int32
+	const payload = "FPK-BYTES-AFTER-RETRY"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&hits, 1) == 1 {
+			// 抢下底层连接直接关掉、一个字都不写：客户端只会看到传输层错误。
+			hj, ok := w.(http.Hijacker)
+			if !ok {
+				t.Error("httptest 服务器不支持 Hijacker，测不了断连")
+				return
+			}
+			conn, _, err := hj.Hijack()
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			_ = conn.Close()
+			return
+		}
+		w.Header().Set("Content-Type", "application/octet-stream")
+		_, _ = w.Write([]byte(payload))
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	m := New(Options{
+		DataDir:        dir,
+		ScriptDir:      filepath.Join(dir, "script"),
+		CurrentVersion: "1.0.0",
+		Client:         srv.Client(), // 默认可替换：安全 transport 会拦 127.0.0.1
+	})
+	m.dl = DownloadState{Status: StatusDownloading, Version: "1.0.1"}
+
+	m.download(context.Background(), srv.URL+"/app.fpk", "app.fpk")
+
+	m.mu.Lock()
+	st := m.dl
+	m.mu.Unlock()
+	if st.Status != StatusReady {
+		t.Fatalf("抖一次就该重试成功，实得 status=%s err=%q", st.Status, st.Error)
+	}
+	if n := atomic.LoadInt32(&hits); n != 2 {
+		t.Fatalf("应当命中 2 次（失败 1 次 + 重试成功），实得 %d", n)
+	}
+	if st.Error != "" {
+		t.Fatalf("成功后不该留「正在重试」残文，实得 %q", st.Error)
+	}
+	body, err := os.ReadFile(st.Path)
+	if err != nil || string(body) != payload {
+		t.Fatalf("落盘内容不对：%q err=%v", string(body), err)
+	}
+}
+
+// TestDownloadFailsAfterRetries 是上一条的另一半：重试次数用尽必须老实报错，
+// 不能无限重试把更新挂在那里。
+func TestDownloadFailsAfterRetries(t *testing.T) {
+	wait := downloadRetryWait
+	downloadRetryWait = 10 * time.Millisecond
+	t.Cleanup(func() { downloadRetryWait = wait })
+
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		hj, _ := w.(http.Hijacker)
+		conn, _, err := hj.Hijack()
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		_ = conn.Close()
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	m := New(Options{
+		DataDir:        dir,
+		ScriptDir:      filepath.Join(dir, "script"),
+		CurrentVersion: "1.0.0",
+		Client:         srv.Client(),
+	})
+	m.dl = DownloadState{Status: StatusDownloading, Version: "1.0.1"}
+
+	m.download(context.Background(), srv.URL+"/app.fpk", "app.fpk")
+
+	m.mu.Lock()
+	st := m.dl
+	m.mu.Unlock()
+	if st.Status != StatusError {
+		t.Fatalf("一直断就该报错，实得 status=%s", st.Status)
+	}
+	if n := atomic.LoadInt32(&hits); n != downloadRetries {
+		t.Fatalf("尝试次数应为 %d，实得 %d", downloadRetries, n)
+	}
+	if !strings.Contains(st.Error, "下载请求失败") {
+		t.Fatalf("错误文案要说明是下载请求失败，实得 %q", st.Error)
+	}
+}

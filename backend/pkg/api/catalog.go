@@ -665,6 +665,18 @@ func APICatalog(baseURL string) []Endpoint {
 			Notes:   "只收 id 不收路径（非法 UTF-8 的名字过不了 JSON 往返；id 是路径字节的 base64url，服务端在最近 8 次扫描缓存里回查，重启后返回 409 要你重扫）。rename 冲突时加序号、绝不覆盖；dry_run=true 只回报 would_fix 且不改文件。",
 		},
 		{
+			Method: http.MethodPost, Path: "/api/nas/delete", Summary: "删除曲库里的文件（默认挪进回收站，可恢复）", Category: catNAS,
+			Params: []Param{
+				{Name: "paths", In: "body", Desc: "文件绝对路径数组（最多 200 个）"},
+				{Name: "mode", In: "body", Desc: "trash（默认，挪进曲库根目录的 .tidy_trash）/ delete（真删）"},
+				{Name: "dry_run", In: "body", Desc: "传 true 只回报将删哪些，不改文件"},
+			},
+			Example: "curl -X POST '" + baseURL + "/api/nas/delete' -H 'Content-Type: application/json' -d '{\"paths\":[\"/vol1/Music/a.flac\"]}'",
+			Notes: "**默认是回收站，不是真删** —— 误触代价是用户的歌没了，所以危险动作不能做默认值。\n\n" +
+				"两种模式都会先把原文件整份备份到 `<dataDir>/ai_backup/<时间戳>/`，删错了可以在「补全整理 → 数据快照」里恢复。" +
+				"路径必须过 ResolveSafePath（越权整批拒绝，不做一半）；删完会顺带从曲库索引里摘掉并通知飞牛重扫。",
+		},
+		{
 			Method: http.MethodGet, Path: "/api/nas/stream", Summary: "流式播放本地音频（支持 Range 拖动）", Category: catNAS,
 			Params:  []Param{{Name: "path", In: "query", Required: true, Desc: "音频文件绝对路径"}},
 			Example: "curl -I '" + baseURL + "/api/nas/stream?path=/vol1/Music/a.flac'",
@@ -686,6 +698,34 @@ func APICatalog(baseURL string) []Endpoint {
 			Example: "curl '" + baseURL + "/api/nas/tags?path=/vol1/Music/a.flac'",
 			Notes: "回 `title/artist/album/genre/year/track/disc/has_lyric/has_cover/lyric_length/format`；" +
 				"没写的数字字段回 0、文本字段回空串。想知道「刚才那次写入到底成没成」，读这里而不是信提交参数。",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/library/lyric/gaps", Summary: "列出缺歌词的文件（分页）", Category: catTidy,
+			Params: []Param{
+				{Name: "dir", In: "body", Required: true, Desc: "曲库目录（必须在允许根目录内）"},
+				{Name: "offset/limit", In: "body", Desc: "分页，limit 缺省 200、上限 1000"},
+			},
+			Example: "curl -X POST " + baseURL + "/api/library/lyric/gaps -H 'Content-Type: application/json' -d '{\"dir\":\"/vol1/Music\",\"limit\":200}'",
+			Notes:   "判据与曲库管家的「缺歌词」完全一致（内嵌 + 同名外挂 .lrc 都算有词）。",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/library/lyric/fetch", Summary: "给一批文件找歌词（只预览，不写盘）", Category: catTidy,
+			Params: []Param{
+				{Name: "dir", In: "body", Desc: "曲库目录（用于范围校验）"},
+				{Name: "paths", In: "body", Required: true, Desc: "文件绝对路径数组"},
+			},
+			Example: "curl -X POST " + baseURL + "/api/library/lyric/fetch -H 'Content-Type: application/json' -d '{\"dir\":\"/vol1/Music\",\"paths\":[\"/vol1/Music/a.flac\"]}'",
+			Notes:   "并发 4、整批墙钟预算 45s；超时报 timed_out，找不到报 not_found（网络尽力而为）。",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/library/lyric/write", Summary: "给一批文件找歌词并写入（内嵌 + .lrc）", Category: catTidy,
+			Params: []Param{
+				{Name: "dir", In: "body", Desc: "曲库目录（用于范围校验）"},
+				{Name: "paths", In: "body", Required: true, Desc: "文件绝对路径数组，一次最多 200"},
+				{Name: "embed", In: "body", Desc: "是否内嵌进音频标签，缺省 true；外挂 .lrc 总是写"},
+			},
+			Example: "curl -X POST " + baseURL + "/api/library/lyric/write -H 'Content-Type: application/json' -d '{\"dir\":\"/vol1/Music\",\"paths\":[\"/vol1/Music/a.flac\"]}'",
+			Notes:   "已有歌词的文件不会被覆盖。",
 		},
 		{
 			Method: http.MethodPost, Path: "/api/nas/tags", Summary: "写入标签：内嵌歌词 / 封面 / 标题歌手专辑风格", Category: catNAS,
@@ -880,6 +920,20 @@ func APICatalog(baseURL string) []Endpoint {
 				"没在跑时如实返回「没有正在跑的补全任务」，不假装成功。",
 		},
 		{
+			Method: http.MethodPost, Path: "/api/library/complete/preview/stream", Summary: "流式预览补全计划（NDJSON 逐条下发）", Category: catTidy,
+			Params: []Param{
+				{Name: "dir", In: "body", Required: true, Desc: "曲库目录"},
+				{Name: "limit", In: "body", Desc: "本次最多预览几首，默认 30，上限 200"},
+				{Name: "fields", In: "body", Desc: "要补哪些字段：lyric / cover / genre / year / track / disc，或 all"},
+				{Name: "platforms", In: "body", Desc: "搜索平台顺序，默认 [wy,tx,kg,wu]"},
+				{Name: "overwrite", In: "body", Desc: "已有歌词/封面是否视为要覆盖"},
+				{Name: "use_ai_genre", In: "body", Desc: "风格拿不到时是否允许 AI 推断"},
+			},
+			Example: "curl -N -X POST " + baseURL + "/api/library/complete/preview/stream -H 'Content-Type: application/json' -d '{\"dir\":\"/vol1/Music\",\"limit\":30,\"fields\":[\"year\"]}'",
+			Notes: "与 `dry_run` 同一套匹配逻辑，结果按行推：`start` / `item`（每首一条，边跑边出）/ " +
+				"`progress` / `done`（带 `plan_id`）/ `cancelled` / `error`。停止 = 断开连接，此时**没有** `plan_id`。",
+		},
+		{
 			Method: http.MethodPost, Path: "/api/library/complete/undo", Summary: "撤销最近一次补全（把改过的文件还原）", Category: catTidy,
 			Example: "curl -X POST " + baseURL + "/api/library/complete/undo",
 			Notes: "把上一次补全改过的文件还原成补全前的样子（改写前都在 `<dataDir>/ai_backup/<时间戳>/` 留了备份）。\n\n" +
@@ -891,6 +945,104 @@ func APICatalog(baseURL string) []Endpoint {
 			Method: http.MethodDelete, Path: "/api/library/complete/undo", Summary: "丢弃补全备份（不还原，只释放空间）", Category: catTidy,
 			Example: "curl -X DELETE " + baseURL + "/api/library/complete/undo",
 			Notes:   "确认不需要还原了，只删备份目录释放磁盘。**不会改任何音频文件。**",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/library/complete/records", Summary: "补全记录：每次都补了什么，逐首前后对照", Category: catTidy,
+			Params: []Param{
+				{Name: "id", In: "query", Desc: "记录 id（备份目录名，如 20261024-153012）；带上就返回这次的逐条明细"},
+			},
+			Example: "curl '" + baseURL + "/api/library/complete/records'",
+			Notes: "不带 id 返回 `records` 数组（每次补全一条：id / 时间 / 首数 / 占用空间，最新在前）；" +
+				"带 id 返回 `entries` 明细，每条含 `path` / `title` / `artist` / `fields`（写了哪些字段）与备份体积。\n\n" +
+				"记录就是补全时的整文件备份清单，所以「记录还在」= 「还能撤回」。",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/library/complete/records", Summary: "撤回勾选的补全条目，或修正其中某条的标题/歌手", Category: catTidy,
+			Params: []Param{
+				{Name: "id", In: "body", Required: true, Desc: "记录 id"},
+				{Name: "items", In: "body", Required: true, Desc: "要处理的文件绝对路径数组（必须是这条记录里的）"},
+				{Name: "op", In: "body", Desc: "restore（默认，撤回）/ edit（改写标题歌手）"},
+				{Name: "title/artist", In: "body", Desc: "op=edit 时的新值；留空表示该字段不改"},
+			},
+			Example: "curl -X POST '" + baseURL + "/api/library/complete/records' -H 'Content-Type: application/json' -d '{\"id\":\"20261024-153012\",\"items\":[\"/vol1/Music/a.flac\"],\"op\":\"restore\"}'",
+			Notes: "比 `/api/library/complete/undo` 更细：那个是整批还原，这个是**只动勾选的几首**。" +
+				"撤回成功的条目会从记录里移除，剩下的还能再撤。\n\n" +
+				"`op=edit` 只改标题/歌手这类文本标签（歌词和封面是整块二进制，要改就重新补一次）；" +
+				"改写成功会顺带刷新曲库索引并通知飞牛重扫。",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/library/title-fix/scan", Summary: "扫出歌名可疑的曲目（没有歌名 / 歌名就是文件名）", Category: catTidy,
+			Params:  []Param{{Name: "dir", In: "query", Desc: "目录绝对路径；留空扫全库"}},
+			Example: "curl '" + baseURL + "/api/library/title-fix/scan?dir=/vol1/Music'",
+			Notes: "只读曲库索引（不开文件，秒回），上限 200 条。判据是「空标题 / 占位词 / 标题等于文件名 / " +
+				"混着文件名符号 / 异常长 / 只是曲序号」。返回值里的 `ai_ready` 说明 AI 是否配好了 —— " +
+				"没配也能扫，只是修不了。",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/library/title-fix/fix", Summary: "交给 AI 修正歌名并写回标签", Category: catTidy,
+			Params: []Param{
+				{Name: "paths", In: "body", Desc: "要修的文件绝对路径数组（最多 50 个）"},
+				{Name: "dry_run", In: "body", Desc: "传 true 只给建议、不写文件"},
+			},
+			Example: "curl -X POST '" + baseURL + "/api/library/title-fix/fix' -H 'Content-Type: application/json' -d '{\"paths\":[\"/vol1/Music/01 - 未知.flac\"]}'",
+			Notes: "AI 只在「文件名 + 现有标签」之间给结论，**新歌名必须能在文件名里找到**（忽略空格标点），" +
+				"否则退回规则层结果或干脆不改 —— 宁可漏修，也不把模型编的名字写进文件。\n\n" +
+				"写回前整文件备份，改完在「数据快照」里可以单条撤回。",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/library/title-fix/audit", Summary: "手动歌名体检：随机抽 N 首让 AI 判断能否修", Category: catTidy,
+			Params: []Param{
+				{Name: "dir", In: "body", Desc: "目录绝对路径；留空抽全库"},
+				{Name: "count", In: "body", Desc: "抽多少首，默认 10，上限 20"},
+			},
+			Example: "curl -X POST '" + baseURL + "/api/library/title-fix/audit' -H 'Content-Type: application/json' -d '{\"dir\":\"/vol1/Music\",\"count\":10}'",
+			Notes: "**只读**：不写标签、不留快照，只回答「AI 在这批样本上靠不靠谱」。" +
+				"与 scan 不同，这里抽的是**随机样本**（含歌名正常的曲目）—— 只挑可疑样本会得出「AI 全对」的假象。\n\n" +
+				"每首一行：原歌名 / 是否需要修 / 能否修好 / 新歌名 / 结论来源（`ai` 大模型、`rule` 文件名规则、`none` 都没把握）。" +
+				"未配置 AI 时直接 400，不会拿规则层冒充 AI。",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/library/title-fix/apply", Summary: "把用户手写的歌名写回标签", Category: catTidy,
+			Params: []Param{
+				{Name: "items", In: "body", Required: true, Desc: "`[{path,title,artist}]`，最多 50 条"},
+			},
+			Example: "curl -X POST '" + baseURL + "/api/library/title-fix/apply' -H 'Content-Type: application/json' -d '{\"items\":[{\"path\":\"/vol1/Music/a.flac\",\"title\":\"晴天\"}]}'",
+			Notes: "走的是和 AI 修复同一套写回路径：写前整文件备份、写后进补全记录（所以「数据快照」里能撤回）。" +
+				"区别是**不做「新歌名必须能在文件名里找到」的校验** —— 手写值是用户说了算；也不需要 AI 可用。",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/library/snapshots", Summary: "定时快照开关（兼容旧路径）", Category: catTidy,
+			Params: []Param{
+				{Name: "op", In: "body", Required: true, Desc: "固定 schedule"},
+				{Name: "enabled", In: "body", Desc: "是否开启定时快照"},
+				{Name: "interval_hours", In: "body", Desc: "每隔几小时拍一次"},
+				{Name: "keep", In: "body", Desc: "保留最近几份"},
+			},
+			Example: "curl -X POST " + baseURL + "/api/library/snapshots -H 'Content-Type: application/json' -d '{\"op\":\"schedule\",\"enabled\":true}'",
+			Notes: "只为兼容老前端保留：数据快照已改为「曲库元数据快照」，建/恢复/删请走 `/api/library/meta-snapshots`。" +
+				"这里只处理 `op=schedule`，其余 op 会明确报错指路。",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/library/meta-snapshots", Summary: "曲库元数据快照：列表 / 看明细", Category: catTidy,
+			Params: []Param{
+				{Name: "id", In: "query", Desc: "快照 id；带上就返回这份快照的曲目标签与和现在的差异"},
+			},
+			Example: "curl '" + baseURL + "/api/library/meta-snapshots'",
+			Notes: "**存的是歌曲元数据（标签），不是音频文件** —— 快照的目的就是「曲库数据被误操作后能改回来」，" +
+				"而误操作改的只有标签。一库几万首也只有几 MB。\n\n" +
+				"`kind`：`manual` 手动 / `scheduled` 定时 / `pre-restore` 恢复前自动留的。" +
+				"明细里带 `diff`：这份快照与当前曲库标签不一致的曲目（最多 500 条）。",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/library/meta-snapshots", Summary: "建快照 / 恢复标签 / 删除快照", Category: catTidy,
+			Params: []Param{
+				{Name: "op", In: "body", Required: true, Desc: "create 立即快照；restore 恢复到某份；delete 删除"},
+				{Name: "id", In: "body", Desc: "op=restore/delete 的快照 id"},
+				{Name: "dir", In: "body", Desc: "op=create 只快照某个目录；留空整库"},
+			},
+			Example: "curl -X POST " + baseURL + "/api/library/meta-snapshots -H 'Content-Type: application/json' -d '{\"op\":\"create\"}'",
+			Notes: "`restore` 只把标签写回文件：可写格式只有 mp3/flac（其余计入 `skipped`）；" +
+				"文件大小与快照不一致的曲目会跳过（多半是换过文件）。恢复前自动拍一份 `pre-restore` 快照，恢复本身也能撤回。",
 		},
 		{
 			Method: http.MethodGet, Path: "/api/library/name-rules", Summary: "列出用户自定义的命名解析规则", Category: catTidy,

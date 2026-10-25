@@ -37,9 +37,90 @@ type PushedTrack struct {
 	GUID    string `json:"guid"`
 	AddedAt int64  `json:"added_at"` // Unix 秒
 	Title   string `json:"title,omitempty"`
+	// RemovedAt 用户从歌单里**手动删掉**了这首的时间（Unix 秒），0 = 未删。
+	//
+	// 用户 2026-10-24：「歌单里我手动删掉的歌，下次同步不要再加回来」。
+	// 记录**不删除**（删了下一轮 toAdd = matched - current 又把它加回去），
+	// 而是打上时间戳：之后的推送直接跳过它。用户在网页端重新加回来
+	// （曲目又出现在歌单里了）就清掉时间戳，让它恢复成正常曲目。
+	//
+	// 0 值不落 JSON：老数据与新数据在文件里长得一模一样。
+	RemovedAt int64 `json:"removed_at,omitempty"`
 }
 
-// NormalizeRetentionMode 归一化保留期模式；非法值一律退回 keep（安全默认）。
+// ManualRemovalGraceSec 判定「用户手动删掉的」所用的宽限期（秒）。
+//
+// 为什么要宽限：我们刚 AddTracks 成功、用户正好在这一刻删了它，
+// 飞牛那边可能读到一个还没有这首歌的快照 —— 这种竞态不该被记成「用户不要了」。
+// 6 小时足够覆盖任何一次读取延迟，又不至于让「刚推上去就删」的记录久等。
+const ManualRemovalGraceSec = 6 * 3600
+
+// DetectManualRemovals 从「歌单现在有什么」里找出**用户手动删掉的**曲目。
+//
+// 判据（三条同时满足才算）：
+//  1. 在我们推送过的清单里（绝不碰用户自己加的歌）；
+//  2. 现在还不在歌单里（current 里没有）；
+//  3. 加进歌单之后已过宽限期。
+//
+// 返回的 PushedTrack 已带上 RemovedAt；调用方把它们并回任务清单（并集，不删记录）。
+func DetectManualRemovals(pushed []PushedTrack, current map[string]bool, now time.Time) []PushedTrack {
+	if len(pushed) == 0 {
+		return nil
+	}
+	cutoff := now.Unix() - ManualRemovalGraceSec
+	out := make([]PushedTrack, 0)
+	for _, p := range pushed {
+		if p.GUID == "" || p.RemovedAt > 0 {
+			continue
+		}
+		if current[p.GUID] {
+			continue // 还在歌单里
+		}
+		if p.AddedAt > 0 && p.AddedAt > cutoff {
+			continue // 可能只是读取快照还没跟上
+		}
+		p.RemovedAt = now.Unix()
+		out = append(out, p)
+	}
+	return out
+}
+
+// ManualRemovals 取出「用户手动删掉过」的 guid 集合（给 PushTracks 过滤用）。
+func ManualRemovals(pushed []PushedTrack) map[string]bool {
+	var out map[string]bool
+	for _, p := range pushed {
+		if p.GUID != "" && p.RemovedAt > 0 {
+			if out == nil {
+				out = make(map[string]bool, 8)
+			}
+			out[p.GUID] = true
+		}
+	}
+	return out
+}
+
+// RevivedManuallyAdded 找出「曾经被用户删掉、后来又自己加回来」的 guid。
+//
+// 用户在网页端把删掉的歌重新拖回歌单，说明他改主意了 —— 这时必须清掉
+// RemovedAt，否则这首会被永久黑名单，比「删了又被加回」更让人火大。
+func RevivedManuallyAdded(pushed []PushedTrack, current map[string]bool) map[string]bool {
+	var out map[string]bool
+	for _, p := range pushed {
+		if p.GUID != "" && p.RemovedAt > 0 && current[p.GUID] {
+			if out == nil {
+				out = make(map[string]bool, 4)
+			}
+			out[p.GUID] = true
+		}
+	}
+	return out
+}
+
+// MergePushed 把本轮新增的曲目并入推送记录（同 guid 去重，保留最新时间）。
+//
+// 用途：一轮推送成功后，把「这次加了哪些」追加进任务的推送清单，
+// 供后续的保留期清理判断归属。
+// NormalizeRetentionMode 把任意输入规整成两种合法模式之一（默认 keep）。
 func NormalizeRetentionMode(mode string) string {
 	if mode == RetentionDays {
 		return RetentionDays
@@ -132,6 +213,53 @@ func MergePushed(existing []PushedTrack, added []PushedTrack) []PushedTrack {
 		}
 		index[p.GUID] = len(out)
 		out = append(out, p)
+	}
+	return out
+}
+
+// PushedIndex 把推送记录建成 guid → 下标 的索引。
+//
+// 给调用方做「这首歌我们推过吗 / 记录在第几条」的 O(1) 判断，
+// 不必自己绕一圈线性扫。空 guid 不进索引（与 MergePushed 口径一致）。
+func PushedIndex(pushed []PushedTrack) map[string]int {
+	if len(pushed) == 0 {
+		return nil
+	}
+	idx := make(map[string]int, len(pushed))
+	for i, p := range pushed {
+		if p.GUID == "" {
+			continue
+		}
+		idx[p.GUID] = i
+	}
+	return idx
+}
+
+// ClearRemovals 清掉指定 guid 上的「手动删除」时间戳，返回一份新切片。
+//
+// 用途：用户把删掉的歌自己加回歌单时（RevivedManuallyAdded），那几条记录
+// 必须恢复成正常曲目 —— 否则会被永久黑名单，比「删了又被加回」更让人火大。
+// **不改入参**（调用方可能还持有旧切片）；没命中任何一条时原样返回，不做无谓拷贝。
+func ClearRemovals(pushed []PushedTrack, guids map[string]bool) []PushedTrack {
+	if len(pushed) == 0 || len(guids) == 0 {
+		return pushed
+	}
+	hit := false
+	for _, p := range pushed {
+		if p.RemovedAt > 0 && guids[p.GUID] {
+			hit = true
+			break
+		}
+	}
+	if !hit {
+		return pushed
+	}
+	out := make([]PushedTrack, len(pushed))
+	copy(out, pushed)
+	for i := range out {
+		if out[i].RemovedAt > 0 && guids[out[i].GUID] {
+			out[i].RemovedAt = 0
+		}
 	}
 	return out
 }

@@ -535,9 +535,13 @@ func (s *Server) buildCompleteOptions(platforms []string, useAIGenre, overwrite 
 		// 备份失败会跳过该文件（宁可不补，也不能剥夺回滚能力）。
 		Backup: complete.NewBackup(complete.NewBackupDir(s.aiBackupRoot)),
 		Tidy: tidy.Options{
-			EmbedLyric:     true,
-			WriteLRC:       true,
-			EmbedCover:     true,
+			// 听用户的设置：`lyric_auto_download` / `cover_embed` **表示「内嵌」本身**，
+			// 不只是自动下载那一条路（2026-10-25 用户反馈：设置里关掉内嵌歌词，
+			// 补全整理照样往文件里塞歌词）。关掉时仍写同名 .lrc / 逐曲封面图的话
+			// 就不是「不内嵌」而是「换个地方塞」，所以两个都跟着关。
+			EmbedLyric:     s.cfgMgr != nil && s.cfgMgr.Get().LyricAutoDownloadOn(),
+			WriteLRC:       s.cfgMgr != nil && s.cfgMgr.Get().LyricAutoDownloadOn(),
+			EmbedCover:     s.cfgMgr != nil && s.cfgMgr.Get().CoverEmbedOn(),
 			WriteMetadata:  true,
 			OverwriteLyric: overwrite,
 			OverwriteCover: overwrite,

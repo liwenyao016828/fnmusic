@@ -149,6 +149,8 @@ func main() {
 			// 榜单歌单勾了哪些榜：**每次现取**（见 pkg/intercept/vchart.go）。
 			// 传值就等于把启动瞬间的配置固定住，榜单管理页改完得重启才生效。
 			ChartPlaylists: func() []string { return cfgMgr.Get().ChartPlaylists },
+			// 显示首数也是现取：设置页保存后立刻生效，不用重启。
+			ChartSizeOf: func(chartID string) int { return cfgMgr.Get().ChartSizeFor(chartID) },
 			// 总开关：`ChartsInjectEnabled()` 里含「没设置过 = 开」的口径，
 			// 别在这里再判一次 nil（两处判空迟早会不一致）。
 			ChartPlaylistsEnabled: func() bool { return cfgMgr.Get().ChartsInjectEnabled() },
@@ -449,7 +451,13 @@ func main() {
 			LocalAPI: fmt.Sprintf("http://127.0.0.1:%d", *port),
 			// authMode=token 时本机回环也要带 Token，否则队列自己调落盘接口 401。
 			Token: api.APIToken(),
-			Logf:  log.Printf,
+			// 落盘目录的唯一定义在 /api/download/song（系统设置里那份），
+			// 队列自己只读来回报，避免两处各记一份、改了一处另一处还显示旧值。
+			SavedDir: func() string {
+				c := cfgMgr.Get() // Get 返回的是值拷贝，不能对它直接调指针方法
+				return c.LibraryDir()
+			},
+			Logf: log.Printf,
 		}
 		bq = backenddl.New(*dataDir, backenddl.NewFetcher(bcfg), log.Printf)
 		// ⚠️ Start 必须等 HTTP 已 listen（见下方「先建监听再开跑」）——

@@ -208,6 +208,23 @@
             </template>
           </div>
         </div>
+
+        <!--
+          服务端洛雪宿主（可选取音路径）——**放在音源管理里，不放在下载页**。
+          用户 2026-10-25 原话：「下载界面显示落雪宿主未开启……如果后台下载需要设置，
+          可以放在音源管理中修改。」后台下载本身不需要它（平台直链就能下主流曲目），
+          它只是在「冷门/无版权歌取不到源」时多一条路，属于音源能力，不是下载状态。
+        -->
+        <div class="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg bg-black/[0.02] px-2.5 py-2">
+          <span class="text-[11px] text-[var(--ys-text-muted)]">服务端洛雪宿主</span>
+          <span
+            class="rounded-full px-1.5 py-0.5 text-[10px] font-medium"
+            :class="lxHostReady ? 'bg-emerald-50 text-emerald-600' : 'bg-gray-100 text-gray-500'"
+          >{{ lxHostLabel }}</span>
+          <span class="text-[10px] leading-relaxed text-gray-400">
+            可选。平台直链取不到音源时用它再兜一层；在服务端启动洛雪宿主后这里会显示「已就绪」。
+          </span>
+        </div>
       </SectionCard>
 
       <!-- 空状态提示 (纯播放器，0 内置音源) -->
@@ -696,7 +713,7 @@
 <script setup>
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { currentView } from '../services/navBus'
-import { SourcesAPI, ProtocolAPI, NasAPI, ConfigAPI } from '../api/client'
+import { SourcesAPI, ProtocolAPI, NasAPI, ConfigAPI, BackendDownloadAPI } from '../api/client'
 import { lxRuntime } from '../engine/lx-runtime'
 import { sourceHealth } from '../services/sourceHealth'
 import {
@@ -927,6 +944,25 @@ const CAPABILITY_LABELS = {
 }
 function capabilityLabel(c) {
   return CAPABILITY_LABELS[c] || c
+}
+
+/**
+ * 服务端洛雪宿主状态（取自后端 GET /api/download/backend/status 的 lx_host）：
+ * off / starting / ready / failed。只做展示，开关在服务端，前端不提供按钮。
+ */
+const lxHost = ref('')
+const lxHostReady = computed(() => lxHost.value === 'ready')
+const lxHostLabel = computed(() => ({ off: '未开启', starting: '启动中', ready: '已就绪', failed: '启动失败' })[lxHost.value] || '未知')
+
+async function loadLxHost() {
+  try {
+    const res = await BackendDownloadAPI.status()
+    const st = res?.data || res || {}
+    lxHost.value = String(st.lx_host ?? st.lxHost ?? '')
+  } catch (e) {
+    // 纯展示用，拿不到就保持「未知」，不影响主流程
+    console.warn('[lxhost] status failed:', e)
+  }
 }
 
 async function loadProtocols() {
@@ -1774,6 +1810,7 @@ onMounted(() => {
   loadMusicDL()
   loadSources()
   loadProtocols()
+  loadLxHost()
   loadApiSources()
   startTick()
   startAutoProbe()
@@ -1787,7 +1824,7 @@ onMounted(() => {
 // 2026-10-17：原实现挂在 onActivated/onDeactivated 上 —— SwipePager 没有 KeepAlive，
 // 那两个钩子从来不会触发（死代码）。改成 watch 导航总线的共享 currentView（本页 = sources）。
 watch(currentView, (v) => {
-  if (v === 'sources') { startAutoProbe(); startTick(); return }
+  if (v === 'sources') { startAutoProbe(); startTick(); loadLxHost(); return }
   stopAutoProbe(); stopTick()
 })
 

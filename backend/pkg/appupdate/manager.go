@@ -33,7 +33,14 @@ const (
 	logName          = "install.log"
 	// 下载超时：fpk 通常几十 MB，弱网给足 30 分钟；超时后任务可重新发起。
 	downloadTimeout = 30 * time.Minute
+	// downloadRetries 是下载请求的尝试次数（含第一次）。GitHub 经代理回源偶发
+	// 「响应头超时」，一次抖动就整个失败太可惜（2026-10-24 用户截图）。
+	downloadRetries = 2
 )
+
+// downloadRetryWait 是两次尝试之间的间隔。做成变量而不是常量：测试要能把它调小，
+// 否则每个重试用例都得真等 3 秒。
+var downloadRetryWait = 3 * time.Second
 
 // CheckResult 是 GET /api/app/update/check 返回的数据。
 type CheckResult struct {
@@ -79,13 +86,26 @@ type Options struct {
 	Token          string // 可选 GitHub token
 	APIURL         string // 测试/镜像用；空 = 官方 releases/latest
 	Client         *http.Client
-	Logf           func(string, ...any)
-	Now            func() time.Time
-	CacheTTL       time.Duration
-	ScriptDir      string
-	Launch         func(script, logPath string) error
-	IsRoot         func() bool
-	SudoAvailable  func() bool
+	// RateKBPS 是下载安装包的限速（KB/s）。0 = 不限速。
+	//
+	// 用户 2026-10-25：「版本更新新增限制速率，避免被限速」——共享代理后面
+	// 裸速下载会把整条出口吃满，镜像/代理侧也更容易 429。限速在**读 body** 时做
+	// （见 download），不影响检查更新这类小请求。
+	RateKBPS int
+	// TokenFunc / RateFunc 是**每次下载前重新读一次**的取值函数（可选）。
+	//
+	// 为什么要函数而不是只在构造时读一次：这两个值在「系统 → 设置」里可改，
+	// 用户改完不希望「要点重启才生效」；而 Manager 是进程级单例，构造时就固定了。
+	// 有函数时以函数为准（函数返回的 0 表示不限速、空串表示不用 token）。
+	TokenFunc     func() string
+	RateFunc      func() int
+	Logf          func(string, ...any)
+	Now           func() time.Time
+	CacheTTL      time.Duration
+	ScriptDir     string
+	Launch        func(script, logPath string) error
+	IsRoot        func() bool
+	SudoAvailable func() bool
 }
 
 // Manager 持有检查缓存、下载状态和安装动作。
@@ -102,6 +122,8 @@ type Manager struct {
 	apiURL  string
 	ua      string
 	dir     string // 安装脚本目录
+	// tokenFunc 见 Options.TokenFunc。
+	tokenFunc func() string
 
 	client *http.Client
 	logf   func(string, ...any)
@@ -167,6 +189,7 @@ func New(opts Options) *Manager {
 		current:       strings.TrimSpace(opts.CurrentVersion),
 		repo:          repo,
 		token:         strings.TrimSpace(opts.Token),
+		tokenFunc:     opts.TokenFunc,
 		apiURL:        strings.TrimSpace(opts.APIURL),
 		dir:           dir,
 		client:        opts.Client,
@@ -218,7 +241,8 @@ func (m *Manager) Check(ctx context.Context, refresh bool) CheckResult {
 
 	res := CheckResult{Current: m.current, CheckedAt: m.now().Format(time.RFC3339)}
 
-	rel, err := FetchLatestRelease(ctx, m.client, m.apiURL, m.repo, m.token, m.ua)
+	// m.tokenNow() 而不是 m.token 字段：设置里刚改的 token 下一次检查就用上。
+	rel, err := FetchLatestRelease(ctx, m.client, m.apiURL, m.repo, m.tokenNow(), m.ua)
 	if err != nil {
 		res.Error = err.Error()
 		m.storeCheck(res)
@@ -367,23 +391,45 @@ func (m *Manager) download(ctx context.Context, rawURL, assetName string) {
 	finalPath := filepath.Join(dir, name)
 	tmpPath := finalPath + ".part"
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
-	if err != nil {
-		fail(err)
-		return
-	}
-	req.Header.Set("User-Agent", m.ua)
-	req.Header.Set("Accept", "application/octet-stream")
-	resp, err := m.client.Do(req)
-	if err != nil {
-		fail(fmt.Errorf("下载请求失败：%w", err))
-		return
+	// 一次网络抖动不该报废整个更新：GitHub 经代理回源偶发首字节超时，重试一次再报错。
+	// 只重试「请求没发出去/响应头没回来」这一类传输层错误；HTTP 状态码不对不重
+	// （404 的资产重试一百次也不会出现）。
+	var resp *http.Response
+	for attempt := 1; ; attempt++ {
+		req, rerr := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+		if rerr != nil {
+			fail(rerr)
+			return
+		}
+		req.Header.Set("User-Agent", m.ua)
+		req.Header.Set("Accept", "application/octet-stream")
+		resp, rerr = m.client.Do(req)
+		if rerr == nil {
+			break
+		}
+		if attempt >= downloadRetries || ctx.Err() != nil {
+			fail(fmt.Errorf("下载请求失败：%w", rerr))
+			return
+		}
+		m.logf("[UPDATE] 下载第 %d 次失败（%v），%s 后重试", attempt, rerr, downloadRetryWait)
+		m.mu.Lock()
+		m.dl.Error = fmt.Sprintf("网络不稳定，正在重试（%v）", rerr)
+		m.mu.Unlock()
+		select {
+		case <-time.After(downloadRetryWait):
+		case <-ctx.Done():
+			fail(ctx.Err())
+			return
+		}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		fail(fmt.Errorf("下载失败：HTTP %d", resp.StatusCode))
 		return
 	}
+	m.mu.Lock()
+	m.dl.Error = "" // 清掉重试期间写下的「正在重试」
+	m.mu.Unlock()
 
 	// 有 Content-Length 就按它显示进度并最终校验；没有则显示已下载字节（progress=0）。
 	total := resp.ContentLength

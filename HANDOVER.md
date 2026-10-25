@@ -22,7 +22,7 @@
 | **后端依赖** | **已引入第三方依赖**（`modernc.org/sqlite v1.36.1`，纯 Go）。旧版「零依赖」规则已作废，见 §2 规则二 |
 | **前端依赖** | vue / vite / tailwindcss / axios / lucide-vue-next / crypto-js / buffer / qrcode |
 | **打包** | `bash scripts/build.sh`，**不需要 fnpack** |
-| **当前版本** | `2.19.2`（代码与 manifest 已同步，见 §7） |
+| **当前版本** | `2.21.0`（代码与 manifest 已同步，见 §7） |
 | **应用内更新** | `backend/pkg/appupdate` + `frontend/src/components/UpdateCard.vue`：查 GitHub Release → 流式下载到 `<数据目录>/updates/` → 执行 `/tmp/yinshu-update/apply-update.sh`（`appcenter-cli stop/uninstall/install-fpk` 再 `start`）。**安装这一跳在开发机上无法验证**（没有 `appcenter-cli`、没有 `/var/apps/`），真机第一次用要盯着 log。 |
 | **文件名体检** | `backend/pkg/nas/health.go`：扫出非法 UTF-8 / 控制字符 / 首尾空格 / 0 字节音频 / `.part` 残留 / 权限 000 等条目（它们会让 fnOS 整层目录报「未知错误」）。修复接口**只收 `id`（路径字节的 base64url）不收 path** —— 非法 UTF-8 的名字过一次 JSON 就变成 U+FFFD，传 path 必然找不到文件；服务端在最近 8 次扫描缓存里回查。 |
 | **自动发布** | 功能完成并验证后由 DSH 提交、推送 main；GitHub Actions 校验四处版本 → 前端构建 → 后端/前端/洛雪测试 → FPK 自检 → 新版本 Release + SHA256。已有版本不覆盖；不自动部署 NAS。不用 git hook 自动暂存工作区。 |
@@ -3913,7 +3913,7 @@ window.addEventListener('resize', () => this.resize())   // 匿名函数，移�
 > 所以别处写的「见 §11 ㊼ 块十」指的是 `docs/变更记录/` 里同名回合的小节。
 
 - **目录**：[`docs/变更记录/INDEX.md`](docs/变更记录/INDEX.md)（全部回合倒序，每行带文件链接）
-- 最近的回合：[`116 界面骨架重构 P1：曲库管家拆解为顶层视图 + 应用壳导航（v2.5.0）`、`115 界面骨架重构 P0：导航 7 → 5（v2.4.0）`、`113 9 项「好用易用」能力（v2.3.0）`](docs/变更记录/2026-10-15.md)
+- 最近的回合：[`v2.21.0 补全整理重做 + 榜单满量显示 + 元数据快照`、`v2.20.0 更新下载超时修复 + 侧栏「发现新版本」入口`、`v2.19.2 重试失败修复 + 歌单推送收编本地曲库`](docs/变更记录/2026-10-25.md)
 - **每轮改完仍要写**（用户定的铁规，见 `.workbuddy-ai/memory/agent/README.md`）：正文改本文件 §0–§10，变更条目追加到 `docs/变更记录/` **当月文件的顶部**，并在 `INDEX.md` 加一行。
 
 ### 11.1 为什么拆、去哪找

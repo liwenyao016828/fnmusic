@@ -133,7 +133,8 @@ test('refreshStatus：ready=true 且声明订阅托管时如实暴露给 PushMan
     assert.equal(await backendDownload.refreshStatus(), true)
     assert.equal(backendDownload.ready.value, true)
     assert.equal(backendDownload.subscriptionsManaged.value, true)
-    assert.equal(backendDownload.lxWeakHint.value, true)
+    // 2026-10-25：lxWeakHint 已删除（宿主状态归音源管理页，下载页不再提示）；此处改验 lxHost 原始值仍在
+    assert.equal(backendDownload.lxHost.value, 'off')
   } finally {
     restore()
   }

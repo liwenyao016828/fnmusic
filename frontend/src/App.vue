@@ -195,8 +195,27 @@
         </div>
       </div>
 
-      <!-- 侧栏底部：只剩播放器入口（音源胶囊已搬到顶部一条栏，同一个按钮不出现两次） -->
+      <!-- 侧栏底部：版本更新入口（只在检测到更新 / 更新在跑时出现）+ 播放器入口（音源胶囊已搬到顶部一条栏，同一个按钮不出现两次） -->
       <div class="shrink-0 space-y-2 border-t border-[var(--ys-border)] p-3">
+        <button
+          v-if="updateEntry"
+          @click="showUpdateModal = true"
+          class="ys-press flex w-full items-center gap-1.5 rounded-[10px] border px-3 py-2 text-[12px] font-medium shadow-sm transition-colors"
+          :class="updateEntry.tone === 'done'
+            ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+            : 'border-[var(--ys-border)] bg-white text-[var(--ys-text)] hover:bg-gray-50'"
+          :title="updateEntry.tone === 'done' ? '新版本已安装，点击重启生效' : '有新版本可更新，点击查看'"
+        >
+          <ArrowUpCircle
+            class="h-3.5 w-3.5 shrink-0 text-[var(--ys-accent)]"
+            :class="{ 'animate-pulse': updateEntry.tone === 'new' }"
+          />
+          <span class="min-w-0 flex-1 truncate text-left">{{ updateEntry.label }}</span>
+          <span
+            v-if="updateEntry.tone === 'new'"
+            class="shrink-0 rounded-full bg-[var(--ys-accent-soft)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--ys-accent)]"
+          >更新</span>
+        </button>
         <button
           v-if="currentSong"
           @click="showImmersive = true"
@@ -274,7 +293,11 @@
                 :segments="decoratedSegments('tidy')"
                 :model-value="segmentOf('tidy')"
                 @update:model-value="v => setSegment('tidy', v)"
-              />
+              >
+                <template #trail>
+                  <TidyDirChip />
+                </template>
+              </SegmentedControl>
             </div>
             <TidyView class="min-h-0 flex-1" />
           </div>
@@ -543,6 +566,22 @@
           </nav>
           <div class="shrink-0 border-t border-[var(--ys-border)] p-3 pb-[calc(0.75rem+var(--safe-bottom))]">
             <button
+              v-if="updateEntry"
+              @click="showUpdateModal = true"
+              class="mb-2 flex w-full min-w-0 items-center gap-1.5 rounded-full border px-3 py-2 text-[11px] font-medium transition-colors"
+              :class="updateEntry.tone === 'done'
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                : 'border-[var(--ys-border)] bg-white text-[var(--ys-text)]'"
+              :title="updateEntry.tone === 'done' ? '新版本已安装，点击重启生效' : '有新版本可更新，点击查看'"
+            >
+              <ArrowUpCircle class="h-3.5 w-3.5 shrink-0 text-[var(--ys-accent)]" :stroke-width="1.9" />
+              <span class="min-w-0 flex-1 truncate text-left">{{ updateEntry.label }}</span>
+              <span
+                v-if="updateEntry.tone === 'new'"
+                class="shrink-0 rounded-full bg-[var(--ys-accent-soft)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--ys-accent)]"
+              >更新</span>
+            </button>
+            <button
               @click="navigateTo('sources')"
               class="flex w-full min-w-0 items-center gap-1.5 rounded-full border border-[var(--ys-border)] bg-white px-3 py-2 text-[var(--ys-text-muted)] transition-colors hover:bg-gray-50 hover:text-[var(--ys-text)]"
               :title="`当前音源：${activeSourceMeta?.name || '未设置'} —— 点开管理音源`"
@@ -567,6 +606,9 @@
 
     <!-- ── 开放接口抽屉（从品牌图标右侧滑出） ── -->
     <ApiDrawer v-model="showApiDrawer" />
+
+    <!-- ── 版本更新弹窗（侧栏底部入口点开；内容复用系统页那张 UpdateCard） ── -->
+    <UpdateModal :open="showUpdateModal" @close="showUpdateModal = false" />
 
     <!-- ── 全局免责声明与服务条款弹窗 ── -->
     <DisclaimerModal
@@ -635,9 +677,12 @@ import AccountManager from './components/AccountManager.vue'
 import SwipePager from './components/SwipePager.vue'
 import AppSettings from './components/AppSettings.vue'
 import FpsMeter from './components/FpsMeter.vue'
+import UpdateModal from './components/UpdateModal.vue'
 import LogViewer from './components/LogViewer.vue'
 import FeedbackHost from './components/FeedbackHost.vue'
 import SegmentedControl from './components/SegmentedControl.vue'
+import TidyDirChip from './components/TidyDirChip.vue'
+import { appUpdate } from './services/appUpdate'
 import { downloadManager } from './services/downloadManager'
 import { bridgeWorker } from './services/bridgeWorker'
 import { pushEngine } from './services/pushEngine'
@@ -652,9 +697,9 @@ import { invalidate } from './services/viewCache'
 import { logError } from './services/appLog'
 import {
   Compass, Trophy, Cpu, Disc, Library, UserRound, ScrollText, Settings,
-  Wand2, Send, Download, ListMusic, ListOrdered, CloudDownload,
+  Wand2, Send, Download, ListMusic, ListPlus, CloudDownload,
   MoreHorizontal, X, Loader2, AlertTriangle, Search, ArrowRight,
-  Sparkles, Copy, ScanSearch, History, Gauge,
+  Sparkles, Copy, ScanSearch, History, Gauge, ArrowUpCircle,
 } from 'lucide-vue-next'
 import { sidebarStatusItems } from './services/libraryView'
 
@@ -723,6 +768,25 @@ const showApiDrawer = ref(false)
 const showMoreDrawer = ref(false)
 // 切了视图就收抽屉 —— 不管跳转来自抽屉里的按钮还是别处（navigateTo 深链）
 watch(currentView, () => { showMoreDrawer.value = false })
+
+/**
+ * 侧栏底部的「版本更新」入口（用户 2026-10-24：「检测到更新后显示有更新的窗口，
+ * 点击后弹窗更新页面」）。
+ *
+ * 只在**真有事**时占位：有新版本、正在下载/安装、或已装好等重启。没更新就整条
+ * 不渲染 —— 侧栏底部是常驻区，挂一个永远灰着的「已是最新」就是噪音。
+ */
+const showUpdateModal = ref(false)
+const updateEntry = computed(() => {
+  const { phase, hasUpdate, installed, latest, progress, checking } = appUpdate
+  if (installed.value) return { label: '更新已装好，点重启', tone: 'done' }
+  if (phase.value === 'installing' || phase.value === 'ready') return { label: '正在安装新版本…', tone: 'busy' }
+  if (phase.value === 'downloading') return { label: `正在下载新版本 ${progress.value}%`, tone: 'busy' }
+  if (hasUpdate.value) return { label: `发现新版本 v${latest.value || ''}`, tone: 'new' }
+  // 首次静默检查还没出结果时给一条极轻的占位，避免「点了没反应」的观感。
+  if (checking.value) return { label: '正在检查更新…', tone: 'busy' }
+  return null
+})
 
 // 播放条收起状态（用户 2026-09-28：「播放时，在右边增加一个收缩图标」）。
 // 只影响这一条栏，不打断音频播放；展开入口在细条上。
@@ -801,7 +865,10 @@ function openDisclaimer(force = false) {
 // 图标按 id 在这里登记 —— navViews.js 是纯数据，不 import 组件。
 const NAV_ICONS = { search: Compass, library: Library, tidy: Wand2, push: Send, download: Download, sources: Cpu, accounts: UserRound, system: Settings }
 /** 页内分段的图标（顶层页有自己的图标，段位单独一套） */
-const SEGMENT_ICONS = { discover: Compass, charts: Trophy, queue: ListMusic, playlist: ListOrdered, autodl: CloudDownload, logs: ScrollText, settings: Settings, complete: Sparkles, dedupe: Copy, audit: ScanSearch, records: History, quality: Gauge }
+// 用户 2026-10-26：「下载-歌单更名为歌单导入，图标也修改下」——原来的 ListOrdered（三横线带序号的清单）
+// 看起来像「有序列表」而不是「往队列里加东西」，换成 ListPlus（清单 + 加号），
+// 正是「粘链接进来、整单加进下载队列」这个动作。
+const SEGMENT_ICONS = { discover: Compass, charts: Trophy, queue: ListMusic, playlist: ListPlus, autodl: CloudDownload, logs: ScrollText, settings: Settings, complete: Sparkles, dedupe: Copy, audit: ScanSearch, records: History, quality: Gauge }
 
 const navItems = VIEWS.map((v) => ({ ...v, icon: NAV_ICONS[v.id] }))
 
@@ -989,6 +1056,13 @@ onMounted(async () => {
 
   // 启动 AI 解析桥工作器：让外部 AI 提交的取链任务能在本页面完成
   bridgeWorker.start()
+
+  // 版本检查提到应用启动这一步（用户 2026-10-24：「检测到更新后显示有更新的窗口」）：
+  // 以前只有进「系统」页才检查，人不进那一页就永远不知道有新版本，侧栏底部那个入口
+  // 也就永远不亮。ensureChecked 每个会话只真查一次，失败静默（不打扰、不弹 toast）。
+  appUpdate.ensureChecked()
+  // 上次离开时如果下载/安装还在跑，回来接着轮询，别让进度丢在半路。
+  appUpdate.resumeIfActive()
 
   // 0. 免责声明与服务条款：**只需同意一次**。
   //

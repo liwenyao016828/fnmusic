@@ -256,6 +256,15 @@ export function buildSubscriptions(monitors = [], tasks = []) {
       lastRunAt: String(mon?.last_run_at || ''),
       lastStatus: String(task?.last_status || ''),
       lastError: String(task?.last_error || ''),
+      // 「你手动删掉的歌不会再被加回来」的可见化（2026-10-24 P1）。
+      // 后端每次推送把仍在黑名单里的 guid 与「本轮新认出被删」的歌名带回 last_result，
+      // 所以这两个数不用额外请求。
+      removedCount: row.tasks.reduce(
+        (n, t) => n + (t.last_result?.manual_removed_guids?.length || 0),
+        0,
+      ),
+      removedTitles: row.tasks.flatMap((t) => t.last_result?.manual_removed_titles || []),
+      revivedCount: row.tasks.reduce((n, t) => n + (t.last_result?.revived || 0), 0),
     })
   }
 

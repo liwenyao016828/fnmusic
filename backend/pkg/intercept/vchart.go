@@ -38,23 +38,21 @@ import (
 const vChartPrefix = "online:playlist:chart:"
 
 const (
-	// vChartSize 是单个榜单最多注入多少首**可播**曲目。
+	// vChartSize 是单个榜单**默认**显示多少首（用户可在设置里改，见 chartSize）。
 	//
 	// 官方歌单首屏是整页全量交付的，所以这个数直接决定一次响应多大。
 	// 100 与 fnmusic-ext 的口径一致。
+	//
+	// ⚠️ 现在是「榜单有多少给多少，最多 100」——**不再**先过滤掉解析不出直链的
+	// 那些（2026-10-24 用户拍板：显示的就是真榜单，播不响的由取音层跨源兜底）。
 	vChartSize = 100
 
 	// vChartFetchMax 是一次从榜单详情里取多少首**候选**。
 	//
-	// 这个数必须比 vChartSize 大，而且大得有意义 —— 因为候选里只有一部分
-	// 能解析出直链（免费曲目），先按 vChartSize 截断再过滤会把榜单砍成个位数。
-	// 2026-10-06 真机实测（飞牛 NAS）：网易云「热歌榜」100 首候选里 **36 首**能播
-	// （榜单越热门，VIP 比例越高），QQ「巅峰榜·热歌」300 首候选里仍然只有个位数 ——
-	// QQ 的解析器本身弱（付费曲目拿不到 purl，文档记过约 33%，热门榜更低）。
-	//
+	// 过滤掉之后它只用来兜两层：上游一次给超量时截断，以及去重后填满 vChartSize
+	//（同一首歌在榜单里重复出现是常态）。
 	// 上限取 300 是因为 `pkg/charts` 的 QQ 详情一次给 300 首（网易自己封顶 100），
-	// 再多也拿不到。代价是解析批量更大（`neteaseMaxBatch` / `qqMaxBatch` 各 50，
-	// 300 首 = 6 个批量请求），所以这条路径**算完就进 vCache**（30 分钟）。
+	// 再多也拿不到。这条路径**算完就进 vCache**（30 分钟）。
 	vChartFetchMax = 300
 
 	// vChartParallel 是「同时抓几个榜单」的上限。
@@ -141,9 +139,15 @@ func (i *Interceptor) enabledChartRefs() []vChartRef {
 
 // chartPlaylist 生成一条榜单歌单。
 //
-// 曲目经 `playableOnly` 过滤 —— 与搜索、每日推荐同一条口径：**进列表的每一首
-// 都必须能播**。代价是榜单长度不再等于真实榜单长度（QQ 侧尤其明显，它直链能
-// 解析出来的只有一部分），换来的是「点开一首、放不出声」不会发生。
+// # 为什么**不**再做可播性过滤（2026-10-24 用户拍板）
+//
+// 以前这里要过 `playableOnly`（只留解析得出直链的），结果网易热歌榜 100 首只
+// 显示 36 首、QQ 更少 —— 用户看到的榜单不是真榜单。用户的原话是「比如 100 首，
+// 就显示 100 首源歌单，网易有 36 能播，还有 64 就用其他源去补充」。
+//
+// 所以：**列表按源榜单原样给满**，能不能响交给取音那一层兜（`resolvePlayback`
+// 的跨源换源兜底 + 下载链路的 `collectDownloadAttempts`，两条都会去下载源池 /
+// 洛雪里找同名同版录音）。代价是极少数歌可能连兜底都找不到 —— 那种才 404。
 func (i *Interceptor) chartPlaylist(ctx context.Context, ref vChartRef) vPlaylist {
 	name, _, tracks, err := i.chartFetch(ctx, ref.Source, ref.ID, vChartFetchMax)
 	if err != nil {
@@ -154,18 +158,13 @@ func (i *Interceptor) chartPlaylist(ctx context.Context, ref vChartRef) vPlaylis
 	if len(tracks) > vChartFetchMax {
 		tracks = tracks[:vChartFetchMax]
 	}
-	for n := range tracks {
-		tracks[n] = tracks[n].Normalized()
-	}
-	// ⚠️ 顺序是「先过滤、后截断」，不能反 —— 候选里能播的只占一部分
-	// （真机实测：网易热门榜 100 首里 36 首，QQ 更低），先截到 100 再过滤
-	// 等于把榜单砍成个位数。截断放在过滤之后，才有「凑满 100 首可播」的机会。
-	tracks = i.playableOnly(ctx, ref.Source, tracks)
+	tracks = dedupeTracks(tracks)
 	if len(tracks) == 0 {
 		return vPlaylist{}
 	}
-	if len(tracks) > vChartSize {
-		tracks = tracks[:vChartSize]
+	limit := i.chartSizeFor(ref.key())
+	if len(tracks) > limit {
+		tracks = tracks[:limit]
 	}
 
 	name = strings.TrimSpace(name)
@@ -184,6 +183,27 @@ func (i *Interceptor) chartPlaylist(ctx context.Context, ref vChartRef) vPlaylis
 		UpdatedAt: ts,
 		Tracks:    tracks,
 	}
+}
+
+// chartSizeFor 返回某个榜单**实际显示多少首**（`wy_19723756` → 100）。
+//
+// 优先级全在配置层（AppConfig.ChartSizeFor），这里只做拦截层的两层兜底：
+//   - `chartSize` 没接线（单测 / 极早期构造）→ 用 vChartSize；
+//   - 配得比一次能取回的还多 → 夹到 vChartFetchMax（多出来的只会是空）。
+//
+// 为什么单独成函数：`vPlaylistFor` 的缓存键也要用它 —— 两边各算一次迟早会漂，
+// 漂了的表现就是「改完首数，列表跟着变，但缓存还是旧的那份」。
+func (i *Interceptor) chartSizeFor(chartID string) int {
+	n := vChartSize
+	if i.chartSize != nil {
+		if v := i.chartSize(chartID); v > 0 {
+			n = v
+		}
+	}
+	if n > vChartFetchMax {
+		n = vChartFetchMax
+	}
+	return n
 }
 
 // chartCards 并行算出所有已勾选榜单的卡片，返回顺序与勾选顺序一致。

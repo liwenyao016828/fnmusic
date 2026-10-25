@@ -41,6 +41,21 @@ type Options struct {
 	DisableProxy bool
 	// ForceProxyForLocal 强制内网目标也走代理（用于「内网目标经代理可达」的场景）
 	ForceProxyForLocal bool
+	// ResponseHeaderTimeout 是「等到响应头」的上限；0 = 默认 20s。
+	//
+	// 默认值对普通接口刚好，对**大文件下载**不够：GitHub Release 的资产会 302 到
+	// objects.githubusercontent.com，经代理回源时首字节经常超过 20s —— 整条下载就被
+	// 判成 `net/http: timeout awaiting response headers`（2026-10-24 用户截图：应用内
+	// 更新下载失败）。要下大文件的调用方显式把它调大。
+	ResponseHeaderTimeout time.Duration
+}
+
+// headerTimeout 返回生效的「等响应头」上限（0 回落默认 20s）。
+func (o Options) headerTimeout() time.Duration {
+	if o.ResponseHeaderTimeout > 0 {
+		return o.ResponseHeaderTimeout
+	}
+	return 20 * time.Second
 }
 
 // DefaultOptions 返回默认策略（禁止访问内网）
@@ -206,7 +221,9 @@ func newSafeTransport(opts Options, exempt map[string]bool, proxy func(*http.Req
 		IdleConnTimeout:       60 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
-		ResponseHeaderTimeout: 20 * time.Second,
+		// 默认 20s；需要下大文件的调用方用 Options.ResponseHeaderTimeout 调大
+		// （GitHub Release 经代理回源首字节经常 >20s，见 Options 注释）。
+		ResponseHeaderTimeout: opts.headerTimeout(),
 	}
 }
 

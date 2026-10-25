@@ -62,14 +62,15 @@ test('历史 id / 深链全部能解析到正确的顶层页与分段', () => {
 
   // 顶层 id 直接进，落在默认段
   assert.deepEqual(resolveRoute('search'), { view: 'search', segment: 'discover', unknown: false })
-  assert.deepEqual(resolveRoute('system'), { view: 'system', segment: 'logs', unknown: false })
+  // 2026-10-24 用户：「设置在前，日志在后」—— 系统页默认段随之改成 settings
+  assert.deepEqual(resolveRoute('system'), { view: 'system', segment: 'settings', unknown: false })
   // 没有分段的页，段位是空串（模板据此决定渲不渲分段器）
   assert.deepEqual(resolveRoute('library'), { view: 'library', segment: '', unknown: false })
   assert.deepEqual(resolveRoute('sources'), { view: 'sources', segment: '', unknown: false })
 
   // 指定段位；给了不存在的段位回落默认段，而不是渲染出一个空页
   assert.equal(resolveRoute('system', 'settings').segment, 'settings')
-  assert.equal(resolveRoute('system', 'nope').segment, 'logs')
+  assert.equal(resolveRoute('system', 'nope').segment, 'settings')
   assert.equal(resolveRoute('search', 'charts').segment, 'charts')
   // 没有分段的页带上段位也安全
   assert.equal(resolveRoute('library', 'whatever').segment, '')
@@ -84,7 +85,7 @@ test('认不出的 id 不静默失败：回落发现页并标记 unknown 供记�
 })
 
 test('辅助函数与注册表一致', () => {
-  assert.equal(defaultSegment('system'), 'logs')
+  assert.equal(defaultSegment('system'), 'settings')
   assert.equal(defaultSegment('library'), '')
   assert.deepEqual(segmentsOf('search').map((s) => s.id), ['discover', 'charts'])
   assert.deepEqual(segmentsOf('library'), [])

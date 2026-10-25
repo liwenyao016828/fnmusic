@@ -9,6 +9,7 @@ import (
 
 	"fn-lx-player/pkg/applog"
 	"fn-lx-player/pkg/appupdate"
+	"fn-lx-player/pkg/config"
 )
 
 // 应用内更新（检查 / 下载 / 安装）。
@@ -139,7 +140,11 @@ func (s *Server) HandleAppUpdateInstall(w http.ResponseWriter, r *http.Request) 
 // AppName 用运行时解析（TRIM_APPNAME / 可执行文件在 /var/apps/<pkg>/ 下 / manifest），
 // 而不是直接写 CurrentAppName：开发环境与真机的包名来源不同，解析失败才回退常量，
 // 这样同一个二进制在真机和 .dev 下都能跑，且不会「卸载错应用」。
-func newAppUpdateManager(dataDir string) *appupdate.Manager {
+func newAppUpdateManager(cfgMgr *config.ConfigManager) *appupdate.Manager {
+	dataDir := ""
+	if cfgMgr != nil {
+		dataDir = cfgMgr.DataDir()
+	}
 	appName := CurrentAppName
 	if exe, err := os.Executable(); err == nil {
 		if n := appupdate.ResolveAppName(exe, os.Getenv); n != "" {
@@ -151,6 +156,24 @@ func newAppUpdateManager(dataDir string) *appupdate.Manager {
 		AppName:        appName,
 		CurrentVersion: CurrentVersion,
 		Token:          strings.TrimSpace(os.Getenv("FN_GITHUB_TOKEN")),
+		// 个人 token（用户 2026-10-25）：用函数而不是构造时读一次，
+		// 这样在「系统 → 设置」里填完，下一次检查/下载就生效，不必重启应用。
+		// 环境变量优先（开发/排障时能临时盖住配置），其次读配置。
+		TokenFunc: func() string {
+			// 环境变量里的 token 优先：有人把 secret 挂在 FN_GITHUB_TOKEN 上，
+			// 不想让它被界面上的一次误改覆盖。
+			if v := strings.TrimSpace(os.Getenv("FN_GITHUB_TOKEN")); v != "" {
+				return v
+			}
+			if cfgMgr == nil {
+				return ""
+			}
+			return cfgMgr.Get().UpdateGitHubToken
+		},
+		// FN_UPDATE_API 换掉「去哪里查新版本」的整条地址（不只是仓库名）：自建
+		// GitHub 镜像/内网发布源用得上，也让这台开发机能拿本地假源做端到端验证
+		// —— 共享代理出去的匿名 GitHub 请求经常直接 403 限速，真机上也可能遇到。
+		APIURL: strings.TrimSpace(os.Getenv("FN_UPDATE_API")),
 		Logf: func(format string, args ...any) {
 			applog.Default().Add(fmt.Sprintf(format, args...))
 		},

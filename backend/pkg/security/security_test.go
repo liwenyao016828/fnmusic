@@ -591,3 +591,21 @@ func TestOutboundTransportDoesNotForceHTTP2(t *testing.T) {
 		t.Fatal("出站 transport 不应启用 HTTP/2：CDN 边缘会挂住响应头 20s")
 	}
 }
+
+// TestResponseHeaderTimeoutOverride 钉住「大文件下载可以放宽等响应头的上限」这条
+// 新契约：默认仍是 20s（普通接口不该被放宽拖住），显式设置后 transport 必须照用。
+func TestResponseHeaderTimeoutOverride(t *testing.T) {
+	if got := (Options{}).headerTimeout(); got != 20*time.Second {
+		t.Fatalf("默认应为 20s，实得 %v", got)
+	}
+	if got := (Options{ResponseHeaderTimeout: 2 * time.Minute}).headerTimeout(); got != 2*time.Minute {
+		t.Fatalf("显式设置没生效，实得 %v", got)
+	}
+	tr := NewSafeTransport(Options{ResponseHeaderTimeout: 45 * time.Second})
+	if tr.ResponseHeaderTimeout != 45*time.Second {
+		t.Fatalf("transport 没用上调大值，实得 %v", tr.ResponseHeaderTimeout)
+	}
+	if tr2 := NewSafeTransport(Options{}); tr2.ResponseHeaderTimeout != 20*time.Second {
+		t.Fatalf("未设置时 transport 应回落 20s，实得 %v", tr2.ResponseHeaderTimeout)
+	}
+}

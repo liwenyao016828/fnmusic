@@ -194,8 +194,9 @@ func newHarness(t *testing.T) *harness {
 
 // setNetease 设定「网易公开歌单」返回什么（推荐歌单 / 热门榜单的曲目来源）。
 //
-// 在 setOnline 之后调用：它会把这些曲目的 id 一起登记成「可解析」，否则
-// 推荐歌单里的歌会被 `playableOnly` 全部滤掉，测试就只能看到空歌单。
+// 在 setOnline 之后调用：它会把这些曲目的 id 一起登记成「可解析」。
+// 在线歌单 / 榜单现在**不再**按可播性过滤（2026-10-24 改成「按源原样给满」），
+// 但解析池为空会让播放与排序相关的用例失真，所以照旧登记。
 func (h *harness) setNetease(tracks ...online.Track) {
 	h.mu.Lock()
 	if h.playable == nil {

@@ -9,7 +9,30 @@
     放在「体检」分段而不是新开一段：它和曲库体检是同一件事的两种口径
     （一个是元数据缺口，一个是磁盘条目本身不合法），分开放用户要点两次才找得到。
   -->
+  <!--
+    2026-10-26 用户：「下面的文件名体检可以与歌名修复合并，并去掉相同的功能」。
+    merge=True 时不自己开一张卡片，只渲染一段带分隔线的子块，由「歌名修复」那张卡片包住。
+  -->
+  <div v-if="merge" class="mt-4 border-t border-[var(--ys-border)] pt-3">
+    <div class="flex items-center gap-2">
+      <ShieldAlert class="h-3.5 w-3.5 shrink-0 text-[var(--ys-text-muted)]" />
+      <div class="min-w-0 flex-1">
+        <div class="text-[12px] font-semibold text-[var(--ys-text)]">文件名体检</div>
+        <div class="mt-0.5 truncate text-[10.5px] text-[var(--ys-text-faint)]">修「文件夹显示未知错误」：非法文件名、控制字符、0 字节音频、下载残留</div>
+      </div>
+      <button
+        class="ys-press shrink-0 rounded-full px-3 py-1.5 text-[11.5px] font-medium transition-colors"
+        :class="scanning ? 'bg-[var(--ys-border)] text-[var(--ys-text-faint)]' : 'bg-[var(--ys-accent)] text-white hover:brightness-105'"
+        :disabled="scanning || fixing"
+        @click="runScan"
+      >{{ scanning ? '扫描中…' : (report ? '重新扫描' : '开始扫描') }}</button>
+    </div>
+    <div class="mt-2.5">
+      <slot name="body" />
+    </div>
+  </div>
   <SectionCard
+    v-else
     :icon="ShieldAlert"
     title="文件名体检"
     sub="修「文件夹显示未知错误」：非法文件名、控制字符、0 字节音频、下载残留"
@@ -23,6 +46,8 @@
       >{{ scanning ? '扫描中…' : (report ? '重新扫描' : '开始扫描') }}</button>
     </template>
 
+    <!-- 卡片正文（两种外壳共用：自己开卡片 / 并进「歌名修复」） -->
+  <template #body>
     <div v-if="!report" class="rounded-[12px] border border-dashed border-[var(--ys-border)] px-4 py-6 text-center text-[11px] leading-relaxed text-[var(--ys-text-faint)]">
       <template v-if="scanning">正在扫描 {{ dirHint }} …<br />文件多的时候要几十秒</template>
       <template v-else>
@@ -96,6 +121,7 @@
 
       <InlineNotice class="mt-2" :text="fixMsg" :tone="fixTone" :log-link="false" />
     </template>
+  </template>
   </SectionCard>
 </template>
 
@@ -112,6 +138,11 @@ import { fail } from '../services/userMsg.js'
 const props = defineProps({
   /** 曲库目录（由父组件传，空则由后端用默认根） */
   dir: { type: String, default: '' },
+  /**
+   * 并进「歌名修复」那张卡片：不开自己的 SectionCard，只渲染一段子块。
+   * 2026-10-26 用户：「下面的文件名体检可以与歌名修复合并」。
+   */
+  merge: { type: Boolean, default: false },
 })
 
 const scanning = ref(false)

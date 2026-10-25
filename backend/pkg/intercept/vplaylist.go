@@ -514,8 +514,17 @@ func (i *Interceptor) vPlaylistFor(guid string, r *http.Request) (vPlaylist, boo
 		return vPlaylist{}, false
 	}
 
+	// 榜单的缓存键带上「当前显示首数」：用户把某个榜从 100 改成 30，改完
+	// 立刻就该看到 30 —— 只按 guid 缓存的话要等 vCacheTTL（30 分钟）才生效，
+	// 用户会以为按钮没反应。键里带首数等于「改了就是一格新缓存」，旧的那格
+	// 自然过期（vCache 有 32 条上限，不会无限涨）。
+	cacheKey := guid
+	if strings.HasPrefix(guid, vChartPrefix) {
+		cacheKey = guid + "#" + itoa(i.chartSizeFor(strings.TrimPrefix(guid, vChartPrefix)))
+	}
+
 	i.vMu.Lock()
-	if e, ok := i.vCache[guid]; ok {
+	if e, ok := i.vCache[cacheKey]; ok {
 		// 空结果（拉取失败 / 整榜都不可播）只留 vChartNegTTL：一次上游抖动
 		// 不该让榜单消失半小时，但也不能放成「每次请求都重新打上游」。
 		ttl := vCacheTTL
@@ -557,7 +566,7 @@ func (i *Interceptor) vPlaylistFor(guid string, r *http.Request) (vPlaylist, boo
 	if len(i.vCache) > 32 {
 		i.vCache = make(map[string]vEntry, 8)
 	}
-	i.vCache[guid] = vEntry{pl: pl, ts: now}
+	i.vCache[cacheKey] = vEntry{pl: pl, ts: now}
 	i.vMu.Unlock()
 
 	i.logf("[INTERCEPT] 虚拟歌单 %s → %d 首（%s）", pl.Name, len(pl.Tracks), pl.GUID)
@@ -765,7 +774,10 @@ func (i *Interceptor) neteasePlaylist(ctx context.Context, id string, limit int)
 	}
 
 	tracks := i.neteaseSongs(ctx, ids)
-	return pl.Playlist.Name, pl.Playlist.CoverImgURL, i.playableOnly(ctx, "wy", tracks)
+	// 与榜单同一条口径（2026-10-24 用户拍板）：**列表按源歌单原样给满**，
+	// 不再先砍掉解析不出直链的那些 —— 那会让一个 100 首的歌单只剩三四十首，
+	// 用户看到的是「残缺的歌单」。播不响的由取音层跨源兜底。
+	return pl.Playlist.Name, pl.Playlist.CoverImgURL, dedupeTracks(tracks)
 }
 
 // neteaseSongs 批量取网易曲目详情。
@@ -855,10 +867,76 @@ func nmMillis(v json.Number) int {
 	return int(n)
 }
 
+// dedupeTracks 规范化并原地去重（按真实 id），保留首次出现。
+//
+// 榜单 / 歌单里同一首歌重复出现不是「数据错误」，而是上游常态（多版本、精选
+// 榜合并）。截断到 vChartSize 之前必须先去过重，否则 100 个坑里可能有重复。
+func dedupeTracks(tracks []online.Track) []online.Track {
+	if len(tracks) == 0 {
+		return nil
+	}
+	out := make([]online.Track, 0, len(tracks))
+	seen := make(map[string]bool, len(tracks))
+	for _, t := range tracks {
+		t = t.Normalized()
+		if strings.TrimSpace(t.PlatformID) == "" || strings.TrimSpace(t.Title) == "" {
+			continue
+		}
+		if seen[t.RealID()] {
+			continue
+		}
+		seen[t.RealID()] = true
+		out = append(out, t)
+	}
+	return out
+}
+
+// preferPlayable 把解析得出直链的曲目排在前面，**但一首都不丢**。
+//
+// 它是 playableOnly 的「只排序不过滤」版本，用在「列表要按源原样给满」的地方
+// （榜单、在线歌单、在线专辑）。为什么不能一直用 playableOnly：那张表在真机上
+// 会把 100 首砍成 36 首，用户看到的是残缺的歌单，而播放其实还有跨源兜底
+// （见 playback_fallback.go）。
+//
+// 排序是**稳定**的：同组内保持上游给的原顺序，榜单第 1 首不该因为「解析快」变成第 7 首。
+func (i *Interceptor) preferPlayable(ctx context.Context, platform string, tracks []online.Track) []online.Track {
+	if len(tracks) == 0 || i.pool == nil {
+		return tracks
+	}
+	ids := make([]string, 0, len(tracks))
+	for _, t := range tracks {
+		ids = append(ids, t.PlatformID)
+	}
+	resolved := i.pool.ResolveMany(ctx, platform, ids)
+
+	out := make([]online.Track, 0, len(tracks))
+	seen := make(map[string]bool, len(tracks))
+	push := func(onlyPlayable bool) {
+		for _, t := range tracks {
+			if seen[t.RealID()] {
+				continue
+			}
+			_, ok := resolved[t.PlatformID]
+			if ok != onlyPlayable {
+				continue
+			}
+			seen[t.RealID()] = true
+			out = append(out, t)
+		}
+	}
+	push(true)
+	push(false)
+	return out
+}
+
 // playableOnly 只保留解析得出直链的曲目。
 //
 // 虚拟歌单的曲目点开就要能响 —— 这是「查得到点不动比查不到更糟」那条规矩
 // 在推荐场景的延伸。
+//
+// ⚠️ **榜单不再走它**（见 vchart.go 的 chartPlaylist）：榜单要的是「显示的就是
+// 真榜单」，宁可少几首能响也不能少几首显示。仍在用的是搜索合并、每日推荐、
+// 在线专辑这几条「推荐」路径 —— 那些列表本来就是挑出来的，少几首不构成失真。
 func (i *Interceptor) playableOnly(ctx context.Context, platform string, tracks []online.Track) []online.Track {
 	if len(tracks) == 0 || i.pool == nil {
 		return tracks

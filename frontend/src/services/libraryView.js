@@ -182,16 +182,23 @@ export const COMPLETE_STEPS = [
   { n: 3, name: '预览并写入' },
 ]
 
-/** 当前处在第几步：预览计划已出 = 3；缺口扫过 = 2；否则还在第 1 步 */
-export function completeStep(gaps, plan) {
-  if (plan) return 3
-  if (gaps) return 2
+/**
+ * 当前处在第几步：预览拿到 plan_id = 3；缺口统计扫过 = 2；否则还在第 1 步。
+ *
+ * 第三个参数 previewing 是流式预览补上的：预览**正在跑**时也已经点过「扫描缺失」
+ * 那一步了（用户没扫过缺口也能直接预览，后端自己会扫），所以至少要到第 2 步 ——
+ * 否则跑的中途界面上「扫描缺失」按钮会重新冒出来，看着像流程被重置了。
+ */
+export function completeStep(gaps, hasPlan, previewing = false) {
+  if (hasPlan) return 3
+  if (gaps || previewing) return 2
   return 1
 }
 
 /** 每一步的「下一步该点哪」—— 这是这一页以前最缺的一句话 */
-export function completeHint(gaps, plan) {
-  if (plan) return '核对下面的清单，没问题就点「确认写入」'
+export function completeHint(gaps, hasPlan, previewing = false) {
+  if (hasPlan) return '核对下面的清单，没问题就点「确认写入」'
+  if (previewing) return '正在逐条匹配，可以随时点「停止预览」'
   if (gaps) return '勾好字段，点右下角「预览要写的内容」'
   return '先点上面的「扫描缺失」看缺什么'
 }

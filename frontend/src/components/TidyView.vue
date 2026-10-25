@@ -19,51 +19,20 @@
     藏在 ⋯ 后面，不是反对 ⋯ 本身）。
   -->
   <PageShell>
-    <template #actions>
-      <!-- 每个分段一行主操作，只显示当前段那一条；
-           补全段第 3 步不给按钮（确认写入就在预览表里，紧挨着要确认的清单） -->
-      <template v-if="sub === 'complete'">
-        <button
-          v-if="completeStep === 1"
-          :disabled="gapsLoading"
-          :title="completeHint"
-          class="ys-press rounded-full bg-emerald-500 px-4 py-1.5 text-[12px] font-semibold text-white shadow-[0_1px_2px_rgba(11,138,102,0.3)] transition-colors hover:bg-emerald-600 disabled:opacity-50"
-          @click="scanGaps"
-        >{{ gapsLoading ? '统计中…' : '扫描缺失' }}</button>
-        <button
-          v-else-if="completeStep === 2"
-          :disabled="previewing || completing || !selectedFields.length"
-          :title="completeHint + (selectedFields.length ? '' : '（先在字段里勾要补的项）')"
-          class="ys-press rounded-full bg-emerald-500 px-4 py-1.5 text-[12px] font-semibold text-white shadow-[0_1px_2px_rgba(11,138,102,0.3)] transition-colors hover:bg-emerald-600 disabled:opacity-50"
-          @click="runComplete"
-        >{{ previewing ? '匹配中…' : '预览要写的内容' }}</button>
+    <!--
+      2026-10-25 用户两条要求合并的落点：
+        ①「统一补全整理里五个导航内的样式，右上角的按钮迁移到下方卡片内。」
+        ②「元数据补全页面内的路径展示，迁移到五个分段导航行的右边。可以点击进行目录选择。」
+      所以这里不再有页首动作区：每个分段的按钮回到各自卡片头（SectionCard 的 #actions），
+      曲库目录改成导航行右边的 TidyDirChip（见 App.vue 里 SegmentedControl 的 #trail）。
+    -->
 
-        <!-- 次要动作保留在 ⋯：现在只剩「增量扫描」 -->
-        <OverflowMenu :items="completeMenu" @select="onCompleteMenu" />
-      </template>
-      <button
-        v-else-if="sub === 'dedupe'"
-        :disabled="deduping"
-        title="扫描曲库，找出内容相同 / 同名的重复曲目"
-        class="ys-press rounded-full bg-emerald-500 px-4 py-1.5 text-[12px] font-semibold text-white shadow-[0_1px_2px_rgba(11,138,102,0.3)] transition-colors hover:bg-emerald-600 disabled:opacity-50"
-        @click="runDedupe"
-      >{{ deduping ? '查重中…' : '查找重复' }}</button>
-      <button
-        v-else-if="sub === 'audit'"
-        :disabled="auditing"
-        title="直接扫一遍文件统计缺口（与「补全」段的索引口径各算各的）"
-        class="ys-press rounded-full bg-emerald-500 px-4 py-1.5 text-[12px] font-semibold text-white shadow-[0_1px_2px_rgba(11,138,102,0.3)] transition-colors hover:bg-emerald-600 disabled:opacity-50"
-        @click="runAudit"
-      >{{ auditing ? '体检中…' : '曲库体检' }}</button>
-      <button
-        v-else-if="sub === 'records'"
-        :disabled="reloading"
-        title="重新拉取快照与上一次补全的状态"
-        class="ys-press rounded-full border border-[var(--ys-border)] bg-white px-4 py-1.5 text-[12px] font-medium text-[var(--ys-text-muted)] transition-colors hover:bg-[var(--ys-surface-2)] disabled:opacity-50"
-        @click="onRefresh"
-      >{{ reloading ? '刷新中…' : '刷新' }}</button>
-    </template>
-
+    <!--
+      分段内容的**公共容器**（PageShell 的默认 slot 只有这一层）。
+      五个分段的 SectionCard 都是它的兄弟节点，靠 v-show 切换显隐。
+      ⚠️ 别让 SectionCard 意外嵌套：一旦上面多了一层没闭合的标签，
+      所有分段会被吸进第一个 SectionCard 的 slot，整页就只剩一块「导航栏」。
+    -->
     <div class="space-y-3.5">
       <!-- ═════ 分段一：补全（默认段，元数据补全主流程） ═════ -->
       <SectionCard
@@ -75,10 +44,22 @@
         sub-title="补全的歌曲信息一律来自搜索结果，不由 AI 猜填"
       >
         <template #actions>
+          <!--
+            2026-10-25 用户：「右上角的按钮迁移到下方卡片内。」
+            「选项」原本挂在页首（现在页首只剩曲库目录），搬进卡片头；
+            「预览要写的内容」原来也在页首，按同一口径搬到这里 —— 卡片头就是这一段的所有入口。
+          -->
+          <button
+            v-if="completeStep === 2"
+            :disabled="previewing || completing || !selectedFields.length"
+            :title="completeHint + (selectedFields.length ? '' : '（先在字段里勾要补的项）')"
+            class="ys-press rounded-full bg-emerald-500 px-3.5 py-1.5 text-[12px] font-semibold text-white shadow-[0_1px_2px_rgba(11,138,102,0.3)] transition-colors hover:bg-emerald-600 disabled:opacity-50"
+            @click="startPreview"
+          >{{ previewing ? '停止预览' : '预览要写的内容' }}</button>
           <button
             type="button"
             class="flex items-center gap-1.5 rounded-[9px] px-2 py-1 text-[12px] font-medium text-[var(--ys-text-muted)] transition-colors hover:bg-black/[0.05] hover:text-[var(--ys-text)]"
-            title="曲库目录、补全字段、最多处理几首、主力平台"
+            title="补全字段、最多处理几首、覆盖口径、主力平台"
             @click="optionsOpen = true"
           >
             <SlidersHorizontal class="h-3.5 w-3.5" :stroke-width="1.8" />
@@ -86,17 +67,8 @@
           </button>
         </template>
 
-        <!-- 一行摘要：目录（可点开选项）、缺口数字 -->
+        <!-- 一行摘要：缺口数字（曲库目录已挪到分段导航行右边，见页面顶部 #actions-trail） -->
         <div class="flex flex-wrap items-center gap-x-4 gap-y-2">
-          <button
-            type="button"
-            class="flex min-w-0 max-w-full items-center gap-1.5 rounded-[8px] border border-[var(--ys-border)] bg-black/[0.02] px-2 py-1 text-left transition-colors hover:bg-black/[0.04]"
-            title="点开修改曲库目录"
-            @click="optionsOpen = true"
-          >
-            <FolderOpen class="h-3.5 w-3.5 shrink-0 text-[var(--ys-accent)]" :stroke-width="1.8" />
-            <span class="min-w-0 truncate font-mono text-[11.5px] text-[var(--ys-text-muted)]">{{ tidyDir || nasDir || '/vol1/Music' }}</span>
-          </button>
           <StatLine
             v-if="gaps"
             :items="[
@@ -129,6 +101,14 @@
             <span v-if="gaps" class="font-mono text-[10.5px]" :class="f.missing ? 'text-amber-600' : 'opacity-50'">{{ f.missing }}</span>
           </button>
           <span class="ml-0.5 text-[11px] text-[var(--ys-text-faint)]">点字段可勾选 / 取消</span>
+          <!-- 合并后的唯一扫描按钮（原「扫描缺失」）：先收新文件，再重算缺口 -->
+          <button
+            v-if="completeStep === 1"
+            :disabled="indexing || gapsLoading"
+            :title="indexing || gapsLoading ? '正在扫描磁盘并重算缺口…' : '扫描磁盘上新增 / 变化的文件，并重新统计缺哪些字段'"
+            class="ys-press ml-auto rounded-full bg-emerald-500 px-3.5 py-1 text-[11.5px] font-semibold text-white shadow-[0_1px_2px_rgba(11,138,102,0.3)] transition-colors hover:bg-emerald-600 disabled:opacity-50"
+            @click="scanAll"
+          >{{ indexing || gapsLoading ? '扫描中…' : '扫描' }}</button>
         </div>
 
         <!-- 还没读过标签的曲目：缺口无从判断，必须单独说清楚 -->
@@ -154,19 +134,46 @@
           </div>
         </div>
 
-        <!-- ── 预览表：还没写任何文件 ── -->
-        <div v-if="completePlan" class="mt-3.5 space-y-2.5 rounded-[12px] border border-[var(--ys-border)] bg-[#FAFAFC] p-3.5">
+        <!-- ── 预览（流式）：匹配完一首就出一行，还没有动过文件 ── -->
+        <div v-if="previewOpen" class="mt-3.5 space-y-2.5 rounded-[12px] border border-[var(--ys-border)] bg-[#FAFAFC] p-3.5">
           <div class="flex flex-wrap items-center justify-between gap-2">
-            <span class="text-[11px] font-semibold text-[var(--ys-text)]">即将写入（还没有动过文件）</span>
-            <span class="text-[11px] text-[var(--ys-text-faint)]">
-              共 {{ completePlan.total }} 首 · 匹配到 {{ completePlan.matched }} 首
-              <span v-if="completePlan.matched_by_ai" class="text-[var(--ys-text-muted)]">
-                · 其中 {{ completePlan.matched_by_ai }} 首由 AI 判断
+            <span class="flex items-center gap-2 text-[11px] font-semibold text-[var(--ys-text)]">
+              {{ previewState === 'running' ? '正在逐条匹配…' : previewHeading }}
+              <span class="font-mono font-normal text-[var(--ys-text-faint)]">
+                {{ previewMeta.done }} / {{ previewMeta.total || '?' }}
               </span>
+              <span v-if="previewMatchedCount" class="font-normal text-[var(--ys-text-muted)]">
+                · 匹配到 {{ previewMatchedCount }} 首
+              </span>
+            </span>
+            <span class="flex shrink-0 items-center gap-2">
+              <button
+                v-if="previewState === 'running'"
+                class="rounded-full border border-[var(--ys-border)] bg-white px-3 py-1 text-[11px] text-[var(--ys-text-muted)] transition-colors hover:text-[var(--ys-text)]"
+                @click="stopPreview"
+              >停止</button>
+              <button
+                v-else
+                class="ys-press rounded-full bg-emerald-500 px-3 py-1 text-[11px] font-semibold text-white transition-colors hover:bg-emerald-600"
+                @click="startPreview"
+              >重新预览</button>
+              <button
+                class="rounded-full px-2.5 py-1 text-[11px] text-[var(--ys-text-muted)] transition-colors hover:text-[var(--ys-text)]"
+                title="收起预览（不影响已写入的结果）"
+                @click="closePreview"
+              >收起</button>
             </span>
           </div>
 
-          <div class="max-h-56 overflow-y-auto rounded-[10px] border border-[var(--ys-border)] bg-white">
+          <!-- 进度条：只在跑的时候占位，跑完不留一条 100% 的装饰 -->
+          <div v-if="previewState === 'running'" class="h-1 overflow-hidden rounded-full bg-[var(--ys-border)]">
+            <div
+              class="h-full rounded-full bg-emerald-500 transition-[width] duration-300"
+              :style="{ width: previewPercent + '%' }"
+            />
+          </div>
+
+          <div class="max-h-64 overflow-y-auto rounded-[10px] border border-[var(--ys-border)] bg-white">
             <table class="w-full text-[11px]">
               <thead class="sticky top-0 bg-white text-[var(--ys-text-faint)]">
                 <tr>
@@ -176,7 +183,7 @@
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="it in completePlan.items" :key="it.path" class="border-t border-[var(--ys-border)]">
+                <tr v-for="it in previewRows" :key="it.path" class="border-t border-[var(--ys-border)]">
                   <td class="max-w-[200px] truncate px-2 py-1 font-mono text-[var(--ys-text-muted)]" :title="it.path">
                     {{ baseName(it.path) }}
                   </td>
@@ -202,22 +209,29 @@
                     <span v-else>—</span>
                   </td>
                 </tr>
+                <tr v-if="previewState === 'running' && !previewRows.length">
+                  <td colspan="3" class="px-2 py-3 text-center text-[var(--ys-text-faint)]">
+                    正在搜索匹配，第一首出来就会显示…
+                  </td>
+                </tr>
               </tbody>
             </table>
           </div>
 
           <div class="flex flex-wrap items-center gap-2">
             <button
-              :disabled="completing || !completePlan.matched"
+              v-if="previewPlanId"
+              :disabled="completing || !previewMatchedCount"
               class="ys-press rounded-full bg-emerald-500 px-4 py-1.5 text-[12px] font-semibold text-white shadow-[0_1px_2px_rgba(11,138,102,0.3)] transition-colors hover:bg-emerald-600 disabled:opacity-50"
               @click="executeComplete"
-            >确认写入 {{ completePlan.matched }} 首</button>
-            <button
-              :disabled="completing"
-              class="rounded-full px-3 py-1.5 text-[12px] text-[var(--ys-text-muted)] transition-colors hover:text-[var(--ys-text)] disabled:opacity-50"
-              @click="completePlan = null"
-            >取消</button>
-            <span class="text-[11px] text-[var(--ys-text-faint)]">写入前会自动备份，可随时撤销</span>
+            >确认写入 {{ previewMatchedCount }} 首</button>
+            <span v-if="previewPlanId" class="text-[11px] text-[var(--ys-text-faint)]">写入前会自动备份，可随时撤销</span>
+            <span v-else-if="previewState === 'done'" class="text-[11px] text-amber-600">
+              这份清单不完整，不能执行 —— 重新预览一次
+            </span>
+            <span v-else-if="previewState === 'idle'" class="text-[11px] text-[var(--ys-text-faint)]">
+              已停止，结果不完整；需要执行请重新预览
+            </span>
           </div>
         </div>
 
@@ -326,6 +340,14 @@
         title="查重"
         sub="内容相同 / 同名不同版的重复曲目：保留一份，其余移入回收站"
       >
+        <template #actions>
+          <button
+            :disabled="deduping"
+            title="扫描曲库，找出内容相同 / 同名的重复曲目"
+            class="ys-press rounded-full bg-emerald-500 px-3.5 py-1.5 text-[12px] font-semibold text-white shadow-[0_1px_2px_rgba(11,138,102,0.3)] transition-colors hover:bg-emerald-600 disabled:opacity-50"
+            @click="runDedupe"
+          >{{ deduping ? '查重中…' : '查找重复' }}</button>
+        </template>
         <div v-if="!dupResult" class="rounded-[12px] border border-dashed border-[var(--ys-border)] px-4 py-6 text-center text-[11px] text-[var(--ys-text-faint)]">
           {{ deduping ? '正在查重…' : '还没有查重结果 —— 点右上「查找重复」' }}
         </div>
@@ -366,53 +388,355 @@
       </SectionCard>
 
       <!-- ═════ 分段三：体检 ═════ -->
+      <!--
+        ═════ 分段三：歌名修复（原「体检」）═════
+        2026-10-24 用户：「去除体检中的曲库体检，更名为歌名修复，页面加入歌名修复功能。」
+        原来的「曲库体检」只统计缺歌词/缺封面（audit 四格），用户明确不要了；
+        这一段的主动作换成歌名修复：扫出没有歌名 / 歌名就是文件名的曲目，
+        交给 AI 从候选里挑或直接按文件名解析，**只改标签里的标题字段**。
+        文件名体检（LibraryHealthCard）留着 —— 它是「磁盘条目本身不合法」，
+        和改歌名是两件事，但它就在这一段里，用户修完名字可以顺手扫一遍。
+      -->
       <SectionCard
         v-show="sub === 'audit'"
         :icon="ScanSearch"
-        title="曲库体检"
-        sub="直接扫文件统计缺口 —— 与「补全」段的索引口径各算各的，数字可能对不上"
+        title="歌名修复"
+        sub="没有歌名 / 歌名就是文件名的曲目：让 AI 从搜索结果里挑，或按文件名解析 —— 只改标题标签，可撤回"
       >
-        <template v-if="audit && auditAtText" #actions>
-          <span class="text-[10.5px] text-[var(--ys-text-faint)]">体检于 {{ auditAtText }}</span>
+        <template #actions>
+          <!-- 2026-10-25 用户：「右上角的按钮迁移到下方卡片内」—— 扫描歌名 + 修复记录时间都进卡片头 -->
+          <span v-if="titleFixRecordsAtText" class="text-[10.5px] text-[var(--ys-text-faint)]">{{ titleFixRecordsAtText }}</span>
+          <button
+            :disabled="titleFixScanning"
+            :title="titleFixScanning ? '正在从曲库索引里挑出歌名可疑的曲目…' : '扫出没有歌名 / 歌名就是文件名的曲目，交给 AI 修'"
+            class="ys-press rounded-full bg-emerald-500 px-3.5 py-1.5 text-[12px] font-semibold text-white shadow-[0_1px_2px_rgba(11,138,102,0.3)] transition-colors hover:bg-emerald-600 disabled:opacity-50"
+            @click="scanTitleFix"
+          >{{ titleFixScanning ? '扫描中…' : '扫描歌名' }}</button>
         </template>
 
-        <div v-if="!audit" class="rounded-[12px] border border-dashed border-[var(--ys-border)] px-4 py-6 text-center text-[11px] text-[var(--ys-text-faint)]">
-          {{ auditing ? '正在体检…' : '还没有体检结果 —— 点右上「曲库体检」' }}
+        <!-- 空态 -->
+        <div v-if="!titleFixItems.length && !titleFixScanning" class="rounded-[12px] border border-dashed border-[var(--ys-border)] px-4 py-6 text-center text-[11px] text-[var(--ys-text-faint)]">
+          <p>还没有扫到可疑歌名 —— 点右上「扫描歌名」</p>
+          <p class="mt-1 text-[10.5px]">判定口径：标题为空、标题就是文件名（有没有扩展名都算）、标题里带「未知」「unknown」「未命名」</p>
         </div>
-        <div v-else class="grid grid-cols-2 gap-2 md:grid-cols-4">
-          <div class="rounded-[12px] border border-[var(--ys-border)] bg-[#FAFAFC] px-3 py-2.5">
-            <div class="text-[10.5px] text-[var(--ys-text-faint)]">曲目总数</div>
-            <div class="mt-0.5 font-mono text-[19px] font-semibold text-[var(--ys-text)]">{{ audit.total }}</div>
+
+        <div v-if="titleFixScanning" class="rounded-[12px] border border-dashed border-[var(--ys-border)] px-4 py-6 text-center text-[11px] text-[var(--ys-text-faint)]">
+          正在从曲库索引里挑歌名可疑的曲目…
+        </div>
+
+        <!-- AI 修复卡：批量猜 + 逐条改 -->
+        <div v-if="titleFixItems.length" class="mt-1 space-y-2.5 rounded-[12px] border border-[var(--ys-border)] bg-[#FAFAFC] p-3.5">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <span class="text-[12px] font-semibold text-[var(--ys-text)]">
+              歌名可疑 {{ titleFixItems.length }} 首
+              <span v-if="titleFixSelectedCount" class="text-[var(--ys-accent)]">· 已勾 {{ titleFixSelectedCount }}</span>
+            </span>
+            <span class="flex items-center gap-2">
+              <button
+                :disabled="titleFixBusy || !titleFixSelectedCount"
+                class="ys-press rounded-full bg-emerald-500 px-3.5 py-1.5 text-[11px] font-semibold text-white transition-colors hover:bg-emerald-600 disabled:opacity-50"
+                @click="runTitleFix"
+              >{{ titleFixBusy ? '修复中…' : `AI 修复 ${titleFixSelectedCount || ''}` }}</button>
+              <button
+                :disabled="titleFixBusy"
+                class="rounded-full px-2.5 py-1.5 text-[11px] text-[var(--ys-text-muted)] hover:text-[var(--ys-text)] disabled:opacity-50"
+                @click="toggleAllTitleFix"
+              >{{ titleFixAllSelected ? '全不选' : '全选' }}</button>
+              <button
+                :disabled="titleFixBusy"
+                class="rounded-full px-2.5 py-1.5 text-[11px] text-[var(--ys-text-muted)] hover:text-[var(--ys-text)] disabled:opacity-50"
+                @click="titleFixItems = []; saveTitleFix()"
+              >清空</button>
+            </span>
           </div>
-          <div class="rounded-[12px] border border-[var(--ys-border)] bg-[#FAFAFC] px-3 py-2.5">
-            <div class="text-[10.5px] text-amber-600">缺歌词</div>
-            <div class="mt-0.5 font-mono text-[19px] font-semibold text-[var(--ys-text)]">{{ audit.no_lyric }}</div>
+
+          <div class="max-h-80 overflow-y-auto rounded-[10px] border border-[var(--ys-border)] bg-white">
+            <table class="w-full text-[11px]">
+              <thead class="sticky top-0 bg-white text-[var(--ys-text-faint)]">
+                <tr>
+                  <th class="w-8 px-2 py-1.5"></th>
+                  <th class="px-2 py-1.5 text-left font-medium">文件</th>
+                  <th class="px-2 py-1.5 text-left font-medium">当前的歌名</th>
+                  <th class="px-2 py-1.5 text-left font-medium">
+                    <!--
+                      2026-10-26 用户：「把修复后的列改成手动歌名体检，
+                      点击后随机抽取 10 首歌曲交给AI修复，并展示修复结果（包括是否可以修复、带原歌名、新歌名等）」。
+                      所以这一列的表头不再是"结果"两个字，而是那个动作的入口。
+                    -->
+                    <span class="flex items-center gap-1.5">
+                      <span>修复后</span>
+                      <button
+                        :disabled="manualAuditBusy"
+                        class="ys-press rounded-full border border-[var(--ys-border)] bg-white px-2 py-0.5 text-[10px] font-normal text-[var(--ys-text-muted)] transition-colors hover:text-[var(--ys-text)] disabled:opacity-50"
+                        title="随便抽 10 首（含歌名正常的）让 AI 判断能不能修复、会改成什么 —— 只出结果，不改文件"
+                        @click="runManualTitleAudit"
+                      >{{ manualAuditBusy ? '抽查中…' : '手动歌名体检' }}</button>
+                    </span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="it in titleFixItems" :key="it.path" class="border-t border-[var(--ys-border)]">
+                  <td class="px-2 py-1">
+                    <input type="checkbox" :checked="it.selected" :disabled="titleFixBusy" @change="toggleTitleFix(it)" />
+                  </td>
+                  <td class="max-w-[220px] truncate px-2 py-1 font-mono text-[var(--ys-text-muted)]" :title="it.path">
+                    {{ baseName(it.path) }}
+                  </td>
+                  <td class="max-w-[150px] truncate px-2 py-1 text-rose-600" :title="it.title">
+                    {{ it.title || '（空）' }}
+                  </td>
+                  <td class="max-w-[220px] truncate px-2 py-1 text-[var(--ys-text)]" :title="it.suggested_title">
+                    <template v-if="it.done">
+                      <span class="text-[var(--ys-accent)]">✓ {{ it.written_title }}</span>
+                    </template>
+                    <template v-else-if="it.suggested_title">{{ it.suggested_title }}</template>
+                    <template v-else-if="it.error"><span class="text-amber-600">{{ it.error }}</span></template>
+                    <template v-else>—</template>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
           </div>
-          <div class="rounded-[12px] border border-[var(--ys-border)] bg-[#FAFAFC] px-3 py-2.5">
-            <div class="text-[10.5px] text-amber-600">缺封面</div>
-            <div class="mt-0.5 font-mono text-[19px] font-semibold text-[var(--ys-text)]">{{ audit.no_cover }}</div>
+
+          <p class="text-[10.5px] leading-relaxed text-[var(--ys-text-faint)]">
+            只改文件里的标题标签，不动文件名；每次修复都进「数据快照」，可以随时撤回。
+          </p>
+        </div>
+
+        <!--
+          手动歌名体检（用户 2026-10-26）：「点击后随机抽取 10 首歌曲交给 AI 修复，
+          并展示修复结果（包括是否可以修复、带原歌名、新歌名等）」。
+          入口在上方表格「修复后」列的表头。**纯只读**：不写标签、不留快照 ——
+          目的就是回答「AI 到底靠不靠谱」，所以样本是随机抽的（也包含歌名看着正常的），
+          只挑可疑样本会得出「AI 全都修对了」的假象。真改请勾回去走 AI 修复。
+        -->
+        <div v-if="manualAuditItems.length || manualAuditBusy" class="mt-3 rounded-[12px] border border-[var(--ys-border)] bg-white p-3">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <span class="text-[11px] font-semibold text-[var(--ys-text)]">
+              手动歌名体检
+              <span v-if="manualAuditBusy" class="ml-1 font-normal text-[var(--ys-text-faint)]">正在逐首问 AI…</span>
+              <span v-else-if="manualAuditSummary" class="ml-1 font-normal text-[var(--ys-text-muted)]">{{ manualAuditSummary }}</span>
+            </span>
+            <span class="flex items-center gap-2">
+              <button
+                :disabled="manualAuditBusy"
+                class="rounded-full px-2.5 py-1 text-[11px] text-[var(--ys-text-muted)] hover:text-[var(--ys-text)] disabled:opacity-50"
+                @click="runManualTitleAudit"
+              >再抽 10 首</button>
+              <button
+                v-if="manualAuditItems.length"
+                class="rounded-full px-2.5 py-1 text-[11px] text-[var(--ys-text-muted)] hover:text-[var(--ys-text)]"
+                @click="manualAuditItems = []; manualAuditSummary = ''"
+              >清空</button>
+            </span>
           </div>
-          <div class="rounded-[12px] border border-[var(--ys-border)] bg-[#FAFAFC] px-3 py-2.5">
-            <div class="text-[10.5px] text-rose-600">两者都缺</div>
-            <div class="mt-0.5 font-mono text-[19px] font-semibold text-[var(--ys-text)]">{{ audit.both_missing }}</div>
+          <div v-if="manualAuditItems.length" class="mt-2 max-h-72 overflow-auto rounded-[10px] border border-[var(--ys-border)]">
+            <table class="w-full text-[11px]">
+              <thead class="sticky top-0 bg-[var(--ys-bg-soft)] text-[10px] text-[var(--ys-text-faint)]">
+                <tr>
+                  <th class="px-2 py-1.5 text-left font-normal">文件</th>
+                  <th class="px-2 py-1.5 text-left font-normal">原歌名</th>
+                  <th class="px-2 py-1.5 text-left font-normal">能不能修</th>
+                  <th class="px-2 py-1.5 text-left font-normal">AI 给的新歌名</th>
+                  <th class="px-2 py-1.5 text-left font-normal">说明</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="it in manualAuditItems" :key="it.path" class="border-t border-[var(--ys-border)] align-top">
+                  <td class="max-w-[180px] truncate px-2 py-1 font-mono text-[var(--ys-text-muted)]" :title="it.path">{{ it.file }}</td>
+                  <td class="max-w-[150px] truncate px-2 py-1" :title="it.title">
+                    <span :class="it.need ? 'text-rose-600' : 'text-[var(--ys-text)]'">{{ it.title || '（空）' }}</span>
+                    <span v-if="it.artist" class="ml-1 text-[10px] text-[var(--ys-text-faint)]">/ {{ it.artist }}</span>
+                  </td>
+                  <td class="whitespace-nowrap px-2 py-1">
+                    <span :class="['rounded-full px-1.5 py-0.5 text-[10px]', it.fixable ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700']">
+                      {{ it.fixable ? '能修' : '修不了' }}
+                    </span>
+                    <span class="ml-1 text-[10px] text-[var(--ys-text-faint)]">{{ it.source === 'ai' ? 'AI' : it.source === 'rule' ? '规则' : '—' }}</span>
+                  </td>
+                  <td class="max-w-[180px] truncate px-2 py-1 text-[var(--ys-accent)]" :title="it.new_title">{{ it.new_title || '—' }}</td>
+                  <td class="max-w-[200px] px-2 py-1 text-[10px] leading-relaxed text-[var(--ys-text-faint)]">{{ it.note || '—' }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="mt-1.5 text-[10px] leading-relaxed text-[var(--ys-text-faint)]">
+            只出结果，不改任何文件。判定口径与「AI 修复」完全一致，所以这里说能修、那边真修就一定修得出来。
+          </p>
+        </div>
+
+        <!-- 修复记录：可撤回 / 批量撤回 / 改回手写标题 -->
+        <div class="mt-3 rounded-[12px] border border-[var(--ys-border)] bg-white p-3">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <span class="text-[11px] font-semibold text-[var(--ys-text)]">
+              修复记录 <span class="font-mono">{{ titleFixRecords.length }}</span>
+            </span>
+            <span class="flex items-center gap-2">
+              <button
+                v-if="titleFixSelectedRecords.length"
+                :disabled="titleFixUndoBusy"
+                class="rounded-full px-2.5 py-1 text-[11px] text-rose-600 hover:bg-rose-50 disabled:opacity-50"
+                @click="undoTitleFixRecords(titleFixSelectedRecords)"
+              >撤回已勾 {{ titleFixSelectedRecords.length }}</button>
+              <button
+                class="rounded-full px-2.5 py-1 text-[11px] text-[var(--ys-text-muted)] hover:text-[var(--ys-text)]"
+                @click="loadTitleFixRecords"
+              >刷新</button>
+            </span>
+          </div>
+          <p v-if="!titleFixRecords.length" class="mt-2 text-[11px] text-[var(--ys-text-faint)]">
+            还没有修复记录 —— 修过之后这里会列出每一首改了什么，可以逐条撤回。
+          </p>
+          <div v-else class="mt-2 max-h-64 space-y-1 overflow-y-auto">
+            <div v-for="r in titleFixRecords" :key="r.id" class="flex items-center gap-2 rounded-[8px] border border-[var(--ys-border)] bg-[#FAFAFC] px-2 py-1.5 text-[11px]">
+              <input type="checkbox" :checked="titleFixSelectedRecords.includes(r.id)" @change="toggleTitleFixRecord(r.id)" />
+              <span class="min-w-0 flex-1 truncate" :title="r.path">
+                <s class="text-[var(--ys-text-faint)]">{{ r.old_title || '（空）' }}</s>
+                <span class="mx-1 text-[var(--ys-text-faint)]">→</span>
+                <span class="text-[var(--ys-text)]">{{ r.new_title }}</span>
+              </span>
+              <span class="shrink-0 text-[10px] text-[var(--ys-text-faint)]">{{ r.at_text }}</span>
+              <span v-if="r.undone" class="shrink-0 text-[10px] text-[var(--ys-text-faint)]">已撤回</span>
+              <!-- 改回手写标题：撤回之后再改一个，记录会记住最终值 -->
+              <button
+                v-else
+                class="shrink-0 rounded-full px-2 py-0.5 text-[10px] text-[var(--ys-text-muted)] hover:bg-black/[0.04] hover:text-[var(--ys-text)]"
+                @click="editTitleFixRecord(r)"
+              >修改</button>
+              <button
+                v-if="!r.undone"
+                class="shrink-0 rounded-full px-2 py-0.5 text-[10px] text-rose-600 hover:bg-rose-50"
+                @click="undoTitleFixRecords([r.id])"
+              >撤回</button>
+            </div>
           </div>
         </div>
       </SectionCard>
 
       <!--
+        命名解析规则 + 文件名语义解析试算（用户 2026-10-26）：
+        「账号连接里的 AI 大模型，下面的文件名语义解析、命名解析规则 / AI 生成规则 /
+        自定义规则，都迁移到补全整理 → 歌名修复卡片内。」
+        理由：这两件事只服务「把文件名拆成歌名+歌手」这一个用途，
+        放在 AI 配置页里用户永远找不到；歌名修复修不好时最需要它的地方就是这里。
+        组件自包含（自己拉规则 / 试算 / 生成 / 保存），见 NameRulesPanel.vue。
+      -->
+      <NameRulesPanel v-show="sub === 'audit'" class="mt-3" :dir="tidyDir || nasDir || ''" />
+
+      <!--
         文件名体检（用户 2026-10-24）：「飞牛文件和官方音乐 App 打开音乐文件夹显示未知错误」。
         和上面的曲库体检是同一件事的两种口径 —— 上面数的是「元数据缺口」，
         这张看的是「磁盘条目本身不合法」。放同一段，用户不用点两次才找得到。
+        2026-10-26 用户：「下面的文件名体检可以与歌名修复合并，并去掉相同的功能」——
+        它现在排在「修复记录」之下、同一张卡片里，由 LibraryHealthCard 自渲染（无外框）。
       -->
-      <LibraryHealthCard v-show="sub === 'audit'" :dir="healthDir || tidyDir || nasDir" class="mt-3" />
+      <LibraryHealthCard v-show="sub === 'audit'" merge :dir="healthDir || tidyDir || nasDir" />
 
-      <!-- ═════ 分段四：记录（整理快照 + 撤销入口） ═════ -->
+      <!--
+        ═════ 缺歌词（用户 2026-10-25 需求 N）═════
+        「加一个缺歌词的代码」—— 扫曲库里真的没词的文件，先「查找歌词」预览命中情况，
+        确认无误再「写入文件」（内嵌标签 + 同名 .lrc 都写）。
+        判据用后端 tidy.NeedsTidy（内嵌与 .lrc 都算有词），和曲库管家同一口径。
+        放在歌名修复段里而不单开一段：两者都是「文件里缺东西」，用户找的时候在一个地方。
+      -->
+      <SectionCard
+        v-show="sub === 'audit'"
+        :icon="FileAudio"
+        title="缺歌词"
+        :desc="'曲库里没有歌词的歌。先「查找歌词」看命中情况，确认后再写入 —— 每条都会同时写内嵌标签和同名 .lrc。' + (lyricAtText ? '（' + lyricAtText + '）' : '')"
+      >
+        <template #actions>
+          <button class="ys-btn ys-btn-sm" :disabled="lyricScanning" @click="scanLyricGaps">
+            {{ lyricScanning ? '扫描中…' : '扫描缺歌词' }}
+          </button>
+          <button
+            v-if="lyricItems.length"
+            class="ys-btn ys-btn-sm"
+            :disabled="lyricFetching || !lyricSelectedCount"
+            @click="fetchLyricPreview"
+          >{{ lyricFetching ? '查找中…' : `查找歌词（${lyricSelectedCount}）` }}</button>
+          <button
+            v-if="lyricFoundCount"
+            class="ys-btn ys-btn-sm ys-btn-primary"
+            :disabled="lyricWriting"
+            @click="writeLyric"
+          >{{ lyricWriting ? '写入中…' : `写入文件（${lyricFoundCount}）` }}</button>
+        </template>
+
+        <div v-if="!lyricItems.length" class="py-6 text-center text-[12px] text-[var(--ys-text-muted)]">
+          点右上角「扫描缺歌词」，看看哪些歌还没有词。
+        </div>
+
+        <template v-else>
+          <div class="mb-2 flex flex-wrap items-center gap-3 text-[11px] text-[var(--ys-text-muted)]">
+            <label class="flex cursor-pointer items-center gap-1.5">
+              <input type="checkbox" :checked="lyricAllSelected" @change="toggleAllLyric" />
+              全选
+            </label>
+            <span>共 {{ lyricTotal }} 首缺词，本页 {{ lyricItems.length }} 首</span>
+            <span v-if="lyricSelectedCount">已勾 {{ lyricSelectedCount }} 首</span>
+            <button class="ml-auto text-[11px] text-[var(--ys-text-faint)] hover:text-[var(--ys-text)]" @click="clearLyricGaps">清空</button>
+          </div>
+
+          <div class="max-h-[420px] overflow-auto rounded-xl border border-[var(--ys-border)]">
+            <table class="w-full text-[12px]">
+              <thead class="sticky top-0 z-10 bg-[var(--ys-bg-soft)] text-[11px] text-[var(--ys-text-muted)]">
+                <tr>
+                  <th class="w-8 px-2 py-1.5"></th>
+                  <th class="px-2 py-1.5 text-left font-normal">文件</th>
+                  <th class="px-2 py-1.5 text-left font-normal">标题 / 歌手</th>
+                  <th class="px-2 py-1.5 text-left font-normal">结果</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="it in lyricItems" :key="it.path" class="border-t border-[var(--ys-border)]">
+                  <td class="px-2 py-1.5 align-top">
+                    <input v-if="!it.written" type="checkbox" :checked="it.selected" @change="toggleLyric(it)" />
+                  </td>
+                  <td class="max-w-[280px] truncate px-2 py-1.5 align-top" :title="it.path">{{ it.name }}</td>
+                  <td class="px-2 py-1.5 align-top">
+                    <div class="truncate">{{ it.title || '—' }}</div>
+                    <div class="truncate text-[10px] text-[var(--ys-text-muted)]">{{ it.artist || '—' }}</div>
+                  </td>
+                  <td class="px-2 py-1.5 align-top">
+                    <span v-if="it.written" class="text-emerald-600">已写入</span>
+                    <span v-else-if="it.ok" class="text-emerald-600">找到{{ it.note ? '（' + it.note + '）' : '' }}</span>
+                    <span v-else-if="it.reason === 'timed_out'" class="text-amber-600">{{ it.note || '网络超时，没来得及试' }}</span>
+                    <span v-else-if="it.reason === 'not_found'" class="text-[var(--ys-text-muted)]">没找到</span>
+                    <span v-else-if="it.reason === 'no_meta'" class="text-[var(--ys-text-muted)]">缺标题/歌手，无法搜词</span>
+                    <span v-else-if="it.err" class="text-rose-600">{{ it.err }}</span>
+                    <span v-else class="text-[var(--ys-text-faint)]">未查找</span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </template>
+      </SectionCard>
+
+
+      <!--
+        ═════ 分段四：数据快照（原「记录」）═════
+        2026-10-24 用户：「记录更名为数据快照，增加定时快照和手动快照的功能和数据恢复。」
+        语义变了：以前这里只有「撤销上一次补全」这一个入口，现在它是**一条快照列表** ——
+        每次写文件之前都留了一份快照（补全 / 歌名修复 / 手动），任何时候都能回到那一刻。
+        快照的数据源仍是备份清单（pkg/complete/backup.go），不另开数据库。
+      -->
       <SectionCard
         v-show="sub === 'records'"
         :icon="History"
-        title="整理记录"
-        sub="上次整理快照与撤销入口"
+        title="数据快照"
+        sub="曲库元数据的快照：哪天标签被改坏了，可以按快照改回来（只存标签，不复制音频）"
       >
+        <template #actions>
+          <button
+            :disabled="reloading"
+            title="重新拉取快照与上一次补全的状态"
+            class="ys-press rounded-full border border-[var(--ys-border)] bg-white px-3.5 py-1.5 text-[12px] font-medium text-[var(--ys-text-muted)] transition-colors hover:bg-[var(--ys-surface-2)] disabled:opacity-50"
+            @click="onRefresh"
+          >{{ reloading ? '刷新中…' : '刷新' }}</button>
+        </template>
         <p v-if="statsLoading" class="text-[11px] text-[var(--ys-text-faint)]">正在读取上次整理快照…</p>
         <p
           v-else-if="indexStats"
@@ -436,6 +760,124 @@
             <template v-else-if="completeJob && completeJob.running">补全任务还在跑 —— 结束后才能撤销</template>
             <template v-else>目前没有可撤销的补全 —— 补全写入前会自动备份，跑完一次这里就会出现「还原」</template>
           </p>
+        </div>
+
+        <!-- 手动快照 -->
+        <div class="mt-3 rounded-[12px] border border-[var(--ys-border)] bg-white px-3.5 py-3">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <span class="text-[11px] font-semibold text-[var(--ys-text)]">手动快照</span>
+            <span class="flex items-center gap-2">
+              <button
+                :disabled="snapBusy"
+                class="ys-press rounded-full bg-emerald-500 px-3.5 py-1.5 text-[11px] font-semibold text-white transition-colors hover:bg-emerald-600 disabled:opacity-50"
+                @click="takeSnapshot"
+              >{{ snapBusy ? '拍快照中…' : '立即快照' }}</button>
+              <button
+                :disabled="snapBusy"
+                class="rounded-full px-2.5 py-1.5 text-[11px] text-[var(--ys-text-muted)] hover:text-[var(--ys-text)] disabled:opacity-50"
+                @click="loadSnapshots"
+              >刷新</button>
+            </span>
+          </div>
+          <p class="mt-1 text-[11px] leading-relaxed text-[var(--ys-text-faint)]">
+            手动快照把<b>每首歌的元数据（歌名/歌手/专辑/风格/年份/曲序）</b>存一份 ——
+            只存标签，一库几万首也只有几 MB，音频文件本身不复制。之后哪天标签被改坏了，
+            点列表里的「恢复到这份」就能改回来；恢复前还会自动再留一份，点错也不怕。
+          </p>
+        </div>
+
+        <!-- 定时快照（用户 2026-10-24：「增加定时快照和手动快照」）-->
+        <div class="mt-3 rounded-[12px] border border-[var(--ys-border)] bg-white p-3"
+             title="按固定间隔自动拍一份快照，保留最近几份，更早的自动删掉">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="text-[11px] font-semibold text-[var(--ys-text)]">定时快照</span>
+            <button
+              type="button"
+              class="rounded-full px-3 py-1 text-[11px] font-semibold transition-colors disabled:opacity-50"
+              :class="schedule.enabled
+                ? 'bg-emerald-500 text-white hover:bg-emerald-600'
+                : 'bg-black/[0.06] text-[var(--ys-text-muted)] hover:bg-black/[0.1]'"
+              :disabled="scheduleBusy"
+              @click="toggleSchedule"
+            >{{ schedule.enabled ? '已开启' : '已关闭' }}</button>
+            <span class="text-[11px] text-[var(--ys-text-muted)]">每</span>
+            <SelectField
+              class="w-28"
+              :model-value="String(schedule.interval_hours || 24)"
+              :options="SNAPSHOT_INTERVAL_OPTIONS"
+              @update:model-value="setScheduleInterval"
+            />
+            <span class="text-[11px] text-[var(--ys-text-muted)]">保留最近</span>
+            <SelectField
+              class="w-24"
+              :model-value="String(schedule.keep || 7)"
+              :options="SNAPSHOT_KEEP_OPTIONS"
+              @update:model-value="setScheduleKeep"
+            />
+            <span class="text-[11px] text-[var(--ys-text-muted)]">份</span>
+            <span class="ml-auto text-[10px] text-[var(--ys-text-faint)]">{{ scheduleLastText }}</span>
+          </div>
+          <p class="mt-1.5 text-[10px] text-[var(--ys-text-faint)]">
+            打开时立刻拍一份；之后按间隔自动拍。只清理「定时快照」，手动快照与写入前快照永远保留。
+          </p>
+        </div>
+
+        <!-- 快照列表 -->
+        <div class="mt-3 rounded-[12px] border border-[var(--ys-border)] bg-white p-3">
+          <p v-if="snapLoading" class="text-[11px] text-[var(--ys-text-faint)]">正在读取快照列表…</p>
+          <p v-else-if="!snapshots.length" class="text-[11px] text-[var(--ys-text-faint)]">还没有快照 —— 补全或歌名修复跑过一次后，这里会出现。</p>
+          <div v-else class="space-y-1">
+            <div v-for="sn in snapshots" :key="sn.id" class="flex flex-wrap items-center gap-2 rounded-[8px] border border-[var(--ys-border)] bg-[#FAFAFC] px-2.5 py-2 text-[11px]">
+              <span class="min-w-0 flex-1 truncate">
+                <b class="font-mono text-[var(--ys-text)]">{{ sn.at_text || sn.id }}</b>
+                <span class="ml-2 text-[var(--ys-text-muted)]">{{ sn.kind_text }}</span>
+                <span class="ml-2 text-[var(--ys-text-faint)]">{{ sn.count }} 首的元数据</span>
+                <span v-if="sn.note" class="ml-2 text-[var(--ys-text-faint)]">· {{ sn.note }}</span>
+              </span>
+              <button
+                class="shrink-0 rounded-full px-2 py-0.5 text-[10px] text-[var(--ys-text-muted)] hover:bg-black/[0.04] hover:text-[var(--ys-text)]"
+                @click="viewSnapshot(sn)"
+              >看明细</button>
+              <button
+                :disabled="snapBusy"
+                class="shrink-0 rounded-full px-2 py-0.5 text-[10px] text-rose-600 hover:bg-rose-50 disabled:opacity-50"
+                @click="restoreSnapshot(sn)"
+              >恢复到这份</button>
+            </div>
+          </div>
+          <!-- 明细：只列「和现在不一样」的曲目 —— 几万首全列出来没人看得下去 -->
+          <div v-if="snapDetail" class="mt-2 rounded-[8px] border border-[var(--ys-border)] bg-white p-2">
+            <p class="text-[11px] text-[var(--ys-text-muted)]">
+              快照 {{ fmtTimeText(snapDetail.created) }} · {{ snapDetail.count }} 首 ·
+              可写标签 {{ snapDetail.writable }} 首
+              <span class="text-[var(--ys-text-faint)]">（其余格式本应用写不了，恢复时会跳过）</span>
+            </p>
+            <p v-if="!(snapDetail.diff || []).length" class="mt-1 text-[11px] text-emerald-700">
+              这份快照和现在的曲库一致 —— 没有需要恢复的东西
+            </p>
+            <div v-else class="mt-1.5 max-h-64 overflow-y-auto rounded-[8px] border border-[var(--ys-border)]">
+              <table class="w-full text-[11px]">
+                <thead class="sticky top-0 bg-white text-[var(--ys-text-faint)]">
+                  <tr>
+                    <th class="px-2 py-1.5 text-left font-medium">文件</th>
+                    <th class="px-2 py-1.5 text-left font-medium">快照里的歌名</th>
+                    <th class="px-2 py-1.5 text-left font-medium">现在的歌名</th>
+                    <th class="px-2 py-1.5 text-left font-medium">变了哪些字段</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="e in snapDetail.diff" :key="e.path" class="border-t border-[var(--ys-border)]">
+                    <td class="max-w-[220px] truncate px-2 py-1 font-mono text-[var(--ys-text-muted)]" :title="e.path">{{ baseName(e.path) }}</td>
+                    <td class="max-w-[150px] truncate px-2 py-1 text-[var(--ys-text)]">{{ e.snap_title || '—' }}</td>
+                    <td class="max-w-[150px] truncate px-2 py-1" :class="e.change === 'missing' ? 'text-amber-600' : 'text-rose-600'">
+                      {{ e.change === 'missing' ? '文件已不在' : (e.now_title || '—') }}
+                    </td>
+                    <td class="px-2 py-1 text-[10.5px] text-[var(--ys-text-faint)]">{{ (e.fields || []).join(' / ') || '—' }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
       </SectionCard>
 
@@ -639,20 +1081,37 @@
       </SectionCard>
     </div>
 
-    <!-- ── 补全选项抽屉：目录 / 最多几首 / 覆盖 / AI / 主力平台 ── -->
-    <SideSheet v-model="optionsOpen" title="补全选项" subtitle="默认值就是推荐值；改完只影响下一次补全">
-      <div class="space-y-5">
-        <label class="block">
-          <span class="text-[12px] font-medium text-[var(--ys-text)]">曲库目录</span>
-          <input
-            v-model="tidyDir"
-            class="mt-1.5 w-full rounded-[10px] border border-[var(--ys-border)] bg-[#FAFAFC] px-3 py-2 font-mono text-[12px] text-[var(--ys-text)] transition-colors focus:border-[var(--ys-accent)] focus:bg-white focus:outline-none"
-            :placeholder="nasDir || '/vol1/Music'"
-          />
-          <span class="mt-1 block text-[11px] leading-relaxed text-[var(--ys-text-faint)]">
-            补全整理、体检、增量扫描、查重都以这个目录为准；留空就用设置里的默认曲库
-          </span>
-        </label>
+    <!--
+      ── 补全选项弹窗：目录 / 最多几首 / 覆盖 / AI / 主力平台 ──
+      2026-10-25 用户：「选项按钮抽屉修改为弹窗。」
+      原来这里是右侧抽屉（SideSheet）；改成居中弹窗后，改完直接点「完成」关掉，
+      不用先滑回去再看一眼页面。
+    -->
+    <Teleport to="body">
+      <div
+        v-if="optionsOpen"
+        class="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4 backdrop-blur-[2px]"
+        @click.self="optionsOpen = false"
+      >
+        <div class="max-h-[85vh] w-full max-w-md overflow-y-auto rounded-2xl border border-[var(--ys-border)] bg-white p-5 shadow-2xl">
+          <div class="mb-4 flex items-start justify-between gap-3">
+            <div>
+              <h3 class="text-[13px] font-semibold text-[var(--ys-text)]">补全选项</h3>
+              <p class="mt-0.5 text-[11px] text-[var(--ys-text-faint)]">默认值就是推荐值；改完只影响下一次补全</p>
+            </div>
+            <button
+              type="button"
+              class="shrink-0 rounded-full p-1 text-[var(--ys-text-faint)] transition-colors hover:bg-black/[0.05] hover:text-[var(--ys-text)]"
+              title="关闭"
+              @click="optionsOpen = false"
+            >✕</button>
+          </div>
+          <div class="space-y-5">
+        <!--
+          2026-10-25 用户：「移除补全选项里的曲库目录组件。」
+          这个输入框已删 —— 目录统一由分段导航行右边的 TidyDirChip 选（点开是目录树），
+          同一个值写在 prefs.nas_dir，不再允许两个地方各改一份。
+        -->
 
         <label class="block">
           <span class="text-[12px] font-medium text-[var(--ys-text)]">本次最多处理</span>
@@ -698,8 +1157,10 @@
             >{{ p.name }}</button>
           </div>
         </div>
+          </div>
+        </div>
       </div>
-    </SideSheet>
+    </Teleport>
   </PageShell>
 </template>
 
@@ -710,20 +1171,23 @@
 //   1. 页面级 flash（message/error ref + 底部 InlineNotice）→ 全局 feedback 通知；
 //   2. 补全卡片补上了 coverUrl（旧代码 cardCover 定义了却从未被调用，
 //      模板里 `:src="c.coverUrl"` 一直是 undefined —— 卡片封面其实从来没显示过）。
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
   Sparkles, Check, FolderOpen, SlidersHorizontal,
-  ScanSearch, FolderSearch, Copy, History, Gauge, ImageIcon, Replace, Square,
+  ScanSearch, FolderSearch, Copy, History, Gauge, ImageIcon, Replace, Square, FileAudio,
 } from 'lucide-vue-next'
 import PageShell from './PageShell.vue'
 import SectionCard from './SectionCard.vue'
 import InlineNotice from './InlineNotice.vue'
 import OverflowMenu from './OverflowMenu.vue'
-import SideSheet from './SideSheet.vue'
+// SideSheet 已不再使用（2026-10-25 补全选项改成弹窗），这里不再 import，避免死引用
 import StatLine from './StatLine.vue'
 import SegmentedControl from './SegmentedControl.vue'
 import SelectionBar from './SelectionBar.vue'
 import LibraryHealthCard from './LibraryHealthCard.vue'
+import NameRulesPanel from './NameRulesPanel.vue'
+import { useLyricGaps } from '../services/useLyricGaps'
+import SelectField from './SelectField.vue'
 import { TidyAPI, TagsAPI, NasAPI, ConfigAPI, QualityAPI, DEFAULT_AUTO_DOWNLOAD_CHANNELS } from '../api/client'
 import { loadPref, savePref, loadBool, loadCache, saveCache } from '../services/prefs'
 import {
@@ -751,7 +1215,12 @@ function flash(msg, isError = false) {
 }
 
 // ── 目录与状态 ──
-const nasDir = computed(() => loadPref('nas_dir', ''))
+/**
+ * 2026-10-25 用户：「移除补全选项里的曲库目录组件，路径展示迁移到分段导航行右边。」
+ * 曲库目录现在由 TidyDirChip（挂在分段导航行右侧）统一选，值仍落在 prefs 的 nas_dir。
+ * tidyDir 保留给「本地曲库页传进来的目录」这条老链路，平时为空 ⇒ 一律用 nas_dir。
+ */
+const nasDir = ref(loadPref('nas_dir', ''))
 const tidyDir = ref('')
 /**
  * 体检卡片要扫哪个目录。
@@ -763,6 +1232,7 @@ const tidyDir = ref('')
  */
 const healthDir = ref('')
 let stopHealthNav = null
+let onDirChanged = null
 // 2026-10-19 渐进式披露 → 2026-10-21 分段导航：「偶尔才改一次的设置」仍在右侧抽屉；
 // 主功能入口升为顶部分段，⋯ 里只留真正次要的动作（增量扫描）。
 const optionsOpen = ref(false)
@@ -1174,6 +1644,9 @@ const auditAt = ref(0)
 const indexResult = ref(null)
 const dupResult = ref(null)
 const dupResolveResult = ref(null)
+// 查重 / 索引扫描结果的落盘时间（0 = 本次刚跑的）；2026-10-25 加，见 restoreDedupe
+const dedupeAt = ref(0)
+const indexScanAt = ref(0)
 // 上次整理快照（来自持久化索引 library_index.json）
 const indexStats = ref(null)
 const statsLoading = ref(false)
@@ -1235,6 +1708,492 @@ async function runAudit() {
   }
 }
 
+// ── 数据快照（原「记录」段）──
+const snapLoading = ref(false)
+const snapBusy = ref(false)
+const snapshots = ref([])
+const snapDetail = ref(null)
+
+function fmtBytes(n) {
+  const v = Number(n) || 0
+  if (v < 1024) return `${v} B`
+  if (v < 1024 * 1024) return `${(v / 1024).toFixed(1)} KB`
+  if (v < 1024 * 1024 * 1024) return `${(v / 1024 / 1024).toFixed(1)} MB`
+  return `${(v / 1024 / 1024 / 1024).toFixed(2)} GB`
+}
+
+/** 快照来源的显示名（后端 kind：manual / scheduled / pre-restore / auto） */
+const SNAP_KIND_TEXT = {
+  manual: '手动快照',
+  scheduled: '定时快照',
+  'pre-restore': '恢复前留底',
+  auto: '写入前留底',
+}
+
+/** ISO 时间 → 「2026-10-27 09:12」这种本地文案（解析不了就原样返回） */
+function fmtTimeText(iso) {
+  if (!iso) return ''
+  const t = new Date(iso)
+  if (Number.isNaN(t.getTime())) return String(iso)
+  return t.toLocaleString('zh-CN', { hour12: false })
+}
+
+/**
+ * 快照列表的缓存键。快照是**曲库级**的（不分目录），所以键不带目录 ——
+ * 与体检/缺口/卡片那三份「按目录分开存」不同，别混。
+ */
+function snapshotCacheKey() {
+  return 'last_snapshots'
+}
+
+/** 上次读到的快照列表与定时设置（刷新页面 / 切段回来都还在） */
+function restoreSnapshots() {
+  const cached = loadCache(snapshotCacheKey(), 0)
+  if (!cached || typeof cached !== 'object') return
+  if (Array.isArray(cached.snapshots)) snapshots.value = cached.snapshots
+  if (cached.schedule && typeof cached.schedule === 'object') {
+    schedule.value = { ...schedule.value, ...cached.schedule }
+  }
+}
+
+async function loadSnapshots() {
+  snapLoading.value = true
+  try {
+    // 2026-10-27 快照改成「曲库元数据快照」：只存标签，不复制音频（见后端 meta_snapshot.go）
+    const [res, sc] = await Promise.all([
+      TidyAPI.metaSnapshots(),
+      TidyAPI.snapshotSchedule().catch(() => null),
+    ])
+    const bad = apiError(res, '读取快照失败')
+    if (bad) return flash(bad, true)
+    snapshots.value = (res.data?.items || []).map(sn => ({
+      ...sn,
+      count: Number(sn.count) || 0,
+      kind_text: SNAP_KIND_TEXT[sn.kind] || '自动快照',
+      at_text: fmtTimeText(sn.created),
+    }))
+    const scData = sc && sc.data ? sc.data : (sc || {})
+    if (scData) {
+      schedule.value = {
+        enabled: !!scData.enabled,
+        interval_hours: Number(scData.interval_hours) || 24,
+        keep: Number(scData.keep) || 7,
+        last_run: scData.last_run || '',
+      }
+    }
+    // 快照列表也是「上次缓存的数据」：切走再回来、刷新页面都还在（2026-10-25）
+    saveCache(snapshotCacheKey(), {
+      snapshots: snapshots.value,
+      schedule: schedule.value,
+    })
+  } catch (e) {
+    flash(failText('读取快照', e), true)
+  } finally {
+    snapLoading.value = false
+  }
+}
+
+async function takeSnapshot() {
+  snapBusy.value = true
+  try {
+    const res = await TidyAPI.takeMetaSnapshot(tidyDir.value || nasDir.value || '')
+    const bad = apiError(res, '创建快照失败')
+    if (bad) return flash(bad, true)
+    flash(res.message || '快照已保存')
+    await loadSnapshots()
+  } catch (e) {
+    flash(failText('创建快照', e), true)
+  } finally {
+    snapBusy.value = false
+  }
+}
+
+async function viewSnapshot(sn) {
+  try {
+    const res = await TidyAPI.metaSnapshotDetail(sn.id)
+    const bad = apiError(res, '读取快照明细失败')
+    if (bad) return flash(bad, true)
+    snapDetail.value = res.data
+  } catch (e) {
+    flash(failText('读取快照明细', e), true)
+  }
+}
+
+async function restoreSnapshot(sn) {
+  const ok = window.confirm(`把 ${sn.count} 首歌的元数据恢复成 ${sn.at_text || sn.id} 这一刻的样子？\n\n只写标签（mp3/flac 才能写），音频文件本身不动；文件被换过的会跳过。恢复前会自动再拍一份当前状态的快照，点错了还能撤回来。`)
+  if (!ok) return
+  snapBusy.value = true
+  try {
+    const res = await TidyAPI.restoreMetaSnapshot(sn.id)
+    const bad = apiError(res, '恢复快照失败')
+    if (bad) return flash(bad, true)
+    flash(res.message || '已恢复')
+    await loadSnapshots()
+    loadIndexStats().catch(() => {})
+    scanGaps().catch(() => {})
+  } catch (e) {
+    flash(failText('恢复快照', e), true)
+  } finally {
+    snapBusy.value = false
+  }
+}
+
+// ── 定时快照（用户 2026-10-24：「增加定时快照和手动快照」）──
+// 与手动快照共用一个 GET /api/library/snapshots 响应里的 schedule 键，少一次请求。
+const schedule = ref({ enabled: false, interval_hours: 24, keep: 7, last_run: '' })
+const scheduleBusy = ref(false)
+const SNAPSHOT_INTERVAL_OPTIONS = [
+  { value: '6', label: '6 小时' },
+  { value: '12', label: '12 小时' },
+  { value: '24', label: '1 天' },
+  { value: '72', label: '3 天' },
+  { value: '168', label: '7 天' },
+]
+const SNAPSHOT_KEEP_OPTIONS = [
+  { value: '3', label: '3' },
+  { value: '5', label: '5' },
+  { value: '7', label: '7' },
+  { value: '14', label: '14' },
+  { value: '30', label: '30' },
+]
+/** 「上次拍的」：留空要说清楚是还没拍过，而不是没开 */
+const scheduleLastText = computed(() => {
+  if (!schedule.value.last_run) return schedule.value.enabled ? '还没拍过' : ''
+  const t = new Date(schedule.value.last_run)
+  if (Number.isNaN(t.getTime())) return ''
+  return `上次 ${t.toLocaleString('zh-CN', { hour12: false })}`
+})
+
+async function saveSchedule(patch, okText) {
+  scheduleBusy.value = true
+  try {
+    const res = await TidyAPI.saveSnapshotSchedule(patch)
+    const bad = apiError(res, '保存定时快照设置失败')
+    if (bad) return flash(bad, true)
+    await loadSnapshots()
+    if (okText) flash(okText)
+  } catch (e) {
+    flash(failText('保存定时快照设置', e), true)
+  } finally {
+    scheduleBusy.value = false
+  }
+}
+
+async function toggleSchedule() {
+  const next = !schedule.value.enabled
+  await saveSchedule({ enabled: next }, next
+    ? '定时快照已开启：正在拍第一份，之后按间隔自动拍'
+    : '定时快照已关闭')
+}
+
+async function setScheduleInterval(v) {
+  const n = Number(v) || 24
+  if (n === schedule.value.interval_hours) return
+  await saveSchedule({ interval_hours: n }, `已改为每 ${n} 小时`)
+}
+
+async function setScheduleKeep(v) {
+  const n = Number(v) || 7
+  if (n === schedule.value.keep) return
+  await saveSchedule({ keep: n }, `已改为保留最近 ${n} 份`)
+}
+
+// ═════ 歌名修复（2026-10-24 用户：「体检 → 歌名修复，页面加入歌名修复功能」）═════
+//
+// 两件事合在一段：①扫出歌名可疑的曲目（后端 GET /api/library/title-fix/scan，只读索引）
+// ②交给 AI 修（POST /fix，写标签 + 落一条补全记录）。
+// 「修复记录」直接读补全记录（GET /library/complete/records 里的 title/artist 条目），
+// 不另存一份本地日志 —— 记录的真相在备份清单里，本地再存一份必然会对不上。
+const titleFixScanning = ref(false)
+const titleFixBusy = ref(false)
+const titleFixUndoBusy = ref(false)
+const titleFixItems = ref([])
+const titleFixAiReady = ref(true)
+const titleFixRecords = ref([])
+const titleFixSelectedRecords = ref([])
+
+const titleFixSelectedCount = computed(() => titleFixItems.value.filter(it => it.selected && !it.done).length)
+const titleFixAllSelected = computed(() => titleFixItems.value.length > 0 && titleFixItems.value.every(it => it.selected || it.done))
+/** 卡片头右侧那句「最近修复时间」：取记录里最新一条，没有记录就不显示这一行 */
+const titleFixRecordsAtText = computed(() => {
+  const at = titleFixRecords.value.reduce((m, r) => Math.max(m, Number(r.at) || 0), 0)
+  if (!at) return ''
+  return `最近修复 ${new Date(at * 1000).toLocaleString('zh-CN', { hour12: false })}`
+})
+
+function toggleTitleFix(it) {
+  it.selected = !it.selected
+  saveTitleFix()
+}
+function toggleAllTitleFix() {
+  const next = !titleFixAllSelected.value
+  for (const it of titleFixItems.value) it.selected = next
+  saveTitleFix()
+}
+function toggleTitleFixRecord(id) {
+  const i = titleFixSelectedRecords.value.indexOf(id)
+  if (i >= 0) titleFixSelectedRecords.value.splice(i, 1)
+  else titleFixSelectedRecords.value.push(id)
+  saveTitleFix()
+}
+
+// ── 歌名修复结果缓存（2026-10-25 用户：「保留五个分段的上次缓存数据和操作」）──
+// 和体检 / 缺口 / 卡片同一套（prefs.saveCache：localStorage + 后端双写，按目录分开）。
+// **勾选状态也要存**：用户勾了一半切去看别的段，回来勾选不能全丢 ——
+// 「操作」也是要保留的状态，不只是结果表格。
+// ttl=0 = 永不过期，与 restoreAudit 一致（用户要的就是「一直看得到上次的」）。
+const titleFixAt = ref(0)
+
+function titleFixCacheKey(dir) {
+  return `last_titlefix:${dir}`
+}
+
+function saveTitleFix() {
+  const dir = (tidyDir.value || nasDir.value || '').trim()
+  if (!dir) return
+  saveCache(titleFixCacheKey(dir), {
+    at: titleFixAt.value,
+    ai_ready: titleFixAiReady.value,
+    records_at: titleFixRecordsAtText.value,
+    items: titleFixItems.value,
+    selected_records: titleFixSelectedRecords.value,
+  })
+}
+
+function restoreTitleFix() {
+  const dir = (tidyDir.value || nasDir.value || '').trim()
+  if (!dir) return
+  const cached = loadCache(titleFixCacheKey(dir), 0)
+  if (!cached || typeof cached !== 'object') return
+  titleFixAt.value = Number(cached.at) || 0
+  titleFixAiReady.value = cached.ai_ready !== false
+  // 老缓存可能没有 selected 字段：一律按「未勾」还原，不给它编造勾选
+  titleFixItems.value = (cached.items || []).map(it => ({ ...it, selected: !!it.selected }))
+  titleFixSelectedRecords.value = Array.isArray(cached.selected_records) ? cached.selected_records : []
+}
+
+/** 歌名修复上次扫描的时间（非 0 = 从缓存恢复的） */
+const titleFixAtText = computed(() => {
+  if (!titleFixAt.value) return ''
+  try {
+    return new Date(titleFixAt.value).toLocaleString('zh-CN', { hour12: false })
+  } catch (_) {
+    return ''
+  }
+})
+
+// ── 缺歌词（用户 2026-10-25 需求 N）──
+// 逻辑全在 services/useLyricGaps.js，这里只把三个依赖喂进去：
+// 目录、提示条、写入成功后刷新索引统计（歌词写进标签后 has_lyric 就变了）。
+const lyric = useLyricGaps({
+  dir: () => tidyDir.value || nasDir.value || '',
+  flash: (msg, isErr) => flash(msg, isErr),
+  afterWrite: () => { loadIndexStats().catch(() => {}) },
+})
+const {
+  items: lyricItems,
+  total: lyricTotal,
+  scanning: lyricScanning,
+  fetching: lyricFetching,
+  writing: lyricWriting,
+  atText: lyricAtText,
+  selectedCount: lyricSelectedCount,
+  foundCount: lyricFoundCount,
+  allSelected: lyricAllSelected,
+  restore: restoreLyricGaps,
+  scan: scanLyricGaps,
+  toggle: toggleLyric,
+  toggleAll: toggleAllLyric,
+  fetchPreview: fetchLyricPreview,
+  write: writeLyric,
+  clear: clearLyricGaps,
+} = lyric
+
+// tab 切到后台再回来时 localStorage 可能被别的标签页写过，这里不主动刷新 ——
+// 这一页的真相在曲库索引里，切回来点「扫描歌名」就会重算。
+
+// ── 手动歌名体检（用户 2026-10-26：随机抽 10 首问 AI，只出结果不改文件）──
+const manualAuditBusy = ref(false)
+const manualAuditItems = ref([])
+const manualAuditSummary = ref('')
+async function runManualTitleAudit() {
+  if (manualAuditBusy.value) return
+  manualAuditBusy.value = true
+  manualAuditSummary.value = ''
+  manualAuditItems.value = []
+  try {
+    // 10 首要逐首问大模型，后端自己留 120s；这里不设 axios 超时（默认值可能更短）
+    const res = await TidyAPI.titleFixAudit(tidyDir.value || nasDir.value || '', 10)
+    const bad = apiError(res, '手动歌名体检失败')
+    if (bad) return flash(bad, true)
+    const d = res.data || {}
+    manualAuditItems.value = (d.items || []).map(it => ({
+      path: it.path,
+      file: it.file || baseName(it.path),
+      title: it.title || '',
+      artist: it.artist || '',
+      need: it.need || '',
+      fixable: !!it.fixable,
+      new_title: it.new_title || '',
+      new_artist: it.new_artist || '',
+      source: it.source || 'none',
+      note: it.note || '',
+    }))
+    const sampled = Number(d.sampled) || manualAuditItems.value.length
+    manualAuditSummary.value = `抽 ${sampled} 首（曲库共 ${d.pool || 0} 首）· 该修 ${d.need_fix || 0} · 能修 ${d.fixable || 0}`
+    flash(`体检完成：${manualAuditSummary.value}`)
+  } catch (e) {
+    flash(failText('手动歌名体检', e), true)
+  } finally {
+    manualAuditBusy.value = false
+  }
+}
+
+async function scanTitleFix() {
+  const dir = tidyDir.value || nasDir.value
+  titleFixScanning.value = true
+  try {
+    const res = await TidyAPI.titleFixScan(dir)
+    const bad = apiError(res, '扫描歌名失败')
+    if (bad) return flash(bad, true)
+    const d = res.data || {}
+    titleFixAiReady.value = d.ai_ready !== false
+    titleFixAt.value = 0 // 本次刚扫的，不是缓存
+    titleFixItems.value = (d.items || []).map(it => ({
+      path: it.path,
+      title: it.old || '',
+      artist: it.artist || '',
+      reason: it.reason || '',
+      suggested_title: it.suggest || '',
+      selected: true,
+      done: false,
+      error: '',
+      source: '',
+    }))
+    saveTitleFix()
+    if (!titleFixItems.value.length) flash('没扫到歌名可疑的曲目')
+    else if (!titleFixAiReady.value) flash(`扫到 ${titleFixItems.value.length} 首，但还没配置 AI 大模型 —— 修不了`, true)
+    loadTitleFixRecords().catch(() => {})
+  } catch (e) {
+    flash(failText('扫描歌名', e), true)
+  } finally {
+    titleFixScanning.value = false
+  }
+}
+
+async function runTitleFix() {
+  const targets = titleFixItems.value.filter(it => it.selected && !it.done)
+  if (!targets.length) return flash('先勾选要修的曲目', true)
+  titleFixBusy.value = true
+  try {
+    const res = await TidyAPI.titleFixFix({ paths: targets.map(it => it.path) })
+    const bad = apiError(res, '修复歌名失败')
+    if (bad) return flash(bad, true)
+    const byPath = new Map((res.data?.items || []).map(r => [r.path, r]))
+    for (const it of targets) {
+      const r = byPath.get(it.path)
+      if (!r) continue
+      if (r.ok) {
+        it.done = true
+        it.written_title = r.suggest || ''
+        it.source = 'ai'
+        it.error = ''
+      } else {
+        it.error = r.error || '没修成'
+        it.selected = false
+      }
+    }
+    flash(res.message || `修好 ${res.data?.fixed ?? 0} 首`)
+    saveTitleFix()
+    loadTitleFixRecords().catch(() => {})
+    scanGaps().catch(() => {})
+    loadIndexStats().catch(() => {})
+  } catch (e) {
+    flash(failText('修复歌名', e), true)
+  } finally {
+    titleFixBusy.value = false
+  }
+}
+
+/**
+ * 修复记录：从补全记录里挑出「改了标题」的那些条目，摊平成一列。
+ * 每条记录 = 一次操作（AI 修复或手动改），带 id + 原文件路径，撤回就是回一个备份。
+ */
+async function loadTitleFixRecords() {
+  const res = await TidyAPI.completeRecords()
+  const bad = apiError(res, '读取修复记录失败')
+  if (bad) return flash(bad, true)
+  const out = []
+  for (const rec of res.data?.records || []) {
+    for (const e of rec.entries || []) {
+      const fields = e.fields || []
+      if (!fields.includes('title') && !fields.includes('artist')) continue
+      out.push({
+        id: rec.id,
+        path: e.original,
+        old_title: e.old_title || '',
+        new_title: e.title || '',
+        at: rec.at,
+        at_text: rec.at ? new Date(rec.at * 1000).toLocaleString('zh-CN', { hour12: false }) : '',
+        undone: false,
+      })
+    }
+  }
+  titleFixRecords.value = out
+  titleFixSelectedRecords.value = titleFixSelectedRecords.value.filter(id =>
+    out.some(r => r.id === id))
+}
+
+async function undoTitleFixRecords(ids) {
+  if (!ids.length) return
+  const byRecord = new Map()
+  for (const id of ids) byRecord.set(id, true)
+  const itemsByRecord = new Map()
+  for (const r of titleFixRecords.value) {
+    if (!byRecord.has(r.id)) continue
+    if (!itemsByRecord.has(r.id)) itemsByRecord.set(r.id, [])
+    itemsByRecord.get(r.id).push(r.path)
+  }
+  titleFixUndoBusy.value = true
+  let okCount = 0
+  try {
+    for (const [id, paths] of itemsByRecord) {
+      const res = await TidyAPI.editCompleteRecords({ id, items: paths, op: 'restore' })
+      if (apiError(res, '撤回失败')) continue
+      okCount += res.data?.restored || 0
+    }
+    flash(`已撤回 ${okCount} 首`)
+    titleFixSelectedRecords.value = []
+    await loadTitleFixRecords()
+    // 撤回后列表里那些条目变成「已撤回」，勾选也清了 —— 存一份新状态，
+    // 否则刷新回来还是撤回前的样子
+    saveTitleFix()
+    loadIndexStats().catch(() => {})
+    scanGaps().catch(() => {})
+  } catch (e) {
+    flash(failText('撤回歌名修复', e), true)
+  } finally {
+    titleFixUndoBusy.value = false
+  }
+}
+
+/** 改回手写标题：撤回之后／或者干脆手改一个更好的 —— 直接改文件，同样进记录 */
+async function editTitleFixRecord(r) {
+  const val = window.prompt('改成什么歌名？（会直接写进文件标签，可再撤回）', r.new_title || '')
+  if (val === null) return
+  const title = val.trim()
+  if (!title) return flash('歌名不能为空', true)
+  try {
+    const res = await TidyAPI.editCompleteRecords({ id: r.id, items: [r.path], op: 'edit', title })
+    const bad = apiError(res, '改写歌名失败')
+    if (bad) return flash(bad, true)
+    flash(res.message || '已改写')
+    await loadTitleFixRecords()
+  } catch (e) {
+    flash(failText('改写歌名', e), true)
+  }
+}
+
 // 读取上次整理快照：挂载时自动加载持久化索引的统计，首屏即可看到上次结果
 async function loadIndexStats() {
   const dir = tidyDir.value || nasDir.value
@@ -1259,10 +2218,12 @@ async function runIndexScan() {
     const res = await TidyAPI.index(dir)
     if (res.code === 200) {
       indexResult.value = res.data
+      indexScanAt.value = 0 // 本次刚扫的
       if (res.warning) flash(res.warning, true)
       // 扫描刚把新字段读进索引 —— 顺手重算缺口，否则页面还显示旧的待补数量
       loadIndexStats()
       scanGaps().catch(() => {})
+      saveDedupe() // 索引扫描结果一起落盘（用户切段回来还能看到这次扫了什么）
     } else {
       flash(apiError(res, '扫描失败'), true)
     }
@@ -1273,6 +2234,54 @@ async function runIndexScan() {
   }
 }
 
+// ── 查重 / 索引扫描结果的持久化（2026-10-25 用户：「保留五个分段的上次缓存数据和操作」）──
+// 与体检同一套：按目录分开存、ttl=0 永不过期。
+// 为什么不复用 runDedupe：查重是重活（要扫全库算哈希），每次进页面都跑一遍没必要，
+// 用户切到歌名修复看一眼再回来，应该看到和刚才一模一样的表格。
+function dedupeCacheKey(dir) {
+  return `last_dedupe:${dir || ''}`
+}
+function indexScanCacheKey(dir) {
+  return `last_index_scan:${dir || ''}`
+}
+
+function saveDedupe() {
+  const dir = (tidyDir.value || nasDir.value || '').trim()
+  if (!dir) return
+  saveCache(dedupeCacheKey(dir), {
+    at: dedupeAt.value,
+    result: dupResult.value,
+    resolved: dupResolveResult.value,
+  })
+  saveCache(indexScanCacheKey(dir), { at: indexScanAt.value, result: indexResult.value })
+}
+
+function restoreDedupe() {
+  const dir = (tidyDir.value || nasDir.value || '').trim()
+  if (!dir) return
+  const c = loadCache(dedupeCacheKey(dir), 0)
+  if (c && typeof c === 'object') {
+    dedupeAt.value = Number(c.at) || 0
+    dupResult.value = c.result || null
+    dupResolveResult.value = c.resolved || null
+  }
+  const i = loadCache(indexScanCacheKey(dir), 0)
+  if (i && typeof i === 'object') {
+    indexScanAt.value = Number(i.at) || 0
+    indexResult.value = i.result || null
+  }
+}
+
+/** 查重结果的落盘时间文案 */
+const dedupeAtText = computed(() => {
+  if (!dedupeAt.value) return ''
+  try {
+    return `上次查重 ${new Date(dedupeAt.value).toLocaleString('zh-CN', { hour12: false })}`
+  } catch (_) {
+    return ''
+  }
+})
+
 async function runDedupe() {
   const dir = tidyDir.value || nasDir.value
   if (!dir) return flash('请填写曲库目录', true)
@@ -1281,8 +2290,11 @@ async function runDedupe() {
   dupResolveResult.value = null
   try {
     const res = await TidyAPI.duplicates(dir)
-    if (res.code === 200) dupResult.value = res.data
-    else flash(apiError(res, '查重失败'), true)
+    if (res.code === 200) {
+      dupResult.value = res.data
+      dedupeAt.value = 0 // 本次刚跑的
+      saveDedupe()
+    } else flash(apiError(res, '查重失败'), true)
   } catch (e) {
     flash(failText('查找重复', e), true)
   } finally {
@@ -1297,6 +2309,7 @@ async function resolveDup(dryRun) {
     const res = await TidyAPI.resolveDuplicates({ dir, mode: 'trash', dry_run: dryRun })
     if (res.code === 200) {
       dupResolveResult.value = res.data
+      saveDedupe()
       // 逐文件失败原因太长，界面只给数量，明细进日志
       const errs = res.data?.errors || []
       if (errs.length) logError('清理重复文件', `${errs.length} 个文件处理失败`, errs.slice(0, 20).join('；'))
@@ -1333,7 +2346,6 @@ const undoBusy = ref(false)
 // 停止请求在途 —— 防连点（后端 cancelRun 是幂等的，但连点会让界面文案乱跳）
 const stopBusy = ref(false)
 // 预览出来的计划（还没写文件）。用户确认后才执行。
-const completePlan = ref(null)
 let completeTimer = null
 
 // ── 按字段补全 ──
@@ -1413,8 +2425,8 @@ const fieldOptions = computed(() => FIELD_DEFS.map((f) => ({
  * 步骤/文案全部来自 services/libraryView.js，由 libraryView.test.mjs 钉住。
  */
 const completeSteps = COMPLETE_STEPS
-const completeStep = computed(() => _completeStep(gaps.value, completePlan.value))
-const completeHint = computed(() => _completeHint(gaps.value, completePlan.value))
+const completeStep = computed(() => _completeStep(gaps.value, previewState.value === 'done', previewing.value))
+const completeHint = computed(() => _completeHint(gaps.value, previewState.value === 'done', previewing.value))
 
 /**
  * 「写不了标签的格式」按扩展名的明细，如 `wav×12、opus×3`。
@@ -1441,13 +2453,27 @@ function gapsCacheKey(dir) {
 
 /** 刷新后仍显示上次统计（同「体检」的处理，2026-09-22 反馈「数据每次都会消失」） */
 function restoreGaps() {
-  const dir = (tidyDir.value || '').trim()
+  const dir = (tidyDir.value || nasDir.value || '').trim()
   if (!dir) {
     gaps.value = null
     return
   }
   const cached = loadCache(gapsCacheKey(dir), 0)
   gaps.value = cached && typeof cached === 'object' ? cached : null
+}
+
+/**
+ * 补全段的「扫描」——用户 2026-10-25：「扫描缺失和扫描是同一功能吧」。
+ *
+ * 两件事合并成一次点击：先把磁盘上新增/变化的文件收进索引，再重算缺哪些字段。
+ * 顺序不能反：缺口统计只读索引，索引没更新时统计出来的是旧世界。
+ * 单独保留 scanGaps / runIndexScan 两个函数是因为别处（扫描完补全、查重后刷新）还在用。
+ */
+async function scanAll() {
+  const dir = tidyDir.value || nasDir.value
+  if (!dir) return flash('请填写曲库目录', true)
+  await runIndexScan()
+  await scanGaps()
 }
 
 async function scanGaps() {
@@ -1473,6 +2499,9 @@ async function scanGaps() {
 watch(tidyDir, () => {
   restoreGaps()
   restoreCards()
+  // 换目录就把歌名修复 / 查重 / 索引扫描也换成该目录的上次结果（各目录分开存）
+  restoreTitleFix()
+  restoreDedupe()
 })
 
 // ── 补全结果卡片：逐首回读文件里真实的标签 ──
@@ -1512,7 +2541,7 @@ function saveCards(dir) {
 
 /** 刷新页面后卡片还在（同「体检」的处理，见 restoreAudit） */
 function restoreCards() {
-  const dir = (tidyDir.value || '').trim()
+  const dir = (tidyDir.value || nasDir.value || '').trim()
   if (!dir) return
   const cached = loadCache(cardsCacheKey(dir), 0)
   if (!cached || typeof cached !== 'object') return
@@ -1566,40 +2595,142 @@ const completeTitle = computed(() => _completeTitleText(completeJob.value) || '�
  */
 const aiMatchedCount = computed(() => _aiMatchedCount(completeJob.value?.summary))
 
-async function runComplete() {
+// ── 流式预览的状态机 ──
+//
+// 用户 2026-10-24：「预览改成流式显示，加暂停 / 继续 / 停止」。
+//
+// 三个状态要分清，界面话术不能混：
+//   running —— 还在跑，条目继续往列表里加
+//   done    —— 跑完并拿到了 plan_id，可以「确认写入」
+//   idle    —— 用户中途停了（或流断了）：**没有 plan_id**，这份清单不完整
+// 所以「能不能写」只看 planId，不看列表里有几行。
+const previewState = ref('idle') // idle | running | done
+const previewRows = ref([])
+const previewMeta = ref({ done: 0, total: 0, matched: 0 })
+const previewPlanId = ref('')
+const previewDir = ref('')
+
+// 「暂停」= 断开流（服务端立刻取消，不再打外网）；「继续」= 重新发起一次。
+// 刻意不做「挂起连接」的假暂停，理由见 client.js 里 streamNDJSON 的注释。
+let previewAbort = null
+
+const previewOpen = computed(() => previewing.value || previewState.value === 'running' || previewState.value === 'done')
+const previewHeading = computed(() => (previewState.value === 'done' ? '预览完成（还没有动过文件）' : '预览已停止'))
+const previewMatchedCount = computed(() => previewRows.value.filter((r) => r.matched).length)
+const previewPercent = computed(() => {
+  const { done, total } = previewMeta.value
+  if (!total) return 0
+  return Math.min(100, Math.round((done / total) * 100))
+})
+
+function previewUpsert(item, done) {
+  if (!item || !item.path) return
+  const rows = previewRows.value
+  const key = item.path
+  // 同一首理论上只来一次；重复推送就取最新（后端也按 Index 去重，这里是第二道）
+  const i = rows.findIndex((r) => r.path === key)
+  const row = { ...item }
+  if (i >= 0) rows.splice(i, 1, row)
+  else rows.push(row)
+  if (done > previewMeta.value.done) previewMeta.value = { ...previewMeta.value, done }
+}
+
+function resetPreviewState() {
+  previewState.value = 'idle'
+  previewRows.value = []
+  previewMeta.value = { done: 0, total: 0, matched: 0 }
+  previewPlanId.value = ''
+}
+
+/** 停止预览（也算「暂停」）：断开连接，服务端立刻不再派发新曲目 */
+function stopPreview() {
+  if (previewAbort) {
+    try {
+      previewAbort.abort()
+    } catch (_) { /* 已断开就无所谓 */ }
+  }
+}
+
+function closePreview() {
+  stopPreview()
+  resetPreviewState()
+  previewing.value = false
+}
+
+/**
+ * 开始（或重新开始）预览。
+ * 走的是流式接口 /library/complete/preview/stream —— 匹配完一首就出一行，
+ * 与旧的同步预览是同一套匹配逻辑，只是不再等全部跑完才返回。
+ */
+async function startPreview() {
   const dir = tidyDir.value || nasDir.value
   if (!dir) return flash('请填写曲库目录', true)
   if (!selectedFields.value.length) return flash('先勾选要补的字段', true)
   savePref('nas_dir', dir)
   savePref('complete_limit', String(completeLimit.value || 30))
 
+  stopPreview() // 上一轮可能还挂着
+  resetPreviewState()
   completeJob.value = null
-  completePlan.value = null
+  previewDir.value = dir
   previewing.value = true
-  try {
-    // 先预览：只解析匹配，**不写任何文件**
-    const res = await TidyAPI.previewComplete({
+  previewState.value = 'running'
+
+  const ctrl = new AbortController()
+  previewAbort = ctrl
+
+  let failure = ''
+  await TidyAPI.previewStream(
+    {
       dir,
       limit: completeLimit.value || 30,
       fields: selectedFields.value,
       overwrite: !!overwriteExisting.value,
       use_ai_genre: !!allowAIGenre.value,
-    })
-    if (res?.hint) {
-      flash(res.message || '没有需要补全的曲目', true)
-      return
-    }
-    const bad = apiError(res, '预览失败')
-    if (bad) {
-      flash(bad, true)
-      return
-    }
-    completePlan.value = res.data
-    flash(res.message || '预览完成，确认后才会写入')
-  } catch (e) {
-    flash(failText('预览补全', e), true)
-  } finally {
-    previewing.value = false
+    },
+    {
+      signal: ctrl.signal,
+      onEvent: (ev) => {
+        if (ev.type === 'start') {
+          previewMeta.value = { done: 0, total: ev.total || 0, matched: 0 }
+        } else if (ev.type === 'item') {
+          previewUpsert(ev.item, ev.done || 0)
+        } else if (ev.type === 'progress') {
+          previewMeta.value = { ...previewMeta.value, done: ev.done || 0, total: ev.total || previewMeta.value.total }
+        } else if (ev.type === 'done') {
+          previewPlanId.value = ev.plan_id || ''
+          previewMeta.value = { done: ev.done || 0, total: ev.total || 0, matched: ev.matched || 0 }
+          previewState.value = 'done'
+        } else if (ev.type === 'cancelled') {
+          if (typeof ev.matched === 'number') {
+            previewMeta.value = { ...previewMeta.value, matched: ev.matched }
+          }
+          if (ev.message) flash(ev.message)
+        } else if (ev.type === 'error') {
+          failure = ev.message || ev.error || '预览失败'
+        }
+      },
+    },
+  )
+
+  if (previewAbort === ctrl) previewAbort = null
+  previewing.value = false
+
+  // 用户自己停的：保留已出的行，明确告诉它这份不完整
+  if (ctrl.signal.aborted) {
+    if (previewState.value === 'running') previewState.value = 'idle'
+    return
+  }
+  if (failure) {
+    previewState.value = 'idle'
+    flash(failure, true)
+    return
+  }
+  if (previewState.value === 'done' && !previewPlanId.value) {
+    previewState.value = 'idle'
+  }
+  if (previewState.value === 'done') {
+    flash('预览完成，确认后才会写入')
   }
 }
 
@@ -1609,15 +2740,17 @@ async function runComplete() {
  * 否则搜索结果变了就会「批准了 A、结果写了 B」。
  */
 async function executeComplete() {
-  const pid = completePlan.value?.plan_id
+  const pid = previewPlanId.value
   if (!pid) return flash('预览已失效，请重新预览', true)
 
-  completePlan.value = null
+  previewPlanId.value = ''
   try {
     const res = await TidyAPI.executeComplete(pid)
     completeJob.value = res?.data
     flash(res?.message || '已开始写入')
     startCompletePolling()
+    // 计划已消费，面板收起（进度接棒显示在下面的补全卡片里）
+    resetPreviewState()
   } catch (e) {
     flash(failText('写入补全结果', e), true)
   }
@@ -1727,9 +2860,14 @@ async function onRefresh() {
   if (reloading.value) return
   reloading.value = true
   try {
+    // 「刷新」= 把五段的上次结果全部重读一遍（不只是补全段的卡片）。
+    // 用户点刷新时想看的是「我现在还剩什么没做」，只刷一段会让人疑惑另外四段为什么不动。
     restoreAudit()
     restoreGaps()
     restoreCards()
+    restoreTitleFix()
+    restoreDedupe()
+    restoreSnapshots()
     await Promise.all([loadIndexStats(), loadCompleteStatus()])
   } finally {
     reloading.value = false
@@ -1751,6 +2889,25 @@ onMounted(() => {
   restoreAudit()
   restoreGaps()
   restoreCards()
+  // 2026-10-25 用户：「保留五个分段的上次缓存数据和操作」——
+  // 歌名修复（含勾选）、查重 + 索引扫描、数据快照三段的缓存也一起恢复，
+  // 不然切段回来或刷新后那三段就只剩空态。
+  restoreTitleFix()
+  restoreDedupe()
+  restoreSnapshots()
+  restoreLyricGaps()
+  // 2026-10-25：曲库目录改由分段导航行右边的 TidyDirChip 选（写 prefs.nas_dir），
+  // 这里监听它选完之后发的事件 —— 同标签页不会触发 storage 事件，必须走自定义事件。
+  onDirChanged = (e) => {
+    nasDir.value = (e && e.detail && e.detail.dir) || loadPref('nas_dir', '')
+    tidyDir.value = ''
+    loadIndexStats()
+    restoreGaps()
+  }
+  window.addEventListener('ys:dir-changed', onDirChanged)
+  // 歌名修复的记录列表是**服务端真相**（补全记录），缓存只存它算出来的时间文案，
+  // 这里补拉一次：本地缓存可能落后于另一次会话里做过的修复。
+  loadTitleFixRecords().catch(() => {})
   // 主力平台从应用配置读
   loadPreferred()
   // 补全任务是后端在跑的，刷新页面不该让进度凭空消失
@@ -1763,6 +2920,7 @@ onUnmounted(() => {
   stopCompletePolling()
   stopQualityPolling()
   if (stopHealthNav) stopHealthNav()
+  if (onDirChanged) window.removeEventListener('ys:dir-changed', onDirChanged)
 })
 
 // 离开「补全整理」就丢掉入口带来的一次性目录，避免导航栏自己走进来时停在过期目录

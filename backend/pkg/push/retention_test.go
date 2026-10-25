@@ -280,3 +280,39 @@ func TestPushTracksRetentionKeepByDefault(t *testing.T) {
 		t.Errorf("清单应保留 2 条，实际 %+v", res.Pushed)
 	}
 }
+
+func TestPushedIndexSkipsEmptyGUID(t *testing.T) {
+	idx := PushedIndex([]PushedTrack{
+		{GUID: "a"},
+		{GUID: ""},
+		{GUID: "b"},
+	})
+	if len(idx) != 2 || idx["a"] != 0 || idx["b"] != 2 {
+		t.Fatalf("索引不对: %#v", idx)
+	}
+	if PushedIndex(nil) != nil {
+		t.Fatal("空清单应返回 nil")
+	}
+}
+
+func TestClearRemovalsOnlyTouchesRequested(t *testing.T) {
+	in := []PushedTrack{
+		{GUID: "a", RemovedAt: 100},
+		{GUID: "b", RemovedAt: 200},
+		{GUID: "c"},
+	}
+	out := ClearRemovals(in, map[string]bool{"a": true})
+	if out[0].RemovedAt != 0 {
+		t.Fatalf("a 的删除标记应被清掉: %#v", out[0])
+	}
+	if out[1].RemovedAt != 200 || out[2].RemovedAt != 0 {
+		t.Fatalf("不该动别的记录: %#v", out)
+	}
+	if in[0].RemovedAt != 100 {
+		t.Fatal("不能改入参")
+	}
+	// 没命中时原样返回同一份切片
+	if got := ClearRemovals(in, map[string]bool{"zzz": true}); len(got) != len(in) || &got[0] != &in[0] {
+		t.Fatal("没命中应原样返回")
+	}
+}

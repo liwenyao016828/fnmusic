@@ -213,8 +213,10 @@ func (s *Server) HandleBackendDownloadStatus(w http.ResponseWriter, r *http.Requ
 			"reason":   avail.Reason,
 			"channels": avail.Channels,
 			"lx_host":  avail.LxHost,
-			"paused":   paused,
-			"stats":    stats,
+			// 后台队列实际落盘目录（只读，改动入口在「系统 → 设置 → 存储目录」）。
+			"dir":    avail.Dir,
+			"paused": paused,
+			"stats":  stats,
 			"subscriptions": map[string]interface{}{
 				"managed": managed,
 				"reason":  subReason,

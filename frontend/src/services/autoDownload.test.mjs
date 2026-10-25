@@ -144,21 +144,27 @@ test('补全整理是顶部分段导航（TidyView）', () => {
 // 踩过的坑：入口只把目录写进 localStorage 偏好，卡片却优先用 props.dir（tidyDir || nasDir），
 // 于是用户走进子目录再点体检，扫的还是曲库根目录；偏好写死了还会在之后改目录时继续扫旧路径。
 // 现在改一次性 payload，这里钉住两端不许改回去。
-test('体检入口用一次性 payload 带当前目录（NasExplorer → TidyView）', () => {
+//
+// ⚠️ 2026-10-26 用户：「本地曲库——移除体检文件名和批量内嵌歌词按钮」。
+// → NasExplorer 上那个入口已被**撤掉**（见 NasExplorer.vue 模板注释），体检的完整交互
+//   现在只在「补全整理 → 歌名修复」里有一份。所以这里不能再钉 NasExplorer 里的
+//   navigateTo('tidy', {...}) —— 那个断言钉的入口已经不存在了，留着只会永远红。
+//   改为钉「入口确实撤干净了」+「LibraryHealthCard 仍按 payload 优先取目录」。
+test('体检入口已从本地曲库撤掉，目录优先级仍在（NasExplorer / LibraryHealthCard）', () => {
   const nasExplorerVue = read('../components/NasExplorer.vue')
-  assert.match(nasExplorerVue, /navigateTo\('tidy',\s*\{\s*segment:\s*'audit',\s*healthDir:\s*dir\s*\}\)/,
-    '入口必须把当前目录随跳转一起带过去（对象 payload）')
+  // 入口撤干净：本地曲库里不该再有「体检文件名」跳转，也不该再往偏好里写体检目录
+  assert.ok(!/navigateTo\('tidy'/.test(nasExplorerVue),
+    '本地曲库不该再带体检入口（2026-10-26 已移除，统一走补全整理）')
   assert.ok(!/savePref\('nas_health_dir'/.test(nasExplorerVue),
     '不许再把体检目录写进持久偏好 —— 那是下次从导航栏走进来时的过期值')
 
-  assert.match(tidyViewVue, /onNavigate\(\(view, payload\)/,
-    'TidyView 要订阅 payload 才能接住入口带来的目录')
-  assert.match(tidyViewVue, /healthDir\.value = String\(payload\.healthDir\)/,
-    '接住 payload.healthDir')
-  assert.match(tidyViewVue, /:dir="healthDir \|\| tidyDir \|\| nasDir"/,
-    '体检卡片优先用入口带来的目录，其次才是曲库目录')
-  assert.match(tidyViewVue, /watch\(currentView,[\s\S]{0,120}healthDir\.value = ''/,
-    '离开本页要丢掉一次性目录，避免下次自己走进来还停在旧目录')
+  const healthCardVue = read('../components/LibraryHealthCard.vue')
+  // 目录优先级：页面传进来的 > 记下的那个 > 空（后端用默认根）
+  assert.match(healthCardVue, /props\.dir|dir:\s*String/,
+    'LibraryHealthCard 仍应接受页面传入的目录')
+  assert.ok(healthCardVue.includes('体检'),
+    '体检卡片本体应还在（只是入口换了地方）')
+
   assert.ok(!tidyViewVue.includes('tidyMenu'),
     '旧的 ⋯ 主菜单 tidyMenu 必须删掉 —— 主功能入口不能再藏在 ⋯ 后面')
   assert.ok(tidyViewVue.includes('completeMenu'),

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
 
 type CustomSource struct {
@@ -37,9 +38,11 @@ type APISource struct {
 }
 
 type AppConfig struct {
-	Port           int    `json:"port"`
-	DefaultNasDir  string `json:"default_nas_dir"`
-	DownloadDir    string `json:"download_dir"`
+	Port          int    `json:"port"`
+	DefaultNasDir string `json:"default_nas_dir"`
+	DownloadDir   string `json:"download_dir"`
+	// 注：读目录请用 LibraryDir()，不要直接读字段 —— 空值时它要回退 DefaultNasDir，
+	// 两处各写一份回退逻辑迟早会漂（下载器就踩过：显示 /vol1/Music、实际写别处）。
 	ActiveSourceID string `json:"active_source_id"`
 	// ActiveSourceIDs 启用池（有序，前面的优先）。用户 2026-09-30 定的多选激活：
 	// 可以同时启用多个音源，取链按池内顺序试、第一个失败自动换下一个。
@@ -120,6 +123,54 @@ type AppConfig struct {
 	// 临时关一下再打开不用重勾一遍（fnmusic-ext 也是「总开关 + 名单」两个键）。
 	// 读它请走 ChartsInjectEnabled()，别自己判 nil。
 	ChartPlaylistsEnabled *bool `json:"chart_playlists_enabled,omitempty"`
+	// ChartSize 是**每个榜单显示多少首**（用户 2026-10-24 要求「首数可设」）。
+	//
+	// 0（或不设）= 用内置默认（intercept 包的 vChartSize，100 首）。
+	// 限制在 [ChartSizeMin, ChartSizeMax]：太少看不出榜、太多一次拉取会拖慢页面，
+	// 区间校验在 NormalizeChartSize 里做，别在校验函数之外各自判。
+	ChartSize int `json:"chart_size,omitempty"`
+	// ChartSizes 按榜单单独设的显示首数：`wy_19723756` → 50。
+	// 有这个键就用它，否则用 ChartSize，再否则用默认 —— 这样临时把一个榜调短、
+	// 其它榜跟着全局走，不用逐个配。
+	ChartSizes map[string]int `json:"chart_sizes,omitempty"`
+	// ── 数据快照的定时设置（用户 2026-10-24：「记录改为数据快照，增加定时快照」）──
+	//
+	// SnapshotScheduleEnabled 定时快照总开关。**默认关**：整库读标签是重活，
+	// 悄悄按天跑一份快照会一点点吃掉磁盘，得让用户自己打开。
+	// 用指针是为了让「局部 patch 里没有这个键」和「显式关掉」分得开。
+	SnapshotScheduleEnabled *bool `json:"snapshot_schedule_enabled,omitempty"`
+	// SnapshotIntervalHours 多久拍一份（小时）。0 / 缺省 → 默认 24 小时。
+	// 上限 30 天，下限 1 小时 —— 定时快照是兜底手段，不是备份盘。
+	SnapshotIntervalHours int `json:"snapshot_interval_hours,omitempty"`
+	// SnapshotKeep 保留几份定时快照（超出的从最旧的开始删）。0 → 默认 7。
+	SnapshotKeep int `json:"snapshot_keep,omitempty"`
+	// ── 应用内更新：GitHub 个人 token（用户 2026-10-25）──
+	//
+	// 「新增个人token输入」。（同一次需求里的「限制速率」被用户当场否掉了：
+	// 「不需要下载限速」—— 所以这里没有速率字段，别再补。）
+	//
+	// UpdateGitHubToken 是访问 GitHub API 用的个人访问令牌（PAT）。
+	//
+	// 未鉴权时 GitHub 限速 **60 次/小时/IP**，共享代理后面这一个出口是很多人在用，
+	// 检查更新经常直接 403（本项目实测过）。填个只读 token 后是 5000 次/小时，
+	// 而且能看私有仓库。空 = 不用 token。
+	//
+	// ⚠️ 这个值会落盘到配置文件里（和其它 AI key 同级），**永远不回传给前端**
+	// ——读接口只回 update_token_set（布尔）。要清空用 UpdateClearToken。
+	UpdateGitHubToken string `json:"update_github_token,omitempty"`
+	// UpdateClearToken 与 ChartSizeOverride 同一套路：只在 /api/config 内部流转，
+	// 因为 UpdateGitHubToken 带 omitempty，「传空串清空」与「没传」解码后一样。
+	UpdateClearToken bool `json:"-"`
+	// UpdateTokenSet 是**只读**的派生字段：表示「磁盘上存了 token」，
+	// 供 GET /api/config 回给前端显示状态（值本身在 redactConfig 里被抹掉）。
+	UpdateTokenSet bool `json:"update_token_set,omitempty"`
+	// ChartSizeOverride 是**只在 /api/config 内部流转**的提示位：这次 Update 要把
+	// ChartSize / ChartSizes 当成「整体覆盖」而不是「非空才改」。
+	//
+	// 为什么需要它：这两个字段带 omitempty，`0` 和「没传这个键」在解码后长得
+	// 一模一样，而「改回默认」正是要写 0 / 写空表。接口层用 `*_overwrite` 键接住
+	// 这种意图，再把这个位置成 true 交给 Update —— 不落盘（omitempty + 不是真配置）。
+	ChartSizeOverride bool `json:"-"`
 	// UIInjectEnabled 是「往飞牛官方音乐页面注入脚本」的开关（默认开）。
 	//
 	// 注入只往**页面文档**里加一行 `<script>`，不改官方代码；但这是改到别人家门口的
@@ -298,6 +349,124 @@ func NormalizeChartPlaylists(ids []string) []string {
 // 重启后仍然是关的（我们存的是 false，不是「没存」）。
 func (a AppConfig) ChartsInjectEnabled() bool {
 	return a.ChartPlaylistsEnabled == nil || *a.ChartPlaylistsEnabled
+}
+
+// 榜单显示首数的上下限。
+// 下限给 10：再少就不像「榜」，只有个位数的话还不如直接看在线歌单。
+// 上限给 300：与 intercept 包的 vChartFetchMax 对齐 —— 显示数超过一次能取回的
+// 条数没有意义（多出来的全是空），而且首数越大拉取越慢。
+const (
+	ChartSizeMin     = 10
+	ChartSizeMax     = 300
+	DefaultChartSize = 100
+)
+
+// HasUpdateToken 判断是否配了 GitHub token（只回布尔，绝不回值）。
+func (a AppConfig) HasUpdateToken() bool {
+	return strings.TrimSpace(a.UpdateGitHubToken) != ""
+}
+
+// NormalizeChartSize 把任意输入夹到合法区间；<=0 表示「用默认」。
+//
+// 单独成函数是为了让读写两端用同一把尺：配置校验、前端下拉、intercept 取数
+// 三处各写一遍迟早会漂。返回 0 表示「没设」，调用方自己换成 DefaultChartSize。
+// NormalizeChartSize 把「用户填的数」夹进 [ChartSizeMin, ChartSizeMax]。
+//
+// ⚠️ 返回 0 **只代表「没填 / 没设置」**，绝不表示「清空」—— 清空走 Update 里
+// 的 ChartSizeOverride 整体覆盖分支（那里直接赋 0，不经过本函数）。把这里的 0
+// 当成「清空」会让「填 0 = 恢复默认」和「填 0 = 非法」搅成一团。
+func NormalizeChartSize(n int) int {
+	if n <= 0 {
+		return 0
+	}
+	if n < ChartSizeMin {
+		return ChartSizeMin
+	}
+	if n > ChartSizeMax {
+		return ChartSizeMax
+	}
+	return n
+}
+
+// NormalizeChartSizes 是 normalizeChartSizes 的导出别名（接口层 POST /config
+// 也要用它，两处必须同一把尺；内部调用保留小写名，改动面最小）。
+func NormalizeChartSizes(in map[string]int) map[string]int { return normalizeChartSizes(in) }
+
+// normalizeChartSizes 清洗按榜单的首数表：键转小写去空白，值夹到合法区间，
+// 非法或 <=0 的项直接丢掉（丢弃 = 让该榜跟着全局走，而不是记成 0）。
+func normalizeChartSizes(in map[string]int) map[string]int {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]int, len(in))
+	for k, v := range in {
+		id := strings.ToLower(strings.TrimSpace(k))
+		if id == "" {
+			continue
+		}
+		if n := NormalizeChartSize(v); n > 0 {
+			out[id] = n
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// ChartSizeFor 取某个榜单**实际显示多少首**。
+// 优先级：该榜单独设的 > 全局 ChartSize > 默认。
+func (a AppConfig) ChartSizeFor(chartID string) int {
+	if n := NormalizeChartSize(a.ChartSizes[chartID]); n > 0 {
+		return n
+	}
+	if n := NormalizeChartSize(a.ChartSize); n > 0 {
+		return n
+	}
+	return DefaultChartSize
+}
+
+// ── 数据快照定时设置（见 AppConfig.SnapshotScheduleEnabled）──
+
+const (
+	// SnapshotDefaultIntervalHours 没设置时的快照间隔：一天一份。
+	SnapshotDefaultIntervalHours = 24
+	// SnapshotMinIntervalHours / SnapshotMaxIntervalHours 间隔的合理区间。
+	// 下限 1 小时而不是 1 分钟：整库读标签本身就要几十秒到几分钟，
+	// 配得更密只会互相叠着跑，磁盘也是白白发热。
+	SnapshotMinIntervalHours = 1
+	SnapshotMaxIntervalHours = 24 * 30
+	// SnapshotDefaultKeep 默认保留几份定时快照。
+	SnapshotDefaultKeep = 7
+	// SnapshotMaxKeep 保留份数上限：再多就不像「快照」而像「备份盘」了。
+	SnapshotMaxKeep = 60
+)
+
+// SnapshotInterval 返回定时快照的实际间隔，配错一律夹回合法区间。
+func (a AppConfig) SnapshotInterval() time.Duration {
+	n := a.SnapshotIntervalHours
+	if n <= 0 {
+		n = SnapshotDefaultIntervalHours
+	}
+	if n < SnapshotMinIntervalHours {
+		n = SnapshotMinIntervalHours
+	}
+	if n > SnapshotMaxIntervalHours {
+		n = SnapshotMaxIntervalHours
+	}
+	return time.Duration(n) * time.Hour
+}
+
+// SnapshotRetention 返回定时快照保留几份。
+func (a AppConfig) SnapshotRetention() int {
+	n := a.SnapshotKeep
+	if n <= 0 {
+		n = SnapshotDefaultKeep
+	}
+	if n > SnapshotMaxKeep {
+		n = SnapshotMaxKeep
+	}
+	return n
 }
 
 // InjectUIEnabled 是「页面注入」开关的读取口径：**没设置过就是开**。
@@ -694,12 +863,29 @@ func (cm *ConfigManager) load() {
 		if c.ChartPlaylists != nil {
 			cm.config.ChartPlaylists = NormalizeChartPlaylists(c.ChartPlaylists)
 		}
+		if c.ChartSize > 0 {
+			cm.config.ChartSize = NormalizeChartSize(c.ChartSize)
+		}
+		if c.ChartSizes != nil {
+			cm.config.ChartSizes = normalizeChartSizes(c.ChartSizes)
+		}
 		// 总开关：nil = 文件里没这个键（保持原值），有值才覆盖。
 		// 存一份副本而不是直接存调用方的指针 —— 那个结构体（POST /api/config
 		// 的 patch）活着的时间比配置短，留着指针等于把配置挂在临时对象上。
 		if c.ChartPlaylistsEnabled != nil {
 			v := *c.ChartPlaylistsEnabled
 			cm.config.ChartPlaylistsEnabled = &v
+		}
+		// 显示首数：只有显式给了才覆盖，没给的键保持原值（Update 的语义）。
+		if c.ChartSize > 0 {
+			cm.config.ChartSize = NormalizeChartSize(c.ChartSize)
+		}
+		if c.ChartSizes != nil {
+			cm.config.ChartSizes = normalizeChartSizes(c.ChartSizes)
+		}
+		// GitHub token（用户 2026-10-25）。⚠️ 老规矩：load 与 Update 两处都要登记。
+		if c.UpdateGitHubToken != "" {
+			cm.config.UpdateGitHubToken = strings.TrimSpace(c.UpdateGitHubToken)
 		}
 		if c.UIInjectEnabled != nil {
 			v := *c.UIInjectEnabled
@@ -874,6 +1060,51 @@ func (cm *ConfigManager) Update(c AppConfig) error {
 		v := *c.ChartPlaylistsEnabled
 		cm.config.ChartPlaylistsEnabled = &v
 	}
+	if c.ChartSizeOverride {
+		// 整体覆盖：配多少就是多少，0 = 回到默认。这是「改回默认」唯一能生效的路径。
+		cm.config.ChartSize = NormalizeChartSize(c.ChartSize)
+		cm.config.ChartSizes = normalizeChartSizes(c.ChartSizes)
+	} else {
+		if c.ChartSize > 0 {
+			cm.config.ChartSize = NormalizeChartSize(c.ChartSize)
+		}
+		if c.ChartSizes != nil {
+			cm.config.ChartSizes = normalizeChartSizes(c.ChartSizes)
+		}
+	}
+	// GitHub 个人 token：空串 = 不动（带 omitempty，没法区分「没传」），清空走 UpdateClearToken。
+	if c.UpdateGitHubToken != "" {
+		cm.config.UpdateGitHubToken = strings.TrimSpace(c.UpdateGitHubToken)
+	}
+	if c.UpdateClearToken {
+		cm.config.UpdateGitHubToken = ""
+	}
+	// 配了更新的限速 / token 之后，管理器要在下一次下载时用新值。这里不直接推进去：
+	// 保存流程末尾统一走 OnUpdate 回调（见 api 层注册处），重启也走 load ——
+	// 「一处修改、两处生效」的坑本项目踩过好几次。
+	// 定时快照：间隔与保留份数是普通数值，直接夹区间落库（0 = 回到各自默认）。
+	// 开关用指针判 nil —— 局部 patch 里没有这个键时不能把它关掉。
+	if c.SnapshotScheduleEnabled != nil {
+		v := *c.SnapshotScheduleEnabled
+		cm.config.SnapshotScheduleEnabled = &v
+	}
+	if c.SnapshotIntervalHours > 0 {
+		v := c.SnapshotIntervalHours
+		if v < SnapshotMinIntervalHours {
+			v = SnapshotMinIntervalHours
+		}
+		if v > SnapshotMaxIntervalHours {
+			v = SnapshotMaxIntervalHours
+		}
+		cm.config.SnapshotIntervalHours = v
+	}
+	if c.SnapshotKeep > 0 {
+		v := c.SnapshotKeep
+		if v > SnapshotMaxKeep {
+			v = SnapshotMaxKeep
+		}
+		cm.config.SnapshotKeep = v
+	}
 	// 页面注入开关：nil = 不动。关掉 = 官方页面完全原样（拦截层不认领文档请求）。
 	if c.UIInjectEnabled != nil {
 		v := *c.UIInjectEnabled
@@ -947,4 +1178,27 @@ func (cm *ConfigManager) Update(c AppConfig) error {
 	}
 	saved = true // 只有落盘成功才通知订阅者（见函数开头那段 defer）
 	return nil
+}
+
+// SnapshotsScheduled 是定时快照开关的读取口径：**没设置过就是关**。
+func (a AppConfig) SnapshotsScheduled() bool {
+	return a.SnapshotScheduleEnabled != nil && *a.SnapshotScheduleEnabled
+}
+
+// LibraryDir 返回**生效**的下载落盘目录（曲库目录）。
+//
+// 与 pkg/downloader 的 getDownloadDir 同一口径：DownloadDir 为空时回退
+// DefaultNasDir，再为空回退 /vol1/Music，最后 Clean —— 下载写哪里，这里就报哪里。
+func (a *AppConfig) LibraryDir() string {
+	if a == nil {
+		return "/vol1/Music"
+	}
+	dir := a.DownloadDir
+	if dir == "" {
+		dir = a.DefaultNasDir
+	}
+	if dir == "" {
+		dir = "/vol1/Music"
+	}
+	return filepath.Clean(dir)
 }
