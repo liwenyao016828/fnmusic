@@ -61,6 +61,14 @@ type BrowseData struct {
 	Folders    []FolderItem `json:"folders"`
 	Files      []FileItem   `json:"files,omitempty"`
 	AudioCount int          `json:"audio_count"`
+	// HiddenCount / HiddenDirs：本目录里因为「没开 hidden」被折叠掉的**子目录**数量与前几个名字。
+	//
+	// 为什么要有：只给一个 hidden=1 开关不够 —— 用户 2026-10-25 两次报障
+	// 「曲库在 music-v2/.dev/music，中间的 .dev 在目录选择器里看不到」，
+	// 开关就摆在界面上但他没注意到。有了这两个字段，前端可以直接在列表底部写
+	// 「还有 2 个隐藏目录（.dev、.tools）· 显示」，不用指望用户自己发现开关。
+	HiddenCount int      `json:"hidden_count"`
+	HiddenDirs  []string `json:"hidden_dirs,omitempty"`
 }
 
 func getAvailableVolumes() []string {
@@ -112,6 +120,10 @@ func BrowseDirectory(w http.ResponseWriter, r *http.Request) {
 
 	// files=1 时额外列出普通文件；ext 逗号分隔（如 ext=js,mjs），留空表示不限
 	wantFiles := strings.TrimSpace(r.URL.Query().Get("files")) == "1"
+	// hidden=1 时连 `.` `$` `@` 开头的隐藏/系统目录一起列出来。
+	// 默认仍然藏起来（`.tidy_trash`、`@eaDir`、`$RECYCLE.BIN` 这类不该被选成曲库），
+	// 但「曲库正好放在 .dev/music 这种点目录里」时必须有办法看见 —— 由前端给显式开关。
+	wantHidden := strings.TrimSpace(r.URL.Query().Get("hidden")) == "1"
 	extFilter := map[string]bool{}
 	for _, e := range strings.Split(r.URL.Query().Get("ext"), ",") {
 		if e = strings.ToLower(strings.TrimSpace(e)); e != "" {
@@ -125,12 +137,22 @@ func BrowseDirectory(w http.ResponseWriter, r *http.Request) {
 	folders := make([]FolderItem, 0)
 	files := make([]FileItem, 0)
 	audioCount := 0
+	hiddenCount := 0
+	hiddenDirs := make([]string, 0, 4)
 
 	entries, err := os.ReadDir(realPath)
 	if err == nil {
 		for _, e := range entries {
 			name := e.Name()
-			if strings.HasPrefix(name, ".") || strings.HasPrefix(name, "$") || strings.HasPrefix(name, "@") {
+			if !wantHidden && (strings.HasPrefix(name, ".") || strings.HasPrefix(name, "$") || strings.HasPrefix(name, "@")) {
+				// 记下被折叠的子目录：前端用它渲染「还有 N 个隐藏目录 · 显示」。
+				// 只统计目录 —— 列表里本来就只有目录，隐藏的普通文件说了也没用。
+				if e.IsDir() {
+					hiddenCount++
+					if len(hiddenDirs) < 12 {
+						hiddenDirs = append(hiddenDirs, name)
+					}
+				}
 				continue
 			}
 			fullPath := filepath.ToSlash(filepath.Join(realPath, name))
@@ -140,7 +162,7 @@ func BrowseDirectory(w http.ResponseWriter, r *http.Request) {
 				if subEntries, sErr := os.ReadDir(filepath.Join(realPath, name)); sErr == nil {
 					for _, se := range subEntries {
 						sName := se.Name()
-						if strings.HasPrefix(sName, ".") {
+						if !wantHidden && strings.HasPrefix(sName, ".") {
 							continue
 						}
 						if se.IsDir() {
@@ -179,12 +201,14 @@ func BrowseDirectory(w http.ResponseWriter, r *http.Request) {
 		"code":    200,
 		"message": "ok",
 		"data": BrowseData{
-			Current:    cleanPath,
-			Parent:     parent,
-			Volumes:    volumes,
-			Folders:    folders,
-			Files:      files,
-			AudioCount: audioCount,
+			Current:     cleanPath,
+			Parent:      parent,
+			Volumes:     volumes,
+			Folders:     folders,
+			Files:       files,
+			AudioCount:  audioCount,
+			HiddenCount: hiddenCount,
+			HiddenDirs:  hiddenDirs,
 		},
 	})
 }

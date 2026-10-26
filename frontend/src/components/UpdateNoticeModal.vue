@@ -62,8 +62,16 @@
             这次是从较新的 v{{ notice.fromVersion }} 回到了 v{{ notice.version }}。
             如果是误操作，可以到「系统 → 版本更新」里重新检查。
           </p>
-          <p v-else class="rounded-lg bg-emerald-50 px-2.5 py-2 text-xs leading-relaxed text-emerald-700">
+          <!-- 2026-10-25 修（用户：「升级日志，很多东西都不显示」）：
+               原来不管有没有说明都写「下面这些是新版本带来的变化」，而说明要等一次
+               版本检查拿到 release notes 才有 —— 说明没有时这句话就变成了一句空头支票，
+               下面什么都没有。现在按「有没有说明」分两种说法。 -->
+          <p v-else-if="notice.notes" class="rounded-lg bg-emerald-50 px-2.5 py-2 text-xs leading-relaxed text-emerald-700">
             已经用上新版本。下面这些是新版本带来的变化。
+          </p>
+          <p v-else class="rounded-lg bg-emerald-50 px-2.5 py-2 text-xs leading-relaxed text-emerald-700">
+            已经用上新版本。这一版的更新说明暂时取不到 —— 要么 GitHub 上还没有对应版本的 Release，
+            要么这台机器连不上 GitHub。不影响使用，之后可以到「系统 → 版本更新」里再查一次。
           </p>
         </div>
 

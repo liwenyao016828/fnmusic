@@ -2,6 +2,7 @@ import { ref, computed } from 'vue'
 import { TidyAPI } from '../api/client'
 import { apiError, fail as failText } from '../services/userMsg'
 import { saveCache, loadCache } from '../services/prefs'
+import { fmtWhen } from '../services/libraryView'
 
 /**
  * 缺歌词的曲目（用户 2026-10-25 需求 N）。
@@ -23,9 +24,8 @@ export function useLyricGaps(deps) {
   const fetching = ref(false)
   const writing = ref(false)
   const at = ref(0)
-  const atText = computed(() => at.value
-    ? `上次扫描 ${new Date(at.value * 1000).toLocaleString('zh-CN', { hour12: false })}`
-    : '')
+  // P2-10：和 services/libraryView.js 的 fmtWhen 同一份实现（原来这里单独 toLocaleString）
+  const atText = computed(() => (at.value ? `上次扫描 ${fmtWhen(at.value)}` : ''))
   const selectedCount = computed(() => items.value.filter(it => it.selected && !it.written).length)
   const foundCount = computed(() => items.value.filter(it => it.ok && !it.written).length)
   const allSelected = computed(() => items.value.length > 0 && items.value.every(it => it.selected || it.written))

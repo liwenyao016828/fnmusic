@@ -254,6 +254,115 @@
             </button>
           </div>
 
+          <!-- 后台音质补强（v2.22，用户 2026-10-25 m00286）：
+               「音质补强是不是有个自动补强？下载-自动记录里有个记录，但是我没法控制呢？
+                增加相应的定时按钮，补强音质来源，音质。」-->
+          <div class="rounded-xl border border-gray-100 bg-gray-50/60 px-3 py-2.5">
+            <div class="flex items-start justify-between gap-3">
+              <div class="min-w-0">
+                <div class="flex items-center gap-2">
+                  <span class="text-[13px] font-medium text-[var(--ys-text)]">后台音质补强</span>
+                  <span :class="['text-[10px] px-1.5 py-0.5 rounded-full border font-mono',
+                                 upgrade.enabled ? 'border-emerald-200 bg-emerald-50 text-emerald-600' : 'border-gray-200 text-gray-400']">
+                    {{ upgrade.enabled ? (upgrade.running ? '运行中' : '已开启') : '已关闭' }}
+                  </span>
+                </div>
+                <p class="mt-0.5 text-[11px] leading-relaxed text-[var(--ys-text-muted)]">
+                  把「收藏时各渠道都没给无损」的那批歌按节奏重试。
+                  <span class="text-gray-400">这就是「自动记录」里那行「音质补强」。</span>
+                </p>
+              </div>
+              <button
+                role="switch"
+                :aria-checked="upgrade.enabled ? 'true' : 'false'"
+                :disabled="upgradeBusy"
+                @click="toggleUpgrade"
+                :class="['relative w-11 h-6 rounded-full transition-colors shrink-0 disabled:opacity-50',
+                         upgrade.enabled ? 'bg-emerald-500' : 'bg-black/[0.12]']">
+                <span :class="['absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform',
+                               upgrade.enabled ? 'translate-x-5' : '']" />
+              </button>
+            </div>
+
+            <!-- 展开只在开启时出现：关着的时候排一排设置会让人以为它还在跑 -->
+            <div v-if="upgrade.enabled" class="mt-2 space-y-2 border-t border-gray-100 pt-2">
+              <!-- 节奏 -->
+              <div class="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                <span class="w-[68px] shrink-0 text-xs font-medium text-gray-700">节奏</span>
+                <div class="flex flex-wrap items-center gap-1">
+                  <button
+                    v-for="o in UPGRADE_INTERVALS" :key="o.minutes"
+                    type="button"
+                    :disabled="upgradeBusy"
+                    @click="saveUpgrade({ interval_minutes: o.minutes })"
+                    :class="['ys-press rounded-full border px-2.5 py-1 text-[11px] transition-colors disabled:opacity-50',
+                             upgrade.interval_minutes === o.minutes
+                               ? 'border-emerald-300 bg-emerald-50 font-semibold text-emerald-700'
+                               : 'border-gray-200 bg-white text-gray-600']"
+                  >{{ o.label }}</button>
+                </div>
+              </div>
+              <!-- 一轮几首 -->
+              <div class="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                <span class="w-[68px] shrink-0 text-xs font-medium text-gray-700">每轮</span>
+                <div class="flex flex-wrap items-center gap-1">
+                  <button
+                    v-for="n in UPGRADE_BATCHES" :key="n"
+                    type="button"
+                    :disabled="upgradeBusy"
+                    @click="saveUpgrade({ batch: n })"
+                    :class="['ys-press rounded-full border px-2.5 py-1 text-[11px] transition-colors disabled:opacity-50',
+                             upgrade.batch === n
+                               ? 'border-emerald-300 bg-emerald-50 font-semibold text-emerald-700'
+                               : 'border-gray-200 bg-white text-gray-600']"
+                  >{{ n }} 首</button>
+                </div>
+              </div>
+              <!-- 来源：与上面「收藏自动下载」共用同一套取音渠道，所以这里给的是入口不是第二份勾选 -->
+              <div class="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                <span class="w-[68px] shrink-0 text-xs font-medium text-gray-700">来源</span>
+                <span class="min-w-0 flex-1 text-[11px] leading-relaxed text-gray-600">{{ channelsSummary }}</span>
+                <button
+                  type="button"
+                  class="ys-press shrink-0 rounded-full border border-gray-200 bg-white px-2.5 py-1 text-[11px] text-gray-600"
+                  title="取音渠道只有一份设置：补强与收藏自动下载用的是同一串渠道"
+                  @click="jumpSection('channels')"
+                >改渠道</button>
+              </div>
+              <!-- 目标档位：同上，共用「下载音质」 -->
+              <div class="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                <span class="w-[68px] shrink-0 text-xs font-medium text-gray-700">目标</span>
+                <span class="min-w-0 flex-1 text-[11px] leading-relaxed text-gray-600">
+                  {{ upgradeQualityLabel }}<span v-if="upgrade.quality !== 'highest'" class="text-amber-600">（不是 highest：后台不会去追无损）</span>
+                </span>
+                <button
+                  type="button"
+                  class="ys-press shrink-0 rounded-full border border-gray-200 bg-white px-2.5 py-1 text-[11px] text-gray-600"
+                  @click="jumpSection('quality')"
+                >改音质</button>
+              </div>
+              <!-- 再试一次 / 立即补一轮 -->
+              <div class="flex flex-wrap items-center gap-2 pt-0.5">
+                <button
+                  type="button"
+                  class="ys-press rounded-full bg-emerald-500 px-3 py-1 text-[11px] font-semibold text-white disabled:opacity-50"
+                  :disabled="upgradeBusy"
+                  title="不管 24 小时冷却，现在就把欠得最久的那几首再试一遍"
+                  @click="runUpgrade(true)"
+                >立即补一轮</button>
+                <button
+                  type="button"
+                  class="ys-press rounded-full border border-gray-200 bg-white px-3 py-1 text-[11px] text-gray-600 disabled:opacity-50"
+                  :disabled="upgradeBusy"
+                  title="只补「本来就该补」的那批，不给刚失败过的再打电话"
+                  @click="runUpgrade(false)"
+                >按计划补</button>
+                <span class="text-[11px] text-[var(--ys-text-faint)]">{{ upgradePendingText }}</span>
+              </div>
+              <p v-if="upgrade.note" class="text-[11px] text-emerald-600">{{ upgrade.note }}</p>
+            </div>
+          </div>
+
           <div class="rounded-xl border border-gray-100 bg-gray-50/60 px-3 py-2.5">
             <div class="flex items-center justify-between gap-3">
               <div class="min-w-0">
@@ -345,7 +454,7 @@ import { computed, onMounted, ref } from 'vue'
 import PageShell from './PageShell.vue'
 import DisclosureSection from './DisclosureSection.vue'
 import { AudioLines, ChevronDown, ChevronUp, Download, FileAudio, FolderCog, Info, Route } from 'lucide-vue-next'
-import { ConfigAPI, DownloadAPI, LogsAPI, AppAPI, ChartInjectAPI, SourcesAPI, DEFAULT_AUTO_DOWNLOAD_CHANNELS } from '../api/client'
+import { ConfigAPI, DownloadAPI, LogsAPI, AppAPI, ChartInjectAPI, SourcesAPI, QualityAPI, DEFAULT_AUTO_DOWNLOAD_CHANNELS } from '../api/client'
 import { QUALITY_OVERRIDE_OPTIONS } from '../services/qualityOverride'
 import { fail, apiError } from '../services/userMsg'
 import InlineNotice from './InlineNotice.vue'
@@ -362,6 +471,11 @@ const emit = defineEmits(['open-disclaimer'])
 const openKey = ref('')
 function toggleSection(k) {
   openKey.value = openKey.value === k ? '' : k
+}
+// 「跳到某个设置分组」而不是「切换」：从补强那块点「改渠道」时，目标分组可能
+// 本来就没展开 —— 用 toggle 会出现「点了没反应」（它刚好是开着的就被关掉了）。
+function jumpSection(k) {
+  openKey.value = k
 }
 
 const qualitySummary = computed(() => {
@@ -470,6 +584,97 @@ function toggleTee() { return toggleDownloadSwitch(teeEnabled, teeBusy, 'tee_ena
 function toggleLyric() { return toggleDownloadSwitch(lyricAutoDownload, lyricBusy, 'lyric_auto_download') }
 function toggleCover() { return toggleDownloadSwitch(coverEmbed, coverBusy, 'cover_embed') }
 
+// ── 后台音质补强（v2.22，见 pkg/intercept/upgrade_sweeper.go）──
+//
+// 走 /quality/auto-upgrade 而不是 /config：补强除了「设置」还有一截**进程内的活状态**
+// （这一轮派了几首、下次什么时候跑、还欠多少首），那部分 config 里没有。
+const UPGRADE_INTERVALS = [
+  { minutes: 30, label: '30 分钟' },
+  { minutes: 60, label: '1 小时' },
+  { minutes: 240, label: '4 小时' },
+  { minutes: 720, label: '12 小时' },
+  { minutes: 1440, label: '1 天' },
+]
+const UPGRADE_BATCHES = [1, 3, 5, 10]
+const QUALITY_LABEL = { highest: '尽量无损（highest）', lossless: '只要无损', '320k': '320k', '192k': '192k', '128k': '128k' }
+
+const upgradeBusy = ref(false)
+const upgrade = ref({
+  enabled: false, running: false, interval_minutes: 240, batch: 3,
+  ignore_cooldown: false, pending: 0, cooling: 0, quality: 'highest', note: '',
+  last_run_at: 0, last_dispatched: 0, next_run_at: 0,
+})
+
+const upgradeQualityLabel = computed(() => QUALITY_LABEL[upgrade.value.quality] || upgrade.value.quality)
+const upgradePendingText = computed(() => {
+  const u = upgrade.value
+  if (!u.pending && !u.cooling) return '目前没有欠无损的曲目'
+  if (u.cooling) return `欠 ${u.pending} 首（${u.cooling} 首在冷却中）`
+  return `欠 ${u.pending} 首`
+})
+
+/** 读补强状态。失败不挡整页：这块单独静默（它依赖拦截层起来，取音通道没起时本就该没有）。 */
+async function loadUpgrade() {
+  try {
+    const res = await QualityAPI.autoUpgrade.get()
+    const d = res?.data
+    if (d && typeof d === 'object') upgrade.value = { ...upgrade.value, ...d, note: upgrade.value.note }
+  } catch (_) {
+    // 静默：设置页的主功能是别的，这块读不到不该弹错
+  }
+}
+
+function toggleUpgrade() {
+  return saveUpgrade({ enabled: !upgrade.value.enabled })
+}
+
+/** 保存补强设置：乐观更新 + 失败回滚（与上面几个开关同一套手感）。 */
+async function saveUpgrade(patch) {
+  const prev = { ...upgrade.value }
+  upgrade.value = { ...upgrade.value, ...patch, note: '' }
+  upgradeBusy.value = true
+  try {
+    const res = await QualityAPI.autoUpgrade.save(patch)
+    const bad = apiError(res)
+    if (bad) {
+      upgrade.value = prev
+      return flash(fail('保存补强设置', new Error(bad)), true)
+    }
+    const d = res?.data
+    if (d && typeof d === 'object') upgrade.value = { ...upgrade.value, ...d }
+    flash('补强设置已更新')
+  } catch (e) {
+    upgrade.value = prev
+    flash(fail('保存补强设置', e), true)
+  } finally {
+    upgradeBusy.value = false
+  }
+}
+
+/** 立即/按计划补一轮。now=true 会先清冷却位（「再试一次」）。 */
+async function runUpgrade(now) {
+  upgradeBusy.value = true
+  upgrade.value = { ...upgrade.value, note: '' }
+  try {
+    const res = await QualityAPI.autoUpgrade.run(now)
+    const bad = apiError(res)
+    if (bad) return flash(fail('补强', new Error(bad)), true)
+    const d = res?.data || {}
+    const n = Number(d.dispatched) || 0
+    upgrade.value = {
+      ...upgrade.value,
+      note: n > 0
+        ? `已派出 ${n} 首，后台正在取音；结果会出现在「补全整理 → 替换音质」的记录里`
+        : '这一轮没有可补的曲目（欠账都已无损、或还在冷却中）',
+    }
+    await loadUpgrade()
+  } catch (e) {
+    flash(fail('补强', e), true)
+  } finally {
+    upgradeBusy.value = false
+  }
+}
+
 const version = ref('')
 const exporting = ref(false)
 const exportNote = ref('')
@@ -504,6 +709,9 @@ async function load() {
   } catch (e) {
     flash(fail('读取设置', e), true)
   }
+  // 补强那块单独读（见 loadUpgrade）：它走 /quality/auto-upgrade，
+  // 取音通道没起来时读不到是**正常**的，不该把整页设置拖成报错。
+  await loadUpgrade()
   try {
     // 洛雪音源列表：只要「启用中的」与它们的顺序（active_source_ids 就是轮询顺序）
     const res = await SourcesAPI.list()

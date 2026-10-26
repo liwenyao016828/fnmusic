@@ -41,11 +41,23 @@ var client = &http.Client{
 // Available 报告开放 API 是否可用：socket 存在，且系统已注入 token。
 // 非飞牛环境（如本地开发）返回 false，调用方据此走回退逻辑。
 func Available() bool {
+	return availableSource()
+}
+
+// availableSource 供测试替换，见 SetAvailableForTest。
+var availableSource = func() bool {
 	if os.Getenv("TRIM_API_TOKEN") == "" {
 		return false
 	}
 	_, err := os.Stat(socketPath)
 	return err == nil
+}
+
+// SetAvailableForTest 固定「开放 API 是否可用」，返回原值供恢复。仅测试用。
+func SetAvailableForTest(v bool) bool {
+	old := availableSource
+	availableSource = func() bool { return v }
+	return old()
 }
 
 type apiResponse struct {
@@ -100,7 +112,10 @@ func Call(req string, data any, out any) error {
 }
 
 // SharedFolders 返回管理员授权给本应用的目录，需声明 trim.file.sharedAccess。
-func SharedFolders() ([]string, error) {
+// SharedFolders 返回管理员授权给本应用的共享目录（需声明 trim.file.sharedAccess）。
+//
+// sharedFoldersSource 供测试替换：真机之外的单元测试不该依赖飞牛 socket。
+var sharedFoldersSource = func() ([]string, error) {
 	var data struct {
 		Paths []string `json:"paths"`
 	}
@@ -108,6 +123,20 @@ func SharedFolders() ([]string, error) {
 		return nil, err
 	}
 	return data.Paths, nil
+}
+
+// SetSharedFoldersSourceForTest 替换共享目录数据源，返回原来源供恢复。仅测试用。
+func SetSharedFoldersSourceForTest(fn func() ([]string, error)) func() ([]string, error) {
+	old := sharedFoldersSource
+	if fn == nil {
+		fn = func() ([]string, error) { return nil, nil }
+	}
+	sharedFoldersSource = fn
+	return old
+}
+
+func SharedFolders() ([]string, error) {
+	return sharedFoldersSource()
 }
 
 // DelSharedFolder 删除一个应用共享授权目录。

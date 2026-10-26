@@ -137,8 +137,21 @@ const (
 //
 // 但**记录要记全**（成功与失败都记，见 pkg/online/autolog.go）：失败只写日志的话，
 // 用户在界面上看不到任何痕迹，只能去翻后端日志 —— 而那正是用户报的问题。
+//
+// ⚠️ 两个闸门各管一类触发：
+//   - 收藏/歌单/页面下载（TriggerFavorite / TriggerPlaylist / TriggerPageClick）
+//     归「收藏自动下载」管（favAutoDownloadOn）；
+//   - 后台补强（TriggerUpgrade）归「补强轮」管（upgradeSweepOn）。
+//
+// 以前这里只看 favAutoDownload，于是「关掉收藏自动下载、但开着补强轮」的组合会被
+// **静默吞掉**（补强轮照着登记表派活，这里一进门就 return，连日志都不留）——
+// v2.22 把补强开关独立出来之后，这条判断必须跟着拆开。
 func (i *Interceptor) autoDownload(fake string, t online.Track, trigger string) {
-	if !i.favAutoDownloadOn() {
+	if trigger == TriggerUpgrade {
+		if !i.upgradeSweepDeps() {
+			return
+		}
+	} else if !i.favAutoDownloadOn() {
 		return
 	}
 	// 判断与占位是**一次**原子操作（见 beginDownload 的注释）：分开做的版本在

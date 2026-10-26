@@ -38,7 +38,7 @@ import (
 )
 
 // CurrentVersion 应用版本号。发布新版本时与 fpk-package/manifest 的 version 同步修改。
-const CurrentVersion = "2.21.1"
+const CurrentVersion = "2.22.0"
 
 // CurrentAppName 对外暴露的应用标识，必须与 fpk-package/manifest 的 appname 一致。
 //
@@ -140,6 +140,15 @@ type Server struct {
 	qualityStatus  func() intercept.QualityStatus
 	qualityStop    func() intercept.QualityStatus
 	qualityReplace func(r *http.Request, paths []string) (any, error)
+
+	// 后台「音质补强」的设置面（见 pkg/api/quality_autoupgrade.go，v2.22）。
+	//
+	// 为什么需要这三个而不是只走 /api/config：用户要的不只是「存下来」，
+	// 还要**看见**它在跑（这一轮派了几首、下次什么时候跑、还剩多少欠账）。
+	// 那部分是进程内的活状态，config 里没有。
+	upgradeStatus func() map[string]any
+	upgradeReload func() // 设置改完让轮子立刻按新值重排（内存 → 运行态）
+	upgradeRun    func(clearCooldown bool) (dispatched int, pending int, err string)
 
 	apiToken string
 	// authMode 生效的鉴权模式（none / lan / token），由 FN_AUTH_MODE + FN_API_TOKEN 解析

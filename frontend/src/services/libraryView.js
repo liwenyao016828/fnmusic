@@ -28,28 +28,77 @@ export function normalizeLibraryTab(id) {
   return TAB_IDS.has(mapped) ? mapped : 'push'
 }
 
-/** 「上次整理」的相对时间。`indexStats.scanned_at` 是**秒**（不是毫秒） */
-export function lastScanText(indexStats, nowMs = Date.now()) {
-  const s = indexStats
-  if (!s || !s.scanned_at) return ''
-  const mins = Math.floor((nowMs / 1000 - s.scanned_at) / 60)
-  if (mins < 1) return '上次整理：刚刚'
-  if (mins < 60) return `上次整理：${mins} 分钟前`
-  const hours = Math.floor(mins / 60)
-  if (hours < 24) return `上次整理：${hours} 小时前`
-  return `上次整理：${Math.floor(hours / 24)} 天前`
-}
+/**
+ * 统一时间文案（2026-10-27，审查报告「P2-10」）。
+ *
+ * 改之前这个页面里有三套时间口径，同一屏里并排出现：
+ *   · 「上次整理：3 小时前」                                   ← 相对（本文件）
+ *   · 「上次扫描 2026/10/27 18:39:52」                         ← `toLocaleString`（7 处）
+ *   · 「10-27 18:39」                                          ← 手写 pad（1 处，替换记录）
+ * 用户读不出这三行哪个更近；而且 `toLocaleString` 的输出随浏览器语言变
+ * （`zh-CN` 给「2026/10/27 18:39:52」，英文环境给「10/27/2026, 6:39:52 PM」），
+ * 截图报障时对不上。统一成「绝对一个函数 + 相对一个函数」。
+ */
 
-/** 「上次统计（缺口）」的相对时间。`gaps.at` 是 `Date.now()`，**毫秒** */
-export function gapsAtText(gaps, nowMs = Date.now()) {
-  const at = gaps?.at
+/**
+ * 相对时间：刚刚 / N 分钟前 / N 小时前 / N 天前。
+ * 只接受**毫秒**时间戳（调用方自己换算；秒和毫秒混用是这类 bug 的主要来源，
+ * 所以这里不做猜测 —— 见下面 lastScanText 的 `* 1000`）。
+ */
+export function relWhen(atMs, nowMs = Date.now()) {
+  const at = Number(atMs) || 0
   if (!at) return ''
   const mins = Math.floor((nowMs - at) / 60000)
   if (mins < 1) return '刚刚'
   if (mins < 60) return `${mins} 分钟前`
   const hours = Math.floor(mins / 60)
   if (hours < 24) return `${hours} 小时前`
-  return `${Math.floor(hours / 24)} 天前`
+  const days = Math.floor(hours / 24)
+  if (days < 30) return `${days} 天前`
+  return `${Math.floor(days / 30)} 个月前`
+}
+
+/**
+ * 绝对时间：`2026-10-27 18:39`。
+ * 接受 Date / 毫秒数 / 秒数 / ISO 串 —— 这个页面四种都出现过，所以统一在这里认。
+ * 判别秒和毫秒：小于 1e11 的当秒（1e11 毫秒 ≈ 1973 年，真实时间戳不会更小）。
+ */
+export function fmtWhen(input) {
+  if (input === null || input === undefined || input === '') return ''
+  // 0 在这个页面里一律表示「还没发生过」（`gaps.at` / `scanned_at` / `titleFixAt`
+  // 全都是 0 当哨兵）—— 不能把 0 格式化成 1970-01-01，否则空态会显示成「上次 1970 年」。
+  if (input === 0 || input === '0') return ''
+  let d
+  if (input instanceof Date) {
+    d = input
+  } else if (typeof input === 'number') {
+    d = new Date(input < 1e11 ? input * 1000 : input)
+  } else if (/^\d+(\.\d+)?$/.test(String(input))) {
+    const n = Number(input)
+    d = new Date(n < 1e11 ? n * 1000 : n)
+  } else {
+    d = new Date(input)
+  }
+  if (Number.isNaN(d.getTime())) return String(input)
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} `
+    + `${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+/** 「上次整理」的相对时间。`indexStats.scanned_at` 是**秒**（不是毫秒） */
+export function lastScanText(indexStats, nowMs = Date.now()) {
+  const s = indexStats
+  if (!s || !s.scanned_at) return ''
+  return `上次整理：${relWhen(s.scanned_at * 1000, nowMs)}`
+}
+
+/** 「上次统计（缺口）」的相对时间。`gaps.at` 是 `Date.now()`，**毫秒** */
+export function gapsAtText(gaps, nowMs = Date.now()) {
+  const at = gaps?.at
+  if (!at) return ''
+  // 补上「上次统计：」前缀 —— 原来只有裸的「3 分钟前」，和旁边的「上次整理：3 小时前」
+  // 并排时根本分不清说的是哪件事（P2-10）。
+  return `上次统计：${relWhen(at, nowMs)}`
 }
 
 /**
@@ -195,10 +244,17 @@ export function completeStep(gaps, hasPlan, previewing = false) {
   return 1
 }
 
-/** 每一步的「下一步该点哪」—— 这是这一页以前最缺的一句话 */
+/**
+ * 每一步的「下一步该点哪」—— 这是这一页以前最缺的一句话。
+ *
+ * ⚠️ 这里写的按钮名和位置必须和 TidyView.vue 里真实渲染的一致（2026-10-27 修）：
+ * 以前写的是「点上面的『扫描缺失』」和「点右下角『预览要写的内容』」，
+ * 但那个按钮早就并进了字段 chip 行、文案也改成了「扫描」，
+ * 预览按钮也从右下角搬到了**卡片头右上角** —— 用户照着提示找不到按钮。
+ */
 export function completeHint(gaps, hasPlan, previewing = false) {
   if (hasPlan) return '核对下面的清单，没问题就点「确认写入」'
   if (previewing) return '正在逐条匹配，可以随时点「停止预览」'
-  if (gaps) return '勾好字段，点右下角「预览要写的内容」'
-  return '先点上面的「扫描缺失」看缺什么'
+  if (gaps) return '字段勾好了就点卡片右上角的「预览要写的内容」'
+  return '先点「扫描」把磁盘上的新增 / 变化收进索引，再看缺哪些标签'
 }

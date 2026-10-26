@@ -417,6 +417,108 @@ func TestBrowseDirectoryGuardAndVolumes(t *testing.T) {
 	})
 }
 
+// 隐藏目录开关：默认藏 `.`/`$`/`@` 开头的条目（`.tidy_trash`、`@eaDir` 不该被选成曲库），
+// hidden=1 时必须全部列出来 —— 用户 2026-10-25 报障「曲库在 music-v2/.dev/music，
+// 中间的 .dev 在目录里看不到」。默认行为不能变，否则回收站会被当成可选曲库。
+func TestBrowseDirectoryHiddenToggle(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "Music", "a.mp3"), []byte("MP3"))
+	mustWrite(t, filepath.Join(root, ".dev", "music", "b.mp3"), []byte("MP3"))
+	mustWrite(t, filepath.Join(root, "@eaDir", "c.mp3"), []byte("MP3"))
+	setAllowedRoots(t, root)
+
+	browse := func(t *testing.T, query string) BrowseData {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		BrowseDirectory(rec, httptest.NewRequest(http.MethodGet, "/api/nas/browse"+query, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (body %q)", rec.Code, rec.Body.String())
+		}
+		var resp struct {
+			Data BrowseData `json:"data"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode: %v (%q)", err, rec.Body.String())
+		}
+		return resp.Data
+	}
+
+	names := func(d BrowseData) []string {
+		out := make([]string, 0, len(d.Folders))
+		for _, f := range d.Folders {
+			out = append(out, f.Name)
+		}
+		return out
+	}
+
+	t.Run("默认藏起隐藏目录", func(t *testing.T) {
+		got := names(browse(t, ""))
+		if len(got) != 1 || got[0] != "Music" {
+			t.Fatalf("folders = %v, want [Music]（.dev 与 @eaDir 都该藏着）", got)
+		}
+	})
+
+	t.Run("hidden=1 时列出来且能继续下钻", func(t *testing.T) {
+		got := names(browse(t, "?hidden=1"))
+		if len(got) != 3 {
+			t.Fatalf("folders = %v, want 3 个（Music/.dev/@eaDir）", got)
+		}
+		if got[0] != ".dev" || got[1] != "@eaDir" || got[2] != "Music" {
+			t.Fatalf("folders = %v, want [.dev @eaDir Music]（os.ReadDir 按名排序：'.' < '@' < 大写字母）", got)
+		}
+	})
+
+	t.Run("hidden=1 时 .dev 下的子目录与音频数可见", func(t *testing.T) {
+		d := browse(t, "?hidden=1&path="+filepath.Join(realPath(t, root), ".dev"))
+		if d.Current != filepath.ToSlash(filepath.Join(realPath(t, root), ".dev")) {
+			t.Fatalf("current = %q", d.Current)
+		}
+		if len(d.Folders) != 1 || d.Folders[0].Name != "music" {
+			t.Fatalf("folders = %+v, want [music]", d.Folders)
+		}
+		if d.Folders[0].AudioCount != 1 {
+			t.Fatalf("music 的 audio_count = %d, want 1", d.Folders[0].AudioCount)
+		}
+	})
+
+	t.Run("hidden=1 不会把关卡整个松掉", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		BrowseDirectory(rec, httptest.NewRequest(http.MethodGet, "/api/nas/browse?hidden=1&path=/etc", nil))
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("status = %d, want 403（hidden 只影响过滤，不影响路径关卡）", rec.Code)
+		}
+	})
+
+	// hidden_count / hidden_dirs 是给「开关没被看见」兜底的：前端拿它渲染
+	// 「还有 2 个隐藏目录（.dev、@eaDir）· 显示」，用户点一下就叫 hidden=1。
+	t.Run("默认折叠时回报被藏起的目录数与名字", func(t *testing.T) {
+		d := browse(t, "")
+		if d.HiddenCount != 2 {
+			t.Fatalf("hidden_count = %d, want 2（.dev 与 @eaDir）", d.HiddenCount)
+		}
+		if len(d.HiddenDirs) != 2 || d.HiddenDirs[0] != ".dev" || d.HiddenDirs[1] != "@eaDir" {
+			t.Fatalf("hidden_dirs = %v, want [.dev @eaDir]（os.ReadDir 按名排序）", d.HiddenDirs)
+		}
+	})
+
+	t.Run("hidden=1 时不再有折叠项", func(t *testing.T) {
+		d := browse(t, "?hidden=1")
+		if d.HiddenCount != 0 || len(d.HiddenDirs) != 0 {
+			t.Fatalf("hidden_count = %d, hidden_dirs = %v，want 0 / 空（都列出来了）", d.HiddenCount, d.HiddenDirs)
+		}
+	})
+
+	t.Run("没有隐藏目录时是 0 而不是 null 语义", func(t *testing.T) {
+		d := browse(t, "?path="+filepath.Join(realPath(t, root), "Music"))
+		if d.HiddenCount != 0 {
+			t.Fatalf("hidden_count = %d, want 0", d.HiddenCount)
+		}
+		if d.HiddenDirs != nil {
+			t.Fatalf("hidden_dirs = %v, want nil（omitempty，没东西就不下发）", d.HiddenDirs)
+		}
+	})
+}
+
 func TestScanSongsGuard(t *testing.T) {
 	root := t.TempDir()
 	mustWrite(t, filepath.Join(root, "Music", "a.mp3"), []byte("MP3"))

@@ -26,34 +26,60 @@ import (
 // HandleFnosStatus 查询飞牛集成状态
 //
 // GET /api/fnos/status
+//
+// ⚠️ **对外只给布尔与枚举，不给内容**（2026-10-25 安全整改）。
+// 这个接口是老接口，靠「内网免校验」跑了很多版本（默认 auth_mode=lan），
+// 而它原来把管理员授权目录的绝对路径、飞牛账号名、上游报错原文一起吐出来 ——
+// 同网段的任何设备扫一下就能拿到你这台 NAS 的目录结构与账号，用来做后续的路径探测。
+//
+// 现在按「谁在问」分两档：
+//   - 本机回环（= 用户自己开着 App 页面，iframe 就来自 /var/apps 下的代理/浏览器同机）
+//     → 还带 shared_folders / music_account 这些**用于界面展示**的内容；
+//   - 其它来源（同网段、外网）→ 只给布尔与枚举（token_source 本身就是枚举，界面要用）。
+//
+// 判断依据是 TCP 对端地址，不是请求头，改不了。
 func (s *Server) HandleFnosStatus(w http.ResponseWriter, r *http.Request) {
+	openAPI := fnos.Available()
+	musicReady, account, accountErr := fnos.MusicStatus()
 	status := map[string]interface{}{
-		"open_api_available": fnos.Available(),
+		"open_api_available": openAPI,
+		"music_available":    musicReady,
+		// 令牌来源（manual / env / db / none）—— 「飞牛同步管理」页要展示这个，
+		// 让用户知道当前用的是手工令牌还是自动读取的。它是**枚举**，不含令牌本身。
+		"token_source": fnos.TokenSource(),
 	}
 
-	// 官方开放 API：管理员授权目录
-	if fnos.Available() {
+	detailed := isLocalRequest(r)
+
+	// 官方开放 API：管理员授权目录（仅本机可见）
+	if openAPI {
 		if folders, err := fnos.SharedFolders(); err == nil {
-			status["shared_folders"] = folders
-		} else {
+			if detailed {
+				status["shared_folders"] = folders
+			} else {
+				// 数量本身够界面用（「已授权 3 个目录」），路径不给。
+				status["shared_folder_count"] = len(folders)
+			}
+		} else if detailed {
 			status["shared_folders_error"] = err.Error()
 		}
 	}
 
-	// 飞牛音乐应用接口：令牌与账号
-	music := fnos.NewMusic("")
-	status["music_available"] = music.Available()
-	// 令牌来源（manual / env / db / none）—— 「飞牛同步管理」页要展示这个，
-	// 让用户知道当前用的是手工令牌还是自动读取的
-	status["token_source"] = fnos.TokenSource()
-	if account, err := music.Me(); err == nil {
-		status["music_account"] = account
-	} else {
-		status["music_error"] = err.Error()
+	// 飞牛音乐应用接口：账号（仅本机可见，且只回名字与角色）
+	if musicReady {
+		if accountErr == nil {
+			if detailed {
+				status["music_account"] = account
+			} else {
+				status["music_account_ready"] = true
+			}
+		} else if detailed {
+			status["music_error"] = accountErr.Error()
+		}
 	}
 
 	hint := "未检测到飞牛环境属正常现象：本地开发时 open_api_available 与 music_available 均为 false，其余功能不受影响。"
-	if !music.Available() {
+	if !musicReady {
 		// ⚠️ 这段会**原样显示在界面上**，只写「缺什么 + 你该怎么做」：
 		// 不写库路径 / socket 路径 / 接口地址，也不写 Markdown 标记（Vue 不解析，会显示成字面量星号）。
 		// 逐项诊断结果走日志，见下面的 log.Printf 与 fnos.UnavailableDetail()。
@@ -71,6 +97,19 @@ func (s *Server) HandleFnosStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"code": 200, "message": "ok", "data": status,
 	})
+}
+
+// isLocalRequest 报告请求是否来自本机回环。
+//
+// 用途：决定「这条应答能不能带内容」。它只认 TCP 对端地址（RemoteAddr），
+// 不看任何请求头 —— X-Forwarded-For / X-Real-IP 是客户端随便写的，拿它做判断
+// 等于把上面那层甄别直接拱手让人。
+//
+// 为什么不顺便认内网：本期先收窄到回环。App 自己的界面由飞牛桌面 iframe 承载，
+// 与后端同机；而「同网段某台设备」恰恰是这次要防的那一方。语义收紧的方向是安全的
+// （最多是外部来源少看到几个字段），反过来放宽才是风险。
+func isLocalRequest(r *http.Request) bool {
+	return isLoopbackIP(clientIP(r))
 }
 
 // HandleFnosFolders 查询管理员授权给本应用的目录（官方开放 API）

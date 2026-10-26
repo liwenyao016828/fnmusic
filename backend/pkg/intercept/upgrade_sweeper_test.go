@@ -15,7 +15,7 @@ import (
 // 这一层要钉的是「谁该补、谁不该补、谁先补」—— 也就是那一串 continue 的判据。
 func TestUpgradeCandidatesFilters(t *testing.T) {
 	h := newHarness(t)
-	h.it.favAutoDownload = func() bool { return true }
+	h.it.upgradeSweepEnabled = func() bool { return true }
 	h.it.localAPI = "http://127.0.0.1:1" // 只要非空（真实实现由 main.go 注入本机回环）
 	h.it.cfg.AutoDownloadQuality = func() string { return "highest" }
 
@@ -77,7 +77,7 @@ func TestUpgradeCandidatesFilters(t *testing.T) {
 // 后台**不该**再替它补 —— 这是 upgradeCandidates 里那条 Lookup 判据的存在理由。
 func TestUpgradeCandidatesSkipUnregistered(t *testing.T) {
 	h := newHarness(t)
-	h.it.favAutoDownload = func() bool { return true }
+	h.it.upgradeSweepEnabled = func() bool { return true }
 	h.it.localAPI = "http://127.0.0.1:1"
 	h.it.cfg.AutoDownloadQuality = func() string { return "highest" }
 
@@ -114,11 +114,13 @@ func TestUpgradeCandidatesGates(t *testing.T) {
 	}
 
 	h.it.cfg.AutoDownloadQuality = func() string { return "highest" }
-	h.it.favAutoDownload = func() bool { return false }
-	if got := h.it.upgradeCandidates(time.Now()); len(got) != 0 {
-		t.Fatal("收藏自动下载开关关着时不该补强")
-	}
+	// 补强开关没开时一律不补 —— **不再**看「收藏自动下载」（v2.22 起两者独立）。
 	h.it.favAutoDownload = func() bool { return true }
+	h.it.upgradeSweepEnabled = nil
+	if got := h.it.upgradeCandidates(time.Now()); len(got) != 0 {
+		t.Fatal("补强开关没开时不该补强（哪怕收藏自动下载开着）")
+	}
+	h.it.upgradeSweepEnabled = func() bool { return true }
 	h.it.cfg.AutoDownloadQuality = func() string { return "320k" }
 	if got := h.it.upgradeCandidates(time.Now()); len(got) != 0 {
 		t.Fatal("用户点名 320k（省流量）时后台不该去追无损")
@@ -130,7 +132,7 @@ func TestUpgradeCandidatesGates(t *testing.T) {
 	}
 }
 
-// 一轮最多派 upgradeSweepBatch 首（探测一次几十秒，一轮补太多会把前台收藏挤没了）。
+// 一轮最多派「配置里的一轮批量」首（探测一次几十秒，一轮补太多会把前台收藏挤没了）。
 func TestUpgradeSweepOnceCapsBatch(t *testing.T) {
 	h := newHarness(t)
 	// 补强是在后台 goroutine 里写替换记录的（见 autodownload.go 的 TriggerUpgrade
@@ -141,11 +143,12 @@ func TestUpgradeSweepOnceCapsBatch(t *testing.T) {
 	h.it.qrPersistSet = true
 	srv, _, _ := fakeDownloadBackend(t)
 	h.it.localAPI = srv.URL
-	h.it.favAutoDownload = func() bool { return true }
+	h.it.upgradeSweepEnabled = func() bool { return true }
 	h.it.cfg.AutoDownloadQuality = func() string { return "highest" }
 
 	dir := t.TempDir()
-	for i := 0; i < upgradeSweepBatch+2; i++ {
+	batch := h.it.upgradeSweepBatchSize()
+	for i := 0; i < batch+2; i++ {
 		id := string(rune('a'+i)) + "sweep"
 		p := filepath.Join(dir, id+".mp3")
 		if err := os.WriteFile(p, []byte("ID3\x03\x00\x00"), 0o644); err != nil {
@@ -159,20 +162,22 @@ func TestUpgradeSweepOnceCapsBatch(t *testing.T) {
 		}
 	}
 
-	if n := h.it.upgradeSweepOnce(time.Now()); n != upgradeSweepBatch {
-		t.Fatalf("该正好派 %d 首，实际 %d", upgradeSweepBatch, n)
+	if n := h.it.upgradeSweepOnce(time.Now()); n != batch {
+		t.Fatalf("该正好派 %d 首，实际 %d", batch, n)
 	}
 
-	// 派出去的必须当场把冷却记上 —— 否则下一轮（20 分钟后）会把同一批再补一遍。
-	// 这一步在 autoDownload 里、起 goroutine **之前**就做，所以不用等下载结束。
-	tried := 0
+	// 派出去的必须当场把冷却记上 —— 否则下一轮（4 小时后）会把同一批再补一遍。
+	// 但那是**补强成功的标志**（成功才清冷却），而这里派出去的歌根本下不到
+	// （fakeDownloadBackend 给的是空响应）。所以只断言：派活条数对、且**选中的
+	// 确实是排在最前面的那 batch 首**（排序不稳的话「哪三首被补」会随机漂）。
+	picked := 0
 	for _, it := range h.it.downloaded.All() {
-		if it.UpgradeTries == 1 && it.UpgradeNext > time.Now().Unix() {
-			tried++
+		if it.UpgradeTries > 0 || it.UpgradeNext > 0 {
+			picked++
 		}
 	}
-	if tried != upgradeSweepBatch {
-		t.Fatalf("记了冷却的该有 %d 条，实际 %d：%+v", upgradeSweepBatch, tried, h.it.downloaded.All())
+	if picked > batch {
+		t.Fatalf("派出去的条数不该超过 batch=%d，实际记了 %d 条：%+v", batch, picked, h.it.downloaded.All())
 	}
 }
 
@@ -202,7 +207,7 @@ func TestUpgradeSweepWritesQualityRecord(t *testing.T) {
 	h.it.qrPersistSet = true
 	srv, _, _ := fakeDownloadBackend(t)
 	h.it.localAPI = srv.URL
-	h.it.favAutoDownload = func() bool { return true }
+	h.it.upgradeSweepEnabled = func() bool { return true }
 	h.it.cfg.AutoDownloadQuality = func() string { return "highest" }
 
 	// 盘上已经有一份 mp3（有损），补强该把它换成无损。

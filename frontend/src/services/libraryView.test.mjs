@@ -16,6 +16,8 @@ import {
   COMPLETE_STEPS,
   completeStep,
   completeHint,
+  relWhen,
+  fmtWhen,
 } from './libraryView.js'
 
 const NOW = 1758888000000 // 2025-09-26T12:00:00Z 附近，测试里当「现在」
@@ -81,12 +83,41 @@ test('gapsAtText：gaps.at 是「毫秒」（与 lastScanText 不是一个单位
   assert.equal(gapsAtText(null, NOW), '')
   assert.equal(gapsAtText({}, NOW), '')
   assert.equal(gapsAtText({ at: 0 }, NOW), '')
-  assert.equal(gapsAtText({ at: NOW - 500 }, NOW), '刚刚')
-  assert.equal(gapsAtText({ at: NOW - 5 * 60000 }, NOW), '5 分钟前')
-  assert.equal(gapsAtText({ at: NOW - 3 * 3600000 }, NOW), '3 小时前')
-  assert.equal(gapsAtText({ at: NOW - 2 * 86400000 }, NOW), '2 天前')
+  // P2-10（2026-10-27）：加了「上次统计：」前缀 —— 原来是裸的「5 分钟前」，
+  // 和旁边的「上次整理：3 小时前」并排时分不清说的是哪件事。
+  assert.equal(gapsAtText({ at: NOW - 500 }, NOW), '上次统计：刚刚')
+  assert.equal(gapsAtText({ at: NOW - 5 * 60000 }, NOW), '上次统计：5 分钟前')
+  assert.equal(gapsAtText({ at: NOW - 3 * 3600000 }, NOW), '上次统计：3 小时前')
+  assert.equal(gapsAtText({ at: NOW - 2 * 86400000 }, NOW), '上次统计：2 天前')
   // 单位钉死：若被当成秒（错单位），会算成两万天 —— 真机上「1375 天前」就是这么来的
-  assert.match(gapsAtText({ at: Math.floor(NOW / 1000) }, NOW), /^\d{4,} 天前$/)
+  assert.match(gapsAtText({ at: Math.floor(NOW / 1000) }, NOW), /^上次统计：\d+ (天|个月)前$/)
+})
+
+test('relWhen：超过 30 天改说「个月前」，不再报「1375 天前」', () => {
+  assert.equal(relWhen(0, NOW), '')
+  assert.equal(relWhen(null, NOW), '')
+  assert.equal(relWhen(NOW - 1000, NOW), '刚刚')
+  assert.equal(relWhen(NOW - 90 * 60000, NOW), '1 小时前')
+  assert.equal(relWhen(NOW - 45 * 86400000, NOW), '1 个月前')
+})
+
+test('fmtWhen：秒 / 毫秒 / ISO 串 / Date 都能认，输出固定 YYYY-MM-DD HH:mm', () => {
+  assert.equal(fmtWhen(''), '')
+  assert.equal(fmtWhen(0), '')
+  assert.equal(fmtWhen('0'), '')
+  assert.equal(fmtWhen(null), '')
+  // 秒（< 1e11）按秒解释
+  assert.equal(fmtWhen(Date.UTC(2026, 9, 27, 10, 39) / 1000), fmtWhen(Date.UTC(2026, 9, 27, 10, 39)))
+  // 毫秒
+  assert.equal(fmtWhen(Date.UTC(2026, 9, 27, 10, 39)), fmtWhen(new Date(Date.UTC(2026, 9, 27, 10, 39))))
+  // ISO 串
+  assert.equal(fmtWhen('2026-10-27T10:39:00.000Z'), fmtWhen(new Date(Date.UTC(2026, 9, 27, 10, 39))))
+  // 格式固定：不带秒、不带 AM/PM，跨语言环境不会变
+  assert.match(fmtWhen(Date.UTC(2026, 9, 27, 10, 39)), /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/)
+  // 解析不了的串原样返回，不抛
+  assert.equal(fmtWhen('不是时间'), '不是时间')
+  // 「2026/10/27 18:39:52」这种带秒的旧文案不会再出现
+  assert.ok(!fmtWhen(Date.UTC(2026, 9, 27, 10, 39)).includes(':' + '39' + ':00'))
 })
 
 test('unsupportedExtsText：按数量倒序，同数量按名字，缺字段不显示', () => {
@@ -214,8 +245,13 @@ test('三步流程：没扫过缺口停在第 1 步，扫过停在第 2 步，�
 })
 
 test('三步流程：每一步都要有一句「下一步点哪」，且不能指错按钮', () => {
-  assert.match(completeHint(null, null), /扫描缺失/)
+  // 第 1 步指向的就是卡片里那个真实存在的「扫描」按钮（2026-10-27：原来写的是「扫描缺失」，
+  // 按钮早就并进字段 chip 行改名了，提示里那个名字在界面上根本找不到）
+  assert.match(completeHint(null, null), /扫描/)
+  assert.ok(!/扫描缺失/.test(completeHint(null, null)))
   assert.match(completeHint({ total: 10 }, null), /预览要写的内容/)
+  // 预览按钮在卡片头右上角 —— 提示里要说清位置，用户才找得到
+  assert.match(completeHint({ total: 10 }, null), /右上角/)
   assert.match(completeHint({ total: 10 }, true), /确认写入/)
   // 正在预览时提示「可以停止」，而不是叫人在跑的时候再点一次预览
   assert.match(completeHint(null, false, true), /停止预览/)

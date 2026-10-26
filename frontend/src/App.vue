@@ -786,7 +786,12 @@ const showUpdateModal = ref(false)
 // 必须放在 setup 顶层：它以前被误写在下面 updateEntry 这个 computed 的**函数体里**
 // （2026-10-25），于是每次 updateEntry 重算都新建一份 null，闭包里的那份和模板读到的
 // 那份还不是同一个——弹窗永远拿不到值。功能「写完了却不出现」，查了很久。
-const showUpdateNotice = ref(null)
+//
+// 2026-10-25 第二次修（用户：「升级日志，很多东西都不显示」）：以前这里是自己的一份
+// `ref(null)`，`ensureNotice()` 返回什么就存什么 —— 于是 appUpdate 在后台把 release
+// 说明补进 `notice` 时，弹窗读的还是当初那份**没有说明**的副本，永远补不上。
+// 现在直接绑服务里那个 ref：弹窗和「补说明」看到的是同一份数据。
+const showUpdateNotice = appUpdate.notice
 // 关掉即确认：通知后端「这个版本的提示已经给过了」，下次启动不再弹。
 function closeUpdateNotice() {
   showUpdateNotice.value = null
@@ -1084,9 +1089,10 @@ onMounted(async () => {
   // 拿到提示就弹窗，用户看到后由弹窗自己调 ackNotice()。
   // 不 await：这段在 onMounted 最前面，后面还有一大串启动请求（音源脚本、窗口记忆…），
   // 任何一步卡住都不该让「更新完成」提示永远不出现。
-  appUpdate.ensureNotice().then((n) => {
-    if (n) showUpdateNotice.value = n
-  })
+  //
+  // 说明文字由 ensureNotice 自己在后台补（release notes 要等一次版本检查才有），
+  // 弹窗读的是 appUpdate.notice 这个 ref —— 补上了会自己重渲染，这里不用回填。
+  appUpdate.ensureNotice()
   // 上次离开时如果下载/安装还在跑，回来接着轮询，别让进度丢在半路。
   appUpdate.resumeIfActive()
 

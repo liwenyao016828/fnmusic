@@ -44,6 +44,14 @@ const (
 	// downloadRetries 是下载请求的尝试次数（含第一次）。GitHub 经代理回源偶发
 	// 「响应头超时」，一次抖动就整个失败太可惜（2026-10-24 用户截图）。
 	downloadRetries = 2
+	// sourceAttemptWindow 是「每台更新源最多等多久」。
+	//
+	// 为什么不能只靠 CheckTimeout（30s）一个总预算：串行试 N 台时，前面几台
+	// 各卡满 30s，后面的源根本轮不到就被总预算掐死。用户 2026-10-25 的现象
+	// （飞牛上「还显示 2.21.0」，其实 release 已经发了）就是这类：
+	// 一台连不通的源吃掉了全部预算，界面只能显示上一次的旧结果。
+	// 网络正常时一次 releases/latest 只要几百毫秒，40s 只在「真的连不上」时才用满。
+	sourceAttemptWindow = 40 * time.Second
 )
 
 // downloadRetryWait 是两次尝试之间的间隔。做成变量而不是常量：测试要能把它调小，
@@ -73,10 +81,10 @@ type CheckResult struct {
 
 // SourceAttempt 记录一次更新源尝试（成功/失败都要，界面按 ok 显示颜色）。
 type SourceAttempt struct {
-	Name    string `json:"name"`
-	URL     string `json:"url"`
-	OK      bool   `json:"ok"`
-	Error   string `json:"error,omitempty"`
+	Name  string `json:"name"`
+	URL   string `json:"url"`
+	OK    bool   `json:"ok"`
+	Error string `json:"error,omitempty"`
 	// Reason 是**给界面看**的短原因（「超时」「返回的不是 JSON」…）。
 	// 与 Error 分开：Error 是给排障看的原文（可能很长、带 URL），Reason 一句话。
 	Reason  string `json:"reason,omitempty"`
@@ -167,9 +175,9 @@ type Manager struct {
 	mirrorsFunc func() []config.UpdateMirror
 	// allowOfficial 见 sourceEntry.allowOfficial（默认 true，只有测试会改它）。
 	allowOfficial bool
-	logf   func(string, ...any)
-	now    func() time.Time
-	ttl    time.Duration
+	logf          func(string, ...any)
+	now           func() time.Time
+	ttl           time.Duration
 
 	launch        func(script, logPath string) error
 	isRoot        func() bool
@@ -187,7 +195,7 @@ type Manager struct {
 	// assetSource 是「查到这个版本时命中的源」：下载失败要换源重试时，
 	// 得知道从哪一台继续（见 download 的换源逻辑）。
 	assetSource sourceEntry
-	cancel       context.CancelFunc
+	cancel      context.CancelFunc
 }
 
 // New 构造 Manager。返回的实例可以立刻使用；检查/下载都是显式调用才发生。

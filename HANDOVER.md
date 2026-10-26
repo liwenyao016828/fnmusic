@@ -22,7 +22,7 @@
 | **后端依赖** | **已引入第三方依赖**（`modernc.org/sqlite v1.36.1`，纯 Go）。旧版「零依赖」规则已作废，见 §2 规则二 |
 | **前端依赖** | vue / vite / tailwindcss / axios / lucide-vue-next / crypto-js / buffer / qrcode |
 | **打包** | `bash scripts/build.sh`，**不需要 fnpack** |
-| **当前版本** | `2.21.1`（代码与 manifest 已同步，见 §7） |
+| **当前版本** | `2.22.0`（代码与 manifest 已同步，见 §7） |
 | **应用内更新** | `backend/pkg/appupdate` + `frontend/src/components/UpdateCard.vue`：查 GitHub Release → 流式下载到 `<数据目录>/updates/` → 执行 `/tmp/yinshu-update/apply-update.sh`（`appcenter-cli stop/uninstall/install-fpk` 再 `start`）。**安装这一跳在开发机上无法验证**（没有 `appcenter-cli`、没有 `/var/apps/`），真机第一次用要盯着 log。 |
 | **文件名体检** | `backend/pkg/nas/health.go`：扫出非法 UTF-8 / 控制字符 / 首尾空格 / 0 字节音频 / `.part` 残留 / 权限 000 等条目（它们会让 fnOS 整层目录报「未知错误」）。修复接口**只收 `id`（路径字节的 base64url）不收 path** —— 非法 UTF-8 的名字过一次 JSON 就变成 U+FFFD，传 path 必然找不到文件；服务端在最近 8 次扫描缓存里回查。 |
 | **自动发布** | 功能完成并验证后由 DSH 提交、推送 main；GitHub Actions 校验四处版本 → 前端构建 → 后端/前端/洛雪测试 → FPK 自检 → 新版本 Release + SHA256。已有版本不覆盖；不自动部署 NAS。不用 git hook 自动暂存工作区。 |
@@ -92,6 +92,16 @@ bash scripts/dev.sh
 它使用独立的 `.dev/` 数据目录，**不会碰正式实例**。
 
 > 用户明确要求过：想看前端效果时必须能直接热加载，不要每次打包再安装。
+
+> ⚠️ **开发机默认看不到「替换音质 / 后台补强」**（设置 → 下载行为、补全整理 → 替换音质都会回
+> `502 取音通道没起来`）。原因：这些接口由 `pkg/intercept` 提供，而拦截层在 `main.go:129`
+> 被 `takeover.Enabled()` 挡着 —— 只有装了 FPK 的真机才有那个 socket。开发机上想看：
+> ```bash
+> QULV_TAKEOVER=1 bash scripts/dev.sh
+> ```
+> 它会照常起拦截层（`ic` 非 nil → 音质/补强接口可用了），只是接管本身会失败并记一行
+> `[TAKEOVER] 未接管音乐入口`。**代价是启动多等约 40s**（它在等一个永远不会来的官方 daemon）。
+> 环境变量名是 `QULV_TAKEOVER`，**不是** `FN_TAKEOVER`（见 `pkg/takeover/takeover.go:50`）。
 
 > ⚠️ **Windows 下必须设 `FN_ALLOWED_ROOTS`**，否则路径守卫 fail closed，曲库功能全被拒：
 > ```bash
@@ -3609,7 +3619,7 @@ console.log(JSON.stringify(await fn(page, cp, http), null, 1));
 |---|---|
 | **真机验证** | **所有飞牛/账号/推送代码都只经单元测试与假服务器验证**，未在真实 fnOS 上跑过。需装 FPK 后访问 `GET /api/fnos/status` 看两个 available 是否为 true |
 | ~~前端扫码界面~~ | ✅ 已完成（`AccountManager.vue`）——但仍**未在真机走过完整扫码链路** |
-| **飞牛前端 JS SDK（目录选择器）** | 已声明 `micro_app=true` 与 `api-scope`，但前端还没接 `@trimjs/web-app` 的 `pickSharedFile` |
+| ~~**飞牛前端 JS SDK（目录选择器）**~~ | ✅ 已完成（v2.22.0）：`frontend/src/services/trimHost.js` 惰性加载 `@trimjs/web-app`，`NasDirPicker.vue` 探测到宿主后在弹窗顶部多给一行「用飞牛的文件选择器」（`pickUserFile({directory:true})`，宿主明确报「不支持」时回落到 `pickSharedFile`，超时**不**回落）。**仍未在真机验证过这一行会不会出现** —— 判定方式见 `trimHost.js` 顶部注释（`localStorage.trim_force_host=1` 可在浏览器里强制预览这条路径） |
 | **QQ 音乐 WeChat 扫码** | 已实现 QQ 扫码；flow 还支持微信扫码（`open.weixin.qq.com/connect/qrconnect`），未移植 |
 | **推送的保留期策略** | ✅ 已实现：`retention_mode` / `retention_days`（如日推只保留 7 天，到期自动清理本任务推送过的曲目）。入口在订阅行的「设置」里（v2.1.16 起） |
 | ~~前端推送管理界面~~ | ✅ 已完成，v2.1.16 起并入 `LibraryManager.vue` 的「推送」页（见 §4.1.5） |
@@ -3765,6 +3775,44 @@ window.addEventListener('resize', () => this.resize())   // 匿名函数，移�
   属**结构改造**，收益（首屏快一点）与风险不成正比 —— **建议先不动**
 
 
+### 8.7 「补全整理」页（TidyView）：审查报告 + **改动已落地（v2.22.0）**
+
+📄 报告：`docs/tidy-page-audit-2026-10-25.md`（307 行，含可复现的 grep 证据）。
+
+审查维度：逻辑脱节 / 代码遗漏 / 功能缺失 / 逻辑重复 / 功能重复 / UI 重复 / 移动端适配 / 隐患。
+**v2.22.0 已按报告逐条修完**（P0 4 项、P1 4 项，其余 P2/P3 与样式重复）。改动集中在：
+
+| 落点 | 内容 |
+| --- | --- |
+| `frontend/src/components/TidyView.vue` | 全部行为修复（约 +1260 / -440 行） |
+| `frontend/src/components/SectionCard.vue` | 副标题窄屏两行 |
+| `frontend/src/components/LibraryHealthCard.vue` | 修复动作就地两步确认（3.6） |
+| `frontend/src/components/SelectionBar.vue` | 窄屏可横滑、按钮不收缩 |
+| `frontend/src/components/TidyDirChip.vue` | 窄屏只显示目录名 |
+| `frontend/src/style.css` | **新增 `.ys-btn` 家族 / `.ys-progress` / `.ys-empty` / `.ys-cell`** |
+| `frontend/src/services/libraryView.js` | 新增 `fmtWhen()` / `relWhen()`；`gapsAtText` 加前缀 |
+| `frontend/src/services/libraryView.test.mjs` | 新增 2 组用例（时间格式 + 30 天以上口径） |
+| `frontend/src/services/useLyricGaps.js` | 时间文案改用 `fmtWhen` |
+
+**⚠️ 留给后来人的三条**：
+
+1. `.ys-btn / .ys-btn-sm / .ys-btn-primary` **以前在项目 CSS 里从未定义过**（全局 grep 只有 3 处
+   使用、0 处定义），缺歌词段那三个按钮一直渲染成浏览器默认样式 —— 现在定义在 `style.css` 的
+   「按钮原语」段。新加按钮请直接用这套类，不要再手抄 `bg-emerald-500 px-3.5 py-1.5 …`。
+2. 时间文案只有 `services/libraryView.js` 的 `fmtWhen` / `relWhen` 两个入口。
+   **不要**在组件里写 `new Date(...).toLocaleString('zh-CN')` —— 它的输出随浏览器语言变化，
+   截图报障时和用户看到的对不上。
+3. `fmtWhen` 把 `0`、`''`、`null` 一律当「还没发生过」返回空串（这个页面的 `gaps.at` /
+   `scanned_at` / `titleFixAt` 全都用 `0` 当哨兵）。新增时间字段时保持这个约定。
+
+仍**未做**（评估后认为收益不抵风险，不是遗漏）：
+
+- 抽 `DataTable` / `EmptyState` 组件 —— 已用 `.ys-empty` / `.ys-cell` / 统一表头类的
+  **CSS 原语**替代，避免为一个页面引入组件层的 prop 契约。
+- 全局「撤销上一步」统一入口 —— 补全的撤销入口在「数据快照」段，歌名修复的撤回在各自记录里，
+  合并需要跨模块的状态总线，属结构改造。
+- 音质替换前的目标档位详情（码率 / 体积 / 时长）—— 后端 `quality` 接口目前不返回这些字段。
+
 ## 9. 参考过的项目
 
 | 项目 | 借鉴内容 | 注意 |
@@ -3913,7 +3961,7 @@ window.addEventListener('resize', () => this.resize())   // 匿名函数，移�
 > 所以别处写的「见 §11 ㊼ 块十」指的是 `docs/变更记录/` 里同名回合的小节。
 
 - **目录**：[`docs/变更记录/INDEX.md`](docs/变更记录/INDEX.md)（全部回合倒序，每行带文件链接）
-- 最近的回合：[`v2.21.0 补全整理重做 + 榜单满量显示 + 元数据快照`、`v2.20.0 更新下载超时修复 + 侧栏「发现新版本」入口`、`v2.19.2 重试失败修复 + 歌单推送收编本地曲库`](docs/变更记录/2026-10-25.md)
+- 最近的回合：[`v2.22.0 隐藏目录可见（.dev/music）`](docs/变更记录/2026-10-26.md)、[`v2.21.0 补全整理重做 + 榜单满量显示 + 元数据快照`、`v2.20.0 更新下载超时修复 + 侧栏「发现新版本」入口`、`v2.19.2 重试失败修复 + 歌单推送收编本地曲库`](docs/变更记录/2026-10-25.md)
 - **每轮改完仍要写**（用户定的铁规，见 `.workbuddy-ai/memory/agent/README.md`）：正文改本文件 §0–§10，变更条目追加到 `docs/变更记录/` **当月文件的顶部**，并在 `INDEX.md` 加一行。
 
 ### 11.1 为什么拆、去哪找

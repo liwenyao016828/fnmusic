@@ -251,6 +251,11 @@ var routeTable = []routeSpec{
 	// 一个路径吃掉 start/status/stop 三个动作（它们是同一件事的三个面）。
 	{Path: "/api/quality/scan", Handler: func(s *Server) http.HandlerFunc { return s.handleQualityScan }},
 	{Path: "/api/quality/replace", Handler: func(s *Server) http.HandlerFunc { return s.handleQualityReplace }},
+	// 后台「音质补强」的设置面（v2.22，用户 2026-10-25：补强记录能看见却没法控制）。
+	// GET = 读状态（开关/间隔/批量/来源/档位 + 欠账条数 + 这一轮跑到哪）；
+	// POST = 改设置；/run = 立刻补一轮。
+	{Path: "/api/quality/auto-upgrade", Handler: func(s *Server) http.HandlerFunc { return s.handleQualityAutoUpgrade }},
+	{Path: "/api/quality/auto-upgrade/run", Handler: func(s *Server) http.HandlerFunc { return s.handleQualityAutoUpgradeRun }},
 
 	// 3. NAS Local Music
 	{Path: "/api/nas/folders", Handler: func(s *Server) http.HandlerFunc { return nas.ListFolders }},

@@ -52,6 +52,11 @@ const (
 	metaSnapshotMeta   = "meta.json"
 	metaSnapshotMark   = "manual.json" // 手动快照标记（与老版一致，便于界面区分）
 	metaSnapshotMaxAge = 90 * 24 * time.Hour
+	// metaSnapshotDiffCap 「看明细」一次最多回多少条差异。
+	// 一份 5 万首的快照，差异很容易上千条 —— 全塞进一个 JSON 会卡住界面，
+	// 所以封顶；但**必须**同时告诉前端「被截了」（diff_truncated / diff_total），
+	// 否则用户会以为「不一样的只有这 500 首」。
+	metaSnapshotDiffCap = 500
 )
 
 // metaTag 一首曲子的标签快照（只记**我们可能改动**的字段）
@@ -241,21 +246,25 @@ func (s *Server) HandleMetaSnapshots(w http.ResponseWriter, r *http.Request) {
 				cur[t.Path] = t
 			}
 			diff := make([]map[string]interface{}, 0, 32)
+			diffTotal := 0 // 真正不一样的条数（不受下方 500 上限影响）
 			for _, t := range snap.Tracks {
 				c, ok := cur[t.Path]
 				if !ok {
-					diff = append(diff, map[string]interface{}{"path": t.Path, "change": "missing", "snap_title": t.Title})
+					diffTotal++
+					if len(diff) < metaSnapshotDiffCap {
+						diff = append(diff, map[string]interface{}{"path": t.Path, "change": "missing", "snap_title": t.Title})
+					}
 					continue
 				}
 				fields := diffFields(t, c)
 				if len(fields) > 0 {
-					diff = append(diff, map[string]interface{}{
-						"path": t.Path, "change": "changed", "fields": fields,
-						"snap_title": t.Title, "now_title": c.Title,
-					})
-				}
-				if len(diff) >= 500 {
-					break
+					diffTotal++
+					if len(diff) < metaSnapshotDiffCap {
+						diff = append(diff, map[string]interface{}{
+							"path": t.Path, "change": "changed", "fields": fields,
+							"snap_title": t.Title, "now_title": c.Title,
+						})
+					}
 				}
 			}
 			writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -263,7 +272,16 @@ func (s *Server) HandleMetaSnapshots(w http.ResponseWriter, r *http.Request) {
 				"data": map[string]interface{}{
 					"id": snap.ID, "created": snap.Created, "kind": snap.Kind, "dir": snap.Dir,
 					"count": snap.Count, "writable": snap.Writable, "note": snap.Note,
-					"tracks": snap.Tracks, "diff": diff,
+					// ⚠️ 这里**不要**再塞 snap.Tracks。
+					// 一份 5 万首的快照整个曲目表就是几 MB JSON，而前端只读 diff
+					// （TidyView.vue 里只有 snapDetail.created / .count / .writable / .diff）——
+					// 每次点「看明细」白传一遍，NAS 上还占着内存序列化。要全量请另开接口分页给。
+					"diff": diff,
+					// 截断了要说清：原来闷头 break，用户看到 500 行会以为「和现在不一样的
+					// 就只有这 500 首」，恢复前的判断全错。
+					"diff_total":     diffTotal,
+					"diff_truncated": diffTotal > len(diff),
+					"diff_cap":       metaSnapshotDiffCap,
 				},
 			})
 			return

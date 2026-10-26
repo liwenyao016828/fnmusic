@@ -5,12 +5,23 @@ import { initUiPrefs } from './services/prefs'
 import { LogsAPI } from './api/client'
 import { setLogReporter, logError } from './services/appLog'
 import { describeError } from './services/userMsg'
+import { setScopeFallback } from './services/feedback'
+import { currentView } from './services/navBus'
+import { VIEWS } from './services/navViews'
 
 const app = createApp(App)
 
 // 前端日志上报通道：界面上的报错只留一句人话，完整信息走这里进后端运行日志，
 // 用户在「日志」页就能查到（约定与实现见 services/appLog.js）。
 setLogReporter((level, message) => LogsAPI.report(level, message))
+
+// 提示没给 scope 时，用「当前页面名」当日志 scope。
+// 为什么放这里而不是 feedback.js 自己引 navBus：navBus 反向 import 了 feedback，
+// 在 feedback 里引 navBus 会绕成循环依赖；main.js 是两者的共同上层，接在这里最干净。
+setScopeFallback(() => {
+  const v = VIEWS.find((x) => x.id === currentView.value)
+  return v?.name || '界面提示'
+})
 
 // 兜底：组件里没被 catch 的异常，以前只进浏览器控制台（用户看不到），
 // 现在也记进日志 —— 否则「页面某块没出来」这种情况在日志里毫无痕迹。

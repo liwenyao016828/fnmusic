@@ -145,6 +145,32 @@ type AppConfig struct {
 	SnapshotIntervalHours int `json:"snapshot_interval_hours,omitempty"`
 	// SnapshotKeep 保留几份定时快照（超出的从最旧的开始删）。0 → 默认 7。
 	SnapshotKeep int `json:"snapshot_keep,omitempty"`
+	// ── 后台「音质补强」的设置（用户 2026-10-25：「音质补强是不是有个自动补强？下载-自动
+	// 记录里有个记录，但是我没法控制呢？增加相应的定时按钮，补强音质来源，音质。将这个自动
+	// 下载功能设置增加到设置。」）──
+	//
+	// 背景：在那之前补强轮是**写死**的 —— 20 分钟一轮、每轮 3 首、只在「收藏自动下载」开着
+	// 时才动（见 pkg/intercept/upgrade_sweeper.go）。它的结果只出现在「下载-自动记录」里
+	// 一行「自动补强」，用户在界面上既看不到它在跑，也关不掉、调不了。
+	//
+	// UpgradeSweepEnabled 补强轮的总开关（**独立于收藏自动下载**）。
+	//
+	// 指针 = 三态，且**老配置（nil）沿用原来的语义**：以前能补强 ⟺ FavAutoDownload 开着，
+	// 所以 nil 时读出来就是「跟收藏自动下载同步」（见 UpgradeSweepOn）。升级不应把用户
+	// 正在跑的补强悄悄停掉，也不该给没开收藏下载的人突然打开一个后台重活。
+	UpgradeSweepEnabled *bool `json:"upgrade_sweep_enabled,omitempty"`
+	// UpgradeSweepIntervalMinutes 两轮之间隔多久（分钟）。0 / 缺省 → 默认 240（等于原来的
+	// 20 分钟 × 12 轮、按「一天补完一小批」的节奏，但让用户能选）。区间见 NormalizeUpgradeSweep。
+	UpgradeSweepIntervalMinutes int `json:"upgrade_sweep_interval_minutes,omitempty"`
+	// UpgradeSweepBatch 一轮最多派几首去补。0 / 缺省 → 默认 3（原来的 upgradeSweepBatch）。
+	// 上限 10：一次探测在洛雪渠道要几十秒，一轮派太多会把用户此刻的收藏下载挤到后面。
+	UpgradeSweepBatch int `json:"upgrade_sweep_batch,omitempty"`
+	// UpgradeSweepIgnoreCooldown 是否无视 24 小时冷却位。
+	//
+	// 原来失败一定记冷却，用户想「再试一次」只能等一天 —— 而第三方站是随时会好的。
+	// 打开后每一轮都从「最该补的」开始重试（仍受 upgradeMaxTries 的总次数上限约束，
+	// 不会无限重试）。**缺省关**：它会让外呼变密，该由用户明确打开。
+	UpgradeSweepIgnoreCooldown *bool `json:"upgrade_sweep_ignore_cooldown,omitempty"`
 	// ── 应用内更新：GitHub 个人 token（用户 2026-10-25）──
 	//
 	// 「新增个人token输入」。（同一次需求里的「限制速率」被用户当场否掉了：
@@ -538,6 +564,78 @@ func (a AppConfig) SnapshotRetention() int {
 		n = SnapshotMaxKeep
 	}
 	return n
+}
+
+// ── 后台「音质补强」的设置读取口径（见 AppConfig.UpgradeSweepEnabled）──
+
+const (
+	// UpgradeSweepDefaultIntervalMinutes 默认两轮间隔：4 小时。
+	UpgradeSweepDefaultIntervalMinutes = 240
+	// UpgradeSweepMinIntervalMinutes 间隔下限：一次探测在洛雪渠道要几十秒，
+	// 再密就是连续外呼第三方站了。
+	UpgradeSweepMinIntervalMinutes = 15
+	// UpgradeSweepMaxIntervalMinutes 间隔上限：一天。
+	UpgradeSweepMaxIntervalMinutes = 24 * 60
+	// UpgradeSweepDefaultBatch 一轮默认派几首。
+	UpgradeSweepDefaultBatch = 3
+	// UpgradeSweepMaxBatch 一轮上限。
+	UpgradeSweepMaxBatch = 10
+)
+
+// NormalizeUpgradeSweepInterval 把间隔（分钟）夹进合法区间，<=0 取默认。
+func NormalizeUpgradeSweepInterval(n int) int {
+	if n <= 0 {
+		return UpgradeSweepDefaultIntervalMinutes
+	}
+	if n < UpgradeSweepMinIntervalMinutes {
+		return UpgradeSweepMinIntervalMinutes
+	}
+	if n > UpgradeSweepMaxIntervalMinutes {
+		return UpgradeSweepMaxIntervalMinutes
+	}
+	return n
+}
+
+// NormalizeUpgradeSweepBatch 把「一轮几首」夹进 [1, UpgradeSweepMaxBatch]，<=0 取默认。
+func NormalizeUpgradeSweepBatch(n int) int {
+	if n <= 0 {
+		return UpgradeSweepDefaultBatch
+	}
+	if n < 1 {
+		return 1
+	}
+	if n > UpgradeSweepMaxBatch {
+		return UpgradeSweepMaxBatch
+	}
+	return n
+}
+
+// UpgradeSweepOn 报告补强轮开没开。
+//
+// **nil（老配置）= 跟收藏自动下载同步** —— 这正是升级前的行为（补强轮的 deps 里第一条就是
+// FavAutoDownloadOn），所以升级既不会给没开收藏下载的人悄悄起一个后台重活，也不会把已经在
+// 补强的人停下来。用户在设置里显式开关过之后，就完全按他选的走（哪怕收藏自动下载是关的，
+// 老曲库里的有损也照样该补）。
+func (a AppConfig) UpgradeSweepOn() bool {
+	if a.UpgradeSweepEnabled != nil {
+		return *a.UpgradeSweepEnabled
+	}
+	return a.FavAutoDownloadOn()
+}
+
+// UpgradeSweepIgnoreCooldownOn 报告「无视冷却位」。nil = 关。
+func (a AppConfig) UpgradeSweepIgnoreCooldownOn() bool {
+	return a.UpgradeSweepIgnoreCooldown != nil && *a.UpgradeSweepIgnoreCooldown
+}
+
+// UpgradeSweepInterval 返回补强轮实际间隔。
+func (a AppConfig) UpgradeSweepInterval() time.Duration {
+	return time.Duration(NormalizeUpgradeSweepInterval(a.UpgradeSweepIntervalMinutes)) * time.Minute
+}
+
+// UpgradeSweepPerRound 返回补强轮一轮实际派几首。
+func (a AppConfig) UpgradeSweepPerRound() int {
+	return NormalizeUpgradeSweepBatch(a.UpgradeSweepBatch)
 }
 
 // InjectUIEnabled 是「页面注入」开关的读取口径：**没设置过就是开**。
@@ -1202,6 +1300,22 @@ func (cm *ConfigManager) Update(c AppConfig) error {
 			v = SnapshotMaxKeep
 		}
 		cm.config.SnapshotKeep = v
+	}
+	// 后台音质补强：三个键都是「给了才改」。开关与「无视冷却」是指针，nil = 保持原样；
+	// 两个数值 0 = 保持原样（要回默认就在界面上选默认值，与定时快照同一口径）。
+	if c.UpgradeSweepEnabled != nil {
+		v := *c.UpgradeSweepEnabled
+		cm.config.UpgradeSweepEnabled = &v
+	}
+	if c.UpgradeSweepIgnoreCooldown != nil {
+		v := *c.UpgradeSweepIgnoreCooldown
+		cm.config.UpgradeSweepIgnoreCooldown = &v
+	}
+	if c.UpgradeSweepIntervalMinutes > 0 {
+		cm.config.UpgradeSweepIntervalMinutes = NormalizeUpgradeSweepInterval(c.UpgradeSweepIntervalMinutes)
+	}
+	if c.UpgradeSweepBatch > 0 {
+		cm.config.UpgradeSweepBatch = NormalizeUpgradeSweepBatch(c.UpgradeSweepBatch)
 	}
 	// 页面注入开关：nil = 不动。关掉 = 官方页面完全原样（拦截层不认领文档请求）。
 	if c.UIInjectEnabled != nil {

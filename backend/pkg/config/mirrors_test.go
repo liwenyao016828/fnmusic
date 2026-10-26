@@ -9,7 +9,7 @@ func TestNormalizeUpdateMirrorAcceptsHTTP(t *testing.T) {
 	for _, raw := range []string{
 		"https://gh-proxy.com",
 		"http://192.168.1.3:8080/gh",
-		"gh-proxy.com",           // 不带 scheme，要补 https
+		"gh-proxy.com", // 不带 scheme，要补 https
 		"https://my.host/{repo}/latest.json",
 	} {
 		if _, ok := NormalizeUpdateMirror(UpdateMirror{URL: raw}); !ok {

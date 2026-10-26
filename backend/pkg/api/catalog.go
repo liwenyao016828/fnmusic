@@ -224,7 +224,7 @@ func APICatalog(baseURL string) []Endpoint {
 		{
 			Method: http.MethodPost, Path: "/api/app/update/notice/ack", Summary: "把「更新完成」提示标记为已展示", Category: catSystem,
 			Example: "curl -X POST " + baseURL + "/api/app/update/notice/ack -H 'Content-Type: application/json' -d '{\"version\":\"2.21.1\"}'",
-			Notes: "body.version 必须等于当前版本号，否则返回 {ok:false}（旧页面拿着旧版本号点确认，不能把新版本的提示作废）。不读到就作废：提示要先渲染出来再 ack。",
+			Notes:   "body.version 必须等于当前版本号，否则返回 {ok:false}（旧页面拿着旧版本号点确认，不能把新版本的提示作废）。不读到就作废：提示要先渲染出来再 ack。",
 		},
 		{
 			Method: http.MethodGet, Path: "/api/config", Summary: "读取应用配置（含主力平台 preferred_platforms）", Category: catSystem,
@@ -655,9 +655,12 @@ func APICatalog(baseURL string) []Endpoint {
 				{Name: "path", In: "query", Desc: "目录绝对路径"},
 				{Name: "files", In: "query", Desc: "传 1 时额外返回普通文件列表（默认不返回，避免放大 JSON）"},
 				{Name: "ext", In: "query", Desc: "配合 files=1 过滤扩展名，逗号分隔，如 js,mjs"},
+				{Name: "hidden", In: "query", Desc: "传 1 时连 `.`/`$`/`@` 开头的隐藏目录一起列出来（默认藏着，如 .dev、@eaDir）"},
 			},
 			Example: "curl '" + baseURL + "/api/nas/browse?path=/vol1/Music&files=1&ext=js'",
-			Notes:   "仅允许访问配置的曲库根目录，越权路径会被拒绝。",
+			Notes: "仅允许访问配置的曲库根目录，越权路径会被拒绝。" +
+				"响应里的 `hidden_count` / `hidden_dirs` 是「被折叠掉的隐藏子目录」的数量与前几个名字 —— " +
+				"默认不给 hidden=1 时，调用方可以据此提示用户「还有 N 个隐藏目录」，而不是让 `.dev/music` 这种路径凭空消失。",
 		},
 		{
 			Method: http.MethodGet, Path: "/api/nas/read", Summary: "读取文本文件（从 NAS 选音源脚本用）", Category: catNAS,
@@ -1466,6 +1469,38 @@ func APICatalog(baseURL string) []Endpoint {
 				"`done[].ok=false` 配 `note` 表示「拿到的是同档位文件，没有覆盖」（不是失败）；" +
 				"真正的失败在 `failed[]` 里。逐条独立，一条失败不影响后续。" +
 				"**注意**：这会在磁盘上产生新文件并删掉旧文件，属于写操作。",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/quality/auto-upgrade",
+			Summary: "读后台「音质补强」的设置与活状态", Category: catDownload,
+			Notes: "自动补强 = 把「收藏时各渠道都没给无损」的那批歌按节奏重试。" +
+				"`pending/cooling` 是欠账总数与其中还在 24h 冷却里的条数；" +
+				"`channels/quality` 复用「自动下载源 / 下载音质」那套键。",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/quality/auto-upgrade",
+			Summary: "改后台「音质补强」的设置（选择性合并，只传要改的键）", Category: catDownload,
+			Params: []Param{
+				{Name: "enabled", In: "body", Desc: "补强总开关（独立于「收藏自动下载」）"},
+				{Name: "interval_minutes", In: "body", Desc: "两轮间隔，15~1440，0 = 回到默认 240"},
+				{Name: "batch", In: "body", Desc: "一轮最多派几首，1~10，0 = 回到默认 3"},
+				{Name: "ignore_cooldown", In: "body", Desc: "是否无视失败后的 24 小时冷却位"},
+				{Name: "channels", In: "body", Desc: "取音渠道允许集与顺序（同「自动下载源」）"},
+				{Name: "quality", In: "body", Desc: "下载音质档位（同「下载音质」）"},
+			},
+			Notes: "改完立刻热生效（间隔重排、开关起停循环），不需要重启应用。" +
+				"⚠️ 用户把档位点名成 320k/192k/128k 时，补强轮**不会**在后台追无损" +
+				"（那是逆着他的选择花流量）。",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/quality/auto-upgrade/run",
+			Summary: "立刻补一轮（不必等到下个间隔）", Category: catDownload,
+			Params: []Param{
+				{Name: "now", In: "body", Desc: "true = 先清掉冷却位再补（「再试一次」）；缺省只看本来就该补的"},
+			},
+			Notes: "同步返回 `dispatched`（这次派出去几首）与 `pending`（还欠多少）；" +
+				"真正的下载在后台跑，结果会进 `/api/quality/records` 那本账。" +
+				"一次最多派 `batch×2` 首，不会把一整个曲库一口气甩出去。",
 		},
 
 		// ── 网络代理 ──

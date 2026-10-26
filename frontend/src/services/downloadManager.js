@@ -18,6 +18,7 @@ import { qualityOverride } from './qualityOverride.js'
 import { qualityLabel, isHighestQuality } from '../engine/quality.js'
 import { logError } from './appLog.js'
 import { fail, apiError } from './userMsg.js'
+import { loadBool, savePref } from './prefs.js'
 import { backendDownload } from './backendDownload.js'
 import {
   MIGRATION_FLAG,
@@ -70,6 +71,17 @@ const dirError = ref('')
 const browseFolders = ref([])
 const browseParentPath = ref('')
 const editDownloadDir = ref('/vol1/Music')
+
+/**
+ * 目录浏览里是否连 `.`/`$`/`@` 开头的隐藏目录一起列出来。
+ *
+ * 用户 2026-10-25 报障「曲库在 music-v2/.dev/music，中间的 .dev 在目录选择器里看不到」——
+ * 这个弹窗（下载页/发现页的「设置目录」）以前根本不传 hidden，于是那条路永远选不到点目录。
+ * 与 `NasDirPicker.vue` 共用同一个偏好键，两边开关状态一致。
+ */
+const browseShowHidden = ref(loadBool('nas_show_hidden', false))
+const browseHiddenCount = ref(0)
+const browseHiddenDirs = ref([])
 
 // ── 后端任务 → 界面任务 ──
 
@@ -759,16 +771,27 @@ function setAllQuality(quality) {
 
 async function openDirModal() {
   editDownloadDir.value = currentDownloadDir.value
+  // 每次打开都重读偏好：用户可能在「本地曲库」弹窗里刚切过开关
+  browseShowHidden.value = loadBool('nas_show_hidden', false)
   showDirModal.value = true
   browseDir(currentDownloadDir.value)
 }
 
+/** 切「显示隐藏目录」：记住偏好并就地重读当前目录（不跳回上一层） */
+function setBrowseShowHidden(v) {
+  browseShowHidden.value = !!v
+  savePref('nas_show_hidden', browseShowHidden.value)
+  browseDir(editDownloadDir.value)
+}
+
 async function browseDir(path) {
   try {
-    const res = await NasAPI.browse(path)
+    const res = await NasAPI.browse(path, { hidden: browseShowHidden.value })
     if (res.code === 200 && res.data) {
       browseFolders.value = res.data.folders || []
       browseParentPath.value = res.data.parent || ''
+      browseHiddenCount.value = res.data.hidden_count || 0
+      browseHiddenDirs.value = res.data.hidden_dirs || []
       if (res.data.current) editDownloadDir.value = res.data.current
     }
   } catch (e) {
@@ -1001,8 +1024,12 @@ export const downloadManager = {
   browseFolders,
   browseParentPath,
   editDownloadDir,
+  browseShowHidden,
+  browseHiddenCount,
+  browseHiddenDirs,
   openDirModal,
   browseDir,
+  setBrowseShowHidden,
   saveDownloadDir,
   loadConfig,
 

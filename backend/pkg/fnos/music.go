@@ -161,6 +161,35 @@ func rows(raw json.RawMessage) []map[string]any {
 	return nil
 }
 
+// musicStatusSource 供测试替换 `/user/me` 与可用性探测，见 SetMusicStatusSourceForTest。
+var musicStatusSource = func() (bool, map[string]any, error) {
+	m := NewMusic("")
+	if !m.Available() {
+		return false, nil, nil
+	}
+	account, err := m.Me()
+	return true, account, err
+}
+
+// SetMusicStatusSourceForTest 替换「飞牛音乐是否可用 / 账号是谁」的数据源，
+// 返回原来源供恢复。仅测试用：真机之外的单元测试不该依赖飞牛 socket。
+func SetMusicStatusSourceForTest(fn func() (bool, map[string]any, error)) func() (bool, map[string]any, error) {
+	old := musicStatusSource
+	if fn == nil {
+		fn = func() (bool, map[string]any, error) { return false, nil, nil }
+	}
+	musicStatusSource = fn
+	return old
+}
+
+// MusicStatus 报告飞牛音乐是否可用，以及可用时的账号信息。
+//
+// 抽出来是为了让 HTTP 层能单测「对外给多少」。生产路径与原来等价：
+// 先 NewMusic("").Available()，再 Me()。
+func MusicStatus() (bool, map[string]any, error) {
+	return musicStatusSource()
+}
+
 // Me 返回当前登录账号信息，可用于校验令牌是否有效。
 func (m *Music) Me() (map[string]any, error) {
 	var data json.RawMessage

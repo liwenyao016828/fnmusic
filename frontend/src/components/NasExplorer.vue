@@ -483,7 +483,7 @@
 
         <!-- Path Breadcrumb Bar & Back to Parent Button -->
         <div class="py-2.5 px-3 bg-gray-50 rounded-xl my-3 flex items-center justify-between gap-2 shrink-0 text-xs">
-          <div class="flex items-center gap-1 overflow-x-auto font-mono text-gray-600">
+          <div class="flex min-w-0 items-center gap-1 overflow-x-auto font-mono text-gray-600">
             <span class="text-gray-400">路径:</span>
             <button
               v-for="(crumb, idx) in modalBreadcrumbs"
@@ -496,19 +496,50 @@
             </button>
           </div>
 
-          <button
-            v-if="modalParentPath"
-            @click="modalDrillDown(modalParentPath)"
-            class="px-2.5 py-1 rounded-lg bg-white border border-gray-200 hover:bg-gray-100 text-gray-600 text-[11px] font-medium flex items-center gap-1 shrink-0 transition-colors"
-            title="返回上一级"
-          >
-            <CornerLeftUp class="w-3 h-3 text-gray-500" />
-            <span>上一级</span>
-          </button>
+          <div class="flex items-center gap-1.5 shrink-0">
+            <!--
+              隐藏目录开关（2026-10-25 用户报障：曲库在 `music-v2/.dev/music`，
+              `.dev` 在目录树里看不见）。后端默认藏 `.`/`$`/`@` 开头的条目。
+            -->
+            <button
+              @click="toggleModalHidden()"
+              class="px-2.5 py-1 rounded-lg border text-[11px] font-medium flex items-center gap-1 shrink-0 transition-colors"
+              :class="modalShowHidden
+                ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
+                : 'bg-white border-gray-200 hover:bg-gray-100 text-gray-600'"
+              :title="modalShowHidden ? '不显示 . 开头的隐藏目录' : '显示 . 开头的隐藏目录'"
+            >
+              <component :is="modalShowHidden ? Eye : EyeOff" class="w-3 h-3" />
+              <span>隐藏项</span>
+            </button>
+
+            <button
+              v-if="modalParentPath"
+              @click="modalDrillDown(modalParentPath)"
+              class="px-2.5 py-1 rounded-lg bg-white border border-gray-200 hover:bg-gray-100 text-gray-600 text-[11px] font-medium flex items-center gap-1 shrink-0 transition-colors"
+              title="返回上一级"
+            >
+              <CornerLeftUp class="w-3 h-3 text-gray-500" />
+              <span>上一级</span>
+            </button>
+          </div>
         </div>
 
         <!-- Folder List Area -->
         <div class="flex-1 overflow-y-auto divide-y divide-gray-50 pr-1 min-h-[220px]">
+          <!--
+            「开关就在眼前但看不见」兜底：后端把被折叠的隐藏子目录数量/名字回报出来，
+            直接在最显眼的位置提示一句，省得用户以为目录不存在。
+          -->
+          <button
+            v-if="!modalShowHidden && modalHiddenCount > 0"
+            type="button"
+            @click="toggleModalHidden()"
+            class="mb-2 w-full text-left px-3 py-2 rounded-xl bg-amber-50 border border-amber-200 text-[11px] leading-tight text-amber-800 hover:bg-amber-100 transition-colors"
+          >
+            这一层还有 {{ modalHiddenCount }} 个隐藏文件夹没显示<template v-if="modalHiddenDirs.length">（{{ modalHiddenDirs.join('、') }}）</template> · 点这里显示
+          </button>
+
           <!-- Loading -->
           <div v-if="modalLoading" class="h-44 flex flex-col items-center justify-center text-gray-400">
             <RotateCw class="w-6 h-6 text-emerald-500 animate-spin mb-2" />
@@ -594,7 +625,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { markLoaded, isStale } from '../services/viewCache'
 import { currentView } from '../services/navBus'
 import { NasAPI, TagsAPI, FnosAPI } from '../api/client'
-import { loadPref, savePref, memGet, memSet } from '../services/prefs'
+import { loadPref, savePref, loadBool, memGet, memSet } from '../services/prefs'
 import { sortSongs, parseSortPref, sortPrefOf, nextSortDir } from '../services/librarySort'
 import {
   breadcrumbsFor,
@@ -607,7 +638,7 @@ import {
 import {
   RotateCw, Folder, FolderOpen, Play, X, Check,
   HardDrive, CornerLeftUp, ChevronRight, ChevronUp, ChevronDown, Loader2,
-  Image as ImageIcon, Trash2
+  Image as ImageIcon, Trash2, Eye, EyeOff
 } from 'lucide-vue-next'
 import InlineNotice from './InlineNotice.vue'
 import { describeError } from '../services/userMsg'
@@ -815,8 +846,16 @@ const modalCurrentPath = ref('/vol1')
 const modalParentPath = ref('')
 const modalVolumes = ref(['/vol1', '/vol2'])
 const modalFolders = ref([])
+/** 被折叠掉的隐藏子目录数量与前几个名字（后端回报，供「还有 N 个」提示） */
+const modalHiddenCount = ref(0)
+const modalHiddenDirs = ref([])
 const modalLoading = ref(false)
 const modalAudioCount = ref(0)
+/**
+ * 是否显示 `.`/`$`/`@` 开头的隐藏目录（2026-10-25 用户报障：`music-v2/.dev/music`
+ * 这种点目录在弹窗里翻不到）。默认关闭 —— `.tidy_trash` 之类不该被选成曲库。
+ */
+const modalShowHidden = ref(loadBool('nas_show_hidden', false))
 
 const breadcrumbs = computed(() => breadcrumbsFor(currentDir.value, '/vol1/Music'))
 const modalBreadcrumbs = computed(() => breadcrumbsFor(modalCurrentPath.value, '/vol1'))
@@ -903,7 +942,7 @@ function openFolderModal() {
 async function loadBrowse(targetPath) {
   modalLoading.value = true
   try {
-    const res = await NasAPI.browse(targetPath)
+    const res = await NasAPI.browse(targetPath, { hidden: modalShowHidden.value })
     if (res.code === 200 && res.data) {
       modalCurrentPath.value = res.data.current
       modalParentPath.value = res.data.parent || ''
@@ -911,6 +950,8 @@ async function loadBrowse(targetPath) {
         modalVolumes.value = res.data.volumes
       }
       modalFolders.value = res.data.folders || []
+      modalHiddenCount.value = res.data.hidden_count || 0
+      modalHiddenDirs.value = res.data.hidden_dirs || []
       modalAudioCount.value = res.data.audio_count || 0
       // 记住目录选择器最后停留的位置
       savePref('nas_modal_path', modalCurrentPath.value)
@@ -924,6 +965,13 @@ async function loadBrowse(targetPath) {
 
 function modalDrillDown(path) {
   loadBrowse(path)
+}
+
+/** 切「显示隐藏项」：记住偏好，并就地重读当前目录（不回到上一层） */
+function toggleModalHidden() {
+  modalShowHidden.value = !modalShowHidden.value
+  savePref('nas_show_hidden', modalShowHidden.value)
+  loadBrowse(modalCurrentPath.value)
 }
 
 function confirmSelection(selectedPath) {

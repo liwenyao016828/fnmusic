@@ -10,6 +10,7 @@
     "test": "node --test"
   },
   "dependencies": {
+    "@trimjs/web-app": "^0.5.0",
     "axios": "^1.7.9",
     "buffer": "^6.0.3",
     "crypto-js": "^4.1.1",

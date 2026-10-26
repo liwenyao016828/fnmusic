@@ -141,7 +141,10 @@ func (m *Manager) tryCheck(ctx context.Context) (CheckResult, Release, sourceEnt
 			failures = append(failures, src.name+"：等待超时")
 			break
 		}
-		rel, err := FetchLatestRelease(ctx, m.httpClient(), src.releaseURL, m.repo, m.tokenNow(), m.ua)
+		// 每台各自限时（sourceAttemptWindow），剩余总预算更短就取更短的那个。
+		sctx, cancel := context.WithTimeout(ctx, sourceAttemptWindow)
+		rel, err := FetchLatestRelease(sctx, m.httpClient(), src.releaseURL, m.repo, m.tokenNow(), m.ua)
+		cancel()
 		if err != nil {
 			reason := briefErr(err)
 			res.Tried = append(res.Tried, SourceAttempt{Name: src.name, URL: src.releaseURL, Error: reason, Reason: reason})
@@ -175,6 +178,9 @@ func (m *Manager) tryCheck(ctx context.Context) (CheckResult, Release, sourceEnt
 	} else {
 		res.Error = fmt.Sprintf("所有更新源均失败：%s", strings.Join(failures, "；"))
 	}
+	// 失败也记住「这条消息从哪个版本说起」：本进程的里 Current 是对的，但如果
+	// 进程自上次检查后重启过，缓存里的这条失败信息可能属于一个更旧的版本。
+	res.Current = m.current
 	return res, Release{}, sourceEntry{}
 }
 

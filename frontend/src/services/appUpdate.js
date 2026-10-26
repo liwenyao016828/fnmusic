@@ -168,6 +168,8 @@ export function createAppUpdate({
   let installRequested = false
   let autoChecked = false
   let stopped = false
+  // 正在跑的 check（见 check()）：并发的调用者共享同一个 promise，而不是拿到 null。
+  let checkInFlight = null
   // 卸载/停止会 ++pollEpoch；异步请求回来时只要 epoch 变了，就说明组件已离开，
   // 不能再把定时器续上（否则切页后还在偷偷轮询）。
   let pollEpoch = 0
@@ -247,20 +249,37 @@ export function createAppUpdate({
   }
 
   async function check({ silent = false } = {}) {
-    if (checking.value) return null
+    // 已经有一次检查在跑时，**把那次的结果给它**，而不是回 null。
+    // 2026-10-25：补「更新说明」时踩到过 —— 后台自动检查正在跑，这边拿到 null 就
+    // 以为「检查完了、后端还是没有说明」，说明永远补不上。
+    if (checking.value) return checkInFlight
     checking.value = true
     if (!silent) checkError.value = ''
+    checkInFlight = (async () => {
+      try {
+        // 前端等待要比后端「所有源各试一轮」更长：后端每台最多 40s（sourceAttemptWindow），
+        // 两台不通就 80s 起步。以前这里写 20s，界面会先报「请求超时」，而后端其实
+        // 还在试下一台 —— 用户看到的「检查失败」并不是真的结论。
+        const data = await request('/api/app/update/check', { timeout: 180000 })
+        applyCheck(data)
+        const res = normalizeCheck(data)
+        // 请求成功但后端明确说要失败（所有源都不通）时也要留痕：
+        // 否则卡片会静默停在「已是最新版本」——那正是飞牛上「怎么还显示旧版本」的样子。
+        if (res && res.error) checkError.value = res.error
+        return res
+      } catch (e) {
+        // 静默检查失败只在卡片里留一行浅灰提示，绝不弹错/打断设置页。
+        checkError.value = e?.message || '检查更新失败'
+        if (!hasUpdate.value && !installed.value) phase.value = 'idle'
+        return null
+      } finally {
+        checking.value = false
+      }
+    })()
     try {
-      const data = await request('/api/app/update/check', { timeout: 20000 })
-      applyCheck(data)
-      return normalizeCheck(data)
-    } catch (e) {
-      // 静默检查失败只在卡片里留一行浅灰提示，绝不弹错/打断设置页。
-      checkError.value = e?.message || '检查更新失败'
-      if (!hasUpdate.value && !installed.value) phase.value = 'idle'
-      return null
+      return await checkInFlight
     } finally {
-      checking.value = false
+      checkInFlight = null
     }
   }
 
@@ -405,6 +424,38 @@ export function createAppUpdate({
     if (keepGoing && !installed.value && epoch === pollEpoch) startPolling()
   }
 
+  /** 取一次 notice 接口（本身不联网检查，只读后端记录 + 已有缓存）。 */
+  async function fetchNotice() {
+    const data = await request('/api/app/update/notice', { timeout: 8000 })
+    return normalizeNotice(data)
+  }
+
+  /**
+   * 后台把 release 说明补进当前这条提示。
+   *
+   * 为什么要补（用户 2026-10-25：「升级日志，很多东西都不显示」）：
+   * 后端只在**已经检查过一次**、且缓存里的版本正好等于当前版本时才带 notes
+   * （见 backend/pkg/appupdate/notice.go 的 NoticeNotes）。启动路径上还没查过，
+   * 所以弹窗拿到的 notes 是空的 —— 卡片里写着「下面这些是新版本带来的变化」，
+   * 下面却什么都没有。这里先让弹窗出来，再在后台补一次说明，谁也不挡谁。
+   */
+  async function fillNoticeNotes() {
+    try {
+      await check({ silent: true })
+    } catch (_) {
+      // 检查失败就算了：说明是锦上添花，弹窗本身照常显示
+    }
+    // 用户可能在这期间关掉了弹窗（ackNotice 会清空 notice）—— 那就别再把说明塞回去。
+    if (!notice.value || notice.value.notes) return
+    try {
+      const again = await fetchNotice()
+      if (again.show && again.notes && notice.value && !notice.value.notes) {
+        // 换一个新对象而不是改字段：notice 是给界面读的 ref，改字段不会触发重渲染。
+        notice.value = { ...notice.value, notes: again.notes }
+      }
+    } catch (_) {}
+  }
+
   /**
    * 取一次「更新完成」提示。每个应用会话只取一次（notifyChecked 去重），
    * 避免用户在多个页面之间切换时反复弹。
@@ -415,9 +466,10 @@ export function createAppUpdate({
     if (notifyChecked) return null
     notifyChecked = true
     try {
-      const data = await request('/api/app/update/notice', { timeout: 8000 })
-      const n = normalizeNotice(data)
+      const n = await fetchNotice()
       notice.value = n.show ? n : null
+      // 先弹窗、后台补说明：不 await（一次检查最长可能试到 80s，绝不能挡着弹窗）。
+      if (n.show && !n.notes) fillNoticeNotes()
       return n.show ? n : null
     } catch (_) {
       return null

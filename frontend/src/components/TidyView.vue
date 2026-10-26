@@ -9,14 +9,19 @@
     增量扫描 / 体检 / 查重 / 撤销 / 选项）全收在右上角 ⋯ 后面。
     重构后：壳层在页面顶部给了分段导航（SegmentedControl，与发现 / 下载 /
     系统同一套机制），五个分段各是一个常驻视图，控件归类进自己那段 ——
-      · 补全（默认段）：扫描缺失 / 增量扫描（仍在 ⋯）/ 字段 chips / 预览 / 写入进度 / 结果；
+      · 补全（默认段）：字段 chips + 合并后的「扫描」（＝增量扫描 + 重算缺口）/
+        预览 / 写入进度 / 结果；
       · 查重：查找重复 + 重复组列表 + 干跑预览 / 移入回收站；
-      · 体检：audit 四格统计（与补全的索引口径各算各的）；
-      · 记录：上次整理快照 + 撤销上一次补全的入口；
-      · 替换音质：占位段 —— 后端 /api/quality/* 开发中，这里不发任何接口调用。
+      · 歌名修复（原「体检」）：AI 改歌名 + 命名规则 + 文件名体检 + 缺歌词；
+      · 数据快照（原「记录」）：快照列表 + 撤销上一次补全 + 手动 / 定时快照；
+      · 替换音质：/api/quality/scan|replace（后端 pkg/intercept/quality.go）。
     分段切换只是 v-show：所有状态都存在本组件的 ref 里，跑完的体检 /
-    查重结果切走再切回来不丢。次要动作仍留在 ⋯（用户反对的是主功能
-    藏在 ⋯ 后面，不是反对 ⋯ 本身）。
+    查重结果切走再切回来不丢。
+
+    ⚠️ 2026-10-27 清理：原来的「⋯ 菜单」已经彻底不存在了 —— 「增量扫描」并进了
+    卡片内的「扫描」按钮，「选项」是卡片头那颗按钮。所以 `completeMenu` /
+    `onCompleteMenu` / `OverflowMenu` import 都是死代码，已删；
+    相关注释里出现的「⋯」也已改掉（曾把用户指到一个不存在的控件上）。
   -->
   <PageShell>
     <!--
@@ -53,7 +58,7 @@
             v-if="completeStep === 2"
             :disabled="previewing || completing || !selectedFields.length"
             :title="completeHint + (selectedFields.length ? '' : '（先在字段里勾要补的项）')"
-            class="ys-press rounded-full bg-emerald-500 px-3.5 py-1.5 text-[12px] font-semibold text-white shadow-[0_1px_2px_rgba(11,138,102,0.3)] transition-colors hover:bg-emerald-600 disabled:opacity-50"
+            class="ys-btn ys-btn-primary ys-press"
             @click="startPreview"
           >{{ previewing ? '停止预览' : '预览要写的内容' }}</button>
           <button
@@ -67,7 +72,9 @@
           </button>
         </template>
 
-        <!-- 一行摘要：缺口数字（曲库目录已挪到分段导航行右边，见页面顶部 #actions-trail） -->
+        <!--
+          一行摘要：缺口数字（曲库目录已挪到分段导航行右边，见页面顶部 #actions-trail）
+        -->
         <div class="flex flex-wrap items-center gap-x-4 gap-y-2">
           <StatLine
             v-if="gaps"
@@ -79,6 +86,18 @@
           />
           <span v-if="gapsAtText" class="text-[10.5px] text-[var(--ys-text-faint)]">{{ gapsAtText }}</span>
         </div>
+
+        <!--
+          「下一步点哪」常驻正文（2026-10-27 修）。
+          这句话原来只挂在预览按钮的 `title` 上 —— 手机上根本没有 hover，
+          等于没写；而它是这一页唯一告诉用户「现在该做什么」的文案（服务层 completeHint）。
+        -->
+        <p class="mt-2 flex items-start gap-1.5 rounded-[10px] bg-[var(--ys-accent-soft)] px-2.5 py-1.5 text-[11px] leading-relaxed text-[var(--ys-accent)]">
+          <Info class="mt-[1px] h-3.5 w-3.5 shrink-0" :stroke-width="2" />
+          <span>
+            {{ completeHint }}<template v-if="!selectedFields.length">（先在下面的字段里勾要补的项）</template>
+          </span>
+        </p>
 
         <!--
           字段选择压成一行 chip（原来 6 张卡片画满一屏）。
@@ -106,7 +125,7 @@
             v-if="completeStep === 1"
             :disabled="indexing || gapsLoading"
             :title="indexing || gapsLoading ? '正在扫描磁盘并重算缺口…' : '扫描磁盘上新增 / 变化的文件，并重新统计缺哪些字段'"
-            class="ys-press ml-auto rounded-full bg-emerald-500 px-3.5 py-1 text-[11.5px] font-semibold text-white shadow-[0_1px_2px_rgba(11,138,102,0.3)] transition-colors hover:bg-emerald-600 disabled:opacity-50"
+            class="ys-btn ys-btn-primary ys-press ml-auto"
             @click="scanAll"
           >{{ indexing || gapsLoading ? '扫描中…' : '扫描' }}</button>
         </div>
@@ -147,16 +166,26 @@
               </span>
             </span>
             <span class="flex shrink-0 items-center gap-2">
+              <!--
+                2.3（2026-10-27）：注释里写的是「暂停 / 继续 / 停止」，模板只有「停止 / 重新预览」——
+                现在把话术对齐成三个各自说清的动作：
+                  · 暂停 = 断开流（服务端立刻取消，不再打外网），已出的行**保留**，但这份清单不能用
+                  · 继续 = 从第一首重新匹配（后端不支持断点续传，别假装能接上）
+                  · 收起 = 只把这块收起来，不影响任何状态
+                原来叫「停止」容易被理解成「就停在这儿、之后能接着跑」，而那做不到。
+              -->
               <button
                 v-if="previewState === 'running'"
                 class="rounded-full border border-[var(--ys-border)] bg-white px-3 py-1 text-[11px] text-[var(--ys-text-muted)] transition-colors hover:text-[var(--ys-text)]"
+                title="断开后服务端立刻停止匹配，已出的行会留着，但这份清单不完整、不能写入"
                 @click="stopPreview"
-              >停止</button>
+              >暂停</button>
               <button
                 v-else
-                class="ys-press rounded-full bg-emerald-500 px-3 py-1 text-[11px] font-semibold text-white transition-colors hover:bg-emerald-600"
+                class="ys-btn ys-btn-sm ys-btn-primary ys-press"
+                :title="previewRows.length ? '从第一首重新匹配；现在这份列表会被清空' : '开始逐条匹配'"
                 @click="startPreview"
-              >重新预览</button>
+              >{{ previewRows.length ? '重新预览' : '预览' }}</button>
               <button
                 class="rounded-full px-2.5 py-1 text-[11px] text-[var(--ys-text-muted)] transition-colors hover:text-[var(--ys-text)]"
                 title="收起预览（不影响已写入的结果）"
@@ -166,16 +195,14 @@
           </div>
 
           <!-- 进度条：只在跑的时候占位，跑完不留一条 100% 的装饰 -->
-          <div v-if="previewState === 'running'" class="h-1 overflow-hidden rounded-full bg-[var(--ys-border)]">
-            <div
-              class="h-full rounded-full bg-emerald-500 transition-[width] duration-300"
-              :style="{ width: previewPercent + '%' }"
-            />
+          <!-- 进度条统一走 .ys-progress（七）：原来这里 h-1（4px），另外两条 h-1.5（6px） -->
+          <div v-if="previewState === 'running'" class="ys-progress">
+            <i :style="{ width: previewPercent + '%' }" />
           </div>
 
-          <div class="max-h-64 overflow-y-auto rounded-[10px] border border-[var(--ys-border)] bg-white">
-            <table class="w-full text-[11px]">
-              <thead class="sticky top-0 bg-white text-[var(--ys-text-faint)]">
+          <div class="max-h-64 overflow-auto rounded-[10px] border border-[var(--ys-border)] bg-white">
+            <table class="w-full min-w-[520px] text-[11px]">
+              <thead class="sticky top-0 z-10 bg-[var(--ys-bg-soft)] text-[var(--ys-text-faint)]">
                 <tr>
                   <th class="px-2 py-1.5 text-left font-medium">文件</th>
                   <th class="px-2 py-1.5 text-left font-medium">匹配到</th>
@@ -222,7 +249,7 @@
             <button
               v-if="previewPlanId"
               :disabled="completing || !previewMatchedCount"
-              class="ys-press rounded-full bg-emerald-500 px-4 py-1.5 text-[12px] font-semibold text-white shadow-[0_1px_2px_rgba(11,138,102,0.3)] transition-colors hover:bg-emerald-600 disabled:opacity-50"
+              class="ys-btn ys-btn-primary ys-press"
               @click="executeComplete"
             >确认写入 {{ previewMatchedCount }} 首</button>
             <span v-if="previewPlanId" class="text-[11px] text-[var(--ys-text-faint)]">写入前会自动备份，可随时撤销</span>
@@ -230,7 +257,7 @@
               这份清单不完整，不能执行 —— 重新预览一次
             </span>
             <span v-else-if="previewState === 'idle'" class="text-[11px] text-[var(--ys-text-faint)]">
-              已停止，结果不完整；需要执行请重新预览
+              已暂停，结果不完整；要继续请点「重新预览」（会从第一首重来）
             </span>
           </div>
         </div>
@@ -246,15 +273,15 @@
               <button
                 v-if="completeJob.running && !completeJob.cancelled"
                 :disabled="stopBusy"
-                class="rounded-[8px] px-2.5 py-1 text-[11px] text-rose-600 transition-colors hover:bg-rose-50 disabled:opacity-50"
+                class="ys-btn ys-btn-sm ys-btn-ghost-danger ys-press"
                 title="不再开始新的曲目；已写入的文件保留，可以用「撤销上一次补全」回退"
                 @click="stopComplete"
               >{{ stopBusy ? '停止中…' : '停止' }}</button>
             </span>
           </div>
 
-          <div v-if="completeJob.running" class="h-1.5 w-full overflow-hidden rounded-full bg-black/[0.06]">
-            <div class="h-full rounded-full bg-emerald-500 transition-all duration-300" :style="{ width: completePercent + '%' }"></div>
+          <div v-if="completeJob.running" class="ys-progress mt-0 w-full">
+            <i :style="{ width: completePercent + '%' }"></i>
           </div>
           <p v-if="completeJob.running && completeJob.current" class="truncate text-[11px] text-[var(--ys-text-faint)]">
             正在处理：{{ completeJob.current }}
@@ -299,7 +326,7 @@
             </span>
           </div>
 
-          <div class="grid grid-cols-2 gap-2">
+          <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
             <div v-for="c in completedCards" :key="c.path" class="flex gap-2 rounded-[10px] border border-[var(--ys-border)] bg-[#FAFAFC] p-2">
               <img v-if="c.hasCover" :src="c.coverUrl" :alt="c.title" class="h-14 w-14 shrink-0 rounded-[6px] object-cover" loading="lazy" />
               <div v-else class="flex h-14 w-14 shrink-0 items-center justify-center rounded-[6px] bg-black/[0.05]">
@@ -344,35 +371,92 @@
           <button
             :disabled="deduping"
             title="扫描曲库，找出内容相同 / 同名的重复曲目"
-            class="ys-press rounded-full bg-emerald-500 px-3.5 py-1.5 text-[12px] font-semibold text-white shadow-[0_1px_2px_rgba(11,138,102,0.3)] transition-colors hover:bg-emerald-600 disabled:opacity-50"
+            class="ys-btn ys-btn-primary ys-press"
             @click="runDedupe"
           >{{ deduping ? '查重中…' : '查找重复' }}</button>
         </template>
-        <div v-if="!dupResult" class="rounded-[12px] border border-dashed border-[var(--ys-border)] px-4 py-6 text-center text-[11px] text-[var(--ys-text-faint)]">
+        <div v-if="!dupResult" class="ys-empty">
           {{ deduping ? '正在查重…' : '还没有查重结果 —— 点右上「查找重复」' }}
         </div>
 
         <div v-if="dupResult" class="space-y-2.5 rounded-[12px] border border-[var(--ys-border)] bg-[#FAFAFC] p-3.5">
           <div class="flex flex-wrap items-center justify-between gap-2">
-            <span class="text-[12px] font-semibold text-[var(--ys-text)]">
-              发现 <b class="font-mono text-rose-600">{{ dupResult.group_count }}</b> 组重复
+            <span class="text-[11px] font-semibold text-[var(--ys-text)]">
+              <template v-if="dupResult.group_count">
+                发现 <b class="font-mono text-rose-600">{{ dupResult.group_count }}</b> 组重复
+              </template>
+              <template v-else>
+                <span class="text-[var(--ys-accent)]">没有发现重复</span>
+                <span class="ml-1 font-normal text-[var(--ys-text-faint)]">（同一首歌的不同版本按标签区分，不算重复）</span>
+              </template>
             </span>
-            <div class="flex gap-1.5">
-              <button @click="resolveDup(true)" class="ys-press rounded-full border border-[var(--ys-border)] bg-white px-3 py-1 text-[11px] text-[var(--ys-text-muted)] transition-colors hover:text-[var(--ys-text)]">干跑预览</button>
-              <button @click="resolveDup(false)" class="ys-press rounded-full bg-rose-500 px-3 py-1 text-[11px] font-medium text-white transition-colors hover:bg-rose-600">移入回收站</button>
+            <!-- 0 组时不给操作按钮：没有可移的文件，留着红按钮只会让人误点 -->
+            <div v-if="dupResult.group_count" class="flex flex-wrap gap-1.5">
+              <button
+                :disabled="dupBusy"
+                class="ys-press rounded-full border border-[var(--ys-border)] bg-white px-3 py-1 text-[11px] text-[var(--ys-text-muted)] transition-colors hover:text-[var(--ys-text)] disabled:opacity-50"
+                @click="resolveDup(true)"
+              >{{ dupBusy ? '…' : '干跑预览' }}</button>
+              <!--
+                P0-4（2026-10-27）：红按钮不再一点就动手。第一次点只跑干跑并把清单摊开，
+                按钮变成「确认移入回收站」；第二次点才真移。原来走 window.confirm()，
+                iOS PWA 下样式系统级、而且确认框里塞不下「将移走 N 个」的清单 ——
+                用户只能盲确认，而这是整页唯一不可逆的批量操作。
+              -->
+              <button
+                :disabled="dupBusy"
+                class="ys-btn ys-btn-sm ys-btn-danger ys-press"
+                :class="dupConfirmArmed ? 'ring-2 ring-rose-300' : ''"
+                @click="resolveDup(false)"
+              >{{ dupConfirmArmed ? '确认移入回收站' : '移入回收站' }}</button>
+              <button
+                v-if="dupConfirmArmed"
+                :disabled="dupBusy"
+                class="rounded-full border border-[var(--ys-border)] bg-white px-3 py-1 text-[11px] text-[var(--ys-text-muted)] transition-colors hover:text-[var(--ys-text)] disabled:opacity-50"
+                @click="cancelResolveDup"
+              >取消</button>
             </div>
           </div>
+
+          <!-- 保留规则：谁被保留完全由后端决定，页面以前一个字都没说（2.7） -->
+          <!--
+            9.2 / 七（2026-10-27）：原文写的是 Markdown 的 `**…**`，在 HTML 里就是四个
+            字面星号（真机上直接印出来）。顺便把回收站的**绝对路径**写出来并给个复制按钮 ——
+            以前只说「曲库里的 .tidy_trash」，用户误删后不知道去哪儿找。
+          -->
+          <p class="text-[10.5px] leading-snug text-[var(--ys-text-muted)]">
+            保留规则：内容相同的取码率/时长更优的那份，同名不同版的保留标签更完整的；
+            被清理的文件<b>移到回收站，不会直接删除</b>，需要时可以自己去里面捞回来。
+            <span v-if="dupResult.group_count > (dupResult.groups || []).length" class="text-amber-700">
+              下方清单只列了前 {{ (dupResult.groups || []).length }} 组（共 {{ dupResult.group_count }} 组），
+              点「干跑预览」会给出全部影响的文件数。
+            </span>
+          </p>
+          <div v-if="trashPath" class="flex flex-wrap items-center gap-x-2 gap-y-1 text-[10.5px] text-[var(--ys-text-faint)]">
+            <span>回收站就在：</span>
+            <code class="min-w-0 truncate font-mono text-[var(--ys-text-muted)]" :title="trashPath">{{ trashPath }}</code>
+            <button
+              class="shrink-0 underline decoration-dotted underline-offset-2 hover:no-underline"
+              @click="copyTrashPath"
+            >复制路径</button>
+          </div>
+
           <div v-if="dupResult.groups.length" class="max-h-64 space-y-1.5 overflow-y-auto">
-            <div v-for="(g, i) in dupResult.groups.slice(0, 30)" :key="i" class="rounded-[10px] border border-[var(--ys-border)] bg-white p-2.5 text-[11px]">
+            <div v-for="(g, i) in visibleDupGroups" :key="i" class="rounded-[10px] border border-[var(--ys-border)] bg-white p-2.5 text-[11px]">
               <div class="flex items-center gap-2">
                 <span :class="['rounded-full px-1.5 py-0.5 font-mono text-[10px]', g.type === 'content' ? 'bg-rose-50 text-rose-600' : 'bg-amber-50 text-amber-600']">
                   {{ g.type === 'content' ? '内容相同' : '同名不同版' }}
                 </span>
                 <span class="text-[var(--ys-text-faint)]">{{ g.count }} 个文件</span>
               </div>
-              <div class="mt-1 text-[var(--ys-accent)]">保留：{{ baseName(g.keep) }}</div>
-              <div class="text-rose-500">清理：{{ g.delete.map(baseName).join('、') }}</div>
+              <div class="mt-1 truncate text-[var(--ys-accent)]" :title="g.keep">保留：{{ baseName(g.keep) }}</div>
+              <div class="truncate text-rose-500" :title="g.delete.join('、')">清理：{{ g.delete.map(baseName).join('、') }}</div>
             </div>
+            <button
+              v-if="dupResult.groups.length > 30"
+              class="w-full rounded-[8px] border border-[var(--ys-border)] bg-white px-3 py-1.5 text-[11px] text-[var(--ys-text-muted)] transition-colors hover:text-[var(--ys-text)]"
+              @click="dupShowAll = !dupShowAll"
+            >{{ dupShowAll ? '只看前 30 组' : `展开全部 ${dupResult.groups.length} 组` }}</button>
           </div>
           <div v-if="dupResolveResult" class="rounded-[10px] border border-[var(--ys-border)] bg-white px-3.5 py-2.5 text-[11px] text-[var(--ys-text-muted)]">
             {{ dupResolveResult.dry_run ? '干跑估算' : '执行完成' }}：
@@ -409,32 +493,32 @@
           <button
             :disabled="titleFixScanning"
             :title="titleFixScanning ? '正在从曲库索引里挑出歌名可疑的曲目…' : '扫出没有歌名 / 歌名就是文件名的曲目，交给 AI 修'"
-            class="ys-press rounded-full bg-emerald-500 px-3.5 py-1.5 text-[12px] font-semibold text-white shadow-[0_1px_2px_rgba(11,138,102,0.3)] transition-colors hover:bg-emerald-600 disabled:opacity-50"
+            class="ys-btn ys-btn-primary ys-press"
             @click="scanTitleFix"
           >{{ titleFixScanning ? '扫描中…' : '扫描歌名' }}</button>
         </template>
 
         <!-- 空态 -->
-        <div v-if="!titleFixItems.length && !titleFixScanning" class="rounded-[12px] border border-dashed border-[var(--ys-border)] px-4 py-6 text-center text-[11px] text-[var(--ys-text-faint)]">
+        <div v-if="!titleFixItems.length && !titleFixScanning" class="ys-empty">
           <p>还没有扫到可疑歌名 —— 点右上「扫描歌名」</p>
           <p class="mt-1 text-[10.5px]">判定口径：标题为空、标题就是文件名（有没有扩展名都算）、标题里带「未知」「unknown」「未命名」</p>
         </div>
 
-        <div v-if="titleFixScanning" class="rounded-[12px] border border-dashed border-[var(--ys-border)] px-4 py-6 text-center text-[11px] text-[var(--ys-text-faint)]">
+        <div v-if="titleFixScanning" class="ys-empty">
           正在从曲库索引里挑歌名可疑的曲目…
         </div>
 
         <!-- AI 修复卡：批量猜 + 逐条改 -->
         <div v-if="titleFixItems.length" class="mt-1 space-y-2.5 rounded-[12px] border border-[var(--ys-border)] bg-[#FAFAFC] p-3.5">
           <div class="flex flex-wrap items-center justify-between gap-2">
-            <span class="text-[12px] font-semibold text-[var(--ys-text)]">
+            <span class="text-[11px] font-semibold text-[var(--ys-text)]">
               歌名可疑 {{ titleFixItems.length }} 首
               <span v-if="titleFixSelectedCount" class="text-[var(--ys-accent)]">· 已勾 {{ titleFixSelectedCount }}</span>
             </span>
             <span class="flex items-center gap-2">
               <button
                 :disabled="titleFixBusy || !titleFixSelectedCount"
-                class="ys-press rounded-full bg-emerald-500 px-3.5 py-1.5 text-[11px] font-semibold text-white transition-colors hover:bg-emerald-600 disabled:opacity-50"
+                class="ys-btn ys-btn-sm ys-btn-primary ys-press"
                 @click="runTitleFix"
               >{{ titleFixBusy ? '修复中…' : `AI 修复 ${titleFixSelectedCount || ''}` }}</button>
               <button
@@ -442,17 +526,50 @@
                 class="rounded-full px-2.5 py-1.5 text-[11px] text-[var(--ys-text-muted)] hover:text-[var(--ys-text)] disabled:opacity-50"
                 @click="toggleAllTitleFix"
               >{{ titleFixAllSelected ? '全不选' : '全选' }}</button>
+              <!-- 9.6（2026-10-27）：清空整份待修名单原来一下就点没了（虽然能重扫，
+                   但几百首的勾选要重来一遍）—— 和查重一样点两次。 -->
               <button
                 :disabled="titleFixBusy"
-                class="rounded-full px-2.5 py-1.5 text-[11px] text-[var(--ys-text-muted)] hover:text-[var(--ys-text)] disabled:opacity-50"
-                @click="titleFixItems = []; saveTitleFix()"
-              >清空</button>
+                class="ys-btn ys-btn-sm"
+                :class="titleFixClearArmed ? 'ys-btn-ghost-danger font-semibold' : ''"
+                @click="clearTitleFixList"
+              >{{ titleFixClearArmed ? '确认清空' : '清空' }}</button>
             </span>
           </div>
 
-          <div class="max-h-80 overflow-y-auto rounded-[10px] border border-[var(--ys-border)] bg-white">
-            <table class="w-full text-[11px]">
-              <thead class="sticky top-0 bg-white text-[var(--ys-text-faint)]">
+          <!--
+            3.8（2026-10-27）：几百首时「我刚勾了哪几首」在表里找不着 ——
+            加「只看勾选的」+「按歌名排序」。默认不过滤、不排序（保持扫描顺序）。
+          -->
+          <div class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-[var(--ys-text-muted)]">
+            <label class="flex cursor-pointer items-center gap-1.5">
+              <input
+                type="checkbox"
+                class="h-3.5 w-3.5 accent-[var(--ys-accent)]"
+                :checked="titleFixOnlySelected"
+                @change="setTitleFixOnlySelected($event.target.checked)"
+              />
+              只看勾选的
+            </label>
+            <label class="flex cursor-pointer items-center gap-1.5">
+              <input
+                type="checkbox"
+                class="h-3.5 w-3.5 accent-[var(--ys-accent)]"
+                :checked="titleFixSort === 'title'"
+                @change="setTitleFixSort($event.target.checked ? 'title' : 'file')"
+              />
+              按歌名排序（空的排前面）
+            </label>
+            <span v-if="titleFixHiddenCount" class="text-[var(--ys-text-faint)]">已隐藏 {{ titleFixHiddenCount }} 条未勾选</span>
+            <span class="ml-auto text-[10.5px] text-[var(--ys-text-faint)]">共 {{ titleFixItems.length }} 条</span>
+          </div>
+
+          <div v-if="!titleFixView.length" class="ys-empty ys-empty-sm">
+            勾选被「只看勾选的」藏住了 —— 取消勾选这句就能看到全部 {{ titleFixItems.length }} 条
+          </div>
+          <div v-else class="max-h-80 overflow-auto rounded-[10px] border border-[var(--ys-border)] bg-white">
+            <table class="w-full min-w-[620px] text-[11px]">
+              <thead class="sticky top-0 z-10 bg-[var(--ys-bg-soft)] text-[var(--ys-text-faint)]">
                 <tr>
                   <th class="w-8 px-2 py-1.5"></th>
                   <th class="px-2 py-1.5 text-left font-medium">文件</th>
@@ -476,17 +593,21 @@
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="it in titleFixItems" :key="it.path" class="border-t border-[var(--ys-border)]">
-                  <td class="px-2 py-1">
-                    <input type="checkbox" :checked="it.selected" :disabled="titleFixBusy" @change="toggleTitleFix(it)" />
+                <tr v-for="it in titleFixView" :key="it.path" class="border-t border-[var(--ys-border)]">
+                  <!-- 8.5：勾选框热区原来是 16px（只有 input 本身），手指点不中 ——
+                       用 label 把整格撑成 32×32 的可点区域，视觉尺寸不变。 -->
+                  <td class="w-10 px-1.5 py-1">
+                    <label class="flex h-8 w-8 cursor-pointer items-center justify-center">
+                      <input type="checkbox" class="h-4 w-4" :checked="it.selected" :disabled="titleFixBusy" @change="toggleTitleFix(it)" />
+                    </label>
                   </td>
                   <td class="max-w-[220px] truncate px-2 py-1 font-mono text-[var(--ys-text-muted)]" :title="it.path">
                     {{ baseName(it.path) }}
                   </td>
-                  <td class="max-w-[150px] truncate px-2 py-1 text-rose-600" :title="it.title">
+                  <td class="ys-cell max-w-[150px] px-2 py-1 text-rose-600" :title="it.title">
                     {{ it.title || '（空）' }}
                   </td>
-                  <td class="max-w-[220px] truncate px-2 py-1 text-[var(--ys-text)]" :title="it.suggested_title">
+                  <td class="ys-cell max-w-[220px] px-2 py-1 text-[var(--ys-text)]" :title="it.suggested_title">
                     <template v-if="it.done">
                       <span class="text-[var(--ys-accent)]">✓ {{ it.written_title }}</span>
                     </template>
@@ -499,8 +620,16 @@
             </table>
           </div>
 
+          <!--
+            六-3：页面上有两个「AI 按钮」，区别原来只写在 tooltip 里（手机上等于没有）。
+            正文里点明分工：扫描歌名 = 按规则挑可疑的、会写文件；手动体检 = 随机抽 10 首、
+            只出结论不写文件，专门用来验证 AI 靠不靠谱。
+          -->
           <p class="text-[10.5px] leading-relaxed text-[var(--ys-text-faint)]">
             只改文件里的标题标签，不动文件名；每次修复都进「数据快照」，可以随时撤回。
+            这里的「扫描歌名」按规则挑出可疑的，会写文件；
+            「手动歌名体检」是随机抽 10 首（含歌名看着正常的）让 AI 判断，
+            <b>只出结论、不写文件</b> —— 想先看看 AI 靠不靠谱就用它。
           </p>
         </div>
 
@@ -532,8 +661,8 @@
             </span>
           </div>
           <div v-if="manualAuditItems.length" class="mt-2 max-h-72 overflow-auto rounded-[10px] border border-[var(--ys-border)]">
-            <table class="w-full text-[11px]">
-              <thead class="sticky top-0 bg-[var(--ys-bg-soft)] text-[10px] text-[var(--ys-text-faint)]">
+            <table class="w-full min-w-[780px] text-[11px]">
+              <thead class="sticky top-0 z-10 bg-[var(--ys-bg-soft)] text-[11px] text-[var(--ys-text-faint)]">
                 <tr>
                   <th class="px-2 py-1.5 text-left font-normal">文件</th>
                   <th class="px-2 py-1.5 text-left font-normal">原歌名</th>
@@ -576,7 +705,7 @@
               <button
                 v-if="titleFixSelectedRecords.length"
                 :disabled="titleFixUndoBusy"
-                class="rounded-full px-2.5 py-1 text-[11px] text-rose-600 hover:bg-rose-50 disabled:opacity-50"
+                class="ys-btn ys-btn-sm ys-btn-ghost-danger ys-press"
                 @click="undoTitleFixRecords(titleFixSelectedRecords)"
               >撤回已勾 {{ titleFixSelectedRecords.length }}</button>
               <button
@@ -590,7 +719,9 @@
           </p>
           <div v-else class="mt-2 max-h-64 space-y-1 overflow-y-auto">
             <div v-for="r in titleFixRecords" :key="r.id" class="flex items-center gap-2 rounded-[8px] border border-[var(--ys-border)] bg-[#FAFAFC] px-2 py-1.5 text-[11px]">
-              <input type="checkbox" :checked="titleFixSelectedRecords.includes(r.id)" @change="toggleTitleFixRecord(r.id)" />
+              <label class="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center">
+                <input type="checkbox" :checked="titleFixSelectedRecords.includes(r.id)" @change="toggleTitleFixRecord(r.id)" />
+              </label>
               <span class="min-w-0 flex-1 truncate" :title="r.path">
                 <s class="text-[var(--ys-text-faint)]">{{ r.old_title || '（空）' }}</s>
                 <span class="mx-1 text-[var(--ys-text-faint)]">→</span>
@@ -606,7 +737,7 @@
               >修改</button>
               <button
                 v-if="!r.undone"
-                class="shrink-0 rounded-full px-2 py-0.5 text-[10px] text-rose-600 hover:bg-rose-50"
+                class="ys-btn ys-btn-sm ys-btn-ghost-danger ys-press"
                 @click="undoTitleFixRecords([r.id])"
               >撤回</button>
             </div>
@@ -622,7 +753,7 @@
         放在 AI 配置页里用户永远找不到；歌名修复修不好时最需要它的地方就是这里。
         组件自包含（自己拉规则 / 试算 / 生成 / 保存），见 NameRulesPanel.vue。
       -->
-      <NameRulesPanel v-show="sub === 'audit'" class="mt-3" :dir="tidyDir || nasDir || ''" />
+      <NameRulesPanel v-show="sub === 'audit'" class="mt-3" :dir="curDir" />
 
       <!--
         文件名体检（用户 2026-10-24）：「飞牛文件和官方音乐 App 打开音乐文件夹显示未知错误」。
@@ -631,7 +762,7 @@
         2026-10-26 用户：「下面的文件名体检可以与歌名修复合并，并去掉相同的功能」——
         它现在排在「修复记录」之下、同一张卡片里，由 LibraryHealthCard 自渲染（无外框）。
       -->
-      <LibraryHealthCard v-show="sub === 'audit'" merge :dir="healthDir || tidyDir || nasDir" />
+      <LibraryHealthCard v-show="sub === 'audit'" merge :dir="healthDir || curDir" />
 
       <!--
         ═════ 缺歌词（用户 2026-10-25 需求 N）═════
@@ -664,7 +795,7 @@
           >{{ lyricWriting ? '写入中…' : `写入文件（${lyricFoundCount}）` }}</button>
         </template>
 
-        <div v-if="!lyricItems.length" class="py-6 text-center text-[12px] text-[var(--ys-text-muted)]">
+        <div v-if="!lyricItems.length" class="ys-empty">
           点右上角「扫描缺歌词」，看看哪些歌还没有词。
         </div>
 
@@ -679,9 +810,9 @@
             <button class="ml-auto text-[11px] text-[var(--ys-text-faint)] hover:text-[var(--ys-text)]" @click="clearLyricGaps">清空</button>
           </div>
 
-          <div class="max-h-[420px] overflow-auto rounded-xl border border-[var(--ys-border)]">
-            <table class="w-full text-[12px]">
-              <thead class="sticky top-0 z-10 bg-[var(--ys-bg-soft)] text-[11px] text-[var(--ys-text-muted)]">
+          <div class="max-h-[420px] overflow-auto overscroll-contain rounded-xl border border-[var(--ys-border)]">
+            <table class="w-full min-w-[520px] text-[12px]">
+              <thead class="sticky top-0 z-10 bg-[var(--ys-bg-soft)] text-[11px] text-[var(--ys-text-faint)]">
                 <tr>
                   <th class="w-8 px-2 py-1.5"></th>
                   <th class="px-2 py-1.5 text-left font-normal">文件</th>
@@ -691,22 +822,52 @@
               </thead>
               <tbody>
                 <tr v-for="it in lyricItems" :key="it.path" class="border-t border-[var(--ys-border)]">
-                  <td class="px-2 py-1.5 align-top">
-                    <input v-if="!it.written" type="checkbox" :checked="it.selected" @change="toggleLyric(it)" />
+                  <td class="w-10 px-1.5 py-1.5 align-top">
+                    <label v-if="!it.written" class="flex h-8 w-8 cursor-pointer items-center justify-center">
+                      <input type="checkbox" :checked="it.selected" @change="toggleLyric(it)" />
+                    </label>
                   </td>
                   <td class="max-w-[280px] truncate px-2 py-1.5 align-top" :title="it.path">{{ it.name }}</td>
                   <td class="px-2 py-1.5 align-top">
-                    <div class="truncate">{{ it.title || '—' }}</div>
-                    <div class="truncate text-[10px] text-[var(--ys-text-muted)]">{{ it.artist || '—' }}</div>
+                    <div class="ys-cell" :title="it.title || '—'">{{ it.title || '—' }}</div>
+                    <div class="ys-cell text-[10px] text-[var(--ys-text-muted)]" :title="it.artist || '—'">{{ it.artist || '—' }}</div>
                   </td>
                   <td class="px-2 py-1.5 align-top">
                     <span v-if="it.written" class="text-emerald-600">已写入</span>
-                    <span v-else-if="it.ok" class="text-emerald-600">找到{{ it.note ? '（' + it.note + '）' : '' }}</span>
+                    <template v-else-if="it.ok">
+                      <span class="text-emerald-600">找到{{ it.note ? '（' + it.note + '）' : '' }}</span>
+                      <!--
+                        P3-15（2026-10-27）：原来「找到」只是个绿色文字，用户点「写入文件」
+                        之前看不到会被写进去的到底是什么词 —— 匹配到 live 版 / 纯音乐版 /
+                        错版歌词都只能写完再发现。歌词文本其实早就在 `it.lyric` 里了
+                        （useLyricGaps 的 `lyric: h.lyric || it.lyric`），只是没人渲染。
+                      -->
+                      <button
+                        v-if="it.lyric"
+                        class="ys-btn ys-btn-sm ys-btn-ghost ml-1 px-1.5 py-0.5 text-[10px]"
+                        :aria-expanded="lyricPreviewPath === it.path ? 'true' : 'false'"
+                        @click="toggleLyricPreview(it)"
+                      >{{ lyricPreviewPath === it.path ? '收起' : '看词' }}</button>
+                    </template>
                     <span v-else-if="it.reason === 'timed_out'" class="text-amber-600">{{ it.note || '网络超时，没来得及试' }}</span>
                     <span v-else-if="it.reason === 'not_found'" class="text-[var(--ys-text-muted)]">没找到</span>
                     <span v-else-if="it.reason === 'no_meta'" class="text-[var(--ys-text-muted)]">缺标题/歌手，无法搜词</span>
                     <span v-else-if="it.err" class="text-rose-600">{{ it.err }}</span>
                     <span v-else class="text-[var(--ys-text-faint)]">未查找</span>
+                  </td>
+                </tr>
+                <!-- 歌词预览行（P3-15）：只读、不写盘，看完再决定要不要勾选写入 -->
+                <tr v-if="lyricPreviewPath === it.path" class="border-t border-[var(--ys-border)] bg-[var(--ys-surface-2)]">
+                  <td colspan="4" class="px-3 py-2">
+                    <div class="mb-1 flex flex-wrap items-center gap-2 text-[10.5px] text-[var(--ys-text-faint)]">
+                      <span>歌词预览 · {{ (lyricPreviewLines(it).length) }} 行</span>
+                      <span>写入时会同时写内嵌标签和同名 .lrc</span>
+                      <button
+                        class="ml-auto text-[10.5px] text-[var(--ys-text-faint)] hover:text-[var(--ys-text)]"
+                        @click="lyricPreviewPath = ''"
+                      >关闭预览</button>
+                    </div>
+                    <pre class="max-h-56 overflow-auto overscroll-contain whitespace-pre-wrap break-all rounded-[8px] border border-[var(--ys-border)] bg-white p-2 font-mono text-[10.5px] leading-relaxed text-[var(--ys-text-muted)]">{{ lyricPreviewText(it) }}</pre>
                   </td>
                 </tr>
               </tbody>
@@ -738,11 +899,26 @@
           >{{ reloading ? '刷新中…' : '刷新' }}</button>
         </template>
         <p v-if="statsLoading" class="text-[11px] text-[var(--ys-text-faint)]">正在读取上次整理快照…</p>
-        <p
-          v-else-if="indexStats"
-          class="text-[11px] leading-relaxed text-[var(--ys-text-faint)]"
-          title="快照读自索引；若和「补全」段「扫描缺失」的数字对不上，说明索引过期了 —— 跑一次「补全」段 ⋯ 里的「增量扫描」即可更新"
-        >{{ lastScanText || '索引还没整理过' }} —— 跑「补全」段的「增量扫描」会更新</p>
+        <p v-else-if="statsError" class="text-[11px] leading-relaxed text-amber-700">
+          {{ statsError }} —— 下面这些数字读不到，不代表库里没有歌
+        </p>
+        <!--
+          2026-10-27 修 2.5：原来这段说明只挂在 title 上，而且指路指向「补全」段的 ⋯ 菜单 ——
+          那个溢出菜单早就删了（增量扫描并进了「扫描」按钮）。移动端用户既看不到 tooltip，
+          又按图索骥找不到入口。现在：正文一行说明 + 一个就地可点的「立即更新索引」。
+        -->
+        <div v-else-if="indexStats" class="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <p class="min-w-0 text-[11px] leading-relaxed text-[var(--ys-text-faint)]">
+            {{ lastScanText || '索引还没整理过' }} · 这一段的数字读自索引；
+            若和「补全」段的待补数量对不上，说明索引过期了
+          </p>
+          <button
+            :disabled="indexing"
+            class="shrink-0 rounded-full border border-[var(--ys-border)] bg-white px-2 py-0.5 text-[10px] text-[var(--ys-text-muted)] transition-colors hover:bg-[var(--ys-surface-2)] disabled:opacity-50"
+            title="就地把磁盘上新增/变化的文件收进索引（等于「补全」段的「扫描」）"
+            @click="refreshIndexHere"
+          >{{ indexing ? '更新中…' : '立即更新索引' }}</button>
+        </div>
         <p v-else class="text-[11px] text-[var(--ys-text-faint)]">还没有索引快照 —— 点右上「刷新」再试</p>
 
         <!-- 撤销入口：原来既在 ⋯ 里、又贴在补全进度条下；按归类放进「记录」段 -->
@@ -752,10 +928,28 @@
             <button
               :disabled="undoBusy || !completeJob || !completeJob.undo_available || completeJob.running"
               class="rounded-[8px] bg-black/[0.04] px-2.5 py-1 text-[11px] text-[var(--ys-text-muted)] transition-colors hover:bg-black/[0.07] disabled:opacity-50"
+              :class="undoConfirmArmed ? 'ring-2 ring-rose-300' : ''"
               @click="undoComplete"
-            >{{ undoBusy ? '还原中…' : '还原' }}</button>
+            >{{ undoBusy ? '还原中…' : (undoConfirmArmed ? '确认还原' : '还原') }}</button>
           </div>
-          <p class="mt-1 text-[11px] leading-relaxed text-[var(--ys-text-faint)]">
+          <!--
+            9.1（2026-10-27）：最后一处 window.confirm 换成就地两步。
+            iOS PWA 与微信内置浏览器里 confirm 是系统弹窗，样式不可控、换行难看，
+            而且这个操作是「只做一次、没有重做」的 —— 值得多要一次明确点击。
+          -->
+          <p v-if="undoConfirmArmed" class="mt-1.5 rounded-[8px] bg-rose-50 px-2.5 py-1.5 text-[11px] leading-relaxed text-rose-700">
+            再点一次「确认还原」就会把
+            <b v-if="completeJob && completeJob.undo_count">上次补全改过的 {{ completeJob.undo_count }} 个文件</b>
+            <b v-else>上次补全改过的文件</b>
+            改回补全前的样子。<b>这一步只能做一次</b>，没有「重做」——
+            想再补上得重新跑一次补全。
+            <button
+              :disabled="undoBusy"
+              class="ml-1 rounded-full border border-rose-300 bg-white px-2.5 py-0.5 text-[11px] text-rose-700 transition-colors hover:bg-rose-100 disabled:opacity-50"
+              @click="cancelUndoComplete"
+            >取消</button>
+          </p>
+          <p v-if="!undoConfirmArmed" class="mt-1 text-[11px] leading-relaxed text-[var(--ys-text-faint)]">
             <template v-if="completeJob && completeJob.undo_available && !completeJob.running">只把上一次补全改过的文件还原成补全前的样子，别的不碰</template>
             <template v-else-if="completeJob && completeJob.running">补全任务还在跑 —— 结束后才能撤销</template>
             <template v-else>目前没有可撤销的补全 —— 补全写入前会自动备份，跑完一次这里就会出现「还原」</template>
@@ -769,14 +963,16 @@
             <span class="flex items-center gap-2">
               <button
                 :disabled="snapBusy"
-                class="ys-press rounded-full bg-emerald-500 px-3.5 py-1.5 text-[11px] font-semibold text-white transition-colors hover:bg-emerald-600 disabled:opacity-50"
+                class="ys-btn ys-btn-sm ys-btn-primary ys-press"
                 @click="takeSnapshot"
               >{{ snapBusy ? '拍快照中…' : '立即快照' }}</button>
+              <!-- 六-1：和卡片头那个「刷新」区分开 —— 这里只重拉快照列表（轻），头上的全量重读五段（重） -->
               <button
                 :disabled="snapBusy"
+                title="只重新拉快照列表；头上的「刷新」会连缺口、结果卡片等一起重读"
                 class="rounded-full px-2.5 py-1.5 text-[11px] text-[var(--ys-text-muted)] hover:text-[var(--ys-text)] disabled:opacity-50"
                 @click="loadSnapshots"
-              >刷新</button>
+              >刷新列表</button>
             </span>
           </div>
           <p class="mt-1 text-[11px] leading-relaxed text-[var(--ys-text-faint)]">
@@ -793,11 +989,11 @@
             <span class="text-[11px] font-semibold text-[var(--ys-text)]">定时快照</span>
             <button
               type="button"
-              class="rounded-full px-3 py-1 text-[11px] font-semibold transition-colors disabled:opacity-50"
+              class="ys-btn ys-btn-sm ys-press"
               :class="schedule.enabled
-                ? 'bg-emerald-500 text-white hover:bg-emerald-600'
+                ? 'ys-btn-primary'
                 : 'bg-black/[0.06] text-[var(--ys-text-muted)] hover:bg-black/[0.1]'"
-              :disabled="scheduleBusy"
+              :disabled="scheduleBusy || !!scheduleReadError"
               @click="toggleSchedule"
             >{{ schedule.enabled ? '已开启' : '已关闭' }}</button>
             <span class="text-[11px] text-[var(--ys-text-muted)]">每</span>
@@ -817,6 +1013,9 @@
             <span class="text-[11px] text-[var(--ys-text-muted)]">份</span>
             <span class="ml-auto text-[10px] text-[var(--ys-text-faint)]">{{ scheduleLastText }}</span>
           </div>
+          <p v-if="scheduleReadError" class="mt-1.5 text-[10px] leading-snug text-amber-700">
+            {{ scheduleReadError }} —— 上面这个开关显示的不一定是真实状态，别在这里判断定时有没有开
+          </p>
           <p class="mt-1.5 text-[10px] text-[var(--ys-text-faint)]">
             打开时立刻拍一份；之后按间隔自动拍。只清理「定时快照」，手动快照与写入前快照永远保留。
           </p>
@@ -827,56 +1026,147 @@
           <p v-if="snapLoading" class="text-[11px] text-[var(--ys-text-faint)]">正在读取快照列表…</p>
           <p v-else-if="!snapshots.length" class="text-[11px] text-[var(--ys-text-faint)]">还没有快照 —— 补全或歌名修复跑过一次后，这里会出现。</p>
           <div v-else class="space-y-1">
-            <div v-for="sn in snapshots" :key="sn.id" class="flex flex-wrap items-center gap-2 rounded-[8px] border border-[var(--ys-border)] bg-[#FAFAFC] px-2.5 py-2 text-[11px]">
-              <span class="min-w-0 flex-1 truncate">
-                <b class="font-mono text-[var(--ys-text)]">{{ sn.at_text || sn.id }}</b>
-                <span class="ml-2 text-[var(--ys-text-muted)]">{{ sn.kind_text }}</span>
-                <span class="ml-2 text-[var(--ys-text-faint)]">{{ sn.count }} 首的元数据</span>
-                <span v-if="sn.note" class="ml-2 text-[var(--ys-text-faint)]">· {{ sn.note }}</span>
-              </span>
-              <button
-                class="shrink-0 rounded-full px-2 py-0.5 text-[10px] text-[var(--ys-text-muted)] hover:bg-black/[0.04] hover:text-[var(--ys-text)]"
-                @click="viewSnapshot(sn)"
-              >看明细</button>
-              <button
-                :disabled="snapBusy"
-                class="shrink-0 rounded-full px-2 py-0.5 text-[10px] text-rose-600 hover:bg-rose-50 disabled:opacity-50"
-                @click="restoreSnapshot(sn)"
-              >恢复到这份</button>
-            </div>
-          </div>
-          <!-- 明细：只列「和现在不一样」的曲目 —— 几万首全列出来没人看得下去 -->
-          <div v-if="snapDetail" class="mt-2 rounded-[8px] border border-[var(--ys-border)] bg-white p-2">
-            <p class="text-[11px] text-[var(--ys-text-muted)]">
-              快照 {{ fmtTimeText(snapDetail.created) }} · {{ snapDetail.count }} 首 ·
-              可写标签 {{ snapDetail.writable }} 首
-              <span class="text-[var(--ys-text-faint)]">（其余格式本应用写不了，恢复时会跳过）</span>
-            </p>
-            <p v-if="!(snapDetail.diff || []).length" class="mt-1 text-[11px] text-emerald-700">
-              这份快照和现在的曲库一致 —— 没有需要恢复的东西
-            </p>
-            <div v-else class="mt-1.5 max-h-64 overflow-y-auto rounded-[8px] border border-[var(--ys-border)]">
-              <table class="w-full text-[11px]">
-                <thead class="sticky top-0 bg-white text-[var(--ys-text-faint)]">
-                  <tr>
-                    <th class="px-2 py-1.5 text-left font-medium">文件</th>
-                    <th class="px-2 py-1.5 text-left font-medium">快照里的歌名</th>
-                    <th class="px-2 py-1.5 text-left font-medium">现在的歌名</th>
-                    <th class="px-2 py-1.5 text-left font-medium">变了哪些字段</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="e in snapDetail.diff" :key="e.path" class="border-t border-[var(--ys-border)]">
-                    <td class="max-w-[220px] truncate px-2 py-1 font-mono text-[var(--ys-text-muted)]" :title="e.path">{{ baseName(e.path) }}</td>
-                    <td class="max-w-[150px] truncate px-2 py-1 text-[var(--ys-text)]">{{ e.snap_title || '—' }}</td>
-                    <td class="max-w-[150px] truncate px-2 py-1" :class="e.change === 'missing' ? 'text-amber-600' : 'text-rose-600'">
-                      {{ e.change === 'missing' ? '文件已不在' : (e.now_title || '—') }}
-                    </td>
-                    <td class="px-2 py-1 text-[10.5px] text-[var(--ys-text-faint)]">{{ (e.fields || []).join(' / ') || '—' }}</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
+            <!--
+              每份快照一行，明细**紧跟在被点的那一行下面**（2026-10-27 修）。
+              以前明细是列表末尾的一个独立块：快照攒到十几份时，点第 2 行的「看明细」，
+              内容出现在第 15 行下面 —— 用户以为没反应，而且没有任何关闭入口。
+            -->
+            <template v-for="sn in snapshots" :key="sn.id">
+              <div
+                class="flex flex-wrap items-center gap-2 rounded-[8px] border px-2.5 py-2 text-[11px] transition-colors"
+                :class="isSnapOpen(sn)
+                  ? 'border-[#0B8A66]/35 bg-[#F3FAF7]'
+                  : 'border-[var(--ys-border)] bg-[#FAFAFC]'"
+              >
+                <span class="min-w-0 flex-1 truncate">
+                  <b class="font-mono text-[var(--ys-text)]">{{ sn.at_text || sn.id }}</b>
+                  <span class="ml-2 text-[var(--ys-text-muted)]">{{ sn.kind_text }}</span>
+                  <span class="ml-2 text-[var(--ys-text-faint)]">{{ sn.count }} 首的元数据</span>
+                  <span v-if="sn.note" class="ml-2 text-[var(--ys-text-faint)]">· {{ sn.note }}</span>
+                </span>
+                <button
+                  class="shrink-0 rounded-full px-2 py-0.5 text-[10px] text-[var(--ys-text-muted)] hover:bg-black/[0.04] hover:text-[var(--ys-text)]"
+                  :aria-expanded="isSnapOpen(sn) ? 'true' : 'false'"
+                  @click="viewSnapshot(sn)"
+                >{{ isSnapOpen(sn) ? '收起明细' : '看明细' }}</button>
+                <button
+                  :disabled="snapBusy"
+                  :class="[
+                    'ys-btn ys-btn-sm',
+                    isRestoreArmed(sn) ? 'ys-btn-danger' : 'ys-btn-ghost-danger',
+                  ]"
+                  :aria-pressed="isRestoreArmed(sn) ? 'true' : 'false'"
+                  @click="armRestoreSnapshot(sn)"
+                >{{ isRestoreArmed(sn) ? '已选这份' : '恢复到这份' }}</button>
+              </div>
+
+              <!-- 明细：只列「和现在不一样」的曲目 —— 几万首全列出来没人看得下去 -->
+              <div
+                v-if="isSnapOpen(sn)"
+                class="rounded-[8px] border border-[var(--ys-border)] bg-white p-2"
+              >
+                <div class="flex flex-wrap items-center gap-2">
+                  <p class="min-w-0 flex-1 text-[11px] leading-snug text-[var(--ys-text-muted)]">
+                    快照 {{ fmtTimeText(snapDetail.created) }} · {{ snapDetail.count || 0 }} 首 ·
+                    可写标签 {{ snapDetail.writable || 0 }} 首
+                    <span class="text-[var(--ys-text-faint)]">（其余格式本应用写不了，恢复时会跳过）</span>
+                  </p>
+                  <!--
+                    P3-13（2026-10-27）：快照以前只能在页面里看，没法带走。
+                    这份 diff 是「哪几首会被改回什么」的完整依据，用户要拿它去
+                    别的工具里比对、或者出事时当证据，都得先能导出。
+                  -->
+                  <button
+                    v-if="snapDetail.id"
+                    class="ys-btn ys-btn-sm ys-btn-ghost"
+                    :title="'把这份快照的差异导出成 JSON 文件'"
+                    @click="exportSnapDetail(sn)"
+                  >导出 JSON</button>
+                  <button
+                    class="ys-btn ys-btn-sm ys-btn-ghost"
+                    @click="closeSnapDetail"
+                  >关闭</button>
+                </div>
+                <p v-if="snapDetailLoading" class="mt-1 text-[11px] text-[var(--ys-text-faint)]">正在读取差异…</p>
+                <p v-else-if="snapErrorText" class="mt-1 text-[11px] text-rose-600">{{ snapErrorText }}</p>
+                <p v-else-if="!(snapDetail.diff || []).length" class="mt-1 text-[11px] text-emerald-700">
+                  这份快照和现在的曲库一致 —— 没有需要恢复的东西
+                </p>
+                <template v-else>
+                  <p v-if="snapDetail.diff_truncated" class="mt-1 text-[11px] leading-snug text-amber-700">
+                    差异共 {{ snapDetail.diff_total }} 条，下表只列前 {{ snapDetail.diff_cap || snapDetail.diff.length }} 条
+                    —— 底下还有 {{ snapDetail.diff_total - snapDetail.diff.length }} 条没显示。
+                  </p>
+                  <div class="mt-1.5 max-h-64 overflow-auto rounded-[8px] border border-[var(--ys-border)]">
+                    <table class="w-full min-w-[560px] text-[11px]">
+                      <thead class="sticky top-0 z-10 bg-[var(--ys-bg-soft)] text-[11px] text-[var(--ys-text-faint)]">
+                        <tr>
+                          <th class="px-2 py-1.5 text-left font-medium">文件</th>
+                          <th class="px-2 py-1.5 text-left font-medium">快照里的歌名</th>
+                          <th class="px-2 py-1.5 text-left font-medium">现在的歌名</th>
+                          <th class="px-2 py-1.5 text-left font-medium">变了哪些字段</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr v-for="e in snapDetail.diff" :key="e.path" class="border-t border-[var(--ys-border)]">
+                          <td class="max-w-[220px] truncate px-2 py-1 font-mono text-[var(--ys-text-muted)]" :title="e.path">{{ baseName(e.path) }}</td>
+                          <td class="ys-cell max-w-[150px] px-2 py-1 text-[var(--ys-text)]" :title="e.snap_title || '—'">{{ e.snap_title || '—' }}</td>
+                          <td class="ys-cell max-w-[150px] px-2 py-1" :class="e.change === 'missing' ? 'text-amber-600' : 'text-rose-600'">
+                            {{ e.change === 'missing' ? '文件已不在' : (e.now_title || '—') }}
+                          </td>
+                          <td class="px-2 py-1 text-[10.5px] text-[var(--ys-text-faint)]">{{ (e.fields || []).join(' / ') || '—' }}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </template>
+              </div>
+
+              <!--
+                恢复确认条（2026-10-27 修 3.5）：原来是 window.confirm 一句「把 N 首恢复回去？」，
+                既看不见差异、在 iOS PWA 里也丑。现在就地摊开数字，第二次点才真写。
+              -->
+              <div
+                v-if="isRestoreArmed(sn)"
+                class="rounded-[8px] border border-rose-200 bg-rose-50/60 p-2.5"
+              >
+                <p class="text-[11px] font-semibold text-rose-800">
+                  确认把元数据恢复成「{{ sn.at_text || sn.id }}」这一刻的样子？
+                </p>
+                <p class="mt-1 text-[11px] leading-snug text-rose-900/80">
+                  <template v-if="snapDetailLoading || !snapRestoreSummary(sn)">
+                    正在读取这份快照和现在的差异…
+                  </template>
+                  <template v-else-if="snapRestoreSummary(sn).none">
+                    这份快照和现在的曲库一致 —— 恢复不会改动任何文件。
+                  </template>
+                  <template v-else>
+                    会改 <b class="font-mono">{{ snapRestoreSummary(sn).total }}</b> 首<template
+                      v-if="snapRestoreSummary(sn).truncated">（差异超过 {{ snapRestoreSummary(sn).listed }} 条，上面只列了前几条）</template>；
+                    <template v-if="snapRestoreSummary(sn).missing">其中 <b class="font-mono">{{ snapRestoreSummary(sn).missing }}</b> 首文件已经不在，会跳过；</template>
+                    <template v-if="snapRestoreSummary(sn).skipped">共 <b class="font-mono">{{ snapRestoreSummary(sn).skipped }}</b> 首写不了标签（格式不支持），也会跳过；</template>
+                    其余按快照里的标签写回。恢复前会自动再拍一份当前状态的快照，点错了还能撤回来。
+                  </template>
+                </p>
+                <div class="mt-2 flex flex-wrap items-center gap-1.5">
+                  <button
+                    :disabled="snapBusy"
+                    class="ys-btn ys-btn-sm ys-btn-danger ys-press"
+                    @click="restoreSnapshot(sn)"
+                  >{{ snapBusy ? '恢复中…' : '确认恢复' }}</button>
+                  <button
+                    :disabled="snapBusy"
+                    class="rounded-full border border-[var(--ys-border)] bg-white px-3 py-1 text-[11px] text-[var(--ys-text-muted)] transition-colors hover:text-[var(--ys-text)] disabled:opacity-50"
+                    @click="cancelRestoreSnapshot"
+                  >取消</button>
+                  <button
+                    v-if="!isSnapOpen(sn)"
+                    class="rounded-full px-2 py-1 text-[11px] text-[var(--ys-text-muted)] underline decoration-dotted underline-offset-2 hover:text-[var(--ys-text)]"
+                    @click="viewSnapshot(sn)"
+                  >先看差异明细</button>
+                </div>
+              </div>
+            </template>
           </div>
         </div>
       </SectionCard>
@@ -897,19 +1187,21 @@
           />
           <button
             type="button"
-            class="ys-press rounded-full bg-emerald-500 px-4 py-1.5 text-[12px] font-semibold text-white shadow-[0_1px_2px_rgba(11,138,102,0.3)] transition-colors hover:bg-emerald-600 disabled:opacity-50"
+            class="ys-btn ys-btn-primary ys-press"
             :disabled="qRunning || qBusy"
-            :title="qRunning ? '扫描进行中 —— 用右边的停止按钮中断查看' : '让三条渠道逐条对比曲库能拿到的最高音质'"
+            :title="qScanBtnTitle"
             @click="startQualityScan"
-          >{{ qRunning ? '扫描中…' : '开始扫描' }}</button>
+          >{{ qScanBtnText }}</button>
           <button
             v-if="qRunning"
             type="button"
-            class="ys-press grid h-8 w-8 shrink-0 place-items-center rounded-[10px] border border-[var(--ys-border)] bg-white text-[var(--ys-text-muted)] transition-colors hover:border-[var(--ys-border-strong)]"
-            title="停止（只停止本页查看进度，后端扫描可能仍在继续）"
+            class="ys-btn ys-btn-sm ys-press shrink-0"
+            :disabled="qStopBusy"
+            title="停止扫描（会真的让后端停下，已探到的结果保留）"
             @click="stopQualityScan"
           >
-            <Square class="h-3.5 w-3.5" :stroke-width="2" />
+            <Square class="h-3 w-3" :stroke-width="2" />
+            {{ qStopBusy ? '停止中…' : '停止' }}
           </button>
           <label class="ml-auto flex items-center gap-1.5 text-[11px] text-[var(--ys-text-muted)]">
             上限
@@ -931,8 +1223,8 @@
             <span>已扫描 <b class="ys-num text-[var(--ys-text)]">{{ qScan?.scanned || 0 }}</b> / <b class="ys-num text-[var(--ys-text)]">{{ qScan?.total || 0 }}</b> 条</span>
             <span>已发现可替换 <b class="ys-num text-[var(--ys-text)]">{{ qScan?.upgradeable || 0 }}</b> 条</span>
           </div>
-          <div class="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-black/[0.06]">
-            <div class="h-full rounded-full bg-emerald-500 transition-all duration-300" :style="{ width: qPercent + '%' }"></div>
+          <div class="ys-progress mt-1.5 w-full">
+            <i :style="{ width: qPercent + '%' }"></i>
           </div>
         </div>
 
@@ -947,8 +1239,27 @@
         />
         <InlineNotice v-if="qErrorText" class="mt-2.5" :text="qErrorText" />
 
+        <!--
+          筛选条（2026-10-27）：一库几万首时，扫描结果里绝大多数是「已经是最高音质」
+          的行，用户真正要处理的那几十条被淹在里面。默认不过滤（保持原样），
+          勾一下就只看能替换的。
+        -->
+        <div v-if="qRowsAll.length" class="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-[var(--ys-text-muted)]">
+          <label class="flex min-h-8 cursor-pointer items-center gap-1.5">
+            <input
+              type="checkbox"
+              class="h-3.5 w-3.5 accent-[var(--ys-accent)]"
+              :checked="qOnlyUpgradeable"
+              @change="setQOnlyUpgradeable($event.target.checked)"
+            />
+            只看能替换的
+          </label>
+          <span v-if="qHiddenRowCount" class="text-[var(--ys-text-faint)]">已隐藏 {{ qHiddenRowCount }} 条无需替换</span>
+          <span class="ml-auto text-[10.5px] text-[var(--ys-text-faint)]">本次共 {{ qRowsAll.length }} 条</span>
+        </div>
+
         <!-- 结果表：列表 + 发丝线（不做卡片套卡片）。只有可替换且未替换的行才能勾选 -->
-        <div v-if="qRows.length" class="mt-3 overflow-hidden rounded-[12px] border border-[var(--ys-border)] bg-white">
+        <div v-if="qRows.length" class="mt-2 overflow-x-auto overscroll-x-contain rounded-[12px] border border-[var(--ys-border)] bg-white">
           <div class="overflow-y-auto" :style="{ maxHeight: '440px' }">
             <div
               v-for="e in qRows"
@@ -956,14 +1267,20 @@
               class="flex flex-wrap items-center gap-x-2.5 gap-y-1.5 border-b border-[var(--ys-border)] px-3 py-2.5 last:border-b-0"
               :class="e.replaced ? 'bg-[var(--ys-surface-2)]' : ''"
             >
-              <input
-                type="checkbox"
-                class="h-4 w-4 shrink-0 accent-[var(--ys-accent)]"
-                :checked="qSelected.has(e.path)"
-                :disabled="!e.upgradeable || e.replaced"
+              <!-- 8.5：原来是裸 16px 的 input —— 手指点不中。用 label 撑成 32×32 热区，视觉尺寸不变 -->
+              <label
+                class="flex h-8 w-8 shrink-0 items-center justify-center"
+                :class="(!e.upgradeable || e.replaced) ? 'cursor-not-allowed' : 'cursor-pointer'"
                 :title="e.replaced ? '已替换' : (e.upgradeable ? '勾选后可用最高音质替换' : '已是各渠道最高音质，无需替换')"
-                @change="toggleQSelect(e)"
-              />
+              >
+                <input
+                  type="checkbox"
+                  class="h-4 w-4 accent-[var(--ys-accent)]"
+                  :checked="qSelected.has(e.path)"
+                  :disabled="!e.upgradeable || e.replaced"
+                  @change="toggleQSelect(e)"
+                />
+              </label>
               <div class="min-w-0 flex-1 basis-[180px]">
                 <div class="truncate text-[12.5px] font-medium text-[var(--ys-text)]">
                   {{ e.title || baseName(e.path) }}
@@ -996,10 +1313,14 @@
         </div>
 
         <!-- 空态（需求 m02848：一条都没有时不留白） -->
-        <div v-else-if="qState === 'done'" class="mt-3 rounded-[12px] border border-dashed border-[var(--ys-border)] px-4 py-6 text-center text-[11px] leading-relaxed text-[var(--ys-text-faint)]">
+        <!-- 被筛选筛空的要说清是「筛选」而不是「没得换」，否则用户会以为白扫了 -->
+        <div v-else-if="qRowsAll.length && qOnlyUpgradeable" class="ys-empty mt-2">
+          当前筛选下没有可替换的曲目 —— 取消「只看能替换的」可以看到全部 {{ qRowsAll.length }} 条
+        </div>
+        <div v-else-if="qState === 'done'" class="ys-empty mt-3">
           曲库里的歌已经是各渠道能拿到的最高音质了
         </div>
-        <div v-else-if="qState === 'idle' && !qRunning && !qErrorText" class="mt-3 rounded-[12px] border border-dashed border-[var(--ys-border)] px-4 py-6 text-center text-[11px] leading-relaxed text-[var(--ys-text-faint)]">
+        <div v-else-if="qState === 'idle' && !qRunning && !qErrorText" class="ys-empty mt-3">
           还没有扫描结果 —— 点「开始扫描」，让洛雪 / musicdl / 原生三条渠道逐条对比
         </div>
 
@@ -1027,6 +1348,36 @@
               :style="{ width: qReplacePercent + '%' }"
             ></div>
           </div>
+        </div>
+
+        <!--
+          没换成的那些：给一个「重试」入口（2026-10-27）。
+          以前失败行只是留在表格里带一行红字，想把它们再试一遍得自己一条条回勾；
+          而且失败集合在收尾时会从勾选里移除（避免用户以为已经处理过），
+          所以这里必须有个地方把它们接住，否则那批勾选就悄悄丢了。
+        -->
+        <div
+          v-if="!qReplacing && qRetryPaths.length"
+          class="mt-2.5 flex flex-wrap items-center gap-x-2 gap-y-1.5 rounded-[12px] border border-[var(--ys-border)] bg-[var(--ys-bg-soft)] px-3 py-2"
+        >
+          <span class="min-w-0 flex-1 text-[11px] leading-snug text-[var(--ys-text-muted)]">
+            有 <b class="ys-num text-[var(--ys-text)]">{{ qRetryPaths.length }}</b> 条这轮没换成（原因写在下表对应行）
+          </span>
+          <button
+            type="button"
+            class="shrink-0 rounded-full border border-[var(--ys-border)] bg-white px-2.5 py-1 text-[11px] text-[var(--ys-text-muted)] transition hover:text-[var(--ys-text)] disabled:opacity-50"
+            :disabled="qBusy"
+            @click="retryFailedReplace"
+          >
+            重试这些
+          </button>
+          <button
+            type="button"
+            class="shrink-0 rounded-full px-2 py-1 text-[11px] text-[var(--ys-text-faint)] transition hover:text-[var(--ys-text-muted)]"
+            @click="qRetryPaths = []"
+          >
+            忽略
+          </button>
         </div>
 
         <!-- 最近替换记录：原地覆盖看不出变化，它是唯一凭据（需求 m04229） -->
@@ -1059,7 +1410,7 @@
                   <span
                     v-if="r.by === 'upgrade'"
                     class="shrink-0 rounded bg-[var(--ys-bg-soft)] px-1 py-px text-[9.5px] text-[var(--ys-text-muted)]"
-                    title="后台音质补强轮自动试的（每 20 分钟一轮，失败会隔天再试）—— 不是你手动点的替换"
+                    title="后台音质补强轮自动试的（节奏在「设置 → 后台音质补强」里调，失败会隔天再试）—— 不是你手动点的替换"
                   >自动补强</span>
                 </div>
                 <div class="mt-0.5 truncate text-[10.5px] text-[var(--ys-text-muted)]">
@@ -1093,7 +1444,7 @@
         class="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4 backdrop-blur-[2px]"
         @click.self="optionsOpen = false"
       >
-        <div class="max-h-[85vh] w-full max-w-md overflow-y-auto rounded-2xl border border-[var(--ys-border)] bg-white p-5 shadow-2xl">
+        <div class="max-h-[85vh] w-full max-w-md overflow-y-auto overscroll-contain rounded-2xl border border-[var(--ys-border)] bg-white p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] shadow-2xl">
           <div class="mb-4 flex items-start justify-between gap-3">
             <div>
               <h3 class="text-[13px] font-semibold text-[var(--ys-text)]">补全选项</h3>
@@ -1173,14 +1524,15 @@
 //      模板里 `:src="c.coverUrl"` 一直是 undefined —— 卡片封面其实从来没显示过）。
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
-  Sparkles, Check, FolderOpen, SlidersHorizontal,
-  ScanSearch, FolderSearch, Copy, History, Gauge, ImageIcon, Replace, Square, FileAudio,
+  Sparkles, Check, SlidersHorizontal, Info, Loader2, AlertTriangle, X,
+  ScanSearch, Copy, History, Gauge, ImageIcon, Replace, Square, FileAudio,
 } from 'lucide-vue-next'
 import PageShell from './PageShell.vue'
 import SectionCard from './SectionCard.vue'
 import InlineNotice from './InlineNotice.vue'
-import OverflowMenu from './OverflowMenu.vue'
-// SideSheet 已不再使用（2026-10-25 补全选项改成弹窗），这里不再 import，避免死引用
+// SideSheet 已不再使用（2026-10-25 补全选项改成弹窗）；OverflowMenu 也不再使用
+// （2026-10-27：「⋯」菜单早已拆掉，入口分别并进卡片内按钮与各分段）—— 两个 import 都已删，
+// 避免「改这里的菜单却不生效」这种死引用。
 import StatLine from './StatLine.vue'
 import SegmentedControl from './SegmentedControl.vue'
 import SelectionBar from './SelectionBar.vue'
@@ -1194,14 +1546,16 @@ import {
   FIELD_DEFS, DEFAULT_FIELDS, parseFields, toggleFieldKey, platformName, planCells,
   summaryCells as _summaryCells, summaryBar, cardModel, cardFields, mapWithLimit,
 } from '../services/libraryFields'
-// 这一页「看法」上的规则（相对时间 / 缺口文案 / 补全四态 / 三步流程）都在服务层，
+// 这一页「看法」上的规则（相对时间 / 缺口文案 / 补全四态 / 下一步提示）都在服务层，
 // 由 libraryView.test.mjs 钉住 —— 组件里只做 ref → 函数参数的桥接，不本地重写。
+// 注：COMPLETE_STEPS 已不再 import —— 它对应的流程条从来没被渲染过（见下面 completeSteps 的删除说明）。
 import {
   lastScanText as _lastScanText, gapsAtText as _gapsAtText,
   unsupportedExtsText as _unsupportedExtsText,
   completePercent as _completePercent, aiMatchedCount as _aiMatchedCount,
   completeDoneText, completeTitleText as _completeTitleText,
-  COMPLETE_STEPS, completeStep as _completeStep, completeHint as _completeHint,
+  completeStep as _completeStep, completeHint as _completeHint,
+  fmtWhen, relWhen,
 } from '../services/libraryView'
 import { fail as failText, apiError } from '../services/userMsg'
 import { logError } from '../services/appLog'
@@ -1223,6 +1577,17 @@ function flash(msg, isError = false) {
 const nasDir = ref(loadPref('nas_dir', ''))
 const tidyDir = ref('')
 /**
+ * ⚠️ 目录的唯一真相源（2026-10-27 修 2.2「双真相源」）。
+ *
+ * 起因：TidyDirChip 把目录写进 prefs.nas_dir，而组件里到处写 `tidyDir.value || nasDir.value`，
+ * 两个 ref 谁赢取决于兜底顺序 —— 任何一处直接写 tidyDir 就会盖过 nasDir，两份真相互相打架，
+ * 而且代码里没有任何地方声明「tidyDir 只做兜底、永远是空串」这个契约。
+ *
+ * 现在：**所有 handler 一律读 curDir**，tidyDir 只剩「本地曲库页传进来的目录」这条老链路的兼容
+ * 入口（onMounted 里读一次 prefs 兼容旧值、离开本页时清空），不再参与业务判断。
+ */
+const curDir = computed(() => (tidyDir.value || nasDir.value || '').trim())
+/**
  * 体检卡片要扫哪个目录。
  *
  * 2026-10-24 用户报的坑：在「本地曲库」里点「体检文件名」，卡片却扫了"补全整理"自己那份
@@ -1233,8 +1598,11 @@ const tidyDir = ref('')
 const healthDir = ref('')
 let stopHealthNav = null
 let onDirChanged = null
-// 2026-10-19 渐进式披露 → 2026-10-21 分段导航：「偶尔才改一次的设置」仍在右侧抽屉；
-// 主功能入口升为顶部分段，⋯ 里只留真正次要的动作（增量扫描）。
+// 3.10：刷新 guard 的句柄
+let onBeforeUnload = null
+// 2026-10-19 渐进式披露 → 2026-10-21 分段导航 → 2026-10-27 收起「⋯」：
+// 主功能入口升为顶部分段，次要动作也各归其位（增量扫描并进卡内「扫描」按钮、
+// 选项 = 卡片头那颗按钮），页面上已经**没有**溢出菜单了。
 const optionsOpen = ref(false)
 const auditing = ref(false)
 
@@ -1245,19 +1613,11 @@ const auditing = ref(false)
  */
 const sub = computed(() => segmentOf('tidy'))
 
-/**
- * 补全段的 ⋯：原六项里，扫描缺失 = 本段主按钮，体检 / 查重 = 各自的分段，
- * 撤销 = 「记录」段，补全选项 = 卡头的「选项」按钮 —— 这里只剩「增量扫描」。
- */
-const completeMenu = computed(() => [
-  { key: 'index', label: indexing.value ? '扫描中…' : '增量扫描', icon: FolderSearch, disabled: indexing.value },
-])
+// ⚠️ 2026-10-27 删除：`completeMenu`（计算属性，只有一项「增量扫描」）+
+// `onCompleteMenu`（分发这个 key）+ `OverflowMenu` import。三者全是死代码 ——
+// 模板里从来没有渲染过 OverflowMenu，「增量扫描」早已并进补全段的「扫描」按钮
+// （见 scanAll）。留着会让人以为页面上真有一个「⋯ 菜单」可以改。
 
-function onCompleteMenu(key) {
-  if (key === 'index') runIndexScan()
-}
-
-/** 替换音质（占位段）：后端 /api/quality/* 开发中，这里不发任何接口调用 */
 // ── 分段五：替换音质（需求 m02757/m02848）──
 //
 // 接后端 /api/quality/scan|replace（pkg/intercept/quality.go，契约见 api/client.js 的 QualityAPI 注释）。
@@ -1273,7 +1633,8 @@ const Q_CHANNEL_LABELS = { lx: '洛雪', dl: 'musicdl', native: '原生' }
 const qMode = ref('lossy')
 const qLimit = ref(clampQLimit(Number(loadPref('quality_limit', 200))))
 const qScan = ref(null)      // 最近一次 scan 返回的 data（state/total/scanned/entries…）
-const qStopped = ref(false)  // true = 本页已停止查看进度（不等于后端停了）
+const qStopped = ref(false)  // true = 已点过「停止」；2026-10-27 起这个动作会真的停后端
+const qStopBusy = ref(false) // 「停止」请求在途（防连点 + 按钮禁用）
 const qErrorText = ref('')   // 请求层失败（接口没上线/断网）的横幅，别白屏也别抛错
 const qSelected = ref(new Set())
 const qBusy = ref(false)     // 替换批次进行中
@@ -1288,6 +1649,9 @@ const qReplaceTotal = ref(0)
 const qReplaceDone = ref(0)
 const qReplaceInFlight = ref(0)
 const qReplaceCurrent = ref('')  // 这一批在换的那首歌（取该批第一条的歌名 / 文件名）
+// 上一轮没换成的 path（2026-10-27）：收尾时摆成「重试这些」的入口。
+// 以前失败的行只是留在表格里带 rowError，用户想再试一次得自己一条条把勾找回来。
+const qRetryPaths = ref([])
 
 // 一批只发 5 条：契约上限是 50（见 api/client.js 的 QualityAPI.replace 注释），
 // 但 50 条一批要等好几分钟才回来一次 —— 用户要的是「看得见在动」的进度，
@@ -1320,16 +1684,56 @@ const qReplacePercent = computed(() => {
   return qReplacing.value ? Math.min(99, pct) : Math.min(100, pct)
 })
 const qSelectedCount = computed(() => qSelected.value.size)
-const qRows = computed(() => {
+// 3.10：还没落盘的勾选总数（歌名修复 / 缺歌词 / 替换音质三段），>0 时离开页面会拦一下。
+// 只统计「选中且还没写」的，已写完的不算未保存。
+const pendingSelectionCount = computed(() =>
+  titleFixSelectedCount.value + lyricSelectedCount.value + qSelectedCount.value)
+// 「只看能替换的」筛选（2026-10-27）：一库几万首时表格里绝大多数是
+// 「已经是最高音质、没事可做」的行，用户真正要处理的那几十条被淹在里面。
+const qOnlyUpgradeable = ref(false)
+function setQOnlyUpgradeable(v) {
+  if (v === qOnlyUpgradeable.value) return
+  qOnlyUpgradeable.value = v
+}
+const qRowsAll = computed(() => {
   const es = qScan.value?.entries || []
   // 扫完且一条都不可替换（也还没替换过任何东西）→ 让位给空态文案，不刷一屏灰勾
   if (qScan.value?.state === 'done' && !es.some((e) => e.upgradeable || e.replaced)) return []
   return es
 })
+const qRows = computed(() => {
+  if (!qOnlyUpgradeable.value) return qRowsAll.value
+  // 失败的行（rowError）一定留着 —— 被筛掉的话用户根本找不到失败原因
+  return qRowsAll.value.filter((e) => e.upgradeable || e.rowError)
+})
+/** 被筛选隐藏掉的行数（提示用，免得用户以为扫描结果少了） */
+const qHiddenRowCount = computed(() => (qOnlyUpgradeable.value ? qRowsAll.value.length - qRows.value.length : 0))
+/**
+ * 音质扫描按钮的文案（六-2）。
+ *
+ * 原来只有「开始扫描 / 扫描中…」两态，但后端 `StartQualityScan`
+ * （backend/pkg/intercept/quality.go:266）**每次都从头扫**，不清空旧结果就直接覆盖：
+ * 已经扫出 30 条可替换、用户想再扫一遍，点下去会把那 30 条连同用户勾好的选择一起冲掉。
+ * 所以按「有没有旧结果」分成两种文案，并在 title 里写清会丢什么。
+ */
+const qScanBtnText = computed(() => {
+  if (qRunning.value) return '扫描中…'
+  if (qBusy.value) return '提交中…'
+  const es = qScan.value?.entries || []
+  return es.length ? '重新扫描' : '开始扫描'
+})
+const qScanBtnTitle = computed(() => {
+  if (qRunning.value) return '扫描进行中 —— 用右边的停止按钮可以真的让后端停下'
+  const es = qScan.value?.entries || []
+  if (!es.length) return '让三条渠道逐条对比曲库能拿到的最高音质'
+  return `会从头上重新扫一遍，现在这 ${es.length} 条结果和已勾的选择都会被清掉；只想保留现状就不要再点`
+})
+
 const qStatusText = computed(() => {
   const parts = []
   if (qStopped.value && qState.value !== 'running') {
-    parts.push('已中断 —— 只是本页不再读取进度（后端扫描可能仍在继续），点「开始扫描」可重新接上')
+    // 2026-10-27：停止现在会真的通知后端（见 stopQualityScan），文案跟着改诚实
+    parts.push('已停止 —— 后端也停了，已探到的结果保留着，可以先把这批换掉，之后再重新扫')
   } else if (qState.value === 'running') {
     parts.push('扫描中…')
   } else if (qState.value === 'done') {
@@ -1377,12 +1781,8 @@ const qAutoCount = computed(() => {
   return list.filter((r) => r && r.by === 'upgrade').length
 })
 
-function formatRecordTime(at) {
-  const d = new Date(Number(at) * 1000)
-  if (Number.isNaN(d.getTime())) return ''
-  const pad = (n) => String(n).padStart(2, '0')
-  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
-}
+// P2-10：原来这里手写 pad 出「10-27 18:39」（没有年份，跨年就歧义），改用统一的 fmtWhen
+const formatRecordTime = fmtWhen
 
 function normalizeScan(j) {
   const d = j && typeof j === 'object' ? j : {}
@@ -1462,9 +1862,30 @@ function stopQualityPolling() {
   }
 }
 
-function stopQualityScan() {
+/**
+ * 停止扫描（2.4 / 六-2，2026-10-27 修）。
+ *
+ * 原来这里**只停本地轮询**，标题还诚实地写着「后端扫描可能仍在继续」——
+ * 于是用户点了停止、以为停了，后端其实还在逐首打三条渠道（一次几百条能跑好几分钟），
+ * 想取消就只能等它扫完。后端 /api/quality/scan 早就支持 `action:"stop"`
+ * （intercept/quality.go:328 StopQualityScan，会 close(stop) 取消在途探测，
+ * 已探到的结果保留），所以这里补上真正的取消。
+ */
+async function stopQualityScan() {
   stopQualityPolling()
   qStopped.value = true
+  qStopBusy.value = true
+  try {
+    const res = await QualityAPI.scan('stop')
+    // 后端回的是停止后的状态（已探到的保留在 entries 里）——直接拿来刷新界面
+    if (res?.data) qScan.value = res.data
+    flash('已停止扫描，已探到的结果保留着')
+  } catch (e) {
+    // 停不下来也要说清楚，别让用户以为停了
+    flash(failText('停止扫描', e) + ' —— 后端可能还在扫，等一会儿再看进度', true)
+  } finally {
+    qStopBusy.value = false
+  }
 }
 
 function setQMode(v) {
@@ -1503,9 +1924,10 @@ function onQAction(key) {
   if (key === 'replace') replaceWithBest()
 }
 
-async function replaceWithBest() {
-  if (qBusy.value || !qSelected.value.size) return
-  const paths = [...qSelected.value]
+async function replaceWithBest(pathsArg) {
+  if (qBusy.value || qReplacing.value) return
+  const paths = Array.isArray(pathsArg) && pathsArg.length ? [...pathsArg] : [...qSelected.value]
+  if (!paths.length) return
   qBusy.value = true
   qErrorText.value = ''
   let doneCount = 0
@@ -1513,11 +1935,15 @@ async function replaceWithBest() {
   // 成功的 path 收在这里：收尾时一次性从扫描队列里移除
   // （用户 2026-10-24 原话：「移除已完成歌曲的扫描队列」）。
   const donePaths = new Set()
+  // 失败的 path 收在这里：收尾时摆成「重试这些」的入口（2026-10-27 加）。
+  const failedPaths = new Set()
+  const batchErrors = []
   qReplaceTotal.value = paths.length
   qReplaceDone.value = 0
   qReplaceInFlight.value = 0
   qReplaceCurrent.value = ''
   qReplacing.value = true
+  qRetryPaths.value = []
   try {
     // 契约：一次最多 50 条 —— 这里刻意只发 5 条一批（见 Q_REPLACE_BATCH），顺序发、一批一落。
     for (let i = 0; i < paths.length; i += Q_REPLACE_BATCH) {
@@ -1525,50 +1951,84 @@ async function replaceWithBest() {
       // 批一发出去就把「在等哪首」摆到进度条上：5 条也要各走一次外网，用户得知道进度在哪
       qReplaceCurrent.value = qBatchLabel(batch[0])
       qReplaceInFlight.value = batch.length
-      const res = await QualityAPI.replace(batch)
-      if (res.code !== 200) {
-        failCount += batch.length
-        qErrorText.value = apiError(res, '替换音质')
-        // 整批失败也算「处理过了」：进度得继续走，不能停在原地让人以为卡死
+      // ⚠️ try 必须在**循环内**（2026-10-27 修）。
+      // 原来 catch 在循环外：第 3 批发一次抛错（断网 / 超时），第 4 批到第 N 批根本不再发，
+      // 用户看到进度条停在原地、后面几十首一动不动，而那些勾选还留在条上以为在排队。
+      try {
+        const res = await QualityAPI.replace(batch)
+        if (res.code !== 200) {
+          // 整批没被受理（不是单条失败）：这一批全算失败，但**继续发后面的批次**
+          const msg = apiError(res, '替换音质')
+          batchErrors.push(msg)
+          qErrorText.value = msg
+          for (const p of batch) failedPaths.add(p)
+          failCount += batch.length
+          qReplaceDone.value += batch.length
+          qReplaceInFlight.value = 0
+          continue
+        }
+        const d = res.data || {}
+        const doneMap = new Map()
+        const failMap = new Map()
+        for (const it of d.done || []) {
+          // ok:false 配的是 `note`（例如「拿到的是同档位文件，没有覆盖」）——
+          // 与 failed[] 那种真失败不同，但要照实说，不能显示成成功。
+          if (it && it.ok === false) failMap.set(it.path, (it && (it.note || it.error)) || '这条没有替换成功')
+          else if (it) doneMap.set(it.path, it)
+        }
+        for (const it of d.failed || []) failMap.set(it.path, it.error || '替换失败')
+        // 后端偶尔会少回几条（既不在 done 也不在 failed）—— 那些不能默默消失，
+        // 否则「勾了 5 条，回来只有 3 条的结果」，用户无从判断另外 2 条怎么了。
+        for (const p of batch) {
+          if (!doneMap.has(p) && !failMap.has(p)) failMap.set(p, '后端没有返回这条的结果，可能没换成')
+        }
+        doneCount += doneMap.size
+        failCount += failMap.size
+        for (const path of doneMap.keys()) donePaths.add(path)
+        for (const path of failMap.keys()) failedPaths.add(path)
+        applyQReplace(doneMap, failMap)
+        // 这批回来了：把在飞数换成真实完成数（进度条分子不变，但自此算「已落盘」）
         qReplaceDone.value += batch.length
         qReplaceInFlight.value = 0
-        continue
+      } catch (e) {
+        // 单批抛错：只记这一批失败，后面的批次继续发（这才是用户要的「别卡死」）
+        const msg = failText('替换音质', e)
+        batchErrors.push(msg)
+        for (const p of batch) failedPaths.add(p)
+        failCount += batch.length
+        qReplaceDone.value += batch.length
+        qReplaceInFlight.value = 0
       }
-      const d = res.data || {}
-      const doneMap = new Map()
-      const failMap = new Map()
-      for (const it of d.done || []) {
-        // ok:false 配的是 `note`（例如「拿到的是同档位文件，没有覆盖」）——
-        // 与 failed[] 那种真失败不同，但要照实说，不能显示成成功。
-        if (it && it.ok === false) failMap.set(it.path, (it && (it.note || it.error)) || '这条没有替换成功')
-        else if (it) doneMap.set(it.path, it)
-      }
-      for (const it of d.failed || []) failMap.set(it.path, it.error || '替换失败')
-      doneCount += doneMap.size
-      failCount += failMap.size
-      for (const path of doneMap.keys()) donePaths.add(path)
-      applyQReplace(doneMap, failMap)
-      // 这批回来了：把在飞数换成真实完成数（进度条分子不变，但自此算「已落盘」）
-      qReplaceDone.value += batch.length
-      qReplaceInFlight.value = 0
     }
     if (doneCount) flash(`已用最高音质替换 ${doneCount} 首`)
-    if (failCount) flash(`${failCount} 条替换失败，原因写在对应行`, true)
-  } catch (e) {
-    // 某批直接抛错：后面的批次不再发（不假装成功），已勾选未处理的留在条上可重试
-    flash(failText('替换音质', e), true)
+    if (failCount) flash(`${failCount} 条没换成${batchErrors.length ? `：${batchErrors[0]}` : '，原因写在对应行'}`, true)
   } finally {
     // 收尾（2026-10-24 用户原话：「替换完成后，自动更新当前页面的最近记录，
     // 移除已完成歌曲的扫描队列」）：
     // 1) 只取一次 status 把 records 换掉 —— 不整表重扫，表格/滚动位置/其他字段都保持原样，
     //    这样刚换完的那几首立刻出现在「最近替换」里；
-    // 2) 成功的行从扫描队列里移除（不再标 replaced:true 留在表里），失败行留着带 rowError。
+    // 2) 成功的行从扫描队列里移除（不再标 replaced:true 留在表里），失败行留着带 rowError；
+    // 3) 失败的行不静默留在勾选里 —— 它们进 qRetryPaths，用户点一下就能重试
+    //    （原地不动的勾选会让人以为「已经处理过了」）。
     await refreshQualityRecordsOnly()
     dropReplacedFromQueue(donePaths)
+    qRetryPaths.value = [...failedPaths]
+    if (failedPaths.size) {
+      const sel = new Set(qSelected.value)
+      for (const p of failedPaths) sel.delete(p)
+      qSelected.value = sel
+    }
     qReplaceInFlight.value = 0
     qReplacing.value = false
     qBusy.value = false
   }
+}
+
+/** 重试上一轮没换成的那些（2026-10-27）：把失败集合塞回勾选再跑一遍。 */
+function retryFailedReplace() {
+  const paths = qRetryPaths.value
+  if (!paths.length || qBusy.value || qReplacing.value) return
+  replaceWithBest(paths)
 }
 
 // 进度条上「当前这首」的可读名：表里能查到时用歌名，查不到就退回文件名。
@@ -1644,12 +2104,64 @@ const auditAt = ref(0)
 const indexResult = ref(null)
 const dupResult = ref(null)
 const dupResolveResult = ref(null)
+// 查重：真执行前的「已看过干跑清单」闸门 + 正在跑 + 是否展开全部组（2026-10-27 P0-4/3.7）
+const dupBusy = ref(false)
+const dupConfirmArmed = ref(false)
+const dupShowAll = ref(false)
+// 9.2：回收站的绝对路径（后端 joinTrash：曲库根下的 .tidy_trash）。
+// 以前页面只说「曲库里的 .tidy_trash」，用户误删后不知道去哪儿捞。
+const trashPath = computed(() => {
+  const d = (curDir.value || '').replace(/\/+$/, '')
+  return d ? `${d}/.tidy_trash` : ''
+})
+/**
+ * 复制到剪贴板（9.2）。
+ * ⚠️ 本应用是 http + 局域网 IP 部署 → 不是安全上下文，`navigator.clipboard`
+ * 直接是 undefined（和 ImmersivePlayer.vue:1156 同一个坑）。所以要判存在 + 退回 execCommand。
+ */
+async function copyText(text, okMsg) {
+  const done = () => flash(okMsg || '已复制')
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    try {
+      await navigator.clipboard.writeText(text)
+      done()
+      return
+    } catch (_) { /* 落到下面的兜底 */ }
+  }
+  try {
+    const ta = document.createElement('textarea')
+    ta.value = text
+    ta.setAttribute('readonly', '')
+    ta.style.position = 'fixed'
+    ta.style.top = '-1000px'
+    ta.style.opacity = '0'
+    document.body.appendChild(ta)
+    ta.select()
+    ta.setSelectionRange(0, ta.value.length)
+    const ok = document.execCommand('copy')
+    document.body.removeChild(ta)
+    if (ok) done()
+    else flash('复制失败 —— 浏览器没给剪贴板权限，手动选中复制吧', true)
+  } catch (e) {
+    flash(failText('复制', e), true)
+  }
+}
+function copyTrashPath() {
+  if (!trashPath.value) return
+  copyText(trashPath.value, '回收站路径已复制')
+}
+const visibleDupGroups = computed(() => {
+  const gs = (dupResult.value && dupResult.value.groups) || []
+  return dupShowAll.value ? gs : gs.slice(0, 30)
+})
 // 查重 / 索引扫描结果的落盘时间（0 = 本次刚跑的）；2026-10-25 加，见 restoreDedupe
 const dedupeAt = ref(0)
 const indexScanAt = ref(0)
 // 上次整理快照（来自持久化索引 library_index.json）
 const indexStats = ref(null)
 const statsLoading = ref(false)
+// 读索引统计失败的原因（2026-10-27 修 9.3：原来静默吞错，页面会说成「还没整理过」）
+const statsError = ref('')
 const reloading = ref(false)
 
 // ── 曲库体检结果的持久化 ──
@@ -1660,7 +2172,7 @@ function auditCacheKey(dir) {
 }
 
 function restoreAudit() {
-  const dir = tidyDir.value || nasDir.value
+  const dir = curDir.value
   if (!dir) {
     audit.value = null
     auditAt.value = 0
@@ -1674,20 +2186,13 @@ function restoreAudit() {
 }
 
 // 目录一改就换成本目录的上次体检结果（各目录分开存，见 auditCacheKey）
-watch(tidyDir, restoreAudit)
+watch(curDir, restoreAudit)
 
 /** 体检结果的时间戳文案（只用于「上次体检结果」这行提示） */
-const auditAtText = computed(() => {
-  if (!auditAt.value) return ''
-  try {
-    return new Date(auditAt.value).toLocaleString('zh-CN', { hour12: false })
-  } catch (_) {
-    return ''
-  }
-})
+const auditAtText = computed(() => (auditAt.value ? fmtWhen(auditAt.value) : ''))
 
 async function runAudit() {
-  const dir = tidyDir.value || nasDir.value
+  const dir = curDir.value
   if (!dir) return flash('请填写曲库目录', true)
   savePref('nas_dir', dir)
   auditing.value = true
@@ -1712,7 +2217,11 @@ async function runAudit() {
 const snapLoading = ref(false)
 const snapBusy = ref(false)
 const snapshots = ref([])
+// 待确认恢复的那一份（2026-10-27 修 3.5：恢复是两步确认，不再走 window.confirm）
+const snapRestorePending = ref(null)
 const snapDetail = ref(null)
+const snapDetailLoading = ref(false)
+const snapErrorText = ref('')
 
 function fmtBytes(n) {
   const v = Number(n) || 0
@@ -1730,13 +2239,12 @@ const SNAP_KIND_TEXT = {
   auto: '写入前留底',
 }
 
-/** ISO 时间 → 「2026-10-27 09:12」这种本地文案（解析不了就原样返回） */
-function fmtTimeText(iso) {
-  if (!iso) return ''
-  const t = new Date(iso)
-  if (Number.isNaN(t.getTime())) return String(iso)
-  return t.toLocaleString('zh-CN', { hour12: false })
-}
+/**
+ * ISO 时间 → 「2026-10-27 09:12」。
+ * P2-10（2026-10-27）：原来这里自己 new Date + toLocaleString，和 services 里的
+ * `fmtWhen` 是两份实现，输出还不一样（这个只到分钟，那个到秒）。现在只留一个。
+ */
+const fmtTimeText = fmtWhen
 
 /**
  * 快照列表的缓存键。快照是**曲库级**的（不分目录），所以键不带目录 ——
@@ -1762,7 +2270,13 @@ async function loadSnapshots() {
     // 2026-10-27 快照改成「曲库元数据快照」：只存标签，不复制音频（见后端 meta_snapshot.go）
     const [res, sc] = await Promise.all([
       TidyAPI.metaSnapshots(),
-      TidyAPI.snapshotSchedule().catch(() => null),
+      // 2026-10-27 修 9.4：原来定时快照配置读失败被 `.catch(() => null)` 吃掉，
+      // 页面把 enabled 显示成「关闭」—— 用户会以为自己的定时任务被关掉了。
+      // 现在记下失败原因，开关区显示「读不到配置」，而不是假装是关闭状态。
+      TidyAPI.snapshotSchedule().catch((e) => {
+        scheduleReadError.value = failText('读取定时快照配置', e)
+        return null
+      }),
     ])
     const bad = apiError(res, '读取快照失败')
     if (bad) return flash(bad, true)
@@ -1773,7 +2287,13 @@ async function loadSnapshots() {
       at_text: fmtTimeText(sn.created),
     }))
     const scData = sc && sc.data ? sc.data : (sc || {})
-    if (scData) {
+    if (!sc) {
+      // 上面的 catch 已经写了原因（网络层直接抛了）
+      if (!scheduleReadError.value) scheduleReadError.value = '读取定时快照配置失败'
+    } else {
+      scheduleReadError.value = apiError(sc, '读取定时快照配置失败')
+    }
+    if (scData && !scheduleReadError.value) {
       schedule.value = {
         enabled: !!scData.enabled,
         interval_hours: Number(scData.interval_hours) || 24,
@@ -1796,7 +2316,7 @@ async function loadSnapshots() {
 async function takeSnapshot() {
   snapBusy.value = true
   try {
-    const res = await TidyAPI.takeMetaSnapshot(tidyDir.value || nasDir.value || '')
+    const res = await TidyAPI.takeMetaSnapshot(curDir.value)
     const bad = apiError(res, '创建快照失败')
     if (bad) return flash(bad, true)
     flash(res.message || '快照已保存')
@@ -1808,20 +2328,136 @@ async function takeSnapshot() {
   }
 }
 
+// 「看明细」的就地展开（2026-10-27）：
+// · snapDetail 存在窗台上，但**只有点开的那一行**渲染它（见模板里的 isSnapOpen）；
+// · 再点一次收起，另有「关闭」按钮；
+// · 读失败时错误就地显示在这一行下面，而不是只 flash 一下（flash 过去就没了，
+//   用户盯着空白的明细区不知道发生了什么）。
+function isSnapOpen(sn) {
+  return !!snapDetail.value && snapDetail.value.id === sn.id
+}
+function closeSnapDetail() {
+  snapDetail.value = null
+  snapErrorText.value = ''
+}
+
+/**
+ * 把当前展开的这份快照导出成 JSON 文件（P3-13，2026-10-27）。
+ *
+ * 导的是**已经读进来的那份 diff**（用户看到什么就导什么），不重新请求 ——
+ * 重新请求会拿到一个可能已经变了的版本（恢复操作会改曲库），
+ * 那用户手里的文件就和屏幕上的对不上了。
+ * 文件名带上快照时间和 ID，一份目录里存多份不会互相覆盖。
+ */
+function exportSnapDetail(sn) {
+  const d = snapDetail.value
+  if (!d || !d.id) return
+  const payload = {
+    exported_at: new Date().toISOString(),
+    snapshot: {
+      id: d.id,
+      created: d.created || '',
+      count: d.count || 0,
+      writable: d.writable || 0,
+      note: sn?.note || d.note || '',
+    },
+    diff_total: d.diff_total ?? (d.diff || []).length,
+    diff_truncated: !!d.diff_truncated,
+    diff: d.diff || [],
+  }
+  try {
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    // 时间戳里的 ':' 在 Windows 上不能进文件名，统一换成 '-'
+    const stamp = String(d.created || '').replace(/[:\s]/g, '-').replace(/-+$/, '') || 'snapshot'
+    a.download = `qulv-snapshot-${stamp}-${d.id}.json`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    // 立刻回收：慢一步在 iOS Safari 上会攒着 blob 不放（导出多次后页面会变卡）
+    setTimeout(() => URL.revokeObjectURL(url), 0)
+    flash(`已导出 ${(d.diff || []).length} 条差异`)
+  } catch (e) {
+    // 浏览器禁止下载（iOS PWA 的某些版本）时别装作成功了
+    logError('exportSnapDetail', e)
+    flash('这个浏览器不允许直接下载文件，可以换桌面端试', true)
+  }
+}
 async function viewSnapshot(sn) {
+  if (isSnapOpen(sn)) return closeSnapDetail()
+  snapErrorText.value = ''
+  snapDetail.value = null // 先收起上一份：明细头里的时间/数量不能是上一份的
+  snapDetailLoading.value = true
   try {
     const res = await TidyAPI.metaSnapshotDetail(sn.id)
     const bad = apiError(res, '读取快照明细失败')
-    if (bad) return flash(bad, true)
+    if (bad) {
+      // 这一份读不出来，保留展开态让错误有地方落脚（isSnapOpen 需要 id）
+      snapDetail.value = { id: sn.id, created: sn.created, count: 0, writable: 0, diff: [] }
+      snapErrorText.value = bad
+      return
+    }
     snapDetail.value = res.data
   } catch (e) {
-    flash(failText('读取快照明细', e), true)
+    snapDetail.value = { id: sn.id, created: sn.created, count: 0, writable: 0, diff: [] }
+    snapErrorText.value = failText('读取快照明细', e)
+  } finally {
+    snapDetailLoading.value = false
+  }
+}
+
+/**
+ * 恢复快照 —— 两步确认（2026-10-27 修 3.5 / 9.1）。
+ *
+ * 原来走 `window.confirm()`：iOS PWA 下是系统级弹窗，而且**确认框里塞不进差异摘要** ——
+ * 用户只能盲确认「把 N 首恢复回去」。这里改成先掏开销掉的动作上「恢复到这份」，
+ * 就地展开一份确认条（会改多少首 / 多少首已不在 / 多少首格式写不了），
+ * 第二次点「确认恢复」才真写。
+ */
+function armRestoreSnapshot(sn) {
+  if (snapRestorePending.value && snapRestorePending.value.id === sn.id) {
+    snapRestorePending.value = null
+    return
+  }
+  snapRestorePending.value = sn
+  // 没读过这份明细就先读一遍 —— 确认条上的数字得是真的
+  if (!(snapDetail.value && snapDetail.value.id === sn.id)) viewSnapshot(sn)
+}
+
+function cancelRestoreSnapshot() {
+  snapRestorePending.value = null
+}
+
+function isRestoreArmed(sn) {
+  return !!snapRestorePending.value && snapRestorePending.value.id === sn.id
+}
+
+/** 确认条上的差异摘要（数字缺失时给 null，模板里就只说「恢复前会自动留底」） */
+function snapRestoreSummary(sn) {
+  const d = snapDetail.value && snapDetail.value.id === sn.id ? snapDetail.value : null
+  if (!d) return null
+  const diff = d.diff || []
+  if (!diff.length) return { none: true, total: 0, missing: 0, writable: 0, skipped: 0 }
+  const missing = diff.filter(e => e.change === 'missing').length
+  const total = Number(d.diff_total) || diff.length
+  return {
+    none: false,
+    total,
+    listed: diff.length,
+    missing,
+    writable: Number(d.writable) || 0,
+    skipped: Math.max(0, total - (Number(d.writable) || 0)),
+    truncated: !!d.diff_truncated,
   }
 }
 
 async function restoreSnapshot(sn) {
-  const ok = window.confirm(`把 ${sn.count} 首歌的元数据恢复成 ${sn.at_text || sn.id} 这一刻的样子？\n\n只写标签（mp3/flac 才能写），音频文件本身不动；文件被换过的会跳过。恢复前会自动再拍一份当前状态的快照，点错了还能撤回来。`)
-  if (!ok) return
+  if (!snapRestorePending.value || snapRestorePending.value.id !== sn.id) {
+    return armRestoreSnapshot(sn)
+  }
+  snapRestorePending.value = null
   snapBusy.value = true
   try {
     const res = await TidyAPI.restoreMetaSnapshot(sn.id)
@@ -1829,8 +2465,11 @@ async function restoreSnapshot(sn) {
     if (bad) return flash(bad, true)
     flash(res.message || '已恢复')
     await loadSnapshots()
+    closeSnapDetail() // 恢复后旧 diff 已经过时，留着会让用户以为「怎么还没变」（9.7）
     loadIndexStats().catch(() => {})
-    scanGaps().catch(() => {})
+    // 9.8：恢复改的是标签，歌名修复的名单也该跟着重算，
+    // 否则快照段的数字变了、歌名段还是旧名单。只在本来就有名单时才重扫（别在空页上突然发起扫描）。
+    if (titleFixItems.value.length) scanTitleFix()
   } catch (e) {
     flash(failText('恢复快照', e), true)
   } finally {
@@ -1841,6 +2480,8 @@ async function restoreSnapshot(sn) {
 // ── 定时快照（用户 2026-10-24：「增加定时快照和手动快照」）──
 // 与手动快照共用一个 GET /api/library/snapshots 响应里的 schedule 键，少一次请求。
 const schedule = ref({ enabled: false, interval_hours: 24, keep: 7, last_run: '' })
+// 读定时快照配置失败的原因（2026-10-27 修 9.4：不能把「读不到」显示成「已关闭」）
+const scheduleReadError = ref('')
 const scheduleBusy = ref(false)
 const SNAPSHOT_INTERVAL_OPTIONS = [
   { value: '6', label: '6 小时' },
@@ -1859,9 +2500,7 @@ const SNAPSHOT_KEEP_OPTIONS = [
 /** 「上次拍的」：留空要说清楚是还没拍过，而不是没开 */
 const scheduleLastText = computed(() => {
   if (!schedule.value.last_run) return schedule.value.enabled ? '还没拍过' : ''
-  const t = new Date(schedule.value.last_run)
-  if (Number.isNaN(t.getTime())) return ''
-  return `上次 ${t.toLocaleString('zh-CN', { hour12: false })}`
+  return `上次 ${fmtWhen(schedule.value.last_run)}`
 })
 
 async function saveSchedule(patch, okText) {
@@ -1914,11 +2553,57 @@ const titleFixSelectedRecords = ref([])
 
 const titleFixSelectedCount = computed(() => titleFixItems.value.filter(it => it.selected && !it.done).length)
 const titleFixAllSelected = computed(() => titleFixItems.value.length > 0 && titleFixItems.value.every(it => it.selected || it.done))
+
+// ── 3.8（2026-10-27）：几百首时「勾了哪几首」在表里根本找不着 ──
+// 加了「只看勾选的」过滤 + 「按歌名排序」，都只是**视图**，不改 titleFixItems 本体
+// （本体的顺序参与缓存与勾选，动它会把用户的勾选顺序搞乱）。
+const titleFixOnlySelected = ref(false)
+function setTitleFixOnlySelected(v) {
+  if (v === titleFixOnlySelected.value) return
+  titleFixOnlySelected.value = v
+}
+const titleFixSort = ref('file') // file | title
+function setTitleFixSort(v) {
+  const next = v === 'title' ? 'title' : 'file'
+  if (next === titleFixSort.value) return
+  titleFixSort.value = next
+}
+const titleFixView = computed(() => {
+  let rows = titleFixItems.value
+  if (titleFixOnlySelected.value) rows = rows.filter(it => it.selected && !it.done)
+  if (titleFixSort.value === 'title') {
+    // 「（空）」和以「未知 / unknown」开头的排在最前面：这些才是最该修的
+    rows = [...rows].sort((a, b) => String(a.title || '').localeCompare(String(b.title || ''), 'zh-CN'))
+  }
+  return rows
+})
+/** 被过滤掉的数量（提示用，免得用户以为名单变少了） */
+const titleFixHiddenCount = computed(() =>
+  titleFixOnlySelected.value ? titleFixItems.value.length - titleFixView.value.length : 0)
+
+// 9.6：清空两步确认的武装态
+const titleFixClearArmed = ref(false)
+let titleFixClearTimer = 0
+function clearTitleFixList() {
+  if (!titleFixClearArmed.value) {
+    titleFixClearArmed.value = true
+    flash('再点一次「确认清空」就清掉这份名单（不会动文件，只是丢掉这次的扫描结果）')
+    // 卡片头里塞不下「取消」按钮，改用 6 秒自动失效 —— 免得武装态一直挂着
+    clearTimeout(titleFixClearTimer)
+    titleFixClearTimer = setTimeout(() => { titleFixClearArmed.value = false }, 6000)
+    return
+  }
+  clearTimeout(titleFixClearTimer)
+  titleFixClearArmed.value = false
+  titleFixItems.value = []
+  saveTitleFix()
+  flash('名单已清空，需要时重新「扫描歌名」')
+}
 /** 卡片头右侧那句「最近修复时间」：取记录里最新一条，没有记录就不显示这一行 */
 const titleFixRecordsAtText = computed(() => {
   const at = titleFixRecords.value.reduce((m, r) => Math.max(m, Number(r.at) || 0), 0)
   if (!at) return ''
-  return `最近修复 ${new Date(at * 1000).toLocaleString('zh-CN', { hour12: false })}`
+  return `最近修复 ${fmtWhen(at)}`
 })
 
 function toggleTitleFix(it) {
@@ -1949,7 +2634,7 @@ function titleFixCacheKey(dir) {
 }
 
 function saveTitleFix() {
-  const dir = (tidyDir.value || nasDir.value || '').trim()
+  const dir = curDir.value
   if (!dir) return
   saveCache(titleFixCacheKey(dir), {
     at: titleFixAt.value,
@@ -1961,7 +2646,7 @@ function saveTitleFix() {
 }
 
 function restoreTitleFix() {
-  const dir = (tidyDir.value || nasDir.value || '').trim()
+  const dir = curDir.value
   if (!dir) return
   const cached = loadCache(titleFixCacheKey(dir), 0)
   if (!cached || typeof cached !== 'object') return
@@ -1973,20 +2658,13 @@ function restoreTitleFix() {
 }
 
 /** 歌名修复上次扫描的时间（非 0 = 从缓存恢复的） */
-const titleFixAtText = computed(() => {
-  if (!titleFixAt.value) return ''
-  try {
-    return new Date(titleFixAt.value).toLocaleString('zh-CN', { hour12: false })
-  } catch (_) {
-    return ''
-  }
-})
+const titleFixAtText = computed(() => (titleFixAt.value ? fmtWhen(titleFixAt.value) : ''))
 
 // ── 缺歌词（用户 2026-10-25 需求 N）──
 // 逻辑全在 services/useLyricGaps.js，这里只把三个依赖喂进去：
 // 目录、提示条、写入成功后刷新索引统计（歌词写进标签后 has_lyric 就变了）。
 const lyric = useLyricGaps({
-  dir: () => tidyDir.value || nasDir.value || '',
+  dir: () => curDir.value,
   flash: (msg, isErr) => flash(msg, isErr),
   afterWrite: () => { loadIndexStats().catch(() => {}) },
 })
@@ -2009,6 +2687,35 @@ const {
   clear: clearLyricGaps,
 } = lyric
 
+/**
+ * 歌词预览（P3-15，2026-10-27）。
+ *
+ * 只在本地展开，**不发请求也不写盘** —— 歌词文本在「查找歌词」那一步就已经
+ * 跟着结果回来了（`items[i].lyric`）。一次只展开一条：这行会撑到 224px 高，
+ * 同时展开多条会把表格顶出去，用户反而找不到刚点的那行。
+ */
+const lyricPreviewPath = ref('')
+function toggleLyricPreview(it) {
+  lyricPreviewPath.value = lyricPreviewPath.value === it.path ? '' : it.path
+}
+/** 预览行数（`
+` 切分，丢掉结尾空行） */
+function lyricPreviewLines(it) {
+  const t = String(it?.lyric || '').replace(/\s+$/, '')
+  return t ? t.split(/\r?\n/) : []
+}
+/**
+ * 预览正文：最多 60 行。
+ * 整首词一般 30-60 行，超过这个数说明匹配到的可能是长电台版/合辑版 ——
+ * 更该让用户把注意力放在「开头对不对」上，而不是把整页刷满。
+ */
+function lyricPreviewText(it) {
+  const lines = lyricPreviewLines(it)
+  if (!lines.length) return '（这首歌的结果里没有歌词正文）'
+  if (lines.length <= 60) return lines.join('\n')
+  return lines.slice(0, 60).join('\n') + `\n\n…… 还有 ${lines.length - 60} 行没显示`
+}
+
 // tab 切到后台再回来时 localStorage 可能被别的标签页写过，这里不主动刷新 ——
 // 这一页的真相在曲库索引里，切回来点「扫描歌名」就会重算。
 
@@ -2023,7 +2730,7 @@ async function runManualTitleAudit() {
   manualAuditItems.value = []
   try {
     // 10 首要逐首问大模型，后端自己留 120s；这里不设 axios 超时（默认值可能更短）
-    const res = await TidyAPI.titleFixAudit(tidyDir.value || nasDir.value || '', 10)
+    const res = await TidyAPI.titleFixAudit(curDir.value, 10)
     const bad = apiError(res, '手动歌名体检失败')
     if (bad) return flash(bad, true)
     const d = res.data || {}
@@ -2050,7 +2757,7 @@ async function runManualTitleAudit() {
 }
 
 async function scanTitleFix() {
-  const dir = tidyDir.value || nasDir.value
+  const dir = curDir.value
   titleFixScanning.value = true
   try {
     const res = await TidyAPI.titleFixScan(dir)
@@ -2134,7 +2841,7 @@ async function loadTitleFixRecords() {
         old_title: e.old_title || '',
         new_title: e.title || '',
         at: rec.at,
-        at_text: rec.at ? new Date(rec.at * 1000).toLocaleString('zh-CN', { hour12: false }) : '',
+        at_text: fmtWhen(rec.at),
         undone: false,
       })
     }
@@ -2195,22 +2902,35 @@ async function editTitleFixRecord(r) {
 }
 
 // 读取上次整理快照：挂载时自动加载持久化索引的统计，首屏即可看到上次结果
+/**
+ * 索引统计（快照段那行「上次整理…」）。
+ *
+ * 2026-10-27 修 9.3：原来 catch 是空的注释「后端不可用/无索引：保持空，不打扰」——
+ * 后果是后端挂掉时页面显示「还没有索引快照 —— 点右上「刷新」再试」，
+ * 用户会以为**库里没歌**，而不是「服务读不到」。现在把失败原因单独记下来并显示。
+ */
 async function loadIndexStats() {
-  const dir = tidyDir.value || nasDir.value
+  const dir = curDir.value
   if (!dir) return
   statsLoading.value = true
   try {
     const res = await TidyAPI.indexStats(dir)
-    if (res.code === 200 && res.data && res.data.total) indexStats.value = res.data
-  } catch (_) {
-    // 后端不可用/无索引：保持空，不打扰
+    const bad = apiError(res, '读取索引统计失败')
+    if (bad) {
+      statsError.value = bad
+      return
+    }
+    statsError.value = ''
+    indexStats.value = res.data && res.data.total ? res.data : null
+  } catch (e) {
+    statsError.value = failText('读取索引统计', e)
   } finally {
     statsLoading.value = false
   }
 }
 
 async function runIndexScan() {
-  const dir = tidyDir.value || nasDir.value
+  const dir = curDir.value
   if (!dir) return flash('请填写曲库目录', true)
   savePref('nas_dir', dir)
   indexing.value = true
@@ -2220,9 +2940,12 @@ async function runIndexScan() {
       indexResult.value = res.data
       indexScanAt.value = 0 // 本次刚扫的
       if (res.warning) flash(res.warning, true)
-      // 扫描刚把新字段读进索引 —— 顺手重算缺口，否则页面还显示旧的待补数量
+      // 索引变了 ⇒ 索引统计跟着变，顺手重读一次（O(1) 的一行数字）
       loadIndexStats()
-      scanGaps().catch(() => {})
+      // ⚠️ 这里**不再**顺手 scanGaps()（2026-10-27 修 2.8 / 5.1）：
+      // 原来 scanAll 外面 await 一次、这里又 auto 一次 ⇒ 一次「扫描」点击发两次缺口统计，
+      // 弱网下页面上的待补数字会跳两下。缺口重算由调用方决定：
+      // scanAll 会 await scanGaps()，其它入口（快照段的「立即更新索引」）自己显式调。
       saveDedupe() // 索引扫描结果一起落盘（用户切段回来还能看到这次扫了什么）
     } else {
       flash(apiError(res, '扫描失败'), true)
@@ -2232,6 +2955,18 @@ async function runIndexScan() {
   } finally {
     indexing.value = false
   }
+}
+
+/**
+ * 快照段那行「立即更新索引」（2026-10-27 修 2.5）。
+ *
+ * 与补全段的「扫描」等价（增量扫描 + 重算缺口），只是从快照段就地触发 ——
+ * 原来这里只有一句 tooltip 让用户「去补全段找增量扫描」，而那个入口不存在了。
+ */
+async function refreshIndexHere() {
+  if (!curDir.value) return flash('请先选曲库目录', true)
+  await runIndexScan()
+  await scanGaps()
 }
 
 // ── 查重 / 索引扫描结果的持久化（2026-10-25 用户：「保留五个分段的上次缓存数据和操作」）──
@@ -2246,7 +2981,7 @@ function indexScanCacheKey(dir) {
 }
 
 function saveDedupe() {
-  const dir = (tidyDir.value || nasDir.value || '').trim()
+  const dir = curDir.value
   if (!dir) return
   saveCache(dedupeCacheKey(dir), {
     at: dedupeAt.value,
@@ -2257,7 +2992,7 @@ function saveDedupe() {
 }
 
 function restoreDedupe() {
-  const dir = (tidyDir.value || nasDir.value || '').trim()
+  const dir = curDir.value
   if (!dir) return
   const c = loadCache(dedupeCacheKey(dir), 0)
   if (c && typeof c === 'object') {
@@ -2273,21 +3008,17 @@ function restoreDedupe() {
 }
 
 /** 查重结果的落盘时间文案 */
-const dedupeAtText = computed(() => {
-  if (!dedupeAt.value) return ''
-  try {
-    return `上次查重 ${new Date(dedupeAt.value).toLocaleString('zh-CN', { hour12: false })}`
-  } catch (_) {
-    return ''
-  }
-})
+const dedupeAtText = computed(() => (dedupeAt.value ? `上次查重 ${fmtWhen(dedupeAt.value)}` : ''))
 
 async function runDedupe() {
-  const dir = tidyDir.value || nasDir.value
+  const dir = curDir.value
   if (!dir) return flash('请填写曲库目录', true)
   savePref('nas_dir', dir)
   deduping.value = true
   dupResolveResult.value = null
+  // 新的一次查重 ⇒ 上一轮的「已看过清单」作废，红按钮退回「移入回收站」
+  dupConfirmArmed.value = false
+  dupShowAll.value = false
   try {
     const res = await TidyAPI.duplicates(dir)
     if (res.code === 200) {
@@ -2302,23 +3033,56 @@ async function runDedupe() {
   }
 }
 
+/**
+ * 清理重复文件。
+ *
+ * 2026-10-27 改（审查报告 P0-4 / 2.7 / 3.7）：
+ * · 去掉了 `window.confirm()` —— iOS PWA / 微信里是系统级弹窗，样式不可控，
+ *   而且确认框里塞不下「将移走 N 个文件、释放 X」的清单，用户只能盲确认；
+ * · 第一次点红按钮**只干跑**并把清单摊开（按钮改成「确认移入回收站」），
+ *   第二次点才真动手 —— 这是整页唯一不可逆的批量操作，值得多一次点击；
+ * · 执行完不再被随后的 `runDedupe()` 把结果清掉（原来「执行完成」面板一闪就没）。
+ */
+/** P0-4：查重确认条里的「取消」—— 武装后必须能退回去 */
+function cancelResolveDup() {
+  dupConfirmArmed.value = false
+}
+
 async function resolveDup(dryRun) {
-  const dir = tidyDir.value || nasDir.value
-  if (!dryRun && !confirm('将把重复文件移入回收站（.tidy_trash），可从回收站恢复。继续？')) return
+  const dir = curDir.value
+  if (!dir) return flash('请填写曲库目录', true)
+  if (!dryRun && !dupConfirmArmed.value) {
+    flash('先看一眼清单 —— 再点一次「确认移入回收站」才会真的移')
+    await resolveDup(true)
+    return
+  }
+  dupBusy.value = true
   try {
     const res = await TidyAPI.resolveDuplicates({ dir, mode: 'trash', dry_run: dryRun })
     if (res.code === 200) {
       dupResolveResult.value = res.data
+      dupConfirmArmed.value = true
       saveDedupe()
       // 逐文件失败原因太长，界面只给数量，明细进日志
       const errs = res.data?.errors || []
       if (errs.length) logError('清理重复文件', `${errs.length} 个文件处理失败`, errs.slice(0, 20).join('；'))
-      if (!dryRun) { await runDedupe(); await runAudit() }
+      if (!dryRun) {
+        const done = dupResolveResult.value
+        dupConfirmArmed.value = false
+        await runDedupe()
+        await runAudit()
+        // runDedupe 会在开头清掉 dupResolveResult —— 把「执行完成：移动 N」放回去，
+        // 否则用户刚做完操作，唯一的结果面板就消失了。
+        dupResolveResult.value = done
+        saveDedupe()
+      }
     } else {
       flash(apiError(res, '执行失败'), true)
     }
   } catch (e) {
     flash(failText('清理重复文件', e), true)
+  } finally {
+    dupBusy.value = false
   }
 }
 
@@ -2343,6 +3107,8 @@ const completeJob = ref(null)
 const completing = ref(false)
 const previewing = ref(false)
 const undoBusy = ref(false)
+/** 9.1：撤销补全的两步确认（第一次点只摆出确认条，第二次才真还原） */
+const undoConfirmArmed = ref(false)
 // 停止请求在途 —— 防连点（后端 cancelRun 是幂等的，但连点会让界面文案乱跳）
 const stopBusy = ref(false)
 // 预览出来的计划（还没写文件）。用户确认后才执行。
@@ -2420,11 +3186,16 @@ const fieldOptions = computed(() => FIELD_DEFS.map((f) => ({
 })))
 
 /**
- * 三步流程条（2026-10-12 用户反馈「点完扫描缺失，下一步做什么？」）。
- * 只由**已有状态**推出，不引入新的步骤状态机。
- * 步骤/文案全部来自 services/libraryView.js，由 libraryView.test.mjs 钉住。
+ * ⚠️ 2026-10-27 删除：`completeSteps = COMPLETE_STEPS`。
+ *
+ * 它从 2026-10-12 加进来（用户「点完扫描缺失，下一步做什么？」）就**从来没有**
+ * 被模板渲染过 —— 三步流程条只活在注释和死变量里，用户一直看不到。
+ * 现在由常驻正文的 `completeHint`（下面的那一行）承担「下一步点哪」，
+ * 它每一步都指的是界面上真实存在的按钮，所以不再需要这组步骤定义。
+ *
+ * 步骤/文案的真相在 services/libraryView.js（completeStep / completeHint），
+ * 由 libraryView.test.mjs 钉住。
  */
-const completeSteps = COMPLETE_STEPS
 const completeStep = computed(() => _completeStep(gaps.value, previewState.value === 'done', previewing.value))
 const completeHint = computed(() => _completeHint(gaps.value, previewState.value === 'done', previewing.value))
 
@@ -2453,7 +3224,7 @@ function gapsCacheKey(dir) {
 
 /** 刷新后仍显示上次统计（同「体检」的处理，2026-09-22 反馈「数据每次都会消失」） */
 function restoreGaps() {
-  const dir = (tidyDir.value || nasDir.value || '').trim()
+  const dir = curDir.value
   if (!dir) {
     gaps.value = null
     return
@@ -2470,14 +3241,14 @@ function restoreGaps() {
  * 单独保留 scanGaps / runIndexScan 两个函数是因为别处（扫描完补全、查重后刷新）还在用。
  */
 async function scanAll() {
-  const dir = tidyDir.value || nasDir.value
+  const dir = curDir.value
   if (!dir) return flash('请填写曲库目录', true)
   await runIndexScan()
   await scanGaps()
 }
 
 async function scanGaps() {
-  const dir = tidyDir.value || nasDir.value
+  const dir = curDir.value
   if (!dir) return flash('请填写曲库目录', true)
   gapsLoading.value = true
   try {
@@ -2496,7 +3267,7 @@ async function scanGaps() {
 }
 
 // 换目录就换成这个目录的上次统计与上次卡片，别把上个库的数字挂在这里
-watch(tidyDir, () => {
+watch(curDir, () => {
   restoreGaps()
   restoreCards()
   // 换目录就把歌名修复 / 查重 / 索引扫描也换成该目录的上次结果（各目录分开存）
@@ -2541,7 +3312,7 @@ function saveCards(dir) {
 
 /** 刷新页面后卡片还在（同「体检」的处理，见 restoreAudit） */
 function restoreCards() {
-  const dir = (tidyDir.value || nasDir.value || '').trim()
+  const dir = curDir.value
   if (!dir) return
   const cached = loadCache(cardsCacheKey(dir), 0)
   if (!cached || typeof cached !== 'object') return
@@ -2552,7 +3323,7 @@ function restoreCards() {
 }
 
 async function loadCompletedCards(summary) {
-  const dir = tidyDir.value || nasDir.value
+  const dir = curDir.value
   const results = (summary && summary.results) || []
   completeBar.value = summaryBar(selectedFields.value, summary)
   cardsAt.value = Date.now()
@@ -2582,7 +3353,7 @@ async function loadCompletedCards(summary) {
   }
 }
 
-watch(tidyDir, restoreCards)
+watch(curDir, restoreCards)
 
 const completePercent = computed(() => _completePercent(completeJob.value))
 
@@ -2602,7 +3373,7 @@ const aiMatchedCount = computed(() => _aiMatchedCount(completeJob.value?.summary
 // 三个状态要分清，界面话术不能混：
 //   running —— 还在跑，条目继续往列表里加
 //   done    —— 跑完并拿到了 plan_id，可以「确认写入」
-//   idle    —— 用户中途停了（或流断了）：**没有 plan_id**，这份清单不完整
+//   idle    —— 用户中途暂停了（或流断了）：**没有 plan_id**，这份清单不完整
 // 所以「能不能写」只看 planId，不看列表里有几行。
 const previewState = ref('idle') // idle | running | done
 const previewRows = ref([])
@@ -2610,12 +3381,13 @@ const previewMeta = ref({ done: 0, total: 0, matched: 0 })
 const previewPlanId = ref('')
 const previewDir = ref('')
 
-// 「暂停」= 断开流（服务端立刻取消，不再打外网）；「继续」= 重新发起一次。
+// 「暂停」= 断开流（服务端立刻取消，不再打外网），已出的行留着但**不能用**；
+// 「继续」就是重新发一次流（后端没有断点续传，所以是从第一首重来，按钮文案照实写）。
 // 刻意不做「挂起连接」的假暂停，理由见 client.js 里 streamNDJSON 的注释。
 let previewAbort = null
 
 const previewOpen = computed(() => previewing.value || previewState.value === 'running' || previewState.value === 'done')
-const previewHeading = computed(() => (previewState.value === 'done' ? '预览完成（还没有动过文件）' : '预览已停止'))
+const previewHeading = computed(() => (previewState.value === 'done' ? '预览完成（还没有动过文件）' : '预览已暂停'))
 const previewMatchedCount = computed(() => previewRows.value.filter((r) => r.matched).length)
 const previewPercent = computed(() => {
   const { done, total } = previewMeta.value
@@ -2663,7 +3435,7 @@ function closePreview() {
  * 与旧的同步预览是同一套匹配逻辑，只是不再等全部跑完才返回。
  */
 async function startPreview() {
-  const dir = tidyDir.value || nasDir.value
+  const dir = curDir.value
   if (!dir) return flash('请填写曲库目录', true)
   if (!selectedFields.value.length) return flash('先勾选要补的字段', true)
   savePref('nas_dir', dir)
@@ -2832,10 +3604,20 @@ async function loadCompleteStatus() {
 
 /**
  * 撤销上一次补全：把改过的文件从备份还原。
- * 撤销只做一次（没有「重做」）—— 确认弹窗里要说清楚。
+ * 撤销只做一次（没有「重做」）—— 两步确认的第二行会写清楚（9.1）。
  */
+function cancelUndoComplete() {
+  // 9.1：确认条里的「取消」—— 原来武装之后没有退路，只能真按下去或离开页面
+  undoConfirmArmed.value = false
+}
+
 async function undoComplete() {
-  if (!confirm('把上一次补全改过的文件还原成补全前的样子？\n\n还原后需要重新跑一次补全才能再补上。')) return
+  // 9.1：从 window.confirm 改成就地两步（见模板里的确认条）
+  if (!undoConfirmArmed.value) {
+    undoConfirmArmed.value = true
+    return
+  }
+  undoConfirmArmed.value = false
   undoBusy.value = true
   try {
     const res = await TidyAPI.undoComplete()
@@ -2847,7 +3629,7 @@ async function undoComplete() {
     completedCards.value = []
     skippedCards.value = []
     completeBar.value = []
-    saveCards(tidyDir.value || nasDir.value)
+    saveCards(curDir.value)
   } catch (e) {
     flash(failText('撤销补全', e), true)
   } finally {
@@ -2905,6 +3687,14 @@ onMounted(() => {
     restoreGaps()
   }
   window.addEventListener('ys:dir-changed', onDirChanged)
+  // 3.10：勾选状态只活在内存里（缓存里恢复的是上一次的列表，不是本次勾选），
+  // 刷新/关标签页会悄无声息地丢掉「已勾了 N 首、正要去写」。有未落盘的勾选时拦一下。
+  onBeforeUnload = (e) => {
+    if (pendingSelectionCount.value <= 0) return
+    e.preventDefault()
+    e.returnValue = ''
+  }
+  window.addEventListener('beforeunload', onBeforeUnload)
   // 歌名修复的记录列表是**服务端真相**（补全记录），缓存只存它算出来的时间文案，
   // 这里补拉一次：本地缓存可能落后于另一次会话里做过的修复。
   loadTitleFixRecords().catch(() => {})
@@ -2921,6 +3711,7 @@ onUnmounted(() => {
   stopQualityPolling()
   if (stopHealthNav) stopHealthNav()
   if (onDirChanged) window.removeEventListener('ys:dir-changed', onDirChanged)
+  if (onBeforeUnload) window.removeEventListener('beforeunload', onBeforeUnload)
 })
 
 // 离开「补全整理」就丢掉入口带来的一次性目录，避免导航栏自己走进来时停在过期目录

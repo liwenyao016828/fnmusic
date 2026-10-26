@@ -187,6 +187,12 @@ func main() {
 			// 收藏 / 加入歌单 → 自动下载并绑定本地（默认关）。
 			// 现取：用户在界面上打开就该立刻生效。
 			FavAutoDownload: func() bool { return cfgMgr.Get().FavAutoDownloadOn() },
+			// 后台「音质补强」轮的四个维度（见 pkg/intercept/upgrade_sweeper.go）。
+			// 全部现取：设置页改完立刻按新值走，不用重启应用。
+			UpgradeSweepEnabled:   func() bool { return cfgMgr.Get().UpgradeSweepOn() },
+			UpgradeSweepInterval:  func() time.Duration { return cfgMgr.Get().UpgradeSweepInterval() },
+			UpgradeSweepBatch:     func() int { return cfgMgr.Get().UpgradeSweepPerRound() },
+			UpgradeIgnoreCooldown: func() bool { return cfgMgr.Get().UpgradeSweepIgnoreCooldownOn() },
 			// 下载时要不要带歌词 / 内嵌封面（见 pkg/intercept/autodownload.go）。
 			LyricAutoDownload: func() bool { return cfgMgr.Get().LyricAutoDownloadOn() },
 			CoverEmbed:        func() bool { return cfgMgr.Get().CoverEmbedOn() },
@@ -333,6 +339,40 @@ func main() {
 				}
 				return map[string]any{"done": done, "failed": failed}, nil
 			},
+		)
+		// 后台「音质补强」的设置面（v2.22）。三件事：
+		//   status —— 把「内存里的配置 + 进程里的活状态（这一轮派了几首、
+		//             下次什么时候跑、还剩多少欠账）」合成一份给界面；
+		//   reload —— 设置改完让轮子按新间隔重排（开关变开要重新起循环）；
+		//   run    —— 立即补一轮（界面上的按钮）。
+		server.SetQualityAutoUpgrade(
+			func() map[string]any {
+				c := cfgMgr.Get()
+				pending, cooling := ic.UpgradePendingCount()
+				st := ic.UpgradeSweepStatus()
+				chans := c.DownloadChannels()
+				return map[string]any{
+					"enabled":          c.UpgradeSweepOn(),
+					"running":          ic.UpgradeSweeperRunning(),
+					"interval_minutes": config.NormalizeUpgradeSweepInterval(c.UpgradeSweepIntervalMinutes),
+					"batch":            config.NormalizeUpgradeSweepBatch(c.UpgradeSweepBatch),
+					"ignore_cooldown":  c.UpgradeSweepIgnoreCooldownOn(),
+					"pending":          pending,
+					"cooling":          cooling,
+					"channels":         chans,
+					"quality":          config.QualityOverride(c.AutoDownloadQuality, c.DownloadQualitySetting()),
+					"last_run_at":      st.LastRunAt,
+					"last_dispatched":  st.LastDispatched,
+					"next_run_at":      st.NextRunAt,
+					"round":            st.Round,
+					// 契约上限给界面画选项用，免得前端再抄一份数字。
+					"max_batch":    config.UpgradeSweepMaxBatch,
+					"min_interval": config.UpgradeSweepMinIntervalMinutes,
+					"max_interval": config.UpgradeSweepMaxIntervalMinutes,
+				}
+			},
+			ic.ReloadUpgradeSweeper,
+			ic.UpgradeSweepNow,
 		)
 	}
 
@@ -508,13 +548,18 @@ func main() {
 		bq.Start()
 	}
 
-	// 后台「音质补强」轮：把「收藏时各渠道都没给无损」的那批歌，隔天再试一遍。
+	// 后台「音质补强」轮：把「收藏时各渠道都没给无损」的那批歌，按用户设的节奏
+	// （默认 4 小时一轮、一轮 3 首）重试。
 	//
-	// ⚠️ 必须放在 `httpServer.Serve` **之后**启动（虽然它第一轮要等 20 分钟才动手）：
+	// ⚠️ 必须放在 `httpServer.Serve` **之后**启动（虽然它第一轮要等一个间隔才动手）：
 	// 补强最终会走 autoDownload → postDownload，那是**从进程里打回自己 HTTP 接口**的
 	// 一条路（`localAPI`）。服务还没 listen 就起循环，第一轮的自调用会全部连不上，
-	// 而这些失败是记冷却位的 —— 等于白等一天。
-	if ic != nil {
+	// 而这些失败是记冷却位的 —— 等于白等一轮。
+	//
+	// v2.22：是否启动由用户配置决定（UpgradeSweepOn）。StartUpgradeSweeper 自身是幂等的，
+	// 关着就不起 —— 这样「用户在设置里关掉补强」在**重启后**也不会偷偷跑起来
+	// （以前是：循环照起，每轮在 deps 里判 favAutoDownload，改开关都得重启）。
+	if ic != nil && cfgMgr.Get().UpgradeSweepOn() {
 		ic.StartUpgradeSweeper()
 	}
 

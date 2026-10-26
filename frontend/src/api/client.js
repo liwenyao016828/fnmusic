@@ -233,6 +233,15 @@ export const QualityAPI = {
   // 替换 = 逐条走外网重新取更高音质的文件再落盘，一批 50 条轻松超过默认 30s，
   // 长超时必须放宽（对齐 PushAPI.run 的长任务口径）。
   replace: (paths) => api.post('/quality/replace', { paths }, { timeout: 600000 }).then(res => res.data),
+  // 后台「音质补强」（用户 2026-10-25：自动补强得有地方控制）。
+  // get   = 读状态：开关/间隔/模式/每轮几首 + 欠账条数与下一次何时跑；
+  // save  = 改设置（与 /api/config 同一套选择性合并，只传要改的键即可）；
+  // run   = 立刻补一轮（now=true 先清冷却位，否则只看「早就该补」的那批）。
+  autoUpgrade: {
+    get: () => api.get('/quality/auto-upgrade').then(res => res.data),
+    save: (patch) => api.post('/quality/auto-upgrade', patch).then(res => res.data),
+    run: (now = false) => api.post('/quality/auto-upgrade/run', { now }, { timeout: 180000 }).then(res => res.data),
+  },
 }
 
 export const DownloadAPI = {
@@ -322,8 +331,13 @@ export const MusicAPI = {
 export const NasAPI = {
   directories: () => api.get('/nas/directories').then(res => res.data),
   // opts.files=true 时后端会额外返回普通文件列表（默认不返回，避免放大 JSON）
+  // opts.hidden=true 时连 `.`/`$`/`@` 开头的隐藏目录一起返回（默认藏起来，见 pkg/nas/scanner.go）
   browse: (path = '', opts = {}) => api.get('/nas/browse', {
-    params: { path, ...(opts.files ? { files: 1, ext: opts.ext || '' } : {}) },
+    params: {
+      path,
+      ...(opts.files ? { files: 1, ext: opts.ext || '' } : {}),
+      ...(opts.hidden ? { hidden: 1 } : {}),
+    },
   }).then(res => res.data),
   // 读文本文件（从 NAS 选音源脚本用）。后端有扩展名白名单 + 2MB 上限，见 pkg/nas/readfile.go
   readText: (path) => api.get('/nas/read', { params: { path } }).then(res => res.data),

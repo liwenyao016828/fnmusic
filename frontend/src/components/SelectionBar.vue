@@ -21,16 +21,21 @@
       v-if="count > 0"
       class="pointer-events-none fixed inset-x-0 bottom-[88px] z-[45] flex justify-center px-3 pb-safe sm:bottom-[96px]"
     >
-      <div class="pointer-events-auto flex max-w-full items-center gap-1 rounded-full border border-white/10 bg-[var(--ys-toast-bg)] px-2 py-1.5 shadow-[0_14px_40px_rgba(0,0,0,0.28)] backdrop-blur-2xl">
-        <span class="pl-2.5 pr-1 text-[12px] font-medium text-white/70">
+      <!--
+        8.6（2026-10-27）：窄屏 + 多个动作时这条会横向撑出屏幕（`max-w-full` 只约束了
+        自身，里面的按钮不换行也不收缩，边缘的动作直接被切掉）。改成整体可横滑 +
+        每个动作不收缩，最少保证「能滑到」而不是「点不到」。
+      -->
+      <div class="pointer-events-auto flex max-w-[calc(100vw-1.5rem)] items-center gap-1 overflow-x-auto overscroll-x-contain rounded-full border border-white/10 bg-[var(--ys-toast-bg)] px-2 py-1.5 shadow-[0_14px_40px_rgba(0,0,0,0.28)] backdrop-blur-2xl">
+        <span class="shrink-0 pl-2.5 pr-1 text-[12px] font-medium text-white/70">
           已选 <b class="text-white">{{ count }}</b>
         </span>
-        <span class="mx-1 h-4 w-px bg-white/15"></span>
+        <span class="mx-1 h-4 w-px shrink-0 bg-white/15"></span>
         <button
           v-for="a in actions"
           :key="a.key"
           type="button"
-          class="ys-press flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] font-medium transition-colors"
+          class="ys-press flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-3 py-1.5 text-[12px] font-medium transition-colors"
           :class="a.danger
             ? 'text-[#ff8a80] hover:bg-white/10'
             : 'text-white/80 hover:bg-white/10 hover:text-white'"
@@ -40,10 +45,10 @@
           <component :is="a.icon" v-if="a.icon" class="h-3.5 w-3.5" :stroke-width="1.9" />
           {{ a.label }}
         </button>
-        <span class="mx-1 h-4 w-px bg-white/15"></span>
+        <span class="mx-1 h-4 w-px shrink-0 bg-white/15"></span>
         <button
           type="button"
-          class="ys-press mr-0.5 grid h-7 w-7 place-items-center rounded-full text-white/60 transition-colors hover:bg-white/10 hover:text-white"
+          class="ys-press mr-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-full text-white/60 transition-colors hover:bg-white/10 hover:text-white"
           title="取消选择"
           @click="emit('clear')"
         >

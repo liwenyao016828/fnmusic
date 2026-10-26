@@ -36,11 +36,20 @@
         <component :is="icon" class="h-4 w-4" />
       </span>
       <div class="min-w-0 flex-1">
-        <h2 class="truncate text-[14px] font-semibold tracking-[-0.01em] text-[var(--ys-text)]" :title="titleTitle || undefined">{{ title }}</h2>
-        <p v-if="sub" class="mt-0.5 truncate text-[11px] text-[var(--ys-text-faint)]" :title="subTitle || undefined">{{ sub }}</p>
+        <h2 class="truncate text-[14px] font-semibold tracking-[-0.01em] text-[var(--ys-text)]" :title="titleTitle || title">{{ title }}</h2>
+        <!--
+          窄屏副标题：原来是 `line-clamp` 之外一律 `truncate`（单行省略），
+          像「歌名修复」段那句 60+ 字的说明在手机上只剩「没有歌名 / 歌名就是…」，
+          用户根本不知道这段是干什么的。改成窄屏最多两行、sm 以上仍单行省略。
+        -->
+        <p v-if="sub" class="mt-0.5 text-[11px] leading-snug text-[var(--ys-text-faint)] line-clamp-2 sm:line-clamp-1" :title="subTitle || sub">{{ sub }}</p>
       </div>
-      <!-- 右侧：计数徽标、次要按钮等（`shrink-0` 不能加在外层，窄屏会溢出） -->
-      <div v-if="$slots.actions" class="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-2">
+      <!--
+        右侧：计数徽标、次要按钮等（`shrink-0` 不能加在外层，窄屏会溢出）。
+        `[&>*]:shrink-0` 给每个按钮单独兜底 —— 窄屏下 flex-wrap 换行后，
+        按钮仍会被 flex 压成「…」或半个字，之前只能靠每个调用点自己记得加。
+      -->
+      <div v-if="$slots.actions" class="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-2 [&>*]:shrink-0">
         <slot name="actions" />
       </div>
     </div>

@@ -48,14 +48,36 @@
         <div>
           <div class="flex items-center justify-between text-xs text-gray-400 mb-1.5">
             <span>NAS 存储卷目录浏览：</span>
-            <button
-              v-if="downloadManager.browseParentPath.value"
-              @click="downloadManager.browseDir(downloadManager.browseParentPath.value)"
-              class="text-emerald-600 hover:underline flex items-center gap-0.5"
-            >
-              <span>↑ 上一级</span>
-            </button>
+            <div class="flex items-center gap-3">
+              <!-- 隐藏目录开关：曲库可能在 .dev/music 这类点目录里（用户 2026-10-25 报障），
+                   不传 hidden 的话这条路永远翻不到 -->
+              <label class="flex cursor-pointer items-center gap-1 text-[11px] text-gray-500">
+                <input
+                  type="checkbox"
+                  class="h-3 w-3 accent-emerald-500"
+                  :checked="downloadManager.browseShowHidden.value"
+                  @change="downloadManager.setBrowseShowHidden($event.target.checked)"
+                />
+                <span>显示隐藏目录</span>
+              </label>
+              <button
+                v-if="downloadManager.browseParentPath.value"
+                @click="downloadManager.browseDir(downloadManager.browseParentPath.value)"
+                class="text-emerald-600 hover:underline flex items-center gap-0.5"
+              >
+                <span>↑ 上一级</span>
+              </button>
+            </div>
           </div>
+          <!-- 「开关就在眼前但看不见」兜底：后端回报被折叠的数量与名字 -->
+          <button
+            v-if="!downloadManager.browseShowHidden.value && downloadManager.browseHiddenCount.value > 0"
+            type="button"
+            class="mb-1.5 w-full rounded-lg bg-amber-50 px-2 py-1.5 text-left text-[11px] leading-tight text-amber-800 hover:bg-amber-100"
+            @click="downloadManager.setBrowseShowHidden(true)"
+          >
+            这个目录里还有 {{ downloadManager.browseHiddenCount.value }} 个隐藏文件夹没显示<template v-if="downloadManager.browseHiddenDirs.value.length">（{{ downloadManager.browseHiddenDirs.value.join('、') }}）</template> · 点这里显示
+          </button>
           <div class="max-h-48 overflow-y-auto border border-gray-100 rounded-xl bg-gray-50 p-2 space-y-1 divide-y divide-gray-100">
             <div
               v-for="folder in downloadManager.browseFolders.value" :key="folder.path"
@@ -69,7 +91,7 @@
               <span class="text-[10px] text-gray-400 shrink-0 font-mono">{{ folder.audio_count }} 首</span>
             </div>
             <div v-if="!downloadManager.browseFolders.value.length" class="py-4 text-center text-xs text-gray-400">
-              当前目录下无子文件夹
+              {{ downloadManager.browseHiddenCount.value > 0 ? '这一层只有隐藏文件夹，点上面的提示条显示' : '当前目录下无子文件夹' }}
             </div>
           </div>
         </div>

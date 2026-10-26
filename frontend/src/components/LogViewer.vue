@@ -6,11 +6,33 @@
         :disabled="loading"
         @click="reload"
       >{{ loading ? '读取中…' : '刷新' }}</button>
+      <!-- 导出打包：这一页自己的说明里一直写着「也可以一键导出打包」
+           （services/navViews.js 的 system/logs desc），但按钮只长在「设置」段里，
+           站在日志页的人根本找不到。同一件事不该让人先去猜它在哪一页。
+           走的是同一个 /api/logs?format=zip（配置凭据后端已脱敏）。 -->
       <button
-        v-if="tab !== 'task'"
+        class="rounded-[10px] border border-[var(--ys-border)] bg-white px-3 py-1.5 text-[12px] font-medium text-[var(--ys-text-muted)] transition-colors hover:bg-black/[0.03] hover:text-[var(--ys-text)] disabled:opacity-50"
+        :disabled="exporting"
+        title="打包成一个 zip：运行日志 + 环境信息 + 脱敏后的配置，发出去排查用"
+        @click="exportLogs"
+      >{{ exporting ? '打包中…' : '导出' }}</button>
+      <!-- 清空：两步确认（全站现在都不用 confirm()）——第一次点先摆出确认条，
+           第二次才真清。只清内存里的记录，不动文件与配置。 -->
+      <button
+        v-if="tab !== 'task' && !clearArmed"
         class="rounded-[10px] px-3 py-1.5 text-[12px] font-medium text-rose-600 transition-colors hover:bg-rose-50"
-        @click="clearLogs"
+        @click="clearArmed = true"
       >清空</button>
+      <button
+        v-else-if="clearArmed"
+        class="rounded-[10px] bg-rose-600 px-3 py-1.5 text-[12px] font-medium text-white transition-colors hover:bg-rose-700"
+        @click="clearLogs"
+      >确认清空</button>
+      <button
+        v-if="clearArmed"
+        class="rounded-[10px] border border-[var(--ys-border)] bg-white px-3 py-1.5 text-[12px] font-medium text-[var(--ys-text-muted)] transition-colors hover:bg-black/[0.03]"
+        @click="clearArmed = false"
+      >取消</button>
     </template>
 
     <!-- 标签 + 过滤（2026-10-18 用户「全局卡片化」：这一排控件原来裸在页面底色上，
@@ -129,12 +151,18 @@ import { markLoaded, isStale } from '../services/viewCache'
 import { currentView, segmentOf } from '../services/navBus'
 import { LogsAPI, MonitorAPI, PushAPI } from '../api/client'
 import { logEntries, clearLocalLog } from '../services/appLog'
+import { fail as failText } from '../services/userMsg'
+import { fail as notifyFail } from '../services/feedback'
 import PageShell from './PageShell.vue'
 
 const tab = ref('server')
 const loading = ref(false)
 const autoRefresh = ref(true)
 const onlyFailed = ref(false)
+const exporting = ref(false)
+// 清空的两步确认（见模板）：以前这里还有一个 window.confirm()，是全项目最后一处
+// 原生弹窗——已经统一成「就在原地再点一次」。
+const clearArmed = ref(false)
 
 const serverEntries = ref([])
 const serverTotal = ref(0)
@@ -287,21 +315,49 @@ async function reload() {
 
 function switchTab(id) {
   tab.value = id
+  clearArmed.value = false
   reload()
 }
 
 async function clearLogs() {
+  clearArmed.value = false
   if (tab.value === 'local') {
-    if (!confirm('清空本机的操作日志？只清这台浏览器里的记录。')) return
     clearLocalLog()
     loadLocal()
     return
   }
-  if (!confirm('清空后端运行日志？只清内存里的记录，不影响文件与配置。')) return
   try {
     await LogsAPI.clear()
     await loadServer()
   } catch (_) {}
+}
+
+/** 「导出」：与「设置」段里那个按钮同一个接口（zip 里的凭据字段后端已抹除）。 */
+function stamp() {
+  const d = new Date()
+  const p = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`
+}
+
+async function exportLogs() {
+  if (exporting.value) return
+  exporting.value = true
+  try {
+    const blob = await LogsAPI.exportZip()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `qulv-logs-${stamp()}.zip`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    // 立刻回收：留着的话这个 blob 会一直占内存到刷新
+    setTimeout(() => URL.revokeObjectURL(url), 10000)
+  } catch (e) {
+    notifyFail(failText('导出运行日志', e))
+  } finally {
+    exporting.value = false
+  }
 }
 
 let timer = null
@@ -320,6 +376,10 @@ function startTimer() {
 }
 
 onMounted(() => {
+  // 操作日志顺手读一次：它只是读 localStorage，零成本。
+  // 不读的话「操作日志」那个标签上没有条数，用户根本不知道里面有东西 ——
+  // 而「点了查看日志却发现没日志」的另一半原因就在这里。
+  loadLocal()
   reload()
   markLoaded('logs')
   // 运行日志每 5 秒拉一次（可关）—— 排查时能边操作边看；

@@ -63,6 +63,12 @@ type completeJobSnapshot struct {
 	UndoAvailable bool `json:"undo_available"`
 	// LatestBackupDir 最近一次备份目录
 	LatestBackupDir string `json:"latest_backup_dir,omitempty"`
+	// UndoCount 最近一次备份里有多少个文件可还原（0 = 没有 / 读不到清单）
+	//
+	// 2026-10-27 加：前端「撤销上一次补全」的两步确认要说出「会改回 N 个文件」，
+	// 这个数字只有备份清单知道。只在**没在跑**的时候算 —— 跑的时候清单还在长，
+	// 而且那时撤销按钮本来就是禁用的，算了也没人看。
+	UndoCount int `json:"undo_count,omitempty"`
 	// Cancelled 这次任务是**被停止**的（不是跑完的）。注意与 `summary.cancelled` 区分：
 	// 这个说的是任务本身，那个说的是「有几首没处理」。
 	Cancelled bool `json:"cancelled,omitempty"`
@@ -76,6 +82,11 @@ func (s *Server) completeSnapshot() completeJobSnapshot {
 	snap := completeJob.snapshot()
 	snap.LatestBackupDir = complete.FindLatest(s.aiBackupRoot)
 	snap.UndoAvailable = snap.LatestBackupDir != ""
+	// 撤销确认条要说「会改回 N 个文件」，这个数字只有备份清单知道。
+	// 只在没在跑的时候读清单：跑的时候清单还在长，而且撤销按钮本来就是禁用的。
+	if snap.UndoAvailable && !snap.Running {
+		snap.UndoCount = complete.Describe(snap.LatestBackupDir, false).Count
+	}
 	return snap
 }
 

@@ -19,8 +19,12 @@
  *   fail('下载目录保存失败', { scope: 'download', detail: err })
  *
  * 全部提示由 `components/FeedbackHost.vue` 统一渲染（App.vue 里挂一次）。
- * `fail`/`warn` 带 `scope` 时会顺手写一条应用日志，保持
- * 「界面只给一句结论，完整信息进日志」的既有约定（见 services/appLog.js）。
+ *
+ * ⚠️ 2026-10-25 修（用户：「底部弹窗看日志，跳转过去后也没有日志」）：
+ * 以前 `fail`/`warn` **只有显式传了 `scope` 才写日志**，而全项目九成调用点都是
+ * `fail('一句人话')` —— 于是 fail 默认带着「查看日志 ›」跳转入口，点过去却一条
+ * 记录都没有。现在 warn/fail **一定**落一条日志：scope 缺省用当前页面名兜底
+ * （见 scopeFallback），保证「能点进日志」和「日志里真有东西」永远同时成立。
  */
 
 import { ref } from 'vue'
@@ -63,6 +67,29 @@ function scheduleDismiss(id, ms) {
 }
 
 /**
+ * 「没显式给 scope」时写日志用的兜底 scope —— 由 main.js 注入当前页面名。
+ * 注入前（例如单元测试里直接调 notify）退化成 '界面提示'，绝不写空 scope。
+ */
+let scopeFallback = null
+
+/** 注入兜底 scope 提供者。传非函数即撤销，回到 '界面提示'。 */
+export function setScopeFallback(fn) {
+  scopeFallback = typeof fn === 'function' ? fn : null
+}
+
+function fallbackScope() {
+  if (scopeFallback) {
+    try {
+      const s = String(scopeFallback() || '').trim()
+      if (s) return s
+    } catch (_) {
+      // 兜底函数自己出错绝不能连累提示：静默走默认值
+    }
+  }
+  return '界面提示'
+}
+
+/**
  * 推送一条瞬时提示。
  *
  * @param {string} text 一句人话（不要塞堆栈）
@@ -70,7 +97,7 @@ function scheduleDismiss(id, ms) {
  * @param {'info'|'ok'|'warn'|'fail'} [opts.level='info']
  * @param {boolean} [opts.goLogs] 点击直达「日志」页（fail 默认 true）
  * @param {number} [opts.timeout] 停留毫秒；0 = 不自动消失
- * @param {string} [opts.scope] 日志 scope；warn/fail 给了就顺手写日志
+ * @param {string} [opts.scope] 日志 scope；warn/fail 不给就用当前页面名兜底
  * @param {any} [opts.detail] 日志详情
  * @returns {number} 提示 id
  */
@@ -90,9 +117,10 @@ export function notify(text, opts = {}) {
     return last.id
   }
 
-  if (opts.scope && (level === 'warn' || level === 'fail')) {
+  // 见文件头 2026-10-25 那条：warn/fail 一定落日志，不再看调用方给没给 scope。
+  if (level === 'warn' || level === 'fail') {
     const log = level === 'fail' ? logError : logWarn
-    log(opts.scope, msg, opts.detail)
+    log(opts.scope || fallbackScope(), msg, opts.detail)
   }
 
   const item = { id: ++seq, text: msg, level, goLogs, at: now }

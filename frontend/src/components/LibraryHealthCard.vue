@@ -103,20 +103,42 @@
           还有 {{ report.issues.length - visibleIssues.length }} 条未列出（修复会一起处理）
         </p>
 
+        <!--
+          3.6（2026-10-27）：批量改名 / 清残留原来点了就执行，没有任何确认。
+          改名尚可再改回来，**清残留是真删**，删错了只能去回收站翻（而且这里删的不一定进回收站）。
+          所以两种动作都走就地两步：第一次点变成「确认…」，第二次才真执行，切走/重扫自动解除武装。
+        -->
         <div class="mt-2 flex flex-wrap items-center gap-2">
           <button
             v-if="renameCount"
-            class="ys-press rounded-full bg-[var(--ys-accent)] px-3 py-1.5 text-[11.5px] font-medium text-white hover:brightness-105 disabled:opacity-60"
+            class="ys-press rounded-full px-3 py-1.5 text-[11.5px] font-medium text-white hover:brightness-105 disabled:opacity-60"
+            :class="armed === 'names' ? 'bg-rose-600' : 'bg-[var(--ys-accent)]'"
             :disabled="fixing"
             @click="runFix('names')"
-          >{{ fixing ? '修复中…' : `改名修好 ${renameCount} 条` }}</button>
+          >{{ fixing ? '修复中…' : (armed === 'names' ? `确认改名 ${renameCount} 条` : `改名修好 ${renameCount} 条`) }}</button>
           <button
             v-if="junkCount"
-            class="ys-press rounded-full border border-[var(--ys-border)] px-3 py-1.5 text-[11.5px] font-medium text-[var(--ys-text-muted)] hover:border-[var(--ys-border-strong)] disabled:opacity-60"
+            class="ys-press rounded-full border px-3 py-1.5 text-[11.5px] font-medium disabled:opacity-60"
+            :class="armed === 'all'
+              ? 'border-rose-300 bg-rose-50 text-rose-700'
+              : 'border-[var(--ys-border)] text-[var(--ys-text-muted)] hover:border-[var(--ys-border-strong)]'"
             :disabled="fixing"
             @click="runFix('all')"
-          >{{ fixing ? '修复中…' : `顺便清掉 ${junkCount} 个残留` }}</button>
+          >{{ fixing ? '修复中…' : (armed === 'all' ? `确认删掉 ${junkCount} 个残留` : `顺便清掉 ${junkCount} 个残留`) }}</button>
+          <button
+            v-if="armed"
+            class="px-2 py-1 text-[11px] text-[var(--ys-text-faint)] hover:text-[var(--ys-text)]"
+            @click="armed = ''"
+          >取消</button>
         </div>
+        <p v-if="armed" class="mt-1 text-[10.5px] leading-relaxed text-rose-700">
+          <template v-if="armed === 'all'">
+            再点一次就会真的删掉这 {{ junkCount }} 个残留文件 —— 删了这里没有还原入口，只能去回收站找。
+          </template>
+          <template v-else>
+            再点一次就会把 {{ renameCount }} 个文件名改成上面建议的样子；改坏了需要手动改回来。
+          </template>
+        </p>
       </template>
 
       <InlineNotice class="mt-2" :text="fixMsg" :tone="fixTone" :log-link="false" />
@@ -147,6 +169,8 @@ const props = defineProps({
 
 const scanning = ref(false)
 const fixing = ref(false)
+// 3.6：就地两步确认的武装态（'' | 'names' | 'all'）
+const armed = ref('')
 const report = ref(null)
 const fixMsg = ref('')
 const fixTone = ref('error')
@@ -172,6 +196,7 @@ async function runScan() {
   if (scanning.value || fixing.value) return
   scanning.value = true
   fixMsg.value = ''
+  armed.value = '' // 3.6：重扫后旧报告的「确认」状态必须失效，否则会拿着新报告执行旧意图
   try {
     report.value = await scanHealth(targetDir.value)
   } catch (e) {
@@ -185,6 +210,12 @@ async function runScan() {
 
 async function runFix(mode) {
   if (fixing.value || !report.value) return
+  // 3.6：先武装再执行 —— 第一次点只把按钮换成「确认…」，第二次才真动文件
+  if (armed.value !== mode) {
+    armed.value = mode
+    return
+  }
+  armed.value = ''
   const targets = pickFixable(report.value.issues, mode)
   if (!targets.length) return
   fixing.value = true

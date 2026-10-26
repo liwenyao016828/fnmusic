@@ -36,6 +36,20 @@ func (s *Server) SetQuality(
 	s.qualityReplace = replace
 }
 
+// SetQualityAutoUpgrade 注入后台「音质补强」的设置面（见 quality_autoupgrade.go）。
+//
+// 三个一起注入是刻意的：只有 status 没有 run/ reload 的话，界面上会出现
+// 「能看不能动」的半截控制台，而那正是用户报的原始问题（记录看得见、控制不了）。
+func (s *Server) SetQualityAutoUpgrade(
+	status func() map[string]any,
+	reload func(),
+	run func(clearCooldown bool) (dispatched int, pending int, err string),
+) {
+	s.upgradeStatus = status
+	s.upgradeReload = reload
+	s.upgradeRun = run
+}
+
 // qualityBodyLimit 单次替换的条数上限。50 = 界面一屏勾选的合理量级。
 const qualityBodyLimit = 50
 

@@ -103,17 +103,26 @@
     </p>
 
     <!-- 更新说明：纯文本，默认折叠。notes 来自 GitHub Release，可能是 Markdown 原文；
-         这里只用 {{ }} 插值 + pre 保留换行，**不渲染 HTML**。 -->
-    <div v-if="notes && hasUpdate" class="mt-3 border-t border-[var(--ys-border)] pt-2.5">
+         这里只用 {{ }} 插值 + pre 保留换行，**不渲染 HTML**。
+
+         2026-10-25 修（用户：「升级日志，很多东西都不显示」）：以前这块是
+         `v-if="notes && hasUpdate"` —— 已是最新版时**整块消失**，用户根本读不到
+         任何一版的更新内容。现在只要有 notes 就显示，并按有没有更新换标题。 -->
+    <div v-if="notes" class="mt-3 border-t border-[var(--ys-border)] pt-2.5">
       <button
         type="button"
-        class="flex items-center gap-1.5 text-[11.5px] font-medium text-[var(--ys-text-muted)] transition-colors hover:text-[var(--ys-text)]"
+        class="flex w-full items-center gap-1.5 text-[11.5px] font-medium text-[var(--ys-text-muted)] transition-colors hover:text-[var(--ys-text)]"
         :aria-expanded="notesOpen"
         @click="notesOpen = !notesOpen"
       >
-        <ChevronDown class="h-3.5 w-3.5 transition-transform" :class="{ 'rotate-180': notesOpen }" :stroke-width="1.8" />
-        更新说明
+        <ChevronDown class="h-3.5 w-3.5 shrink-0 transition-transform" :class="{ 'rotate-180': notesOpen }" :stroke-width="1.8" />
+        {{ hasUpdate ? '更新说明' : '更新日志' }}
+        <span v-if="notesVersion" class="font-normal text-[var(--ys-text-faint)]">v{{ notesVersion }}</span>
       </button>
+      <p v-if="notesStale" class="mt-1 text-[10.5px] leading-relaxed text-[var(--ys-text-faint)]">
+        上面这段是发布版 v{{ notesVersion }} 的说明；你跑的是 v{{ current }}（比发布版新），
+        所以本版自己的说明还没上 GitHub Release。
+      </p>
       <pre
         v-if="notesOpen"
         class="mt-2 max-h-64 overflow-y-auto whitespace-pre-wrap break-words rounded-[9px] bg-[#FAFAFC] p-3 font-sans text-[11.5px] leading-relaxed text-[var(--ys-text-muted)]"
@@ -334,6 +343,19 @@ const notesOpen = ref(false)
 const active = computed(() => ['downloading', 'ready', 'installing'].includes(phase.value))
 const busy = computed(() => checking.value || active.value || installed.value)
 const sizeLabel = computed(() => formatBytes(size.value))
+
+// 更新说明属于哪一版：notes 永远来自「检查到的最新发布版」，所以标 latest；
+// latest 拿不到时退回 current，至少不显示空标签。
+const notesVersion = computed(() => String(latest.value || current.value || '').trim())
+
+// 发布版比本机还旧（开发机上跑的是还没发布的版本）时，说清楚这段说明不是本版的 ——
+// 否则用户会以为「更新日志里写的就是我这个版本的变化」。
+const notesStale = computed(() => {
+  if (hasUpdate.value || !notes.value) return false
+  const l = String(latest.value || '').trim()
+  const c = String(current.value || '').trim()
+  return !!l && !!c && l !== c
+})
 
 const primaryLabel = computed(() => {
   if (checking.value && !hasUpdate.value) return '检查中…'

@@ -250,6 +250,20 @@ type Config struct {
 	// 与其它开关同样是**函数**：用户在界面上打开就该立刻生效。默认关 ——
 	// 它会真的占磁盘和带宽（无损一首几十兆），该由用户明确同意。
 	FavAutoDownload func() bool
+	// ── 后台「音质补强」轮的四个可配置维度（v2.22，用户 2026-10-25 m00286）──
+	//
+	// 见 upgrade_sweeper.go 的文件注释。四条都是**现取**：用户在设置页改完，
+	// 下一轮就按新值走，不用重启应用。
+	//
+	// UpgradeSweepEnabled 补强轮总开关，nil = 关。**独立于 FavAutoDownload**：
+	// 关闭收藏自动下载不等于「老曲库里的有损也不用补了」，两者是两件事。
+	UpgradeSweepEnabled func() bool
+	// UpgradeSweepInterval 两轮之间隔多久，nil = 4 小时。
+	UpgradeSweepInterval func() time.Duration
+	// UpgradeSweepBatch 一轮最多派几首，nil = 3 首。
+	UpgradeSweepBatch func() int
+	// UpgradeIgnoreCooldown 是否无视 24 小时冷却位（失败后立刻可重试），nil = 否。
+	UpgradeIgnoreCooldown func() bool
 	// UIDevFile 是注入脚本的「开发覆盖」文件路径；文件存在且非空时优先发它。
 	//
 	// 注入界面只能在官方页面里看效果，而脚本平时是 `go:embed` 进二进制的 ——
@@ -382,6 +396,18 @@ type Interceptor struct {
 	// nil = 没起过；只有 main.go 显式 StartUpgradeSweeper 才会非 nil。
 	upgradeMu   sync.Mutex
 	upgradeStop chan struct{}
+	// upgradeGen 是「第几代」循环：中止/重启时旧的那一代看到 gen 变了就自己退场，
+	// 避免两个循环同时跑（Reload 时 Stop+Start 的竞态窗口）。
+	upgradeGen int
+	// upgradeStat 是「这一轮跑到哪」的现场快照（见 upgrade_sweeper.go）。
+	upgradeStat upgradeSweepStatus
+	// 补强的四个可配置维度都是**现取**（用户在设置页改完下一轮就按新值走）：
+	// 开关 / 是否无视冷却位 / 两轮间隔 / 一轮几首。
+	// nil = 没注入（测试与降级场景），按「关 / 不看 / 4 小时 / 3 首」处理。
+	upgradeSweepEnabled     func() bool
+	upgradeIgnoreCooldownFn func() bool
+	upgradeSweepIntervalFn  func() time.Duration
+	upgradeSweepBatchFn     func() int
 
 	// quality 管「替换音质」的扫描任务（见 quality.go）。
 	// 它在 New() 里建好（内置 mutex，零值不可用）。
@@ -492,30 +518,34 @@ func New(cfg Config) *Interceptor {
 	}
 
 	i := &Interceptor{
-		cfg:             cfg,
-		logf:            logf,
-		registry:        online.NewRegistry(0),
-		pool:            pool,
-		downloaded:      downloaded,
-		dlSet:           map[string]bool{},
-		favAutoDownload: cfg.FavAutoDownload,
-		searcher:        searcher,
-		lxSearch:        cfg.LxSearch,
-		lxResolve:       cfg.LxResolve,
-		lxResolveAll:    cfg.LxResolveAll,
-		lxSourceNames:   cfg.LxSourceNames,
-		lyricFetch:      lyricFetcher,
-		store:           store,
-		userCache:       make(map[string]userEntry, 16),
-		onlineCache:     make(map[string]onlineCacheEntry, 32),
-		lyricCache:      make(map[string]lyricEntry, 64),
-		vCache:          make(map[string]vEntry, 8),
-		llmCache:        make(map[string]*llmEntry, 8),
-		albumCache:      make(map[string]albumEntry, 8),
-		albumLogged:     map[string]bool{},
-		fbCache:         make(map[string]fbEntry, 16),
-		stats:           make(map[string]int, 32),
-		quality:         &qualityScanState{status: QualityStatus{State: QualityStateIdle, Entries: []QualityEntry{}}},
+		cfg:                     cfg,
+		logf:                    logf,
+		registry:                online.NewRegistry(0),
+		pool:                    pool,
+		downloaded:              downloaded,
+		dlSet:                   map[string]bool{},
+		favAutoDownload:         cfg.FavAutoDownload,
+		upgradeSweepEnabled:     cfg.UpgradeSweepEnabled,
+		upgradeSweepIntervalFn:  cfg.UpgradeSweepInterval,
+		upgradeSweepBatchFn:     cfg.UpgradeSweepBatch,
+		upgradeIgnoreCooldownFn: cfg.UpgradeIgnoreCooldown,
+		searcher:                searcher,
+		lxSearch:                cfg.LxSearch,
+		lxResolve:               cfg.LxResolve,
+		lxResolveAll:            cfg.LxResolveAll,
+		lxSourceNames:           cfg.LxSourceNames,
+		lyricFetch:              lyricFetcher,
+		store:                   store,
+		userCache:               make(map[string]userEntry, 16),
+		onlineCache:             make(map[string]onlineCacheEntry, 32),
+		lyricCache:              make(map[string]lyricEntry, 64),
+		vCache:                  make(map[string]vEntry, 8),
+		llmCache:                make(map[string]*llmEntry, 8),
+		albumCache:              make(map[string]albumEntry, 8),
+		albumLogged:             map[string]bool{},
+		fbCache:                 make(map[string]fbEntry, 16),
+		stats:                   make(map[string]int, 32),
+		quality:                 &qualityScanState{status: QualityStatus{State: QualityStateIdle, Entries: []QualityEntry{}}},
 	}
 	i.platformsStatic = platforms
 

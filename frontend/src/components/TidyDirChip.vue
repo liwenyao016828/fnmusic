@@ -18,7 +18,13 @@
     @click="open = true"
   >
     <FolderOpen class="h-3.5 w-3.5 shrink-0 text-[var(--ys-accent)]" :stroke-width="1.9" />
-    <span class="truncate font-mono">{{ shown }}</span>
+    <!--
+      8.7（2026-10-27）：`max-w-[38vw]` 在 320px 设备上只有 ~121px 宽，
+      而 `truncate` 会把 `/vol1/Music` 截成 `/vol1/M…` —— 用户看不出选的是哪个目录。
+      窄屏改成只显示最后一段（目录名），宽屏才显示全路径。
+    -->
+    <span class="hidden truncate font-mono sm:inline">{{ shown }}</span>
+    <span class="truncate font-mono sm:hidden">{{ shownTail }}</span>
   </button>
   <NasDirPicker v-model:open="open" title="选择曲库目录" :start="shown" @pick="onPick" />
 </template>
@@ -37,6 +43,14 @@ const prefDir = ref(loadPref('nas_dir', '') || '')
 /** 选完目录会写 prefs 的 nas_dir；TidyView 从同一处读，改完两处一起变 */
 const open = ref(false)
 const shown = computed(() => prefDir.value || DEFAULT_DIR)
+/**
+ * 窄屏显示用：只要最后一段目录名（`/vol1/Music` → `Music`）。
+ * 全路径在手机上必然被截断，截断后的片段（`/vol1/M…`）反而认不出是哪个目录。
+ */
+const shownTail = computed(() => {
+  const parts = String(shown.value).split('/').filter(Boolean)
+  return parts.length ? parts[parts.length - 1] : shown.value
+})
 
 function onPick(path) {
   if (!path) return
