@@ -447,6 +447,31 @@
 
       '.hint{font-size:11px;color:' + T.text4 + ';margin-top:8px;line-height:1.5}' +
 
+      /* 指令条：面板里唯一的「说话」入口（AI + 开关） */
+      '.cmdrow{display:flex;gap:6px;align-items:center}' +
+      '.cmdin{flex:1;min-width:0;height:32px;padding:0 10px;border-radius:8px;' +
+        'border:1px solid ' + T.borderSoft + ';background:' + T.ctrlBg + ';color:' + T.text + ';' +
+        'font-family:inherit;font-size:13px;outline:none}' +
+      '.cmdin:focus{border-color:' + T.brandBorder + '}' +
+      '.cmdin::placeholder{color:' + T.text4 + '}' +
+      '.cmdsend{height:32px;padding:0 12px;border:0;border-radius:8px;background:' + T.brand + ';' +
+        'color:var(--ds-text-on-accent,#fff);font-family:inherit;font-size:13px;font-weight:600;' +
+        'cursor:pointer;flex:none}' +
+      '.cmdsend:disabled{opacity:.5;cursor:default}' +
+
+      /* 指令结果卡片 */
+      '.card{margin-top:8px;padding:9px 10px;border:1px solid ' + T.borderSoft + ';' +
+        'border-radius:8px;background:' + T.rowBg + '}' +
+      '.card .ct{font-size:12px;font-weight:600;margin-bottom:6px}' +
+      '.card .cm{font-size:12px;line-height:1.6;color:' + T.text2 + ';white-space:pre-wrap;word-break:break-word}' +
+      '.kv{display:flex;justify-content:space-between;gap:12px;padding:3px 0;font-size:12px;color:' + T.text2 + '}' +
+      '.kv .k{color:' + T.text4 + ';flex:none}' +
+      '.kv .v{text-align:right;word-break:break-all}' +
+      '.slist{display:flex;flex-direction:column;gap:9px}' +
+      '.srow{display:flex;align-items:center;gap:10px}' +
+      '.srow .lb{flex:1;min-width:0;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
+      '.srow .df{font-size:10px;color:' + T.text4 + ';flex:none}' +
+
       /* 开关：配色跟官方（开启用品牌色）*/
       '.swrow{display:flex;align-items:center;justify-content:space-between;gap:12px;cursor:pointer}' +
       '.swrow span.lb{font-size:13px}' +
@@ -481,7 +506,19 @@
         'word-break:break-word}' +
       '.toast.show{opacity:1;transform:translateX(-50%)}' +
       '.toast.ok{border-color:' + T.ok + '}' +
-      '.toast.err{border-color:' + T.err + '}';
+      '.toast.err{border-color:' + T.err + '}' +
+
+      /* 移动端：面板改成贴底的全宽抽屉。
+       *
+       * 为什么：窄屏上 320px 的浮动面板会挡住官方内容，而且「点外面关闭」
+       * 在手机上很难点中。改成底部抽屉后，拇指可达，单手能用。
+       */
+      '@media (max-width:560px){' +
+        '.panel{left:8px;right:8px;width:auto;top:auto!important;bottom:8px;' +
+          'transform:translateY(10px) scale(1);max-height:76vh;overflow:auto;' +
+          '-webkit-overflow-scrolling:touch}' +
+        '.panel.show{transform:translateY(0)}' +
+      '}';
 
     // ⚠️ 注意上面每条规则都带 `.wrap` / 具名类前缀：影子树里只有我们自己的
     // 元素，但保留前缀是为了「万一哪天改成挂在 light DOM 也能用」。
@@ -629,6 +666,31 @@
     s3.appendChild(row);
     p.appendChild(s3);
 
+    // ── 指令条（AI + 开关）──
+    // 面板里唯一的「说话」入口：一句自然语言 → 一张卡片。
+    // 本地规则先接（开关/状态/帮助），接不住才问大模型（见后端
+    // pkg/api/assistant_command.go）。输入框按 Enter 也发送。
+    var s4 = el('div', 'sec');
+    s4.appendChild(el('div', 'h4', '曲率助手'));
+    var cmdrow = el('div', 'cmdrow');
+    var cmdin = el('input', 'cmdin');
+    cmdin.type = 'text';
+    cmdin.placeholder = '说点什么…（如「关掉收藏自动下载」）';
+    cmdin.setAttribute('aria-label', '给曲率助手下指令');
+    var cmdsend = el('button', 'cmdsend', '发送');
+    cmdsend.addEventListener('click', function () { sendCommand(cmdin.value); });
+    cmdin.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') { e.preventDefault(); sendCommand(cmdin.value); }
+    });
+    cmdrow.appendChild(cmdin);
+    cmdrow.appendChild(cmdsend);
+    s4.appendChild(cmdrow);
+    var card = el('div', 'card');
+    card.hidden = true;
+    s4.appendChild(card);
+    s4.appendChild(el('p', 'hint', '能问：开关状态、诊断、曲库情况；也可以直接让曲率助手回答。'));
+    p.appendChild(s4);
+
     // ── 状态 ──
     var ft = el('div', 'ft');
     var dot = el('span', 'dot');
@@ -639,7 +701,8 @@
 
     p.__q = {
       ver: ver, cov: cov, ph: ph, mt: mt, ms: ms, mq: mq, dl: dl, go: go, sw: sw,
-      dot: dot, state: state, chips: chips, chipBtns: {}
+      dot: dot, state: state, chips: chips, chipBtns: {},
+      cmdin: cmdin, cmdsend: cmdsend, card: card
     };
     return p;
   }
@@ -902,7 +965,8 @@
   document.addEventListener('click', function (e) {
     if (!open) return;
     var t = e.target;
-    if (t && typeof t.closest === 'function' && (t.closest('[data-qulv-ui]') || t.closest('[' + ENTRY_ATTR + ']'))) return;
+    if (t && typeof t.closest === 'function' &&
+        (t.closest('[data-qulv-ui]') || t.closest('[' + ENTRY_ATTR + ']') || t.closest('[data-qulv-fallback]'))) return;
     toggle(false);
   }, true);
 
@@ -912,7 +976,181 @@
 
   window.addEventListener('resize', function () { if (open) place(); });
 
-  /* ── 7. toast ─────────────────────────────────────────────────────── */
+  /* ── 7. 指令条：发送 + 渲染卡片 ─────────────────────────────────────
+   *
+   * 走的是同源通道 `/music/_qulv/api/command`，由拦截层转发给曲率后端的
+   * /api/assistant/command（见 backend/pkg/api/assistant_command.go）。
+   * 脚本里只有相对路径 —— 不用知道 NAS 的 IP 和端口。
+   */
+
+  var cmdBusy = false;
+
+  function sendCommand(text) {
+    var q = panel && panel.__q;
+    if (!q) return;
+    text = String(text || '').trim();
+    if (!text) return;
+    if (cmdBusy) return;
+    cmdBusy = true;
+    q.cmdsend.disabled = true;
+    q.cmdsend.textContent = '…';
+    renderCard({ kind: 'text', title: '…', message: '曲率助手在想…' });
+
+    fetch(BASE + '/api/command', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: text })
+    })
+      .then(function (res) {
+        return res.json().catch(function () { return null; }).then(function (body) {
+          if (!res.ok) {
+            throw new Error((body && (body.message || body.msg)) || ('HTTP ' + res.status));
+          }
+          if (body && body.code !== undefined && body.code !== 0 && body.code !== 200) {
+            throw new Error(body.message || body.msg || ('code ' + body.code));
+          }
+          return (body && (body.data || body)) || {};
+        });
+      })
+      .then(function (w) { renderCard(w); })
+      .catch(function (err) {
+        renderCard({
+          kind: 'text', title: '没调通',
+          message: '指令条调用失败：' + ((err && err.message) || err)
+        });
+      })
+      .then(function () {
+        cmdBusy = false;
+        if (panel && panel.__q) {
+          panel.__q.cmdsend.disabled = false;
+          panel.__q.cmdsend.textContent = '发送';
+        }
+      });
+  }
+
+  // toggleSwitch 直接切后端的某个功能开关。
+  //
+  // 走 key/on 直连而不是再发一句自然语言：面板上点开关时用户要的是**立刻
+  // 生效**，不该经过一遍「猜用户想干嘛」的匹配。
+  function toggleSwitch(key, on) {
+    fetch(BASE + '/api/command', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: key, on: !!on })
+    })
+      .then(function (res) {
+        return res.json().catch(function () { return null; }).then(function (body) {
+          if (!res.ok) throw new Error((body && (body.message || body.msg)) || ('HTTP ' + res.status));
+          return (body && (body.data || body)) || {};
+        });
+      })
+      .then(function (w) { renderCard(w); })
+      .catch(function (err) {
+        toast('切换失败：' + ((err && err.message) || err), 'err');
+      });
+  }
+
+  // renderCard 把后端给的卡片画出来。
+  function renderCard(w) {
+    var q = panel && panel.__q;
+    if (!q || !w) return;
+    var card = q.card;
+    card.innerHTML = '';
+    card.hidden = false;
+
+    if (w.title) card.appendChild(el('div', 'ct', w.title));
+
+    if (w.kind === 'switches' && w.switches && w.switches.length) {
+      var list = el('div', 'slist');
+      for (var i = 0; i < w.switches.length; i++) {
+        list.appendChild(switchRow(w.switches[i]));
+      }
+      card.appendChild(list);
+      if (w.message) card.appendChild(el('div', 'cm', w.message));
+      return;
+    }
+
+    if (w.kind === 'status' && w.status && w.status.length) {
+      for (var j = 0; j < w.status.length; j++) {
+        var row = el('div', 'kv');
+        row.appendChild(el('span', 'k', w.status[j].label));
+        row.appendChild(el('span', 'v', String(w.status[j].value)));
+        card.appendChild(row);
+      }
+      return;
+    }
+
+    if (w.message) card.appendChild(el('div', 'cm', w.message));
+    else if (!w.title) card.appendChild(el('div', 'cm', '（没有内容）'));
+  }
+
+  // switchRow 画一行开关。
+  //
+  // 三态口径：后端没写过这个开关时 on 是 null —— 此时按默认值显示，并在
+  // 旁边标一个「默认」。三态的判断在后端（config.FeatureSwitchState），
+  // 前端只照着显示。
+  function switchRow(sw) {
+    var row = el('div', 'srow');
+    row.appendChild(el('span', 'lb', sw.label || sw.key));
+    if (sw.on === null || sw.on === undefined) {
+      row.appendChild(el('span', 'df', '默认'));
+    }
+    var on = (sw.on === true) || (sw.on === null || sw.on === undefined ? !!sw.default_on : false);
+    var knob = el('span', 'sw' + (on ? ' on' : ''));
+    knob.setAttribute('role', 'switch');
+    knob.setAttribute('aria-checked', on ? 'true' : 'false');
+    knob.addEventListener('click', function (e) {
+      e.stopPropagation();
+      var next = !knob.classList.contains('on');
+      knob.className = 'sw' + (next ? ' on' : '');
+      knob.setAttribute('aria-checked', next ? 'true' : 'false');
+      toggleSwitch(sw.key, next);
+    });
+    row.appendChild(knob);
+    return row;
+  }
+
+  /* ── 8. 移动端兜底入口 ───────────────────────────────────────────────
+   *
+   * 官方顶栏那颗「设置」齿轮在窄屏上可能不渲染（或者被折叠进「更多」）。
+   * 那样的话面板就没有入口了 —— 所以自己补一颗悬浮按钮。
+   *
+   * 只在没有齿轮、也没有我们自己的入口时才补；一旦官方齿轮出现就把自己
+   * 收掉（不并存，两颗按钮会让人以为有两个曲率）。
+   */
+  function ensureFallbackEntry() {
+    if (!document.body) return;
+    if (entryNode()) return;
+    if (document.querySelector('button[aria-label="设置"]')) return;
+    if (document.querySelector('[data-qulv-fallback]')) return;
+
+    var btn = document.createElement('button');
+    btn.setAttribute('data-qulv-fallback', '');
+    btn.setAttribute('aria-label', '曲率');
+    btn.title = '曲率';
+    btn.innerHTML = '<span style="display:flex;align-items:center;justify-content:center;width:18px;height:18px">' +
+      ICON_WAVE + '</span>';
+    btn.style.cssText = 'position:fixed;right:14px;bottom:calc(14px + env(safe-area-inset-bottom,0px));' +
+      'width:42px;height:42px;border-radius:50%;border:1px solid ' + T.border + ';' +
+      'background:' + T.popupBg + ';color:' + T.brand + ';backdrop-filter:' + T.blur + ';' +
+      '-webkit-backdrop-filter:' + T.blur + ';box-shadow:' + T.shadow + ';z-index:2147483645;' +
+      'display:flex;align-items:center;justify-content:center;cursor:pointer;padding:0';
+    btn.addEventListener('click', function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      toggle();
+    });
+    document.body.appendChild(btn);
+  }
+
+  function removeFallbackEntry() {
+    var b = document.querySelector('[data-qulv-fallback]');
+    if (b && b.parentNode) b.parentNode.removeChild(b);
+  }
+
+  /* ── 9. toast ─────────────────────────────────────────────────────── */
 
   function toast(text, kind) {
     if (!ensureHost()) return;
@@ -925,7 +1163,7 @@
     }, kind === 'err' ? 9000 : 4000);
   }
 
-  /* ── 8. 下载 ───────────────────────────────────────────────────────── */
+  /* ── 10. 下载 ──────────────────────────────────────────────────────── */
 
   // describeSource 把「实际从哪儿、什么音质下来的」拼成一句人话。
   //
@@ -979,7 +1217,7 @@
     });
   }
 
-  /* ── 9. 启动 ──────────────────────────────────────────────────────── */
+  /* ── 11. 启动 ──────────────────────────────────────────────────────── */
 
   var pendingMenu = null, scheduled = false;
 
@@ -1019,6 +1257,10 @@
       // 顶栏入口按钮是幂等的：存在就什么都不做。放在每批变更末尾查一次，
       // 一并覆盖两种「它不在了」——官方重渲染把它摘掉、以及首屏时官方还没挂载完。
       if (!entryNode()) ensureEntry();
+      // 官方齿轮出现了就把我们自己的兜底悬浮按钮收掉：两颗入口会让人
+      // 以为有两个曲率。
+      if (entryNode()) removeFallbackEntry();
+      else ensureFallbackEntry();
     }).observe(document.documentElement, { childList: true, subtree: true });
   }
 
@@ -1026,9 +1268,13 @@
     try { wrapFetch(); } catch (e) {}
     try { wrapXHR(); } catch (e) {}
     try { ensureEntry(); } catch (e) {}
+    try { ensureFallbackEntry(); } catch (e) {}
     try { watch(); } catch (e) {}
     // 官方 SPA 挂载之后顶栏才存在：首屏补一次，之后交给观察器。
-    setTimeout(function () { try { ensureEntry(); } catch (e) {} }, 1200);
+    setTimeout(function () {
+      try { ensureEntry(); } catch (e) {}
+      try { ensureFallbackEntry(); } catch (e) {}
+    }, 1200);
   }
 
   /* ── 10. 测试钩子 ───────────────────────────────────────────────────

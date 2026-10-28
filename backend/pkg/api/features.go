@@ -245,9 +245,9 @@ func (s *Server) HandleCoverCandidates(w http.ResponseWriter, r *http.Request) {
 //
 // GET /api/library/audit?dir=/vol1/Music
 func (s *Server) HandleLibraryAudit(w http.ResponseWriter, r *http.Request) {
-	dir := strings.TrimSpace(r.URL.Query().Get("dir"))
+	dir := s.libraryDirOrDefault(r.URL.Query().Get("dir"))
 	if dir == "" {
-		errJSON(w, http.StatusBadRequest, "请提供 dir")
+		errJSON(w, http.StatusBadRequest, "请提供 dir（当前没有配置曲库目录）")
 		return
 	}
 	resolved, err := resolveLibraryPath(dir)
@@ -292,9 +292,9 @@ func (s *Server) HandleLibraryAudit(w http.ResponseWriter, r *http.Request) {
 // 关键安全门：只有枚举完整（audit.complete）时才允许把未枚举到的记录判定为已删除；
 // 否则只累计 removed_skipped 并给出告警，避免挂载抖动把索引清空。
 func (s *Server) HandleLibraryIndex(w http.ResponseWriter, r *http.Request) {
-	dir := strings.TrimSpace(r.URL.Query().Get("dir"))
+	dir := s.libraryDirOrDefault(r.URL.Query().Get("dir"))
 	if dir == "" {
-		errJSON(w, http.StatusBadRequest, "请提供 dir")
+		errJSON(w, http.StatusBadRequest, "请提供 dir（当前没有配置曲库目录）")
 		return
 	}
 	resolved, err := resolveLibraryPath(dir)
@@ -402,9 +402,9 @@ func enrichIndexTags(index *library.Index, dir string, limit int) int {
 //
 // GET /api/library/index/stats?dir=/vol1/Music
 func (s *Server) HandleLibraryIndexStats(w http.ResponseWriter, r *http.Request) {
-	dir := strings.TrimSpace(r.URL.Query().Get("dir"))
+	dir := s.libraryDirOrDefault(r.URL.Query().Get("dir"))
 	if dir == "" {
-		errJSON(w, http.StatusBadRequest, "请提供 dir")
+		errJSON(w, http.StatusBadRequest, "请提供 dir（当前没有配置曲库目录）")
 		return
 	}
 	resolved, err := resolveLibraryPath(dir)
@@ -428,9 +428,9 @@ func (s *Server) HandleLibraryIndexStats(w http.ResponseWriter, r *http.Request)
 // 因此把「读过标签的条数 / 还没读过的条数」一起返回，界面才能说清楚
 // 「这些缺口是真缺，还是只是没扫描到」。
 func (s *Server) HandleLibraryGaps(w http.ResponseWriter, r *http.Request) {
-	dir := strings.TrimSpace(r.URL.Query().Get("dir"))
+	dir := s.libraryDirOrDefault(r.URL.Query().Get("dir"))
 	if dir == "" {
-		errJSON(w, http.StatusBadRequest, "请提供 dir")
+		errJSON(w, http.StatusBadRequest, "请提供 dir（当前没有配置曲库目录）")
 		return
 	}
 	resolved, err := resolveLibraryPath(dir)
@@ -510,9 +510,9 @@ func (s *Server) HandleLibraryIndexList(w http.ResponseWriter, r *http.Request) 
 //
 // GET /api/duplicates?dir=/vol1/Music&name=1
 func (s *Server) HandleDuplicates(w http.ResponseWriter, r *http.Request) {
-	dir := strings.TrimSpace(r.URL.Query().Get("dir"))
+	dir := s.libraryDirOrDefault(r.URL.Query().Get("dir"))
 	if dir == "" {
-		errJSON(w, http.StatusBadRequest, "请提供 dir")
+		errJSON(w, http.StatusBadRequest, "请提供 dir（当前没有配置曲库目录）")
 		return
 	}
 	resolved, err := resolveLibraryPath(dir)
@@ -671,6 +671,26 @@ func (s *Server) HandleAIConfig(w http.ResponseWriter, r *http.Request) {
 	default:
 		errJSON(w, http.StatusMethodNotAllowed, "Method not allowed")
 	}
+}
+
+// HandleAIModels GET /api/ai/models —— 列出网关可用模型（AI 助手的模型下拉）
+//
+// 失败也回 200 + 空列表 + error 原因：这是「下拉列表的填充接口」，
+// 前端要能区分「没启用 / 没配 Key / 网关连不上」并给出对应提示，
+// 拿一个裸 HTTP 错误反而没法在界面上说话。
+func (s *Server) HandleAIModels(w http.ResponseWriter, r *http.Request) {
+	models, err := s.aiClient.Models(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"code": 200,
+			"data": map[string]interface{}{"models": []string{}, "error": err.Error()},
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"code": 200, "message": "ok",
+		"data": map[string]interface{}{"models": models},
+	})
 }
 
 // HandleAIUsage AI 用量统计
@@ -874,6 +894,32 @@ func (s *Server) loadAIConfig() {
 // libraryIndex 返回曲库索引实例
 func (s *Server) libraryIndex() *library.Index {
 	return s.libIndex
+}
+
+// libraryDirOrDefault 把「可选 dir」解析成**实际要用的曲库目录**。
+//
+// 为什么需要它：曲库类接口（stats / gaps / audit / index / duplicates / lyric gaps…）
+// 原来一律要求调用方显式传 dir，没传就 400「请提供 dir」。但应用自己**已经**知道
+// 曲库在哪（配置里的 download_dir / default_nas_dir，见 config.LibraryDir）——
+// 于是每个调用方都得先猜一次目录，猜错就是 403、不猜就是 400，连内置 AI 助手
+// 的 library_stats 能力都被卡成「执行失败（HTTP 400）：请提供 dir」。
+//
+// 现在的口径：
+//   - 传了 dir → 原样返回（调用方明确指定优先，行为不变）；
+//   - 没传 → 回退到配置里生效的曲库目录；
+//   - 只有配置也空（理论上不会，LibraryDir 有 /vol1/Music 兜底）才回 ""，
+//     由调用方决定报什么错。
+//
+// 注意：这里只**补默认值**，不加宽权限 —— resolveLibraryPath 的路径守卫照旧。
+func (s *Server) libraryDirOrDefault(raw string) string {
+	if dir := strings.TrimSpace(raw); dir != "" {
+		return dir
+	}
+	if s.cfgMgr == nil {
+		return ""
+	}
+	cfg := s.cfgMgr.Get()
+	return strings.TrimSpace(cfg.LibraryDir())
 }
 
 // localTrackSnapshot 把曲库索引转成 push 包认得的一串 LocalTrack（给「飞牛歌单

@@ -213,6 +213,19 @@ var routeTable = []routeSpec{
 	{Path: "/api/ai/usage/reset", Handler: func(s *Server) http.HandlerFunc { return s.HandleAIResetUsage }},
 	{Path: "/api/ai/test", Handler: func(s *Server) http.HandlerFunc { return s.HandleAITest }},
 	{Path: "/api/ai/complete", Handler: func(s *Server) http.HandlerFunc { return s.HandleAIComplete }},
+	{Path: "/api/ai/models", Handler: func(s *Server) http.HandlerFunc { return s.HandleAIModels }},
+
+	// 2.11 AI 助手（2026-10-26 新增）
+	{Path: "/api/assistant/chat", Handler: func(s *Server) http.HandlerFunc { return s.HandleAssistantChat }},
+	{Path: "/api/assistant/capabilities", Handler: func(s *Server) http.HandlerFunc { return s.HandleAssistantCapabilities }},
+	{Path: "/api/assistant/settings", Handler: func(s *Server) http.HandlerFunc { return s.HandleAssistantSettings }},
+	{Path: "/api/assistant/confirm", Handler: func(s *Server) http.HandlerFunc { return s.HandleAssistantConfirm }},
+	{Path: "/api/assistant/sessions", Handler: func(s *Server) http.HandlerFunc { return s.HandleAssistantSessions }},
+	{Path: "/api/assistant/session", Handler: func(s *Server) http.HandlerFunc { return s.HandleAssistantSession }},
+	{Path: "/api/assistant/clear", Handler: func(s *Server) http.HandlerFunc { return s.HandleAssistantClear }},
+	{Path: "/api/assistant/models", Handler: func(s *Server) http.HandlerFunc { return s.HandleAssistantModels }},
+	// 指令条：注入面板专用的「一句话 → 卡片」接口（见 assistant_command.go）
+	{Path: "/api/assistant/command", Handler: func(s *Server) http.HandlerFunc { return s.HandleAssistantCommand }},
 
 	// 2.11 飞牛 fnOS 集成（官方开放 API + 音乐应用接口）
 	{Path: "/api/fnos/status", Handler: func(s *Server) http.HandlerFunc { return s.HandleFnosStatus }},
@@ -318,6 +331,8 @@ var routeTable = []routeSpec{
 
 	// 5.2 后端日志（内存环形缓冲，重启即清空）—— 网页端「日志」页读它
 	{Path: "/api/logs", Handler: func(s *Server) http.HandlerFunc { return s.handleLogs }},
+	// 日志存储位置（2026-10-26 用户口径：「设置增加日志存储位置」）：读取 / 设置落盘目录
+	{Path: "/api/logs/config", Handler: func(s *Server) http.HandlerFunc { return s.handleLogsConfig }},
 	{Path: "/api/diagnostics/platforms", Handler: func(s *Server) http.HandlerFunc { return s.handlePlatformDiagnostics }},
 }
 

@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { splitFrames, parseFrame } from '../services/assistantStream.js'
 
 // ── NDJSON 流 ──
 //
@@ -456,6 +457,10 @@ export const UiPrefsAPI = {
 export const LogsAPI = {
   list: (limit = 200) => api.get('/logs', { params: { limit } }).then(res => res.data),
   clear: () => api.delete('/logs').then(res => res.data),
+  // 日志存储位置（2026-10-26 用户口径：设置增加日志存储位置）：
+  // log_dir 为空串 = 不落盘（默认，内存即清空）；传路径 = 每条日志同时写进该目录下的文件。
+  config: () => api.get('/logs/config').then(res => res.data),
+  saveConfig: (logDir) => api.post('/logs/config', { log_dir: logDir }).then(res => res.data),
   /**
    * 网页端上报前端错误。
    *
@@ -652,6 +657,78 @@ export const AIAPI = {
   resetUsage: () => api.post('/ai/usage/reset').then(res => res.data),
   test: () => api.post('/ai/test').then(res => res.data),
   complete: (payload) => api.post('/ai/complete', payload).then(res => res.data),
+  // 模型下拉：失败也回 200，data 里带 error 说明原因（未启用 / 未配置 / 网关连不上）
+  models: () => api.get('/ai/models').then(res => (res.data && res.data.data) || { models: [] }),
+}
+
+// 助手类接口（对话 / 确认）共用的 SSE 流读取器。
+// 后端的帧只写 `data: {...}`、不写 `event:` 行，事件名在 JSON 的 type 字段里
+// —— 早期版本默认成 'message'，导致助手回复收到了却从不渲染。
+// 帧解析抽到 services/assistantStream.js，便于单测。
+async function streamChat(path, payload, onEvent) {
+  const resp = await fetch(`/api${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload || {}),
+  })
+  if (!resp.ok || !resp.body) {
+    // 非流式失败（参数错 / 404）时后端回普通 JSON，尽量把原因带出来
+    let msg = `助手接口返回 HTTP ${resp.status}`
+    try {
+      const body = await resp.json()
+      if (body && body.error) msg = body.error
+    } catch (e) {
+      /* 不是 JSON 就用状态码 */
+    }
+    throw new Error(msg)
+  }
+  const reader = resp.body.getReader()
+  const decoder = new TextDecoder('utf-8')
+  let buffer = ''
+  while (true) {
+    const { value, done } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const { frames, rest } = splitFrames(buffer)
+    buffer = rest
+    for (const frame of frames) {
+      const ev = parseFrame(frame)
+      if (ev && onEvent) onEvent(ev)
+    }
+  }
+}
+
+// AI 助手（2026-10-26 新增）
+//
+// chat 走 fetch + ReadableStream 手动解析 SSE（不能走 axios：响应是 text/event-stream，
+// axios 会把它塞进 blob 或字符串，拿不到逐行事件流）。
+//
+// 事件格式（每行 `event: <type>` / `data: <json>`）：
+//   meta   —— 会话初始化（session_id / settings）
+//   role   —— 角色切换（assistant / user / tool / system）
+//   text   —— 助手正文增量（增量拼接）
+//   tool   —— 工具调用请求（模型要调某个能力）
+//   tool_result —— 工具执行结果
+//   action —— 待用户确认的写入操作（confirm 接口用 action_id）
+//   error  —— 出错
+//   done   —— 一轮结束（含 usage）
+export const AssistantAPI = {
+  /** 流式对话。onEvent(event) 收到每个 SSE 事件对象 {event, data}。 */
+  chat: (message, sessionId, onEvent) => streamChat('/assistant/chat', { message, session_id: sessionId || '' }, onEvent),
+  /**
+   * 确认/拒绝一条待确认操作。后端同样是 SSE 流：确认后会真执行，
+   * 再把执行结果和助手的后续回复流回来 —— 所以这里的 onEvent 必须
+   * 接到界面上，不能像旧版那样只发请求不看响应（那样用户点了确认
+   * 也看不到任何结果）。
+   */
+  confirm: (actionId, approved, onEvent) =>
+    streamChat('/assistant/confirm', { action_id: actionId, approved: !!approved }, onEvent),
+  sessions: () => api.get('/assistant/sessions').then(res => (res.data && res.data.sessions) || []),
+  newSession: () => api.post('/assistant/session').then(res => (res.data && res.data.session) || {}),
+  history: (id) => api.get('/assistant/session', { params: { id } }).then(res => (res.data && res.data.session) || null),
+  removeSession: (id) => api.delete('/assistant/session', { params: { id } }).then(res => res.data),
+  clear: (sessionId) => api.post('/assistant/clear', { session_id: sessionId }).then(res => res.data),
+  models: () => api.get('/assistant/models').then(res => (res.data && res.data.models) || []),
 }
 
 export default api

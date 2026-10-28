@@ -174,6 +174,38 @@
               >恢复默认</button>
             </div>
           </label>
+          <!-- 日志存储位置（2026-10-26 用户口径：「设置增加日志存储位置」）。
+               留空 = 默认不落盘（重启即清空）；填路径 = 每条运行日志（含前端上报）同时写进 <目录>/qulv.log。 -->
+          <label class="block sm:col-span-2">
+            <span class="text-[12px] font-medium text-gray-700">日志存储位置（留空 = 不落盘，重启即清空）</span>
+            <div class="mt-1 flex flex-wrap gap-2">
+              <input
+                v-model.trim="logDir"
+                type="text"
+                spellcheck="false"
+                placeholder="/vol1/Logs"
+                class="w-full min-w-0 flex-1 rounded-xl border border-gray-200 px-3 py-2 text-[13px] focus:border-emerald-500 focus:outline-none"
+              />
+              <button
+                type="button"
+                class="shrink-0 rounded-xl border border-emerald-200 bg-emerald-50 px-3 text-[12px] font-medium text-emerald-700 hover:bg-emerald-100"
+                @click="dirPicker = { open: true, field: 'log', start: logDir || downloadDir }"
+              >选择</button>
+              <button
+                type="button"
+                class="shrink-0 rounded-xl border border-gray-200 px-3 text-[12px] text-gray-600 hover:border-gray-300"
+                title="关闭落盘：日志只在内存里保留，重启即清空（默认行为）"
+                @click="logDir = ''"
+              >恢复默认</button>
+              <button
+                type="button"
+                class="shrink-0 rounded-xl bg-emerald-500 px-3 text-[12px] font-medium text-white hover:bg-emerald-600 disabled:opacity-50"
+                :disabled="savingLogDir"
+                @click="saveLogDir"
+              >{{ savingLogDir ? '保存中…' : '保存日志位置' }}</button>
+            </div>
+            <span v-if="logError" class="mt-1 block text-[12px] text-red-500">{{ logError }}</span>
+          </label>
         </div>
         <div class="mt-3 flex flex-wrap items-center gap-3">
           <button
@@ -186,7 +218,7 @@
         </div>
         <NasDirPicker
           v-model:open="dirPicker.open"
-          :title="dirPicker.field === 'cache' ? '选择缓存目录' : '选择下载目录（曲库）'"
+          :title="dirPicker.field === 'log' ? '选择日志存储目录' : dirPicker.field === 'cache' ? '选择缓存目录' : '选择下载目录（曲库）'"
           :start="dirPicker.start"
           @pick="onPickDir"
         />
@@ -457,6 +489,7 @@ import { AudioLines, ChevronDown, ChevronUp, Download, FileAudio, FolderCog, Inf
 import { ConfigAPI, DownloadAPI, LogsAPI, AppAPI, ChartInjectAPI, SourcesAPI, QualityAPI, DEFAULT_AUTO_DOWNLOAD_CHANNELS } from '../api/client'
 import { QUALITY_OVERRIDE_OPTIONS } from '../services/qualityOverride'
 import { fail, apiError } from '../services/userMsg'
+import { logInfo } from '../services/appLog'
 import InlineNotice from './InlineNotice.vue'
 import NasDirPicker from './NasDirPicker.vue'
 import UpdateCard from './UpdateCard.vue'
@@ -528,17 +561,22 @@ const namingOptions = [
 const namingValue = ref('artist-title')
 
 const downloadDir = ref('')
-/** 目录选择弹窗：{ open, field: 'download'|'cache', start } */
+/** 目录选择弹窗：{ open, field: 'download'|'cache'|'log', start } */
 const dirPicker = ref({ open: false, field: 'download', start: '' })
 
 function onPickDir(p) {
   if (!p) return
   if (dirPicker.value.field === 'cache') cacheDir.value = p
+  else if (dirPicker.value.field === 'log') logDir.value = p
   else downloadDir.value = p
 }
 const cacheDir = ref('')
 const savingDirs = ref(false)
 const dirError = ref('')
+// 日志存储位置（2026-10-26 用户口径）：留空 = 不落盘；保存走独立的 LogsAPI.saveConfig，与下载/缓存目录分开报错
+const logDir = ref('')
+const savingLogDir = ref(false)
+const logError = ref('')
 
 // ── 下载行为四开关（v2.5.0 从旧 LibraryManager 搬来，逻辑原样）──
 // 歌词/封面缺省「开」（后端 pkg/config LyricAutoDownloadOn 同语义：没这个键就是开），
@@ -696,6 +734,8 @@ async function load() {
       downloadDir.value = cfg.download_dir || ''
       // 空串 = 默认位置，与「没配」在界面上是同一件事
       cacheDir.value = cfg.cache_dir || ''
+      // 日志存储位置（2026-10-26）同口径：空串 = 不落盘（默认）
+      logDir.value = cfg.log_dir || ''
       // 下载行为四开关：歌词/封面缺省开，另两个缺省关
       favAutoDownload.value = !!cfg.fav_auto_download
       teeEnabled.value = !!cfg.tee_enabled
@@ -896,11 +936,36 @@ async function saveDirs() {
     if (d.download_dir) downloadDir.value = d.download_dir
     cacheDir.value = d.cache_dir || ''
     dirError.value = ''
+    // 操作日志：设置变更也留痕（2026-10-26 用户口径）——改了什么、改成了什么都写清楚。
+    logInfo('设置', `保存目录：下载 → ${d.download_dir || '（未改）'} · 缓存 → ${d.cache_dir || '默认位置'}`)
     flash('目录已保存')
   } catch (e) {
     dirError.value = fail('保存存储目录', e)
   } finally {
     savingDirs.value = false
+  }
+}
+
+// 保存日志存储位置（2026-10-26 用户口径：「设置增加日志存储位置」）。
+// 留空 = 关闭落盘恢复默认；传路径 = 启用并立即切换（后端切文件句柄，无需重启）。
+async function saveLogDir() {
+  savingLogDir.value = true
+  logError.value = ''
+  try {
+    const res = await LogsAPI.saveConfig(logDir.value)
+    const bad = apiError(res)
+    if (bad) {
+      logError.value = bad
+      return
+    }
+    logDir.value = res?.log_dir ?? logDir.value
+    // 操作日志：设置变更也留痕（2026-10-26 用户口径）——写清开了还是关了、写到哪。
+    logInfo('设置', `日志存储位置 → ${logDir.value || '不落盘（默认）'}`)
+    flash(logDir.value ? `日志位置已保存：${logDir.value}` : '已关闭日志落盘（默认行为）')
+  } catch (e) {
+    logError.value = fail('保存日志位置', e)
+  } finally {
+    savingLogDir.value = false
   }
 }
 

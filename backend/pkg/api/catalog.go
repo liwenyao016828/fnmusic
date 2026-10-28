@@ -56,6 +56,9 @@ var internalEndpoints = map[string]bool{
 	"GET /api/logs":      true,
 	"POST /api/logs":     true, // 网页端上报前端错误
 	"DELETE /api/logs":   true,
+	// 日志存储位置（2026-10-26）：设置页的目录读写，界面自己的事
+	"GET /api/logs/config":  true,
+	"POST /api/logs/config": true,
 	// 平台健康度：GET 留给 AI（「为什么这首歌搜不到」就该查它），清空是界面维护动作
 	"DELETE /api/diagnostics/platforms": true,
 	"POST /api/config":                  true, // 整体写配置太危险；读配置（GET）留给 AI 看当前设置
@@ -107,6 +110,20 @@ var internalEndpoints = map[string]bool{
 	"POST /api/ai/usage/reset": true, // 清计数是界面维护动作
 	"POST /api/ai/test":        true,
 	"POST /api/ai/complete":    true,
+	"GET /api/ai/models":       true, // AI 助手的模型下拉
+
+	// AI 助手（2026-10-26 新增）：对话流式接口、能力目录、设置、操作确认
+	"POST /api/assistant/chat":        true,
+	"GET /api/assistant/capabilities": true,
+	"GET /api/assistant/settings":     true,
+	"POST /api/assistant/settings":    true,
+	"POST /api/assistant/confirm":     true,
+	"GET /api/assistant/sessions":     true,
+	"POST /api/assistant/clear":       true,
+	"GET /api/assistant/models":       true,
+	"GET /api/assistant/session":      true, // 读单个会话历史
+	"POST /api/assistant/session":     true, // 新建会话
+	"DELETE /api/assistant/session":   true, // 删除会话
 
 	// 飞牛令牌手工写入与连通性自检是故障排查动作
 	"POST /api/fnos/check": true,
@@ -275,9 +292,9 @@ func APICatalog(baseURL string) []Endpoint {
 				{Name: "format", In: "query", Desc: "传 zip 时改为**打包下载**（日志 + 环境信息 + 脱敏配置），用于反馈问题"},
 			},
 			Example: "curl '" + baseURL + "/api/logs?limit=100'",
-			Notes: "只存**内存**（最多 2000 条），**重启即清空**，不落盘（免得路径与令牌留在 NAS 上）。" +
-				"`source` 区分 `backend` / `frontend`。`?format=zip` 改为打包下载 " +
-				"app.log / info.txt / config.json，凭据字段已抹除，可安全外发。",
+			Notes: "只存**内存**（最多 2000 条），**重启即清空**，默认不落盘（免得路径与令牌留在 NAS 上；" +
+				"设置过「日志存储位置」的另有一份落盘副本）。`source` 区分 `backend` / `frontend`。" +
+				"`?format=zip` 打包下载日志+环境信息+脱敏配置，可安全外发。",
 		},
 		{
 			Method: http.MethodDelete, Path: "/api/logs", Summary: "清空后端运行日志缓冲", Category: catSystem,
@@ -290,6 +307,18 @@ func APICatalog(baseURL string) []Endpoint {
 			Notes: "**给网页端自己用的**：界面提示只留一句人话，完整信息（接口路径、堆栈）经这里进日志。" +
 				"body 为 `{source, level, message}`：`level` 只认 `info` / `warn` / `error`（其他按 `info` 处理），" +
 				"`message` 必填、超 2000 字符截断，`source` 省略时按 `frontend` 记。",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/logs/config", Summary: "读取日志存储位置设置", Category: catSystem,
+			Example: "curl '" + baseURL + "/api/logs/config'",
+			Notes:   "返回 `{log_dir, log_file}`：`log_dir` 为设置页里配的目录（空串 = 默认不落盘），`log_file` 为当前实际写入的文件路径（未启用为空）。",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/logs/config", Summary: "设置日志存储位置（留空关闭落盘）", Category: catSystem,
+			Example: "curl -X POST '" + baseURL + "/api/logs/config' -H 'Content-Type: application/json' -d '{\"log_dir\":\"/vol1/Logs\"}'",
+			Notes: "body 为 `{log_dir}`：空串 = 关闭落盘（默认：日志只在内存里，重启即清空）；" +
+				"传路径 = 每条运行日志（含前端上报）同时写进 `<目录>/qulv.log`，即时生效、跨重启保留。" +
+				"目录与下载/缓存目录同一条红线：绝对路径且位于 NAS 存储卷内。",
 		},
 		{
 			Method: http.MethodGet, Path: "/api/diagnostics/platforms", Summary: "查看各平台请求健康度（失败计数与最近明细）", Category: catSystem,
@@ -728,7 +757,7 @@ func APICatalog(baseURL string) []Endpoint {
 		{
 			Method: http.MethodPost, Path: "/api/library/lyric/gaps", Summary: "列出缺歌词的文件（分页）", Category: catTidy,
 			Params: []Param{
-				{Name: "dir", In: "body", Required: true, Desc: "曲库目录（必须在允许根目录内）"},
+				{Name: "dir", In: "body", Desc: "曲库目录（必须在允许根目录内）；省略时用配置里生效的曲库目录"},
 				{Name: "offset/limit", In: "body", Desc: "分页，limit 缺省 200、上限 1000"},
 			},
 			Example: "curl -X POST " + baseURL + "/api/library/lyric/gaps -H 'Content-Type: application/json' -d '{\"dir\":\"/vol1/Music\",\"limit\":200}'",
@@ -1114,7 +1143,7 @@ func APICatalog(baseURL string) []Endpoint {
 		{
 			Method: http.MethodGet, Path: "/api/library/audit", Summary: "曲库体检：统计缺歌词/缺封面的曲目", Category: catTidy,
 			Params: []Param{
-				{Name: "dir", In: "query", Required: true, Desc: "曲库目录"},
+				{Name: "dir", In: "query", Desc: "曲库目录；省略时用配置里生效的曲库目录"},
 				{Name: "sample", In: "query", Desc: "缺失样本数量，默认 50"},
 			},
 			Example: "curl '" + baseURL + "/api/library/audit?dir=/vol1/Music'",
@@ -1122,7 +1151,7 @@ func APICatalog(baseURL string) []Endpoint {
 		},
 		{
 			Method: http.MethodGet, Path: "/api/library/index", Summary: "曲库增量扫描（返回相对上次的增删改）", Category: catTidy,
-			Params:  []Param{{Name: "dir", In: "query", Required: true, Desc: "曲库目录"}},
+			Params:  []Param{{Name: "dir", In: "query", Desc: "曲库目录；省略时用配置里生效的曲库目录"}},
 			Example: "curl '" + baseURL + "/api/library/index?dir=/vol1/Music'",
 			Notes: "大曲库友好：只对比 (size,mtime)，仅新增/变化的文件需要读标签。" +
 				"枚举不完整时（权限失败/深度截断/数量上限）会跳过删除判定并告警，避免误清索引。",
@@ -1134,7 +1163,7 @@ func APICatalog(baseURL string) []Endpoint {
 		},
 		{
 			Method: http.MethodGet, Path: "/api/library/index/stats", Summary: "曲库管家：读取上次整理快照（持久化索引概况）", Category: catTidy,
-			Params:  []Param{{Name: "dir", In: "query", Required: true, Desc: "曲库目录"}},
+			Params:  []Param{{Name: "dir", In: "query", Desc: "曲库目录；省略时用配置里生效的曲库目录"}},
 			Example: "curl '" + baseURL + "/api/library/index/stats?dir=/vol1/Music'",
 			Notes: "读取持久化的 library_index.json 统计：已索引/已有歌词/缺歌词/缺封面。" +
 				"歌词与封面判定与 NAS 扫描同口径（内嵌 + 同名外挂文件，不认目录级封面）。" +
@@ -1142,7 +1171,7 @@ func APICatalog(baseURL string) []Endpoint {
 		},
 		{
 			Method: http.MethodGet, Path: "/api/library/gaps", Summary: "曲库管家：各字段缺口统计（补全前先看缺什么）", Category: catTidy,
-			Params:  []Param{{Name: "dir", In: "query", Required: true, Desc: "曲库目录"}},
+			Params:  []Param{{Name: "dir", In: "query", Desc: "曲库目录；省略时用配置里生效的曲库目录"}},
 			Example: "curl '" + baseURL + "/api/library/gaps?dir=/vol1/Music'",
 			Notes: "只读索引、不开文件，所以秒回。返回 `{dir,unread,gaps{...},writable_formats}`；gaps 里 `unsupported`/`unsupported_exts` 是**写不了标签的格式**（只有 MP3/FLAC 能写），不算缺口。\n\n" +
 				"`unread`=**还没读过标签**的条数，先跑 `GET /api/library/index` 再看这里才准。",
@@ -1150,7 +1179,7 @@ func APICatalog(baseURL string) []Endpoint {
 		{
 			Method: http.MethodGet, Path: "/api/duplicates", Summary: "查找重复曲目", Category: catTidy,
 			Params: []Param{
-				{Name: "dir", In: "query", Required: true, Desc: "曲库目录"},
+				{Name: "dir", In: "query", Desc: "曲库目录；省略时用配置里生效的曲库目录"},
 				{Name: "name", In: "query", Desc: "传 0 关闭「同名同歌手」通道，只查内容完全相同"},
 			},
 			Example: "curl '" + baseURL + "/api/duplicates?dir=/vol1/Music'",
@@ -1211,6 +1240,86 @@ func APICatalog(baseURL string) []Endpoint {
 			},
 			Example: "curl -X POST " + baseURL + "/api/ai/complete -H 'Content-Type: application/json' -d '{\"kind\":\"name_parse\",\"filename\":\"【无损】周杰伦 - 晴天.flac\"}'",
 			Notes:   "未配置 AI 时静默降级返回空结果，不会报错影响主流程。",
+		},
+
+		// ── AI 助手（2026-10-26 新增）──
+		{
+			Method: http.MethodPost, Path: "/api/assistant/chat", Summary: "AI 助手对话（SSE 流式，含工具调用与操作确认）", Category: catAI,
+			Params: []Param{
+				{Name: "session_id", In: "body", Desc: "会话 ID（留空用 default）"},
+				{Name: "message", In: "body", Desc: "用户消息"},
+			},
+			Example: "curl -N -X POST " + baseURL + "/api/assistant/chat -H 'Content-Type: application/json' -d '{\"message\":\"下载周杰伦的晴天\"}'",
+			Notes:   "SSE 事件流：meta / role / text / tool / action / error / done。写入类操作需前端调 confirm 接口确认后才真正执行。",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/assistant/capabilities", Summary: "助手能力目录（可调用的 API 清单与暴露策略）", Category: catAI,
+			Example: "curl " + baseURL + "/api/assistant/capabilities",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/assistant/settings", Summary: "助手设置（总开关 / 执行模式 / 能力开关）", Category: catAI,
+			Example: "curl " + baseURL + "/api/assistant/settings",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/assistant/settings", Summary: "更新助手设置", Category: catAI,
+			Params: []Param{
+				{Name: "enabled", In: "body", Desc: "助手总开关"},
+				{Name: "mode", In: "body", Desc: "read_only / confirm_writes（默认）/ full_auto"},
+				{Name: "disabled", In: "body", Desc: "能力名 → 是否关闭"},
+			},
+			Example: "curl -X POST " + baseURL + "/api/assistant/settings -H 'Content-Type: application/json' -d '{\"mode\":\"confirm_writes\"}'",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/assistant/confirm", Summary: "确认 / 拒绝助手发起的写入操作", Category: catAI,
+			Params: []Param{
+				{Name: "action_id", In: "body", Desc: "待确认操作 ID（chat 事件流里的 action.data.action_id）"},
+				{Name: "approved", In: "body", Desc: "true 执行，false 拒绝"},
+			},
+			Example: "curl -X POST " + baseURL + "/api/assistant/confirm -H 'Content-Type: application/json' -d '{\"action_id\":\"act_123\",\"approved\":true}'",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/assistant/sessions", Summary: "助手会话列表（新→旧，含标题）", Category: catAI,
+			Example: "curl " + baseURL + "/api/assistant/sessions",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/assistant/session", Summary: "读单个会话的完整历史", Category: catAI,
+			Params:  []Param{{Name: "id", In: "query", Desc: "会话 ID（sessions 列表里的 id）"}},
+			Example: "curl " + baseURL + "/api/assistant/session?id=s20261027-210000-ab12",
+			Notes:   "不存在返回 404。会话持久化在数据目录 assistant_sessions.json，重启不丢。",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/assistant/session", Summary: "新建会话", Category: catAI,
+			Example: "curl -X POST " + baseURL + "/api/assistant/session",
+			Notes:   "返回 {session:{id}}；之后 chat 时带上这个 session_id 即可在新会话里聊。",
+		},
+		{
+			Method: http.MethodDelete, Path: "/api/assistant/session", Summary: "删除会话", Category: catAI,
+			Params:  []Param{{Name: "id", In: "query", Desc: "要删除的会话 ID"}},
+			Example: "curl -X DELETE " + baseURL + "/api/assistant/session?id=s20261027-210000-ab12",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/ai/models", Summary: "列出模型网关的可用模型（AI 助手下拉）", Category: catAI,
+			Example: "curl " + baseURL + "/api/ai/models",
+			Notes:   "失败也回 200：data.models 为空 + data.error 说明原因（未启用 / 未配置 / 网关连不上）。",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/assistant/clear", Summary: "清空助手会话消息", Category: catAI,
+			Params:  []Param{{Name: "session_id", In: "body", Desc: "要清空的会话 ID"}},
+			Example: "curl -X POST " + baseURL + "/api/assistant/clear -H 'Content-Type: application/json' -d '{\"session_id\":\"default\"}'",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/assistant/models", Summary: "助手推荐模型列表", Category: catAI,
+			Example: "curl " + baseURL + "/api/assistant/models",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/assistant/command", Summary: "指令条：一句话 → 结果卡片（注入面板专用）", Category: catAI,
+			Params: []Param{
+				{Name: "text", In: "body", Desc: "一句自然语言，如「关掉收藏自动下载」「状态」"},
+				{Name: "key", In: "body", Desc: "开关 key（与 text 二选一，面板点开关时用）"},
+				{Name: "on", In: "body", Desc: "目标状态 true / false（配合 key 使用）"},
+			},
+			Example: "curl -X POST " + baseURL + "/api/assistant/command -H 'Content-Type: application/json' -d '{\"text\":\"状态\"}'",
+			Notes:   "本地规则匹配，不依赖大模型；规则接不住时才走一次 AI 兜底，AI 未配置时退化为帮助卡片。",
 		},
 
 		// ── 飞牛集成 ──
@@ -1759,6 +1868,24 @@ func (s *Server) HandleCatalog(w http.ResponseWriter, r *http.Request) {
 	authMode := s.effectiveAuthMode()
 
 	guide := CatalogGuide()
+	endpoints := APICatalog(base)
+	// ?filter=keyword：只返回路径或说明里含该词的接口。
+	// AI 助手用它从 181 条里精确找某一类能力（曲库/下载/榜单…），
+	// 否则只能按位置截断，排在后面的接口根本到不了模型手里。
+	if q := strings.TrimSpace(r.URL.Query().Get("filter")); q != "" {
+		terms := strings.Fields(strings.ToLower(q))
+		hit := make([]Endpoint, 0, len(endpoints))
+		for _, e := range endpoints {
+			hay := strings.ToLower(e.Method + " " + e.Path + " " + e.Summary + " " + e.Category)
+			for _, t := range terms {
+				if strings.Contains(hay, t) {
+					hit = append(hit, e)
+					break
+				}
+			}
+		}
+		endpoints = hit
+	}
 	resp := CatalogResponse{
 		Code:      200,
 		Message:   "ok",
@@ -1766,7 +1893,7 @@ func (s *Server) HandleCatalog(w http.ResponseWriter, r *http.Request) {
 		Version:   CurrentVersion,
 		BaseURL:   base,
 		AuthMode:  authMode,
-		Endpoints: APICatalog(base),
+		Endpoints: endpoints,
 		Guide:     guide,
 		Usage:     usageFromGuide(guide),
 	}

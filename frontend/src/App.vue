@@ -107,6 +107,15 @@
             <span class="truncate text-[11px] font-medium sm:hidden">{{ shortSourceName }}</span>
             <span class="hidden truncate text-[11px] font-medium sm:inline">{{ activeSourceMeta?.name || '音源' }}</span>
           </button>
+          <!-- AI 助手入口：2026-10-26 新增。放在头部最右，与音源胶囊同排。 -->
+          <button
+            @click="showAssistant = true"
+            class="shrink-0 rounded-[10px] border border-[var(--ys-border)] bg-white/70 p-2 text-[var(--ys-text-muted)] transition-colors hover:bg-white hover:text-emerald-600"
+            title="AI 助手"
+            aria-label="AI 助手"
+          >
+            <Sparkles class="h-4 w-4" />
+          </button>
           <!-- 播放器入口在桌面侧栏底部，手机没有侧栏，所以只有手机在这儿放一个图标入口 -->
           <button
             v-if="currentSong"
@@ -606,6 +615,7 @@
 
     <!-- ── 开放接口抽屉（从品牌图标右侧滑出） ── -->
     <ApiDrawer v-model="showApiDrawer" />
+    <AssistantDrawer v-model="showAssistant" />
 
     <!-- ── 版本更新弹窗（侧栏底部入口点开；内容复用系统页那张 UpdateCard） ── -->
     <UpdateModal :open="showUpdateModal" @close="showUpdateModal = false" />
@@ -634,6 +644,7 @@
       :is-resolving="isResolving"
       :play-mode="playMode"
       :collapsed="playerBarCollapsed"
+      :lyric="lyricData"
       @update:play-mode="val => playMode = val"
       @toggle-play="togglePlay"
       @prev="playPrev"
@@ -645,6 +656,7 @@
       @volume-change="onVolumeChange"
       @toggle-collapse="playerBarCollapsed = !playerBarCollapsed"
       @search="searchFromPlayerBar"
+      @stop="stopPlayback"
     />
 
     <audio
@@ -675,6 +687,7 @@ import TidyView from './components/TidyView.vue'
 import PushManager from './components/PushManager.vue'
 import DownloadHub from './components/DownloadHub.vue'
 import ApiDrawer from './components/ApiDrawer.vue'
+import AssistantDrawer from './components/AssistantDrawer.vue'
 import DisclaimerModal from './components/DisclaimerModal.vue'
 import AccountManager from './components/AccountManager.vue'
 import SwipePager from './components/SwipePager.vue'
@@ -698,7 +711,7 @@ import {
 import { VIEWS, NAV_GROUPS, MOBILE_TAB_IDS, viewsOfGroup, segmentsOf, defaultSegment, resolveRoute } from './services/navViews'
 import { fail as feedbackFail } from './services/feedback'
 import { invalidate } from './services/viewCache'
-import { logError } from './services/appLog'
+import { logError, logInfo } from './services/appLog'
 import {
   Compass, Trophy, Cpu, Disc, Library, UserRound, ScrollText, Settings,
   Wand2, Send, Download, ListMusic, ListPlus, CloudDownload,
@@ -766,6 +779,9 @@ const isDisclaimerForce = ref(false)
 
 // 开放接口抽屉
 const showApiDrawer = ref(false)
+
+// AI 助手抽屉（2026-10-26 新增）
+const showAssistant = ref(false)
 
 // 手机「更多」右侧抽屉（次要入口：整理 / 音源 / 账号 / 系统）。
 // 用户口径：「说『样式』指的是呈现方式，不是位置；次要入口要做右侧抽屉」。
@@ -1200,6 +1216,12 @@ async function playSong(songOrPayload) {
 
   if (!song) return
 
+  // 操作日志（2026-10-26 用户口径）：正常操作也要留痕 —— 原先只有报错才写日志，
+  // 用户「用了好一会儿」操作日志页也是空的。只记关键动作（播放/下载/搜索/改设置），
+  // 不记暂停、拖进度这类高频小操作，免得 200 条环形缓冲被刷穿。
+  const singer = song.singer || song.artist || ''
+  logInfo('播放', `《${song.title || song.name || '未知曲目'}》${singer ? ' — ' + singer : ''}`)
+
   const thisSession = ++currentSessionId
   lastFailedSongId = null
 
@@ -1420,6 +1442,16 @@ function togglePlay() {
     audioRef.value.pause()
     isPlaying.value = false
   }
+}
+
+/* 停止（2026-10-26 用户口径：播放条右侧按钮从「搜索」改为「停止」）：
+   暂停并把进度归零；不动播放队列与当前曲目，再按播放可从头继续。 */
+function stopPlayback() {
+  if (!audioRef.value) return
+  audioRef.value.pause()
+  audioRef.value.currentTime = 0
+  currentTime.value = 0
+  isPlaying.value = false
 }
 
 function getRandomIndex() {

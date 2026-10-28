@@ -185,14 +185,14 @@ func NewDownloader(cfgMgr *config.ConfigManager) *Downloader {
 // 注意：目标目录可能尚不存在，而 ResolveSafePath 要求路径已存在（需要解析软链接），
 // 因此这里自底向上找到「最近的已存在祖先目录」再交给它校验。
 func validateDownloadDir(dir string) error {
-	return validateNasDir(dir, "下载目录")
+	return ValidateNasDir(dir, "下载目录")
 }
 
 // validateNasDir 是目录类设置的共同校验：绝对路径 + 落在 NAS 存储卷内。
 //
 // label 只影响报错文案（「下载目录」/「缓存目录」）—— 用户在设置页里同时能看到
 // 两个输入框，报错不说是哪一个等于让他自己猜。
-func validateNasDir(dir, label string) error {
+func ValidateNasDir(dir, label string) error {
 	clean := filepath.Clean(strings.TrimSpace(dir))
 	if !filepath.IsAbs(clean) {
 		return fmt.Errorf("%s必须是绝对路径", label)
@@ -272,7 +272,7 @@ func (d *Downloader) HandleSetConfig(w http.ResponseWriter, r *http.Request) {
 
 	if targetDir != "" {
 		// 目录越权防护：只允许写入 NAS 存储卷内的目录
-		if err := validateNasDir(targetDir, "下载目录"); err != nil {
+		if err := ValidateNasDir(targetDir, "下载目录"); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{"code": 400, "message": err.Error()})
 			return
@@ -286,7 +286,7 @@ func (d *Downloader) HandleSetConfig(w http.ResponseWriter, r *http.Request) {
 	if req.CacheDir != nil {
 		cacheDir := strings.TrimSpace(*req.CacheDir)
 		if cacheDir != "" {
-			if err := validateNasDir(cacheDir, "缓存目录"); err != nil {
+			if err := ValidateNasDir(cacheDir, "缓存目录"); err != nil {
 				w.WriteHeader(http.StatusBadRequest)
 				_ = json.NewEncoder(w).Encode(map[string]interface{}{"code": 400, "message": err.Error()})
 				return

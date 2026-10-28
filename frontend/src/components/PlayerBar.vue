@@ -26,11 +26,16 @@
     <div v-if="collapsed && currentSong" class="px-3 pb-2">
       <button
         @click="$emit('toggle-collapse')"
-        class="ys-glass ys-player-glass pointer-events-auto mx-auto flex h-8 w-full max-w-[576px] items-center justify-center gap-2 rounded-full text-[11px] text-white/60 transition-colors hover:text-white"
+        class="ys-glass ys-player-glass pointer-events-auto mx-auto flex h-8 w-full max-w-[576px] items-center gap-3 overflow-hidden rounded-full px-3 text-[11px] text-white/70 transition-colors hover:text-white"
         title="展开播放条"
       >
-        <ChevronUp class="h-3.5 w-3.5" />
-        <span class="max-w-[50vw] truncate">{{ currentSong.name || '正在播放' }}</span>
+        <ChevronUp class="h-3.5 w-3.5 shrink-0" />
+        <!-- 2026-10-26 用户口径：最小播放框左边显示歌名、右边显示歌词，两边保持距离；
+             显示不下整段就自动向右滚动（LyricMarquee direction="right"）。 -->
+        <span class="max-w-[45vw] shrink-0 truncate font-medium text-white/85">{{ currentSong.name || '正在播放' }}</span>
+        <span class="min-w-0 flex-1">
+          <LyricMarquee :text="currentLyric" direction="right" />
+        </span>
       </button>
     </div>
 
@@ -154,24 +159,33 @@
           </button>
         </div>
 
-        <!-- 中：封面 + 歌曲信息 + 进度（弹性区）。
-             搜索（v2.1.119）改由右下角图标滑出的独立搜索框承担 —— 这里不再内嵌输入框。 -->
+        <!-- 中：封面 + 歌曲信息（弹性区）。
+             搜索（v2.1.119）改由右下角图标滑出的独立搜索框承担 —— 这里不再内嵌输入框。
+             2026-10-26 用户口径：进度条改为「封面外圈一圈绿色线条」，原线条位置换成一行歌词。 -->
         <div class="relative flex min-w-0 flex-1 items-center gap-2.5">
-          <button
-            @click="$emit('toggle-fullscreen')"
-            class="grid h-[38px] w-[38px] shrink-0 place-items-center overflow-hidden rounded-[9px] bg-white/10 text-white/50 transition-transform hover:scale-[1.04]"
-            title="打开播放页"
-          >
-            <img
-              v-if="currentSong.cover"
-              :src="currentSong.cover"
-              alt=""
-              referrerpolicy="no-referrer"
-              class="h-full w-full object-cover"
-              @error="currentSong.cover = ''"
-            />
-            <Music v-else class="h-4 w-4" />
-          </button>
+          <!-- 封面 + 绿色环形进度：conic-gradient 一圈，进度随播放推进 -->
+          <div class="relative grid h-11 w-11 shrink-0 place-items-center">
+            <span
+              class="absolute inset-0 rounded-full"
+              :style="{ background: `conic-gradient(#22c55e ${progressPercent * 3.6}deg, rgba(255,255,255,0.22) 0deg)` }"
+              aria-hidden="true"
+            ></span>
+            <button
+              @click="$emit('toggle-fullscreen')"
+              class="relative grid h-[38px] w-[38px] place-items-center overflow-hidden rounded-[9px] bg-black/45 text-white/50 transition-transform hover:scale-[1.04]"
+              title="打开播放页"
+            >
+              <img
+                v-if="currentSong.cover"
+                :src="currentSong.cover"
+                alt=""
+                referrerpolicy="no-referrer"
+                class="h-full w-full object-cover"
+                @error="currentSong.cover = ''"
+              />
+              <Music v-else class="h-4 w-4" />
+            </button>
+          </div>
 
           <div class="min-w-0 flex-1">
             <b class="block max-w-[234px] truncate text-[13px] font-semibold tracking-[-0.01em] text-white sm:text-sm">
@@ -180,28 +194,22 @@
             <small class="hidden max-w-[234px] truncate text-[11px] text-white/45 sm:block">
               {{ currentSong.singer || currentSong.artist || '—' }}
             </small>
-            <!-- 进度：细线；≥sm 时两端带时间。手机（<sm）它就在歌名下面那一行 -->
-            <div class="mt-1 flex items-center gap-2">
-              <span class="ys-num hidden w-9 shrink-0 text-right text-[10px] text-white/45 sm:block">{{ formatTime(currentTime) }}</span>
-              <!-- ⚠️ 视觉只有 4px，手指点不准：before 伪元素把命中区上下各撑 12px（视觉粗细不变） -->
-              <span
-                @click="handleSeek"
-                class="group/progress relative h-1 flex-1 cursor-pointer rounded-full bg-white/20 before:absolute before:inset-x-0 before:-top-3 before:-bottom-3 before:content-['']"
-              >
-                <span class="block h-1 rounded-full bg-white transition-[width] duration-150 ease-linear" :style="{ width: progressPercent + '%' }"></span>
-              </span>
-              <span class="ys-num hidden w-9 shrink-0 text-[10px] text-white/45 sm:block">{{ formatTime(duration) }}</span>
+            <!-- 歌词行（原进度条位置）：只显示一行，长度超出自动滚动 -->
+            <div class="mt-1 min-w-0">
+              <LyricMarquee :text="currentLyric" direction="left" />
             </div>
           </div>
         </div>
 
-        <!-- 右：功能按钮（搜索 / 歌词 / 音量 / 播放页 / 收缩） -->
+        <!-- 右：功能按钮（停止 / 歌词 / 音量 / 播放页 / 收缩） -->
         <div class="relative flex shrink-0 items-center gap-0.5 sm:gap-1.5">
+          <!-- 停止（2026-10-26 用户口径：原来这里是搜索按钮，与手机底部导航的搜索重复，改为停止）。
+               桌面端的搜索仍由右下角图标滑出的那一框承担，不受影响。 -->
           <button
-            @click="openSearch"
-            title="搜索"
+            @click="$emit('stop')"
+            title="停止"
             class="grid h-9 w-9 place-items-center rounded-full text-white/55 transition-colors hover:bg-white/10 hover:text-white"
-          ><Search class="h-4 w-4" /></button>
+          ><Square class="h-3.5 w-3.5 fill-current" /></button>
           <button
             @click="$emit('toggle-lyrics')"
             :class="['hidden h-9 rounded-full px-2.5 text-[11px] font-medium transition-colors lg:block', showLyrics ? 'bg-white/15 text-white' : 'text-white/55 hover:bg-white/10 hover:text-white']"
@@ -243,9 +251,11 @@
 import { ref, computed, nextTick, onMounted, onUnmounted, watch } from 'vue'
 import {
   Play, Pause, SkipBack, SkipForward, Shuffle, Repeat, Repeat1,
-  Volume2, Volume1, VolumeX, Maximize, Music, Loader2,
+  Volume2, Volume1, VolumeX, Maximize, Music, Loader2, Square,
   Disc3, ChevronDown, ChevronUp, Search,
 } from 'lucide-vue-next'
+import LyricMarquee from './LyricMarquee.vue'
+import { currentLyricLine } from '../services/lyricLine'
 import {
   SEARCH_ANIM_MS,
   SEARCH_OPEN_TIMEOUT_MS,
@@ -265,10 +275,12 @@ const props = defineProps({
   playMode: { type: String, default: 'sequence' },
   /** 播放条是否被收起（由 App.vue 持有，本组件只负责渲染细条与派发切换） */
   collapsed: { type: Boolean, default: false },
+  /** 原始 LRC 歌词（App.vue 的 lyricData）：底栏在原进度条位置显示「正在唱的那一行」 */
+  lyric: { type: String, default: '' },
 })
 const emit = defineEmits([
   'toggle-play', 'prev', 'next', 'seek', 'toggle-lyrics', 'toggle-fullscreen',
-  'toggle-view', 'volume-change', 'update:playMode', 'toggle-collapse', 'search',
+  'toggle-view', 'volume-change', 'update:playMode', 'toggle-collapse', 'search', 'stop',
 ])
 
 // ── 搜索滑出/收回（v2.1.119 状态机：逻辑在 services/playerBarSearch.js，有单测）──
@@ -397,21 +409,12 @@ function cyclePlayMode() {
 
 const progressPercent = computed(() => (!props.duration ? 0 : Math.min(100, (props.currentTime / props.duration) * 100)))
 
-function formatTime(sec) {
-  if (!sec || isNaN(sec)) return '00:00'
-  return Math.floor(sec / 60).toString().padStart(2, '0') + ':' + Math.floor(sec % 60).toString().padStart(2, '0')
-}
-
-/**
- * 点哪儿跳哪儿。用 `currentTarget` 取坐标 —— 手机上那条细线在歌名下面、
- * 桌面上是中间那条带时间的，两处共用这一个处理函数，就不必各挂一个 ref。
- */
-function handleSeek(e) {
-  if (!props.duration) return
-  const rect = e.currentTarget.getBoundingClientRect()
-  if (!rect.width) return
-  emit('seek', Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)) * props.duration)
-}
+/** 当前正在唱的那一行歌词（原进度条位置 / 折叠最小播放框右段都显示它） */
+const currentLyric = computed(() =>
+  currentLyricLine(props.lyric, props.currentTime)
+  || (props.currentSong && (props.currentSong.singer || props.currentSong.artist))
+  || ''
+)
 
 function toggleMute() {
   if (isMuted.value) { isMuted.value = false; volume.value = prevVolume.value || 0.8 }

@@ -44,6 +44,41 @@
       </button>
 
       <!--
+        搜索（用户 2026-10-26：「本地曲库列表增加搜索（不写文字，图标就可以）」）。
+        默认只有一颗放大镜图标；点开后在工具栏里就地展开一条小搜索框（不弹窗），
+        Esc / 清空即收回 —— 平时这一排依然是「播放全部 + 重新扫描 + 搜索」三个图标。
+      -->
+      <button
+        @click="searchOpen = !searchOpen"
+        :title="searchOpen ? '收起搜索' : '搜索歌曲'"
+        aria-label="搜索歌曲"
+        class="grid h-[30px] w-[30px] place-items-center rounded-lg bg-gray-100 text-gray-600 transition-all hover:bg-gray-200"
+      >
+        <Search class="w-3.5 h-3.5" />
+      </button>
+
+      <!-- 展开的搜索框：与按钮同行的紧凑胶囊输入框 -->
+      <div v-if="searchOpen" class="flex items-center gap-1">
+        <input
+          ref="searchInput"
+          v-model="searchText"
+          @keyup.esc="closeSearch"
+          type="search"
+          placeholder="搜索"
+          aria-label="搜索本目录歌曲"
+          class="h-8 w-32 rounded-lg border border-gray-200 bg-white px-2.5 text-xs outline-none transition-colors focus:border-sky-400 sm:w-44"
+        />
+        <button
+          @click="closeSearch"
+          title="清空并收起搜索"
+          aria-label="清空并收起搜索"
+          class="grid h-[30px] w-[30px] place-items-center rounded-lg bg-gray-100 text-gray-500 transition-all hover:bg-gray-200 hover:text-gray-700"
+        >
+          <X class="w-3.5 h-3.5" />
+        </button>
+      </div>
+
+      <!--
         用户 2026-10-26：「本地曲库——移除体检文件名和批量内嵌歌词按钮」。
         两个入口都撤掉：体检的完整交互只在「补全整理 → 歌名修复」里有一份，
         同一页摆一颗看起来一样的按钮，反而让人分不清该点哪个；
@@ -101,8 +136,12 @@
           </button>
         </div>
 
+        <!--
+          2026-10-26 用户要求加搜索与页数：搜索生效时在计数后补一段匹配数，
+          扫一眼就知道是「整个目录」还是「当前关键词命中的部分」。
+        -->
         <span class="shrink-0 text-[11px] font-normal text-gray-400">
-          (已加载 {{ songs.length }} 首歌曲)
+          (已加载 {{ songs.length }} 首歌曲<template v-if="searchText.trim()"> · 匹配 {{ filteredSongs.length }} 首</template>)
         </span>
         <!-- 枚举被上限/深度截断时必须说出来：以前只显示「已加载 1000 首」，
              看起来就是这个目录的全部，用户根本不知道该去子目录里找。
@@ -158,6 +197,25 @@
         >
           <FolderOpen class="w-3.5 h-3.5" />
           <span>点击选择包含音乐的文件夹</span>
+        </button>
+      </div>
+
+      <!--
+        搜索无结果（用户 2026-10-26 的搜索要求）：目录里有歌、但关键词一首都没命中。
+        单独一个分支而不是在表格里渲染空 tbody —— 空表格会让人以为在加载。
+      -->
+      <div v-else-if="!filteredSongs.length" class="h-72 flex flex-col items-center justify-center text-gray-400 bg-white rounded-2xl border border-gray-100 shadow-xs p-8">
+        <div class="w-14 h-14 rounded-2xl bg-gray-50 flex items-center justify-center mb-3">
+          <Search class="w-7 h-7 text-gray-400" />
+        </div>
+        <p class="text-base font-semibold text-gray-700">没有匹配的歌曲</p>
+        <p class="text-xs text-gray-400 mt-1">当前关键词在「{{ songs.length }} 首」里找不到结果</p>
+        <button
+          @click="clearSearch"
+          class="mt-4 px-4 py-2 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-600 text-xs font-semibold transition-all flex items-center gap-1.5"
+        >
+          <X class="w-3.5 h-3.5" />
+          <span>清空搜索</span>
         </button>
       </div>
 
@@ -255,13 +313,19 @@
             </tr>
           </thead>
           <tbody class="divide-y divide-gray-100">
+            <!--
+              2026-10-26 分页改造：循环 pagedSongs（当前页切片），
+              但「#」列与 playSong 的队列位置都要用**全局序号**
+              ((page-1)*PAGE_SIZE + idx) —— 队列来自 sortedSongs 全量，
+              传页内序号会让「下一首」播错歌。
+            -->
             <tr 
-              v-for="(song, idx) in sortedSongs" 
+              v-for="(song, idx) in pagedSongs" 
               :key="song.path"
-              @dblclick="playSong(song, idx)"
+              @dblclick="playSong(song, (page - 1) * PAGE_SIZE + idx)"
               class="group cursor-pointer transition-colors hover:bg-black/[0.02]"
             >
-              <td class="py-3 px-2 sm:px-3 text-center text-gray-400 font-mono">{{ idx + 1 }}</td>
+              <td class="py-3 px-2 sm:px-3 text-center text-gray-400 font-mono">{{ (page - 1) * PAGE_SIZE + idx + 1 }}</td>
               <td class="py-3 px-3 sm:px-4 flex items-center gap-2.5 sm:gap-3 min-w-0">
                 <div class="w-8 h-8 sm:w-9 sm:h-9 rounded-lg overflow-hidden bg-gray-100 border border-gray-200/60 shrink-0 flex items-center justify-center">
                   <img 
@@ -309,7 +373,7 @@
               <td class="py-3 px-3 sm:px-4 text-center">
                 <div class="flex items-center justify-center gap-1">
                   <button 
-                    @click.stop="playSong(song, idx)"
+                    @click.stop="playSong(song, (page - 1) * PAGE_SIZE + idx)"
                     class="grid h-7 w-7 place-items-center rounded-[7px] text-[var(--ys-text-faint)] transition-colors hover:bg-[var(--ys-accent-soft)] hover:text-[var(--ys-accent)]"
                     title="立即播放"
                   >
@@ -349,6 +413,52 @@
             </tr>
           </tbody>
         </table>
+        </div>
+
+        <!--
+          分页条（用户 2026-10-26：「本地曲库列表增加页数」）。
+          目录上千首时一屏放不下，每页 100 首、页脚给「上一页 / 页码 / 下一页」。
+          页码按当前页前后各 1 格、首尾页必留的方式铺开，多的用 … 省略。
+        -->
+        <div
+          v-if="pageCount > 1"
+          class="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 border-t border-gray-100 px-3 py-2 text-xs text-gray-500"
+        >
+          <button
+            @click="page = Math.max(1, page - 1)"
+            :disabled="page <= 1"
+            aria-label="上一页"
+            class="grid h-7 w-7 place-items-center rounded-lg border border-gray-200 bg-white text-gray-600 transition-colors hover:bg-gray-100 disabled:opacity-40 disabled:hover:bg-white"
+          >
+            <ChevronLeft class="w-4 h-4" />
+          </button>
+
+          <span class="px-1 font-mono text-[11px]">{{ page }} / {{ pageCount }}</span>
+          <span class="hidden text-gray-300 sm:inline">·</span>
+          <span class="hidden text-gray-400 sm:inline">共 {{ filteredSongs.length }} 首</span>
+
+          <template v-for="(p, i) in pageButtons" :key="i">
+            <span v-if="p === '…'" class="px-1 text-gray-300">…</span>
+            <button
+              v-else
+              @click="page = p"
+              :aria-label="`第 ${p} 页`"
+              :aria-current="p === page ? 'page' : undefined"
+              class="grid h-7 min-w-[28px] place-items-center rounded-lg border border-gray-200 bg-white px-1.5 font-mono transition-colors hover:bg-gray-100"
+              :class="p === page ? 'border-black bg-black font-semibold text-white hover:bg-black' : 'text-gray-600'"
+            >
+              {{ p }}
+            </button>
+          </template>
+
+          <button
+            @click="page = Math.min(pageCount, page + 1)"
+            :disabled="page >= pageCount"
+            aria-label="下一页"
+            class="grid h-7 w-7 place-items-center rounded-lg border border-gray-200 bg-white text-gray-600 transition-colors hover:bg-gray-100 disabled:opacity-40 disabled:hover:bg-white"
+          >
+            <ChevronRight class="w-4 h-4" />
+          </button>
         </div>
       </div>
     </div>
@@ -621,7 +731,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import { markLoaded, isStale } from '../services/viewCache'
 import { currentView } from '../services/navBus'
 import { NasAPI, TagsAPI, FnosAPI } from '../api/client'
@@ -636,8 +746,8 @@ import {
   scanHintOf,
 } from '../services/nasView'
 import {
-  RotateCw, Folder, FolderOpen, Play, X, Check,
-  HardDrive, CornerLeftUp, ChevronRight, ChevronUp, ChevronDown, Loader2,
+  RotateCw, Folder, FolderOpen, Play, X, Search, Check,
+  HardDrive, CornerLeftUp, ChevronRight, ChevronLeft, ChevronUp, ChevronDown, Loader2,
   Image as ImageIcon, Trash2, Eye, EyeOff
 } from 'lucide-vue-next'
 import InlineNotice from './InlineNotice.vue'
@@ -665,6 +775,86 @@ const sortedSongs = computed(() => sortSongs(songs.value, sortState.value.key, s
 function persistSort() {
   savePref('nas_sort', sortPrefOf(sortState.value))
 }
+
+// ── 搜索 + 分页（用户 2026-10-26：「本地曲库列表增加页数，增加搜索（不写文字，图标就可以）」）──
+// 目录上千首时一屏放不下：每页 PAGE_SIZE 首，页脚翻页；搜索框默认收起，只留一颗放大镜图标。
+// 三者的关系是单向的：songs（扫描结果）→ sortedSongs（排序）→ filteredSongs（搜索过滤）
+// → pagedSongs（当前页切片）。表格只渲染 pagedSongs，但播放队列仍是全量 sortedSongs。
+const PAGE_SIZE = 100
+
+const searchOpen = ref(false)
+const searchText = ref('')
+const searchInput = ref(null)
+
+/** 搜索框展开后自动聚焦，不用再点一下才打字。 */
+watch(searchOpen, async (open) => {
+  if (!open) return
+  await nextTick()
+  searchInput.value?.focus()
+})
+
+function closeSearch() {
+  searchText.value = ''
+  searchOpen.value = false
+}
+
+/** 空状态里的「清空搜索」：只清关键词、收起输入框，回到完整列表。 */
+function clearSearch() {
+  searchText.value = ''
+}
+
+/** 关键词命中任一字段即算匹配；大小写不敏感。 */
+const filteredSongs = computed(() => {
+  const q = searchText.value.trim().toLowerCase()
+  if (!q) return sortedSongs.value
+  return sortedSongs.value.filter((song) => {
+    const haystack = [song.title, song.filename, song.artist, song.album]
+      .map((v) => String(v ?? ''))
+      .join(' ')
+      .toLowerCase()
+    return haystack.includes(q)
+  })
+})
+
+const pageCount = computed(() => Math.max(1, Math.ceil(filteredSongs.value.length / PAGE_SIZE)))
+
+// 当前页码（从 1 起）
+const page = ref(1)
+
+const pagedSongs = computed(() => {
+  const start = (page.value - 1) * PAGE_SIZE
+  return filteredSongs.value.slice(start, start + PAGE_SIZE)
+})
+
+/**
+ * 页码条：首尾页必留，当前页前后各 1 格，其余用 … 跳过。
+ * 例如 1 … 5 6 7 … 20 —— 页数多的时候不用横向滚一整排数字。
+ */
+const pageButtons = computed(() => {
+  const total = pageCount.value
+  const cur = page.value
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1)
+  const out = [1]
+  const from = Math.max(2, cur - 1)
+  const to = Math.min(total - 1, cur + 1)
+  if (from > 2) out.push('…')
+  for (let p = from; p <= to; p++) out.push(p)
+  if (to < total - 1) out.push('…')
+  out.push(total)
+  return out
+})
+
+// 关键词 / 排序方向 / 新的扫描结果都会改变可见歌曲集合 —— 变化时回到第 1 页，
+// 否则用户搜完还停在第 5 页，看到的是过滤前的旧页码（很可能空着）。
+watch([searchText, () => sortState.value, () => songs.value], () => {
+  page.value = 1
+})
+
+// 重扫回来歌曲变少时，页码可能已经超出最后一页 —— 钳回最后一页，
+// 否则页脚上一页/下一页都失效，列表空白。
+watch(pageCount, (total) => {
+  if (page.value > total) page.value = total
+})
 
 /** 点表头：同一列切升降序，换列则用该列默认方向。 */
 function toggleSort(key) {

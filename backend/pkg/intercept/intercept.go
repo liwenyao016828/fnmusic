@@ -646,6 +646,8 @@ func (i *Interceptor) buildRoutes() []route {
 		// `/api/quality` 写「试听音质偏好」。两条都在同源白名单里，其余照旧 404。
 		{get, qulvPrefix + "/api/now", i.handleQulvNow},
 		{post, qulvPrefix + "/api/quality", i.handleQulvQuality},
+		// 指令条：面板里的「一句话 → 卡片」（转发给本机后端 /api/assistant/command）
+		{post, qulvPrefix + "/api/command", i.handleQulvCommand},
 		{all, qulvPrefix, i.handleQulvNotFound},
 
 		// ── 页面外壳：注入脚本的落点。

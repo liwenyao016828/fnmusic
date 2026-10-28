@@ -940,7 +940,7 @@ import {
   officialPlatform, setOfficialPlatform, ensureOfficialPlatform,
   OFFICIAL_PLATFORM_IDS,
 } from '../services/officialPlatform'
-import { logError, logWarn } from '../services/appLog'
+import { logError, logInfo, logWarn } from '../services/appLog'
 import {
   QR_POLL_MS,
   LOGIN_SUCCESS_CLOSE_MS,
@@ -2043,6 +2043,8 @@ async function handleSearch() {
     }
     // 第 1 页整批交给 pager：露出前 30 条，多的先收进缓冲
     const rows = pager.start(res.data?.list || [])
+    // 操作日志：搜索成功也留痕（2026-10-26 用户口径）；失败路径本就有 logError。
+    logInfo('搜索', `「${q}」第 1 页 ${(res.data?.list || []).length} 首（${selectedPlatform.value || '全部平台'}）`)
     searchResults.value = rows
     activeSongList.value = searchResults.value
     hasMore.value = pager.hasMore

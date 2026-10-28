@@ -178,6 +178,69 @@ func (i *Interceptor) handleQulvQuality(w http.ResponseWriter, r *http.Request) 
 	return true
 }
 
+// handleQulvCommand 把面板的指令条请求转给本机后端。
+//
+// 面板只有一行输入框，没有聊天记录、没有流式渲染的位置，所以它要的不是
+// /api/assistant/chat 那种 SSE 对话，而是一张**卡片**（开关列表 / 状态 /
+// 帮助）。这个接口在曲率后端（见 pkg/api/assistant_command.go）里。
+//
+// 同源转发的好处还是那两个：脚本只用相对路径、不必知道 NAS 的 IP 与端口；
+// 页面与接口同源，没有预检。
+func (i *Interceptor) handleQulvCommand(w http.ResponseWriter, r *http.Request) bool {
+	if i.localAPI == "" {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+			"code": 503, "message": "曲率后端地址未知，指令条不可用",
+		})
+		return true
+	}
+	raw, err := io.ReadAll(io.LimitReader(r.Body, 64<<10))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"code": 400, "message": "请求体读不出来"})
+		return true
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 40*time.Second)
+	defer cancel()
+
+	out, status, err := i.postLocalAPIRaw(ctx, "/api/assistant/command", raw)
+	if err != nil {
+		i.logf("[QULV] 指令条调用失败：%v", err)
+		writeJSON(w, http.StatusBadGateway, map[string]any{
+			"code": 502, "message": "指令条调用失败：" + err.Error(),
+		})
+		return true
+	}
+	// 后端的响应原样透传（{code, data: 卡片}）—— 面板只要认一种形状。
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	_, _ = w.Write(out)
+	return true
+}
+
+// postLocalAPIRaw 把一段**已经是 JSON 的**请求体转给本机后端。
+//
+// 为什么不在 handleQulvCommand 里重新序列化：请求体原样转发，语义就是
+// 「面板说什么，后端就收到什么」—— 中间少一次转换，就少一处两边形状对不上的可能。
+func (i *Interceptor) postLocalAPIRaw(ctx context.Context, path string, raw []byte) ([]byte, int, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, i.localAPI+path, bytes.NewReader(raw))
+	if err != nil {
+		return nil, 0, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: qulvDownloadTimeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, resp.StatusCode, err
+	}
+	return body, resp.StatusCode, nil
+}
+
 // qulvURL 拼出「曲率自己」的地址，形如 `http://192.168.1.66:8898/`。
 //
 // 主机名取**请求的 Host**（浏览器访问官方页面用的那个名字，可能是 IP、

@@ -16,6 +16,7 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -164,6 +165,87 @@ func (c *Client) endpoint() string {
 	return base + "/v1/chat/completions"
 }
 
+// modelsURL 列模型接口地址（与 endpoint() 同一套 base 兼容规则）
+func modelsURL(base string) string {
+	base = strings.TrimRight(strings.TrimSpace(base), "/")
+	if strings.HasSuffix(base, "/chat/completions") {
+		return strings.TrimSuffix(base, "/chat/completions") + "/models"
+	}
+	if regexp.MustCompile(`/v\d+$`).MatchString(base) {
+		return base + "/models"
+	}
+	return base + "/v1/models"
+}
+
+// Models 拉取网关的可用模型列表（OpenAI 兼容 /models 接口）。
+//
+// 供 AI 助手的模型下拉选择用。注意这里**不**静默降级：列模型是设置界面的
+// 主动动作，用户需要知道「为什么列表是空的」（没启用 / 没配 Key / 网关连不上），
+// 返回错误让上层把原因带出去。
+func (c *Client) Models(ctx context.Context) ([]string, error) {
+	c.mu.RLock()
+	cfg := c.cfg
+	c.mu.RUnlock()
+
+	if !cfg.Available() {
+		return nil, fmt.Errorf("AI 未启用或未配置（base_url / api_key / 启用开关）")
+	}
+
+	timeout := time.Duration(cfg.Timeout) * time.Second
+	if timeout <= 0 {
+		timeout = 20 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, modelsURL(cfg.BaseURL), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("连接模型网关失败: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// 模型列表很小，但异常响应仍要封顶，避免打爆内存
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, fmt.Errorf("读取模型列表失败: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		// OpenAI 风格错误体尽量抠出 message，抠不出就用状态码
+		var e struct {
+			Error struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if json.Unmarshal(body, &e) == nil && e.Error.Message != "" {
+			return nil, fmt.Errorf("网关返回 HTTP %d: %s", resp.StatusCode, e.Error.Message)
+		}
+		return nil, fmt.Errorf("网关返回 HTTP %d", resp.StatusCode)
+	}
+
+	var out struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		return nil, fmt.Errorf("模型列表格式无法解析: %w", err)
+	}
+	models := make([]string, 0, len(out.Data))
+	for _, m := range out.Data {
+		if id := strings.TrimSpace(m.ID); id != "" {
+			models = append(models, id)
+		}
+	}
+	sort.Strings(models)
+	return models, nil
+}
+
 // chatRequest OpenAI 兼容请求体
 type chatRequest struct {
 	Model       string        `json:"model"`
@@ -172,11 +254,43 @@ type chatRequest struct {
 	// Stream 显式声明非流式。部分自建网关（one-api / new-api 等）即使不传也默认流式返回，
 	// 因此客户端必须同时具备解析 SSE 的能力，不能只依赖这个字段。
 	Stream bool `json:"stream"`
+	// Tools 工具调用清单（助手模式专用；普通 Chat 不传）
+	Tools []ToolDef `json:"tools,omitempty"`
 }
 
 type chatMessage struct {
 	Role    string `json:"role"`
-	Content string `json:"content"`
+	Content string `json:"content,omitempty"`
+	// ToolCalls 仅 assistant 角色使用：模型请求调用工具
+	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+	// ToolCallID 仅 tool 角色使用：回填某个 tool_call 的结果
+	ToolCallID string `json:"tool_call_id,omitempty"`
+}
+
+// ToolCall 模型请求的一次工具调用（OpenAI 兼容格式）
+type ToolCall struct {
+	ID       string           `json:"id"`
+	Type     string           `json:"type"`
+	Function ToolCallFunction `json:"function"`
+}
+
+// ToolCallFunction 工具调用的函数名与参数
+type ToolCallFunction struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"` // JSON 字符串
+}
+
+// ToolDef 工具定义（OpenAI 兼容格式）
+type ToolDef struct {
+	Type     string          `json:"type"`
+	Function ToolDefFunction `json:"function"`
+}
+
+// ToolDefFunction 工具的名称、描述与参数 Schema
+type ToolDefFunction struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Parameters  json.RawMessage `json:"parameters"`
 }
 
 // chatMessageOut 响应里的 message。
@@ -185,9 +299,10 @@ type chatMessage struct {
 // 它们把思维链放这里，**content 可能是空的**。不接这两个字段的话，
 // 配了推理模型会「静默无结果」—— 上层只看到空串，完全不知道原因。
 type chatMessageOut struct {
-	Content          string `json:"content"`
-	ReasoningContent string `json:"reasoning_content"`
-	Reasoning        string `json:"reasoning"`
+	Content          string     `json:"content"`
+	ReasoningContent string     `json:"reasoning_content"`
+	Reasoning        string     `json:"reasoning"`
+	ToolCalls        []ToolCall `json:"tool_calls"`
 }
 
 // chatDelta 流式响应里的 delta
@@ -323,6 +438,137 @@ func (c *Client) Chat(ctx context.Context, kind, system, user string) (string, U
 			"若用的是推理模型，请确认网关是否把正文放在 reasoning_content", orNone(fr))
 	}
 	return content, u, nil
+}
+
+// ToolsResponse 一次带工具调用的对话响应
+type ToolsResponse struct {
+	Content   string     // 模型正文（调用工具时可能为空）
+	ToolCalls []ToolCall // 模型请求的工具调用（可能为空=直接给了正文）
+	Usage     Usage
+}
+
+// Message 对话消息（助手工具调用循环用；导出以便跨包构造）。
+// 与 OpenAI 兼容格式一一对应：user / assistant（可带 tool_calls）/ tool（带 tool_call_id）。
+type Message struct {
+	Role       string     `json:"role"`
+	Content    string     `json:"content,omitempty"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
+}
+
+// ChatWithTools 发起一次支持工具调用（tool calling）的对话。
+//
+// 与 Chat 的区别：messages 可以携带 assistant 的 tool_calls 与 tool 角色结果
+// （工具调用循环用），请求体带 tools 清单。未配置时返回空结果且不报错（静默降级）。
+func (c *Client) ChatWithTools(ctx context.Context, kind, system string, messages []Message, tools []ToolDef) (*ToolsResponse, error) {
+	c.mu.RLock()
+	cfg := c.cfg
+	c.mu.RUnlock()
+
+	if !cfg.Available() {
+		return nil, nil // 静默降级：未配置不是错误
+	}
+
+	timeout := time.Duration(cfg.Timeout) * time.Second
+	if timeout <= 0 {
+		timeout = 20 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	msgs := make([]chatMessage, 0, len(messages)+1)
+	if strings.TrimSpace(system) != "" {
+		msgs = append(msgs, chatMessage{Role: "system", Content: system})
+	}
+	for _, m := range messages {
+		msgs = append(msgs, chatMessage{
+			Role:       m.Role,
+			Content:    m.Content,
+			ToolCalls:  m.ToolCalls,
+			ToolCallID: m.ToolCallID,
+		})
+	}
+
+	payload, err := json.Marshal(chatRequest{
+		Model:       cfg.Model,
+		Messages:    msgs,
+		Temperature: 0.2,
+		Stream:      false,
+		Tools:       tools,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint(), bytes.NewReader(payload))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		c.record(kind, Usage{Missing: true}, false)
+		return nil, fmt.Errorf("调用大模型失败: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if err != nil {
+		c.record(kind, Usage{Missing: true}, false)
+		return nil, fmt.Errorf("读取大模型响应失败: %w", err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		c.record(kind, Usage{Missing: true}, false)
+		return nil, fmt.Errorf("大模型返回 HTTP %d: %s", resp.StatusCode, truncate(string(body), 300))
+	}
+
+	parsed, err := parseChatResponse(body)
+	if err != nil {
+		c.record(kind, Usage{Missing: true}, false)
+		return nil, fmt.Errorf("解析大模型响应失败: %w", err)
+	}
+	if msg := extractErrorMessage(parsed.Error); msg != "" {
+		c.record(kind, Usage{Missing: true}, false)
+		return nil, fmt.Errorf("大模型报错: %s", msg)
+	}
+	if len(parsed.Choices) == 0 {
+		c.record(kind, Usage{Missing: true}, false)
+		return nil, fmt.Errorf("大模型未返回任何结果")
+	}
+
+	u := Usage{
+		PromptTokens:     parsed.Usage.PromptTokens,
+		CompletionTokens: parsed.Usage.CompletionTokens,
+		TotalTokens:      parsed.Usage.TotalTokens,
+	}
+	if u.TotalTokens == 0 && u.PromptTokens == 0 && u.CompletionTokens == 0 {
+		u.Missing = true
+	}
+	c.record(kind, u, true)
+
+	msg := parsed.Choices[0].Message
+	content := msg.Content
+	if strings.TrimSpace(content) == "" {
+		content = firstNonEmptyStr(msg.ReasoningContent, msg.Reasoning)
+	}
+	// 推理模型的正文回退不适用于工具调用场景（思维链≠正文），仅作兜底
+	if strings.TrimSpace(content) == "" && len(msg.ToolCalls) == 0 {
+		fr := ""
+		if parsed.Choices[0].FinishReason != nil {
+			fr = *parsed.Choices[0].FinishReason
+		}
+		if fr == "length" {
+			return nil, fmt.Errorf("大模型输出被 token 上限截断（finish_reason=length）——" +
+				"推理模型常把额度耗在思维链上，请调大 max_tokens 或换非推理模型")
+		}
+		return nil, fmt.Errorf("大模型返回成功但正文为空（finish_reason=%s）——"+
+			"若用的是推理模型，请确认网关是否把正文放在 reasoning_content", orNone(fr))
+	}
+
+	return &ToolsResponse{Content: content, ToolCalls: msg.ToolCalls, Usage: u}, nil
 }
 
 func orNone(s string) string {

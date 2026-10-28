@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io"
 	"io/fs"
+	"log"
 	"mime"
 	"net"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 	"fn-lx-player/pkg/ai"
 	"fn-lx-player/pkg/applog"
 	"fn-lx-player/pkg/appupdate"
+	"fn-lx-player/pkg/assistant"
 	"fn-lx-player/pkg/backenddl"
 	"fn-lx-player/pkg/bridge"
 	"fn-lx-player/pkg/charts"
@@ -38,7 +40,7 @@ import (
 )
 
 // CurrentVersion 应用版本号。发布新版本时与 fpk-package/manifest 的 version 同步修改。
-const CurrentVersion = "2.22.0"
+const CurrentVersion = "2.23.0"
 
 // CurrentAppName 对外暴露的应用标识，必须与 fpk-package/manifest 的 appname 一致。
 //
@@ -81,6 +83,11 @@ type Server struct {
 	nameRules *nameparse.Store
 	// aiBackupRoot 补全任务的备份根目录（<dataDir>/ai_backup），供「撤销」还原
 	aiBackupRoot string
+
+	// AI 助手（2026-10-26 新增）：会话/设置/操作确认的运行时。
+	// 懒构造（首次请求时建），构造时需要 aiClient 已就绪 —— 两者都在 NewServer 里初始化。
+	assistantRT *assistant.Runtime
+	assistantMu sync.Mutex
 
 	// 第三方平台账号（扫码登录，凭据 0600 落盘）
 	accountStore *account.Store
@@ -223,6 +230,14 @@ func NewServer(cfgMgr *config.ConfigManager, sourcesMgr *sources.Manager, static
 	// 把配置里的手工飞牛令牌注入运行时（非空时优先于环境变量与数据库）。
 	// 用户通过 POST /api/fnos/token 改动时会立即重新注入，不用重启。
 	fnos.SetManualToken(cfgMgr.Get().FnosToken)
+
+	// 启动即恢复「日志存储位置」（2026-10-26）：设置过的用户，落盘要跨重启持续生效。
+	// 目录失效（被删/权限变了）不拦启动 —— 内存日志照常可用，只记一条原因。
+	if dir := cfgMgr.Get().LogDir; dir != "" {
+		if err := applog.EnableFile(dir); err != nil {
+			log.Printf("[applog] 日志落盘目录不可用，继续只写内存: %v", err)
+		}
+	}
 
 	// 注入调度：发现走「浏览器上报」，下载复用既有下载器
 	mHandler.SetDispatcher(&monitorDispatcher{srv: s})
@@ -413,8 +428,9 @@ func (s *Server) handleUIPrefs(w http.ResponseWriter, r *http.Request) {
 // GET    /api/logs?limit=200   读取最近若干条
 // DELETE /api/logs             清空
 //
-// 日志只存内存（见 pkg/applog），重启即清空 —— 不落盘，
-// 避免日志里可能出现的路径与令牌长期留在 NAS 磁盘上。
+// 日志默认只存内存（见 pkg/applog），重启即清空 —— 默认不落盘，
+// 避免日志里可能出现的路径与令牌长期留在 NAS 磁盘上；
+// 用户设置过「日志存储位置」时另有一份落盘副本（见 handleLogsConfig 与 sink.go）。
 func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	switch r.Method {
@@ -433,13 +449,17 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		entries := applog.Default().Recent(limit)
+		// log_file：落盘文件路径，空 = 用户没设置「日志存储位置」（默认只存内存）。
+		// 跟 /api/logs/config 的字段同名同义；hint 保持原口径不变 ——
+		// 页脚的「同时落盘到 …」由前端自己拼（LogViewer.vue 里已有该分支），这里不再重复。
 		writeJSON(w, http.StatusOK, map[string]interface{}{
 			"code": 200, "message": "ok",
 			"data": map[string]interface{}{
-				"entries": entries,
-				"count":   len(entries),
-				"total":   applog.Default().Len(),
-				"hint":    "日志只保留在内存里，重启应用即清空。",
+				"entries":  entries,
+				"count":    len(entries),
+				"total":    applog.Default().Len(),
+				"log_file": applog.FilePath(),
+				"hint":     "日志只保留在内存里，重启应用即清空。",
 			},
 		})
 	case http.MethodDelete:
@@ -464,6 +484,58 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 		}
 		applog.Default().AddFrom(req.Source, req.Level, req.Message)
 		writeJSON(w, http.StatusOK, map[string]interface{}{"code": 200, "message": "ok"})
+	default:
+		errJSON(w, http.StatusMethodNotAllowed, "Method not allowed")
+	}
+}
+
+// handleLogsConfig 读取 / 设置日志落盘目录（2026-10-26 用户口径：「设置增加日志存储位置」）。
+//
+// GET  /api/logs/config → { log_dir, log_file }（log_file 为当前实际写入的文件路径）
+// POST /api/logs/config body { log_dir } —— 空串 = 关闭落盘恢复默认；传路径 = 启用并立即切换。
+// 路径校验与下载/缓存目录同一条红线（绝对路径 + NAS 存储卷内），非法返回 400 人话报错。
+// 生效失败（建不了目录/打不开文件）同样 400，但**不改动已保存的配置** —— 免得配置里
+// 留着一个实际写不进去的目录，下次启动还要再报一次错。
+func (s *Server) handleLogsConfig(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	switch r.Method {
+	case http.MethodGet:
+		cfg := s.cfgMgr.Get()
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"code": 200, "message": "ok",
+			"log_dir":  cfg.LogDir,
+			"log_file": applog.FilePath(),
+		})
+	case http.MethodPost:
+		var req struct {
+			LogDir string `json:"log_dir"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil {
+			errJSON(w, http.StatusBadRequest, "请求体不是合法 JSON")
+			return
+		}
+		dir := strings.TrimSpace(req.LogDir)
+		if dir != "" {
+			if err := downloader.ValidateNasDir(dir, "日志目录"); err != nil {
+				errJSON(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		}
+		if err := applog.EnableFile(dir); err != nil {
+			errJSON(w, http.StatusBadRequest, "日志目录无法创建（检查权限）: "+err.Error())
+			return
+		}
+		cfg := s.cfgMgr.Get()
+		cfg.LogDir = dir
+		if err := s.cfgMgr.Update(cfg); err != nil {
+			errJSON(w, http.StatusInternalServerError, "failed to update config: "+err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"code": 200, "message": "ok",
+			"log_dir":  dir,
+			"log_file": applog.FilePath(),
+		})
 	default:
 		errJSON(w, http.StatusMethodNotAllowed, "Method not allowed")
 	}

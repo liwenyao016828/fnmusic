@@ -42,6 +42,10 @@ type AppConfig struct {
 	Port          int    `json:"port"`
 	DefaultNasDir string `json:"default_nas_dir"`
 	DownloadDir   string `json:"download_dir"`
+	// LogDir 日志落盘目录（2026-10-26 用户口径：「设置增加日志存储位置」）。
+	// 空串 = 默认不落盘（见 pkg/applog 包注释）；设置后每条运行日志同时写进 <LogDir>/qulv.log，
+	// 启动时由 NewServer 恢复生效。校验走 downloader.ValidateNasDir（绝对路径 + NAS 存储卷内）。
+	LogDir string `json:"log_dir"`
 	// 注：读目录请用 LibraryDir()，不要直接读字段 —— 空值时它要回退 DefaultNasDir，
 	// 两处各写一份回退逻辑迟早会漂（下载器就踩过：显示 /vol1/Music、实际写别处）。
 	ActiveSourceID string `json:"active_source_id"`

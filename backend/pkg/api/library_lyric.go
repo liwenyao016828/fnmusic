@@ -90,9 +90,9 @@ func (s *Server) HandleLibraryLyricGaps(w http.ResponseWriter, r *http.Request) 
 		errJSON(w, http.StatusBadRequest, "请求格式有误: "+err.Error())
 		return
 	}
-	dir := strings.TrimSpace(req.Dir)
+	dir := s.libraryDirOrDefault(req.Dir)
 	if dir == "" {
-		errJSON(w, http.StatusBadRequest, "请提供 dir")
+		errJSON(w, http.StatusBadRequest, "请提供 dir（当前没有配置曲库目录）")
 		return
 	}
 	resolved, err := resolveLibraryPath(dir)

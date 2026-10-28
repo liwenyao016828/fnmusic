@@ -16,7 +16,7 @@ import { computed, ref, watch } from 'vue'
 import { ConfigAPI, DownloadAPI, NasAPI } from '../api/client.js'
 import { qualityOverride } from './qualityOverride.js'
 import { qualityLabel, isHighestQuality } from '../engine/quality.js'
-import { logError } from './appLog.js'
+import { logError, logInfo } from './appLog.js'
 import { fail, apiError } from './userMsg.js'
 import { loadBool, savePref } from './prefs.js'
 import { backendDownload } from './backendDownload.js'
@@ -456,6 +456,8 @@ function addSong(song, activeSourceId, autoOpen = true, quality = '') {
   if (!name) return null
   if (isSongDownloading(song)) return null
   const task = makeProvisional(song, activeSourceId, quality)
+  // 操作日志：正常「加入下载队列」也留痕（2026-10-26 用户口径）；批量入口在 addBatch 记一条汇总。
+  logInfo('下载', `加入队列：《${name}》`)
   provisional.value = [...provisional.value, task]
   if (!canEnqueue.value) {
     markProvisionalFailed(task, enqueueBlockReason.value)
@@ -477,6 +479,8 @@ function addBatch(songs, activeSourceId, autoOpen = false, pickSourceFor = null)
     created.push(makeProvisional(song, sid, ''))
   }
   if (!created.length) return []
+  // 操作日志：批量只记一条汇总（N 首挤 N 条会刷穿 200 条环形缓冲）；单首入口在 addSong。
+  logInfo('下载', `批量加入队列：${created.length} 首（首曲《${created[0].name || '?'}》）`)
   provisional.value = [...provisional.value, ...created]
   if (!canEnqueue.value) {
     for (const t of created) markProvisionalFailed(t, enqueueBlockReason.value)

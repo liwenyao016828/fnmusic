@@ -150,3 +150,39 @@ func TestCatalogResponseShape(t *testing.T) {
 		t.Fatal("顶层 usage 为空")
 	}
 }
+
+// ?filter= 只保留命中的接口：AI 助手靠它从上百条里挑出某一类能力。
+func TestCatalogFilterNarrowsEndpoints(t *testing.T) {
+	fetch := func(query string) CatalogResponse {
+		rec := httptest.NewRecorder()
+		(&Server{}).HandleCatalog(rec, httptest.NewRequest(http.MethodGet, "/api/catalog"+query, nil))
+		var resp CatalogResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("响应不是合法 JSON: %v", err)
+		}
+		return resp
+	}
+
+	all := fetch("")
+	lib := fetch("?filter=library")
+	if len(lib.Endpoints) == 0 {
+		t.Fatal("filter=library 应至少命中一条")
+	}
+	if len(lib.Endpoints) >= len(all.Endpoints) {
+		t.Errorf("过滤后应变少：all=%d filtered=%d", len(all.Endpoints), len(lib.Endpoints))
+	}
+	for _, e := range lib.Endpoints {
+		hay := strings.ToLower(e.Method + " " + e.Path + " " + e.Summary + " " + e.Category)
+		if !strings.Contains(hay, "library") {
+			t.Errorf("过滤结果里混入了不相关接口：%s %s", e.Method, e.Path)
+		}
+	}
+	// 过滤不影响其它顶层字段：模型还得知道这是哪个应用、什么版本。
+	if lib.App != all.App || lib.Version != all.Version || len(lib.Guide.Workflows) == 0 {
+		t.Error("过滤时不应丢掉 app/version/guide")
+	}
+	// 不认识的词返回空清单而不是全量
+	if got := fetch("?filter=zzz-not-a-word"); len(got.Endpoints) != 0 {
+		t.Errorf("无命中时应返回空清单，实际 %d 条", len(got.Endpoints))
+	}
+}

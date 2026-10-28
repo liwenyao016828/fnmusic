@@ -88,8 +88,10 @@
           </div>
         </div>
         <p class="border-t border-gray-100 px-4 py-2 text-[11px] text-gray-400">
-          共 {{ serverTotal }} 条 · 只保留在内存里，重启应用即清空 ·
-          <span class="text-gray-500">「前端」= 网页端上报的操作报错</span>
+          共 {{ serverTotal }} 条 ·
+          <span v-if="serverLogFile" class="text-gray-500">内存副本重启即清空，同时落盘到 {{ serverLogFile }}</span>
+          <span v-else>只保留在内存里，重启应用即清空</span>
+          · <span class="text-gray-500">「前端」= 网页端上报的操作报错</span>
         </p>
       </template>
     </div>
@@ -118,7 +120,7 @@
     <!-- 操作日志（本机留存，重启不丢） -->
     <div v-else class="overflow-hidden rounded-[18px] border border-[var(--ys-border)] bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
       <p v-if="!visibleLocal.length" class="m-3 rounded-xl border border-dashed border-gray-200 bg-gray-50/50 py-12 text-center text-[12px] text-gray-400">
-        {{ onlyFailed ? '没有失败的操作记录' : '还没有操作记录 —— 界面操作一旦出错，完整信息会记在这里' }}
+        {{ onlyFailed ? '没有失败的操作记录' : '还没有操作记录 —— 播放、搜索、下载、保存设置等操作都会记在这里；出错时附带完整信息' }}
       </p>
       <template v-else>
         <div class="max-h-[620px] divide-y divide-gray-50 overflow-y-auto">
@@ -166,6 +168,8 @@ const clearArmed = ref(false)
 
 const serverEntries = ref([])
 const serverTotal = ref(0)
+// 落盘文件路径（设置里配置了「日志存储位置」时非空）——页脚提示日志同时写到了哪里
+const serverLogFile = ref('')
 const taskRuns = ref([])
 const localEntries = ref([])
 
@@ -223,8 +227,11 @@ function fmtTime(v) {
 async function loadServer() {
   try {
     const res = await LogsAPI.list(500)
-    serverEntries.value = res?.data?.entries || []
+    // 后端按时间正序返回（旧→新）。2026-10-26 用户口径：日志页「新的在左上方」
+    // —— 倒过来显示，最新的永远在第一行，不用往下滚找最后一条。
+    serverEntries.value = (res?.data?.entries || []).slice().reverse()
     serverTotal.value = res?.data?.total ?? serverEntries.value.length
+    serverLogFile.value = res?.data?.log_file || ''
   } catch (_) {
     // 后端不可用时静默：日志页本身不该再制造报错
   }

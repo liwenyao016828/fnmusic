@@ -4,8 +4,9 @@
 // 只能 SSH 上去翻文件，对用户和其他接手项目的 AI 都很不方便。
 // 这里保留最近若干条，通过 GET /api/logs 提供，网页端「日志」页直接渲染。
 //
-// 只放内存、不落盘：重启即清空。这样既不会撑爆 NAS 磁盘，
+// 只放内存、默认不落盘：重启即清空。这样既不会撑爆 NAS 磁盘，
 // 也不会把日志里可能出现的路径、令牌长期留在盘上。
+// 用户在设置里明确配置了「日志存储位置」才额外落盘一份（见 sink.go），关掉即恢复默认。
 //
 // 前端错误经 POST /api/logs 上报（见 AddFrom），与后端日志汇到同一个缓冲区 ——
 // 排查一次操作失败时，服务端和浏览器两侧的信息在同一个时间轴上。
@@ -83,11 +84,15 @@ func (b *Buffer) Write(p []byte) (int, error) {
 
 // Add 追加一条日志
 func (b *Buffer) Add(message string) {
+	now := time.Now()
+	level := levelOf(message)
+	msg := logTimePrefix.ReplaceAllString(message, "")
+	sink.write(now, level, SourceBackend, msg) // 落盘副本（未配置目录时是空操作，见 sink.go）
 	b.push(Entry{
-		At:      time.Now().Format("15:04:05"),
-		Level:   levelOf(message),
+		At:      now.Format("15:04:05"),
+		Level:   level,
 		Source:  SourceBackend,
-		Message: logTimePrefix.ReplaceAllString(message, ""),
+		Message: msg,
 	})
 }
 
@@ -109,8 +114,10 @@ func (b *Buffer) AddFrom(source, level, message string) {
 	if r := []rune(msg); len(r) > maxMessageRunes {
 		msg = string(r[:maxMessageRunes]) + "…"
 	}
+	now := time.Now()
+	sink.write(now, level, source, msg) // 落盘副本（未配置目录时是空操作，见 sink.go）
 	b.push(Entry{
-		At:      time.Now().Format("15:04:05"),
+		At:      now.Format("15:04:05"),
 		Level:   level,
 		Source:  source,
 		Message: msg,

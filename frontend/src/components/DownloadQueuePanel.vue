@@ -876,21 +876,27 @@ const currentFilterName = computed(() => {
 
 const filteredTasks = computed(() => {
   const list = downloadManager.tasks.value
+  // 2026-10-26 用户口径：下载队列「新的在最上方」。tasks 仍保持后端到达顺序
+  // （那才是实际执行顺序，别动），这里只改**显示**排序：按加入时间倒序，
+  // 同批加入（addedAt 相同）的保持原相对顺序 —— 整单批量下载不会乱跳。
+  const order = list.map((t, i) => ({ t, i }))
+    .sort((a, b) => ((b.t.addedAt || 0) - (a.t.addedAt || 0)) || (a.i - b.i))
+    .map((x) => x.t)
   if (currentFilter.value === 'downloading') {
-    return list.filter(t => t.status === 'pending' || t.status === 'downloading')
+    return order.filter(t => t.status === 'pending' || t.status === 'downloading')
   }
   if (currentFilter.value === 'paused') {
-    return list.filter(t => t.status === 'paused')
+    return order.filter(t => t.status === 'paused')
   }
   if (currentFilter.value === 'stopped') {
-    return list.filter(t => t.status === 'stopped')
+    return order.filter(t => t.status === 'stopped')
   }
   if (currentFilter.value === 'completed') {
-    return list.filter(t => t.status === 'success')
+    return order.filter(t => t.status === 'success')
   }
   if (currentFilter.value === 'failed') {
-    return list.filter(t => t.status === 'failed')
+    return order.filter(t => t.status === 'failed')
   }
-  return list
+  return order
 })
 </script>
