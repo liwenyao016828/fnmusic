@@ -79,9 +79,13 @@
           <!-- 纯装饰光效层：沿用 modelValue 的 Transition 激活/关闭，不新增开关状态。
                两个圆角容器跟随弹窗尺寸，内部光斑只做小幅位移，绝不旋转外壳。 -->
           <div v-if="decorOn" class="ys-ai-aura" aria-hidden="true">
-            <div class="ys-ai-aura__wash"></div>
-            <!-- 2026-10-29 用户：「跑马灯边框太碍眼了,可以不用,就要炫彩的流光渐变」
-                 → 贴边旋转细环（.ys-ai-edge）已删除，这里只剩面板外那圈柔光。 -->
+            <!-- 2026-10-30：背景上的动态光晕（Apple Intelligence 的边框光）——
+                 面板**外面**一圈模糊的 conic 彩光，光溢到背后的遮罩/页面上；
+                 面板内部只留极窄的一圈渐隐流光（.ys-ai-veil）作为"发光边缘"。
+                 旧的 .ys-ai-aura__wash（面板内外的两团淡径向光斑）已删除。 -->
+            <div class="ys-ai-glow">
+              <div class="ys-ai-glow__hue"></div>
+            </div>
           </div>
           <!-- 边缘流光：一张静态的方向性渐变，形状由面板自己的 border-radius 裁剪。
                2026-10-29 用户：「弹出窗四个角有个白色的弧形」→ 旧版「五档矩形环带 +
@@ -520,6 +524,22 @@ const haloRef = ref(null)
  */
 let animTimer = 0
 /**
+ * ⚠️ 2026-10-30 修「ReferenceError: Cannot access uninitialized variable.」
+ *
+ * 同一个 immediate watch 里，除了 decorTimer 还读写 `decorOn`（bundle 里是 E.value）。
+ * decorOn 原先声明在 watch 之后（586 行），于是 immediate 那次同步执行
+ * 走到 `decorOn.value = false` 就踩进暂时性死区 → ReferenceError，
+ * 面板初始化整体断掉（2026-10-29 只把 decorTimer 上移，漏了 decorOn）。
+ * 与 decorTimer 一样，把声明提到 watch 之前即可。
+ */
+const decorOn = ref(false)
+/**
+ * dataTimer 同理：onUnmounted 里 clearTimeout(dataTimer)，
+ * 而声明原本在 1184 行（onUnmounted 之后）。钩子体虽在卸载时才跑，
+ * 但为了不再留同类隐患，一并上移。
+ */
+let dataTimer = 0
+/**
  * ⚠️ 2026-10-29 修「ReferenceError: Cannot access 'decorTimer' before initialization」。
  *
  * 下面这个 watch 是 `{ immediate: true }`：它在**定义的那一行就同步跑一遍**，
@@ -579,9 +599,7 @@ onUnmounted(() => {
  * ⚠️ 只影响光效，**不动任何布局**：装饰层一直是 position:absolute + pointer-events:none，
  *    在不在都撑不动尺寸，也不会拦输入。
  */
-const decorOn = ref(false)
-/* decorTimer 的声明已上移到 watch 之前（immediate 会同步执行，见那里的说明） */
-
+/* decorOn / decorTimer / dataTimer 的声明已上移到 watch 之前（immediate 会同步执行，见那里的说明） */
 // AI 配置（aiCfg.available / configured / enabled 都来自后端，别再自己猜）
 const aiCfg = ref(null)
 const models = ref([])
@@ -1177,7 +1195,6 @@ async function loadDrawerData() {
   scrollBottom()
 }
 
-let dataTimer = 0
 watch(() => props.modelValue, (open) => {
   if (!open) {
     clearTimeout(dataTimer)

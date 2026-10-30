@@ -809,7 +809,10 @@ html.ys-app-idle .ys-ai-star-sub {
                           从背景里"浮"出来，而不是发光发热。
    彩色部分由 .ys-ai-veil 那层「从边框向内渐隐」的方向性渐变承担。
    ⚠️ 2026-10-29 用户「跑马灯边框太碍眼了,可以不用,就要炫彩的流光渐变」：
-     贴边旋转细环（.ys-ai-edge）整条删除，只留渐隐流光。 */
+     贴边旋转细环（.ys-ai-edge）整条删除，只留渐隐流光。
+   ⚠️ 2026-10-30 用户：「修复 ai 的动态光晕效果，现在怎么在背景上，做成苹果 ai 的
+     边框效果」→ 光晕改成落在**面板外的背景上**：.ys-ai-glow（模糊 conic 彩光，
+     在玻璃之下、溢到背后的遮罩上），旧的 .ys-ai-aura__wash 已删除。 */
 
 .ys-ai-halo {
   /* 高度规则不可删：它优先于 Tailwind utilities，手机端靠 --ys-ai-vh 跟随键盘。
@@ -841,16 +844,49 @@ html.ys-app-idle .ys-ai-star-sub {
   pointer-events: none;
 }
 
-/* 外晕：一层极淡的径向柔光，只在面板边缘附近，给"玻璃浮起来"的感觉。 */
-.ys-ai-aura__wash {
+/* ── 背景上的动态光晕（2026-10-30 重做：Apple Intelligence 的边框光）──────────
+   用户口径：「修复 ai 的动态光晕效果，现在怎么在背景上，做成苹果 ai 的边框效果」
+   → 光晕不再糊在面板**内部**当一层渐变，而是跑到**面板外面、落在背景上**：
+     面板像一块被彩色光包边的玻璃，光从它的边缘溢出到背后的遮罩/页面上。
+
+   结构（两层，避免 filter 互相覆盖）：
+     .ys-ai-glow        外层：inset:-32px（比面板大一圈），负责 blur + 呼吸；
+       .ys-ai-glow__hue  内层：真正的 conic 彩色，负责 hue-rotate 缓慢漂移。
+   ⚠️ 为什么必须分两层：blur 和 hue-rotate 都是 filter 属性，写在同一个元素上时，
+      动画的 filter 会**整体覆盖**静态的 blur（动画期间 blur 消失 → 光晕变硬、边界突兀）。
+      拆成父子两层各自动各自的 filter，就不会互相吃掉。
+   ⚠️ 形状用「圆角矩形 + blur」而不是「直角矩形 + blur」：圆角矩形的角本来就是圆角，
+      blur 之后仍是同一个圆心，不会出现旧版那种「四角各浮出一段白弧」。
+   ⚠️ 这一层 z-index 0（玻璃是 2、veil 是 3），所以它的中心被面板遮住、
+      只有四边溢到背景上 —— 正是「光在背景上」的效果。
+   ⚠️ overflow:hidden 的圆角 + 溢出的彩色在 mask 之外不裁剪（blur 会自然收边），
+      但为避免外扩部分溢出屏幕，容器宽度已在 .ys-ai-halo 上限制，这里不再裁。 */
+.ys-ai-glow {
   position: absolute;
-  inset: -6px;
+  /* 只比面板外扩 14px：外扩太多时模糊光会漫到半个屏幕（实测 -32px/blur22 时整页都被
+     彩色糊住了），14px + blur18 刚好是「边框外一圈光」的观感。 */
+  inset: -14px;
+  z-index: 0;
+  /* 圆角跟着外壳走：外壳 26px + 外扩 14px ≈ 40px */
+  border-radius: 40px;
+  pointer-events: none;
+  filter: blur(18px) saturate(1.05);
+  opacity: 0.45;
+  will-change: opacity;
+  animation: ys-ai-glow-breathe 5.4s ease-in-out infinite;
+}
+.ys-ai-glow__hue {
+  position: absolute;
+  inset: 0;
   border-radius: inherit;
-  background:
-    radial-gradient(120% 60% at 50% -10%, rgb(56 189 248 / 0.22), transparent 60%),
-    radial-gradient(120% 60% at 50% 110%, rgb(168 85 247 / 0.18), transparent 60%);
-  filter: blur(10px);
-  opacity: 0.55;
+  background: conic-gradient(from 210deg,
+    #3b82f6, #8b5cf6, #ec4899, #f97316, #22d3ee, #3b82f6);
+  filter: hue-rotate(0deg);
+  animation: ys-ai-veil-hue 11s linear infinite;
+}
+@keyframes ys-ai-glow-breathe {
+  0%, 100% { opacity: 0.34; }
+  50% { opacity: 0.58; }
 }
 
 /* ── 2026-10-29 用户：「跑马灯边框太碍眼了,可以不用,就要炫彩的流光渐变」──
@@ -957,15 +993,26 @@ html.ys-app-idle .ys-ai-star-sub {
      得到一圈「内缩渐隐」的柔和边带：靠边满色、向内 26% 处淡出为透明，
      形状被 border-radius 裁成面板自己的圆角 —— 四角天然是面板的角，不会多出第二段弧。
      ──────────────────────────────────────────────────────────── */
+  /* ── 2026-10-30 改：靠边**立刻**是满彩，向内 12px 处淡出 ──────────────
+     旧写法是 `transparent 0% → #000 13%`：面板最外那一圈是**透明**的，颜色从
+     13% 处才开始出现 —— 所以看起来是「边框没有颜色，只有一圈淡淡的彩色雾」，
+     完全不像 Apple 那种「边框本身是彩色的、光从边框往外溢」。
+     现在改成：0 处直接 #000（满彩）→ 向内 12px 淡出为透明，
+     于是**边框线本身**就是一条彩色的亮边，向内快速隐去；再配合 .ys-ai-glow
+     那层落在背景上的模糊彩光，就得到「Apple AI 边框」的整体观感：
+       面板内沿 = 一圈清晰的彩色亮边
+       面板外沿 = 光晕溢到背景上
+     ⚠️ 用 px 而不是 %：百分比是相对面板宽/高算的，720px 宽的面板 13% ≈ 94px，
+        渐隐带会一直漫到面板中央（实测整块面板被染成彩色）。12px 才是「一条边」。 */
   -webkit-mask:
-    linear-gradient(to right, transparent 0%, #000 13%, #000 87%, transparent 100%),
-    linear-gradient(to bottom, transparent 0%, #000 13%, #000 87%, transparent 100%);
+    linear-gradient(to right, #000 0, #000 1px, transparent 12px, transparent calc(100% - 12px), #000 calc(100% - 1px), #000 100%),
+    linear-gradient(to bottom, #000 0, #000 1px, transparent 12px, transparent calc(100% - 12px), #000 calc(100% - 1px), #000 100%);
   -webkit-mask-composite: source-in;
           mask:
-    linear-gradient(to right, transparent 0%, #000 13%, #000 87%, transparent 100%),
-    linear-gradient(to bottom, transparent 0%, #000 13%, #000 87%, transparent 100%);
+    linear-gradient(to right, #000 0, #000 1px, transparent 12px, transparent calc(100% - 12px), #000 calc(100% - 1px), #000 100%),
+    linear-gradient(to bottom, #000 0, #000 1px, transparent 12px, transparent calc(100% - 12px), #000 calc(100% - 1px), #000 100%);
           mask-composite: intersect;
-  opacity: 0.9;
+  opacity: 0.85;
 }
 
 /* 色相缓慢漂移 = 光在呼吸着变色。合成阶段完成，不触发重绘/重光栅化。 */
@@ -1058,8 +1105,12 @@ html.ys-app-idle .ys-ai-star-sub {
 @media (prefers-reduced-motion: reduce) {
   .ys-ai-aura,
   .ys-ai-veil { animation: none !important; filter: none !important; }
+  /* ⚠️ .ys-ai-glow 自身**不能**进上面那条 filter:none —— 它的 blur 就是光晕本体，
+     去掉了就变成一坨生硬的彩色方块。这里只停掉动画，blur 保留。 */
+  .ys-ai-glow { animation: none !important; }
+  .ys-ai-glow__hue { animation: none !important; }
   .ys-ai-aura { opacity: 0.6; }
-  .ys-ai-aura__wash { opacity: 0.35; }
+  .ys-ai-glow { opacity: 0.5; }
   .ys-ai-veil { opacity: 0.7; }
 }
 

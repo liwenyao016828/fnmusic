@@ -3,6 +3,7 @@ package tidy
 import (
 	"crypto/sha1"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"fn-lx-player/pkg/namefmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 
 	"fn-lx-player/pkg/match"
 )
@@ -385,10 +387,72 @@ func moveToTrash(src, trashDir string) (string, error) {
 		}
 	}
 
-	if err := os.Rename(src, dst); err != nil {
+	if err := renameOrCopy(src, dst); err != nil {
 		return "", err
 	}
 	return dst, nil
+}
+
+// renameOrCopy 优先用 rename（快、原子），失败则退化为「复制 + 删除」。
+//
+// 为什么要退化：飞牛 NAS 上一个卷里可能挂多个子卷（例如 /vol3 本身是卷根，
+// 而 /vol3/1000 是独立子卷）。回收站目录由 joinTrash 挑「最深的允许根」，
+// 常见结果是 <卷根>/.tidy_trash，而源文件在 <卷根>/<共享目录>/… 子卷里 ——
+// 跨子卷的 os.Rename 会直接返回 EXDEV（invalid cross-device link）。
+// 2026-10-30 用户在 NAS 上删 NAS 文件时命中这个 500。
+//
+// 退化路径：复制到 dst 的临时文件 → rename 到 dst（同目录内必然同设备）→
+// 再删源文件。任何一步失败都回滚（删掉临时文件），不会留下半个文件。
+func renameOrCopy(src, dst string) error {
+	err := os.Rename(src, dst)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, syscall.EXDEV) && !isCrossDeviceErr(err) {
+		return err
+	}
+
+	srcInfo, statErr := os.Stat(src)
+	if statErr != nil {
+		return statErr
+	}
+	in, openErr := os.Open(src)
+	if openErr != nil {
+		return openErr
+	}
+	defer in.Close()
+
+	tmp := dst + ".xdev.tmp"
+	out, createErr := os.Create(tmp)
+	if createErr != nil {
+		return createErr
+	}
+	if _, cpErr := io.Copy(out, in); cpErr != nil {
+		out.Close()
+		_ = os.Remove(tmp)
+		return cpErr
+	}
+	if closeErr := out.Close(); closeErr != nil {
+		_ = os.Remove(tmp)
+		return closeErr
+	}
+	if srcInfo.Mode().Perm() != 0 {
+		_ = os.Chmod(tmp, srcInfo.Mode().Perm())
+	}
+	if renameErr := os.Rename(tmp, dst); renameErr != nil {
+		_ = os.Remove(tmp)
+		return renameErr
+	}
+	if rmErr := os.Remove(src); rmErr != nil {
+		// 源删不掉：回收站里多了一份，但宁可留下副本也不丢数据
+		return fmt.Errorf("跨卷移动：已复制到 %s，但源文件删除失败：%w", dst, rmErr)
+	}
+	return nil
+}
+
+// isCrossDeviceErr 兜底判断跨设备错误（部分平台 syscall.EXDEV 不可直接用时）。
+func isCrossDeviceErr(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "cross-device")
 }
 
 // moveSidecars 把与音频同名的附属文件一起移入回收站
