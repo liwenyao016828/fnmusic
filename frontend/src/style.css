@@ -3,22 +3,39 @@
 @tailwind utilities;
 
 /* ============================================================================
-   曲率 · 全局视觉地基（v2.11.0 视觉重构）
+   曲率 · 全局视觉地基（v2.28.0 视觉重构）
 
-   方向：**Quiet Glass / 安静玻璃** —— Apple 系统级的克制，不是「加更多效果」。
+   方向：**fnOS / 飞牛管理台** —— 与宿主系统同源的中性工程感。
+
+   2026-10-29 用户口径：「参考这些飞牛截图的设计语言（色彩、留白、圆角、阴影），
+   重构我的曲率的界面。」
+
+   那一轮之前的方向是「Quiet Glass / 安静玻璃」（Apple 系统级的柔光感），
+   问题不是不好看，而是**跟飞牛 OS 放在一起像两个产品**：曲率是冷灰 + 青玉绿 +
+   大扩散阴影，飞牛是中性灰 + 钴蓝 + 几乎无阴影。用户直接给了 4 张截图当基准。
 
    这一层只做三件事，其余全交给 tailwind.config.js 的色阶/圆角/阴影：
      1. 令牌：颜色语义、层级、动效曲线只在这里定义一次（组件里不再写死十六进制）；
      2. 基础层：字体、滚动条、选区、聚焦环、表单控件；
-     3. 动效原语：入场 / 按压 / 悬停抬升 / 数字等宽 —— 全站共用同一套曲线。
+     3. 动效原语：入场 / 按压 / 悬停 —— 全站共用同一套曲线。
 
-   ⚠️ 三条口径（改之前先读）：
-     · 强调色只有翡翠绿一支，**只用于**主按钮、选中态、状态点、聚焦环；
-       大面积填绿会让界面像「后台模板」，这是本次重构要治的病。
-     · 深度靠「1px 发丝线 + 极淡大扩散阴影」，不靠粗边框和色块。
+   ⚠️ 四条口径（改之前先读）：
+     · 强调色只有钴蓝一支 #0066FF，**只用于**主按钮、选中态、开关、聚焦环；
+       大面积铺蓝会让界面像「后台模板」的蓝色版，这跟以前大面积铺绿是同一个病。
+     · 层次靠「中性灰框架层 vs 纯白画布层」的**明度差**建立（F3F3F3 / FFFFFF），
+       不靠阴影。飞牛全站几乎没有阴影 —— 这条是最容易被后来人改坏的一条。
+     · 结构线用**不透明**的 #E1E1E1 / #D8D8D8，不再用 rgba 发丝线
+       （rgba 叠在不同底色上会变灰，飞牛那种「工程精度」要的是恒定的一条线）。
      · 所有动效都要能吃 `prefers-reduced-motion`。
 
    移动端基础层（动态视口 / 安全区 / 触屏手感）见下方独立段落，未改动行为。
+
+   ⚠️ 兼容别名（v2.28.0 新增，别删）：
+     --ys-text2 / --ys-brand / --ys-bg / --ys-bg-soft 这 4 个变量在 `frontend/src/`
+     里被引用了 40+ 处（主要在 TrackRepairCard / TidyView / QualityView），
+     但**从来没有在任何地方定义过** —— 所以它们一直是 `invalid`，浏览器直接丢弃那条声明
+     （表现为「设置了的颜色/背景没生效」，肉眼很难发现）。
+     这里补上定义，一次性修掉这批「隐形失效」。
    ============================================================================ */
 
 :root {
@@ -27,64 +44,213 @@
   --safe-left: env(safe-area-inset-left, 0px);
   --safe-right: env(safe-area-inset-right, 0px);
 
-  /* ── 亮色表面 ──────────────────────────────────────────────────────────
-     画布 #F5F5F7 与卡片纯白之间只差 5% 明度：层次靠 1px 发丝线建立，
-     不用阴影堆叠（阴影一多就「脏」）。 */
-  --ys-canvas: #f5f5f7;
+  /* ── 表面（飞牛三层模型）──────────────────────────────────────────────
+     这是整套设计语言最核心的一条：飞牛**不用「白卡叠灰底」**，
+     而是「灰色框架 + 白色画布」的横向分区。
+       · chrome（F3F3F3）＝ 侧栏 / 顶栏 / 页面最外层；占画面约 20%
+       · canvas（FFFFFF）＝ 内容区；占画面约 74%
+       · sunken（FAFAFA）＝ 列表行、只读块、卡内凹陷区
+       · control（ECECEC）＝ 次级按钮底、分段器槽
+     别把 canvas 和 chrome 反过来用 —— 反了就成了「灰色卡片浮在白底上」，
+     那是完全另一种（也更廉价的）视觉。 */
+  --ys-chrome: #f3f3f3;
+  --ys-canvas: #ffffff;
   --ys-surface: #ffffff;
-  --ys-surface-sunken: #f0f0f3;   /* 分段器底、只读块、卡内凹陷区 */
-  --ys-surface-2: #fafafc;        /* 需要比画布再浅一点的内层 */
-  --ys-surface-glass: rgb(250 250 252 / 0.72); /* 顶栏 / 抽屉：磨砂白 */
-  --ys-border: rgb(0 0 0 / 0.07);  /* 发丝线：白底上唯一的分隔手段 */
-  --ys-border-strong: rgb(0 0 0 / 0.12);
+  --ys-surface-sunken: #fafafa;
+  --ys-surface-control: #ececec;
+  --ys-surface-hover: #f5f5f5;
+  /*
+    顶栏磨砂。飞牛的顶栏其实是**不透明**的 #F3F3F3（它没有 backdrop-blur）。
+    这里保留 0.98 的近不透明：截图色阶验证发现 0.86 叠白底会算出 #F5F5F5，
+    和 chrome 色 #F3F3F3 形成肉眼可见的断层 —— 飞牛要的是框架层完全同色。
+    磨砂效果主要来自 backdrop-blur 本身，不透明度差这 0.12 无感。
+  */
+  --ys-surface-glass: rgb(243 243 243 / 0.98);
 
-  /* ── 文字 ──────────────────────────────────────────────────────────────
-     Apple 的三级灰：正文近黑、次要中灰、辅助浅灰。三级之外不要再造第四级。 */
-  --ys-text: #1d1d1f;
-  --ys-text-muted: #6e6e73;
-  --ys-text-faint: #aeaeb2;
+  /* 结构线：不透明。E1E1E1 是分隔/描边，D8D8D8 是控件描边，C9C9C9 是强描边。 */
+  --ys-line: #e1e1e1;
+  --ys-line-control: #d8d8d8;
+  --ys-line-strong: #c9c9c9;
+  --ys-border: var(--ys-line);          /* 兼容旧名（175 处引用） */
+  /* 2026-10-29：--ys-border-strong 之前指向 --ys-line-control(#D8D8D8)。
+     它的消费者全是「默认边框 → hover 加深」（DownloadQueuePanel / LibraryHealthCard /
+     AppSettings），hover 必须比默认线**更深**才有反馈，所以要落 --ys-line-strong(#C9C9C9)。 */
+  --ys-border-strong: var(--ys-line-strong);
 
-  /* ── 强调色（品牌青玉）────────────────────────────────────────────────
-     500 压白字 4.7:1（AA），600 压白底 5.3:1，400 只给深色玻璃用。 */
-  --ys-accent: #0b8a66;
-  --ys-accent-hover: #0a7a5b;
-  --ys-accent-soft: rgb(11 138 102 / 0.08);
-  --ys-accent-ring: rgb(11 138 102 / 0.28);
+  /* ── 文字（飞牛四档灰）────────────────────────────────────────────────
+     主文字不是纯黑（0B0B0C ≈ 97% 黑），次文字 454546，辅助 858585，占位 C2C2C2。
+     四档之外不要再造第五级。 */
+  --ys-text: #0b0b0c;
+  --ys-text-secondary: #454546;
+  --ys-text-muted: #454546;
+  --ys-text-aux: #858585;
+  --ys-text-faint: #858585;
+  --ys-text-placeholder: #c2c2c2;
 
-  /* ── 形状与阴影 ──────────────────────────────────────────────────────── */
-  --ys-radius-card: 18px;
-  --ys-radius-control: 10px;
-  --ys-shadow-1: 0 1px 2px rgb(0 0 0 / 0.04), 0 1px 1px rgb(0 0 0 / 0.03);
-  --ys-shadow-2: 0 4px 16px rgb(0 0 0 / 0.06);
-  --ys-shadow-3: 0 18px 48px rgb(0 0 0 / 0.12);
+  /* ── 强调色（主题色；默认 = 飞牛钴蓝）────────────────────────────────
+     600 是唯一的实心色（白字 6.4:1，AA）；700 用于悬停；
+     500/400 是深色底上的图标色；100 是提示条底（截图里占 2.85%）。
 
-  /* ── 动效 ──────────────────────────────────────────────────────────────
-     160ms 用于颜色/描边这类「不移动」的变化；260ms 用于位移；360ms 用于面板进出。
-     曲线「快出慢收」，与 Apple 的 spring 手感同源。 */
-  --ys-ease: cubic-bezier(0.32, 0.72, 0, 1);
-  --ys-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+     ⚠️ 2026-10-29 加主题色后，这一族改成「色阶变量 + data-theme 覆盖」：
+     默认值（飞牛蓝）写在 :root，四套主题（蓝 / 青玉绿 / 樱粉 / 石墨灰）
+     写在下方的 `html[data-theme=...]` 段。切主题 = 改 html 的 data-theme，
+     全站按钮、图标、描边、进度条一起变 —— 一个组件都不用碰。
+
+     存的是**空格分隔的 RGB 三元组**（不是 #hex）：Tailwind 的
+     `rgb(var(--x) / <alpha-value>)` 必须用这种形式才能支持透明度修饰
+     （bg-emerald-500/40、ring-emerald-500/20 这类，全站 20 多处）。 */
+  --ys-accent-50-rgb: 239 245 255;  /* #EFF5FF 极淡底 */
+  --ys-accent-100-rgb: 224 236 255; /* #E0ECFF 提示条底 */
+  --ys-accent-200-rgb: 194 217 255; /* #C2D9FF 淡描边 */
+  --ys-accent-300-rgb: 143 184 255; /* #8FB8FF */
+  --ys-accent-400-rgb: 61 139 255;  /* #3D8BFF 深色底上的图标 */
+  --ys-accent-500-rgb: 0 102 255;   /* #0066FF 主强调色 */
+  --ys-accent-600-rgb: 0 85 212;    /* #0055D4 实心按钮（白字 AA） */
+  --ys-accent-700-rgb: 0 71 176;    /* #0047B0 悬停 */
+  --ys-accent-800-rgb: 0 58 143;    /* #003A8F */
+  --ys-accent-900-rgb: 0 46 114;    /* #002E72 */
+
+  --ys-accent: rgb(var(--ys-accent-500-rgb));
+  --ys-accent-strong: rgb(var(--ys-accent-600-rgb));
+  --ys-accent-hover: rgb(var(--ys-accent-600-rgb));
+  --ys-accent-bright: rgb(var(--ys-accent-400-rgb));  /* 深色面上用 */
+  --ys-accent-soft: rgb(var(--ys-accent-100-rgb));
+  --ys-accent-ring: rgb(var(--ys-accent-500-rgb) / 0.30);
+  --ys-accent-rgb: var(--ys-accent-500-rgb);         /* 需要裸三元组时用 */
+
+  /* ── 状态色（飞牛系统色）────────────────────────────────────────────── */
+  --ys-ok: #22c55e;
+  --ys-warn: #ff9f0a;
+  --ys-danger: #e5484d;
+  --ys-info: var(--ys-accent);
+
+  /* ── 形状与阴影（飞牛尺度）────────────────────────────────────────────
+     阴影只有四档语义，且都极淡 —— 飞牛的「立体感」主要来自浮起时的这一层。 */
+  --ys-radius-control: 8px;   /* 按钮、输入框 */
+  --ys-radius-block: 12px;    /* 区块、卡片 */
+  --ys-radius-overlay: 16px;  /* 弹窗、抽屉 */
+  --ys-radius-card: var(--ys-radius-block);
+  --ys-shadow-1: 0 1px 3px rgb(0 0 0 / 0.08);   /* 选中项浮起 */
+  --ys-shadow-2: 0 2px 8px rgb(0 0 0 / 0.07);   /* 悬停抬升 */
+  --ys-shadow-3: 0 8px 24px rgb(0 0 0 / 0.10);  /* 弹窗 */
+  --ys-shadow-4: 0 16px 40px rgb(0 0 0 / 0.12); /* 抽屉/浮层 */
+
+  /* ── 动效（飞牛手感：比 Apple 更「工具」）─────────────────────────────
+     160ms 调色 / 200ms 位移 / 280ms 面板进出。曲线是标准 Material 缓动。 */
+  --ys-ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --ys-ease-out: cubic-bezier(0.4, 0, 0.2, 1);
   --ys-dur-1: 160ms;
-  --ys-dur-2: 260ms;
-  --ys-dur-3: 360ms;
+  --ys-dur-2: 200ms;
+  --ys-dur-3: 280ms;
 
-  /* ── 字号（组件里用任意值消费，这里只记口径）────────────────────────── */
-  --ys-fs-display: 29px;  /* 页面主标题 */
-  --ys-fs-title: 15px;    /* 卡片标题 */
+  /* ── 字号与行高（飞牛实测口径）────────────────────────────────────────
+     飞牛界面整体比 Apple 风更「密」：正文 13px，标题 15px，辅助 12px。
+     行高给 1.5 —— 中文 13px 时 1.4 会显得挤。 */
+  --ys-fs-display: 22px;  /* 页面主标题（飞牛大标题比 Apple 小一档） */
+  --ys-fs-title: 15px;    /* 区块标题 */
   --ys-fs-body: 13px;     /* 正文 */
-  --ys-fs-caption: 11px;  /* 说明 */
-  --ys-fs-toast: 12px;
+  --ys-fs-caption: 12px;  /* 说明 */
+  --ys-fs-toast: 13px;
+  --ys-lh-body: 1.5;
 
-  /* ── 瞬时提示：统一深色玻璃 + 彩色图标（颜色不再整块铺底）────────────── */
-  --ys-toast-bg: rgb(24 24 26 / 0.9);
-  --ys-toast-info: #5a9cff;
-  --ys-toast-ok: #34c759;
-  --ys-toast-warn: #ff9f2e;
-  --ys-toast-fail: #ff5a4e;
+  /* ── 间距节奏（飞牛留白）──────────────────────────────────────────────
+     区块之间 24px，区块内 16px，行之间 12px，控件之间 8px。
+     写成变量是为了让「留白」也成为可审查的常量，而不是每个组件随意 p-3/p-4。 */
+  --ys-gap-section: 24px;
+  --ys-gap-block: 16px;
+  --ys-gap-row: 12px;
+  --ys-gap-control: 8px;
+
+  /* ── 瞬时提示：飞牛用白底 + 深色字 + 一条彩色图标（不再是深色玻璃）── */
+  --ys-toast-bg: #ffffff;
+  --ys-toast-info: var(--ys-info);
+  --ys-toast-ok: var(--ys-ok);
+  --ys-toast-warn: var(--ys-warn);
+  --ys-toast-fail: var(--ys-danger);
+
+  /* ── 旧别名补齐（见文件头说明：这 4 个以前被引用但从未定义）────────── */
+  --ys-text2: var(--ys-text-muted);        /* 124 行 TrackRepairCard 等处的「次要文字」 */
+  --ys-brand: var(--ys-accent);            /* 8 处「品牌色」 */
+  --ys-bg: var(--ys-surface-sunken);       /* 7 处「浅底」 */
+  --ys-bg-soft: var(--ys-surface-sunken);  /* 7 处「浅底」 */
 
   /* 手机底部标签栏占位高度（2026-10-17 导航框架重做）：
      桌面 0；触屏 = 56px 标签栏 + 底部安全区。
      PlayerBar / FeedbackHost / 页面底部留白（PageShell、SearchView）都按它避让。 */
   --dock-h: 0px;
+}
+
+/* ============================================================================
+   主题色（2026-10-29）
+
+   四套：蓝（默认，飞牛钴蓝）/ 青玉绿（改版前的旧品牌色）/ 樱粉 / 石墨灰。
+   切主题只改 html 的 data-theme 属性，全站按钮、图标、描边、进度条、选中态
+   一起跟着变 —— 因为它们全都引用 --ys-accent-* 这一族变量。
+
+   ⚠️ 命名不是「颜色名」，是「层级名」：
+      100 = 提示条底 / 选中行底，500 = 主强调色（图标、深底上的文字），
+      600 = 唯一允许配白字的实心色（AA），700 = 悬停。
+      任何一套主题都必须同时给全 10 阶，缺哪一阶哪一阶就沿用默认蓝。
+
+   灰主题的特殊处理：石墨灰本身是中性色，和 --ys-text 的灰阶会糊在一起，
+   所以灰主题的 500 往深里走一档（#737373），选中行底用 100（#F0F0F0）而不是
+   蓝/粉那种淡彩 —— 保证「选中」在任何主题下都读得出来。
+   ============================================================================ */
+
+/* 蓝（默认）已在上面的 :root 定义，这里只显式声明，方便看全四套的结构 */
+html[data-theme='blue'] {
+  --ys-accent-50-rgb: 239 245 255;
+  --ys-accent-100-rgb: 224 236 255;
+  --ys-accent-200-rgb: 194 217 255;
+  --ys-accent-300-rgb: 143 184 255;
+  --ys-accent-400-rgb: 61 139 255;
+  --ys-accent-500-rgb: 0 102 255;
+  --ys-accent-600-rgb: 0 85 212;
+  --ys-accent-700-rgb: 0 71 176;
+  --ys-accent-800-rgb: 0 58 143;
+  --ys-accent-900-rgb: 0 46 114;
+}
+
+/* 青玉绿：改版前的旧品牌色（#0B8A66），用户点名要保留 */
+html[data-theme='green'] {
+  --ys-accent-50-rgb: 240 248 244;
+  --ys-accent-100-rgb: 220 240 231;
+  --ys-accent-200-rgb: 188 229 212;
+  --ys-accent-300-rgb: 127 208 181;
+  --ys-accent-400-rgb: 20 156 119;
+  --ys-accent-500-rgb: 11 138 102;
+  --ys-accent-600-rgb: 10 122 91;
+  --ys-accent-700-rgb: 8 100 80;
+  --ys-accent-800-rgb: 7 79 64;
+  --ys-accent-900-rgb: 6 63 52;
+}
+
+/* 樱粉 */
+html[data-theme='pink'] {
+  --ys-accent-50-rgb: 255 240 245;
+  --ys-accent-100-rgb: 255 224 236;
+  --ys-accent-200-rgb: 255 194 216;
+  --ys-accent-300-rgb: 255 156 190;
+  --ys-accent-400-rgb: 245 100 156;
+  --ys-accent-500-rgb: 232 56 123;
+  --ys-accent-600-rgb: 208 24 94;
+  --ys-accent-700-rgb: 172 14 78;
+  --ys-accent-800-rgb: 136 10 62;
+  --ys-accent-900-rgb: 106 7 47;
+}
+
+/* 石墨灰 */
+html[data-theme='gray'] {
+  --ys-accent-50-rgb: 250 250 250;
+  --ys-accent-100-rgb: 240 240 240;
+  --ys-accent-200-rgb: 222 222 222;
+  --ys-accent-300-rgb: 196 196 196;
+  --ys-accent-400-rgb: 154 154 154;
+  --ys-accent-500-rgb: 115 115 115;
+  --ys-accent-600-rgb: 88 88 88;
+  --ys-accent-700-rgb: 68 68 68;
+  --ys-accent-800-rgb: 48 48 48;
+  --ys-accent-900-rgb: 28 28 30;
 }
 
 /* 手机底部标签栏：只在触屏出现。判定统一用 hover:none + pointer:coarse
@@ -110,19 +276,56 @@
   .pb-dock { padding-bottom: calc(7rem + var(--dock-h)); }
 }
 
-/* 底部「灵动岛」搜索圆上的实时小绿点（正在播放时亮）：呼吸一下，别做成闪烁的信号灯。
-   只动 opacity/transform（合成器通道），减弱动效下保持常亮不跳。 */
-.island-live-dot {
-  box-shadow: 0 0 0 2px rgb(255 255 255 / 0.9);
-  animation: island-live-dot 2s ease-in-out infinite;
+/* ── 灵动岛融合态：两半合成一条胶囊，接缝处不能有断层（2026-10-28 用户口径）──
+   左半 / 右圆本来就各自带 border，靠 `gap-0` 硬贴在一起：接缝处两条 1px 线并排
+   （左半留了 border-r-0，但右圆的 border-l-0 是配 accent 色写的，融合后那段线要么
+   露出来、要么颜色跟左半不一致），两侧投影也在接缝堆成一道暗边。
+   做法：整条容器只当「画框」——自己的 border/ring/shadow 全挂在外侧，两半内部不画边。
+   · 左半：右侧两角归零、无右边框、无投影（组件里已给）。
+   · 右圆：左侧两角归零、无左边框。
+   · 焦点环（:focus-within）：左边一道弧 + 右边一道弧 + 底部一条线 —— 拼起来是一圈，
+     中间不画线，所以看不出「两块拼起来」。用 box-shadow 画，不占布局、不改圆角。 */
+.island-merged > :first-child {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
 }
-@keyframes island-live-dot {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.45; transform: scale(0.8); }
+.island-merged > :last-child {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  border-left: 0;
 }
-@media (prefers-reduced-motion: reduce) {
-  .island-live-dot { animation: none; }
+.island-merged {
+  border-radius: 9999px;
 }
+/* 融合态的整体投影：挂在容器上（两半各自 shadow-none），一圈在外侧，接缝没有暗边 */
+.island-merged:not(:focus-within) {
+  box-shadow: 0 8px 30px rgb(0 0 0 / 0.10);
+  border-radius: 9999px;
+}
+/* 输入框聚焦：整条胶囊亮一圈（与桌面搜索框同一支钴蓝），左右两半各画外侧半环 */
+.island-merged:focus-within {
+  box-shadow: 0 0 0 2px var(--ys-accent-ring), 0 8px 30px rgb(0 0 0 / 0.10);
+}
+/* 输入框自身不画任何焦点装饰（全局 @layer base 那条 search 输入框的 ring 会赢，
+   这里按控件压掉；否则用户看到的就是「聚焦框显示在输入框里」） */
+.island-search-input:focus,
+.island-search-input:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+  border: 0 !important;
+  background: transparent;
+}
+.island-search-input::-webkit-search-decoration,
+.island-search-input::-webkit-search-cancel-button,
+.island-search-input::-webkit-search-results-button {
+  -webkit-appearance: none;
+  appearance: none;
+  display: none;
+}
+
+/* 2026-10-28 移除：底部灵动岛搜索圆上的「正在播放」小绿点（用户：「取消灵动岛搜索按钮
+   的绿点」）。这颗点原本由 .island-live-dot + @keyframes island-live-dot 驱动，
+   元素已从 App.vue 摘掉，样式一并删除（别留一段没有使用者的 CSS，下次排查会误导）。 */
 
 
 @layer base {
@@ -132,26 +335,30 @@
     height: 100dvh;
   }
 
-  /* 字体渲染：SF Pro / 苹方在小字号下加抗锯齿，笔画不会糊成灰块；
-     中文正文默认 -0.01em 字距，13px 时读起来更紧致（大标题由组件自己 tracking-tight）。 */
+  /* 字体渲染：抗锯齿保留（小字号不会糊成灰块）。
+     ⚠️ 字距改为 0：飞牛不做负字距，中文 13px 上 -0.006em 会挤成一团。
+     大标题的字距由组件自己 tracking-tight 控制，不在全局压。
+     ⚠️ 底色是 --ys-chrome（灰框架层），不是画布白：内容区的白由 PageShell 铺。 */
   body {
     color: var(--ys-text);
-    background-color: var(--ys-canvas);
+    background-color: var(--ys-chrome);
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     text-rendering: optimizeLegibility;
-    letter-spacing: -0.006em;
+    letter-spacing: 0;
+    line-height: var(--ys-lh-body);
   }
 
-  /* 选中态：强调色的淡底，不用浏览器默认那抹高饱和蓝 */
+  /* 选中态：强调色（钴蓝）的淡底。飞牛本尊就是系统蓝选区。 */
   ::selection {
-    background: rgb(11 138 102 / 0.18);
+    background: var(--ys-accent-soft);
     color: var(--ys-text);
   }
 
-  /* 键盘聚焦环：只有键盘操作才出现（鼠标点击不画出焦点框） */
+  /* 键盘聚焦环：只有键盘操作才出现（鼠标点击不画出焦点框）。
+     飞牛用一条实的 2px 蓝线，不用「淡色扩散环」—— 扩散环在浅灰底上几乎看不见。 */
   :focus-visible {
-    outline: 2px solid var(--ys-accent-ring);
+    outline: 2px solid var(--ys-accent);
     outline-offset: 2px;
   }
 
@@ -176,9 +383,11 @@
 
   select:not([multiple]) {
     cursor: pointer;
-    border-radius: 0.625rem;
+    border-radius: var(--ys-radius-control);
   }
 
+  /* 输入框聚焦：飞牛是「描边变蓝」，不是「外面套一圈淡光」。
+     保留极淡的一圈 ring 作为可访问性提示，但主体靠 border 颜色。 */
   select:focus-visible,
   input[type="text"]:focus-visible,
   input[type="search"]:focus-visible,
@@ -308,7 +517,7 @@
     display: block;
     height: 100%;
     border-radius: 9999px;
-    background: #10b981;
+    background: var(--ys-accent);
     transition: width var(--ys-dur-2) var(--ys-ease);
   }
 
@@ -321,7 +530,10 @@
      使用、0 处定义），所以它们一直渲染成浏览器默认按钮 —— 白底黑字灰边框，
      跟旁边的 emerald 主按钮完全不像一套。现在统一定义在这里。
      尺寸对齐原来手抄的档位：默认 12px / px-3.5 py-1.5，`.ys-btn-sm` 是 11px。
-     `min-height` 是给移动端的（8.5 触控目标）：原来小按钮只有 ~18px 高，手指点不中。 */
+     `min-height` 是给移动端的（8.5 触控目标）：原来小按钮只有 ~18px 高，手指点不中。
+
+     v2.28.0 飞牛化：胶囊圆角（9999px）改为 8px 控件圆角 —— 飞牛的按钮**全是圆角矩形**，
+     胶囊只留给「开关 / 标签 / 状态点」。这是全局最显眼的一处「风格开关」。 */
   .ys-btn {
     display: inline-flex;
     align-items: center;
@@ -330,9 +542,9 @@
     min-height: 2rem;
     padding: 0.375rem 0.875rem;
     border: 1px solid var(--ys-border);
-    border-radius: 9999px;
+    border-radius: var(--ys-radius-control);
     background: #fff;
-    color: var(--ys-text-muted);
+    color: var(--ys-text-secondary);
     font-size: 12px;
     font-weight: 500;
     line-height: 1.25;
@@ -350,21 +562,20 @@
   }
   .ys-btn-primary {
     border-color: transparent;
-    background: #10b981; /* = emerald-500，和原来的手抄值一致 */
+    background: var(--ys-accent);
     color: #fff;
-    font-weight: 600;
-    box-shadow: 0 1px 2px rgb(11 138 102 / 0.3);
+    font-weight: 500;
   }
-  .ys-btn-primary:hover:not(:disabled) { background: #059669; }
+  .ys-btn-primary:hover:not(:disabled) { background: var(--ys-accent-hover); }
   /* 危险按钮三档（原来散着三种写法，见「七、UI 重复」）：
      danger = 实心（确认后才出现的破坏性动作）；ghost-danger = 文字型（可就地取消的动作）。 */
   .ys-btn-danger {
     border-color: transparent;
-    background: #e11d48;
+    background: var(--ys-danger);
     color: #fff;
-    font-weight: 600;
+    font-weight: 500;
   }
-  .ys-btn-danger:hover:not(:disabled) { background: #be123c; }
+  .ys-btn-danger:hover:not(:disabled) { background: #c93b40; }
   /* 纯文字按钮（次要动作，如「看词」「收起」）：没有边框没有底色，只在悬停时给一点底 */
   .ys-btn-ghost {
     border-color: transparent;
@@ -372,28 +583,29 @@
     color: var(--ys-text-muted);
   }
   .ys-btn-ghost:hover:not(:disabled) {
-    background: rgb(0 0 0 / 0.04);
+    background: var(--ys-surface-hover);
     color: var(--ys-text);
   }
   .ys-btn-ghost-danger {
     border-color: transparent;
     background: transparent;
-    color: #e11d48;
+    color: var(--ys-danger);
   }
-  .ys-btn-ghost-danger:hover:not(:disabled) { background: #fff1f2; }
+  .ys-btn-ghost-danger:hover:not(:disabled) { background: #fff1f0; }
 
-  /* 可点卡片的悬停抬升：只对鼠标设备生效（触屏没有 hover，别让它一直「浮着」） */
+  /* 可点卡片的悬停反馈：只对鼠标设备生效（触屏没有 hover，别让它一直「浮着」）。
+     v2.28.0 飞牛化：**去掉 translateY(-2px) 抬升**。
+     飞牛是桌面管理台语汇，卡片「浮起来」属于营销页/Apple 风；这里改成
+     「描边加深一档 + 底色微沉」，安静但有反馈，也不会在密集列表里晃眼。 */
   .ys-lift {
-    transition: transform var(--ys-dur-2) var(--ys-ease),
-                box-shadow var(--ys-dur-2) var(--ys-ease),
+    transition: box-shadow var(--ys-dur-2) var(--ys-ease),
                 border-color var(--ys-dur-1) linear,
                 background-color var(--ys-dur-1) linear;
   }
   @media (hover: hover) and (pointer: fine) {
     .ys-lift:hover {
-      transform: translateY(-2px);
-      box-shadow: var(--ys-shadow-2);
-      border-color: var(--ys-border-strong);
+      border-color: var(--ys-line-control);
+      background: var(--ys-surface-hover);
     }
   }
 
@@ -427,7 +639,7 @@
   background-clip: content-box;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgb(11 138 102 / 0.55);
+  background: var(--ys-accent);
   background-clip: content-box;
 }
 
@@ -507,96 +719,408 @@
 }
 
 /* ============================================================================
-   顶栏软件图标 = 开放接口入口（2026-09-27）
+   顶栏品牌图标 = AI 助手入口（2026-10-29 换图）
 
-   用户口径：「保留软件图标、用动态图标提示（非文字）让用户知道可以点」；
-   2026-09-28 又反馈「logo 外圈旋转的方框不需要了」——外圈光环已删除，只留两个安静动作：
-     · 中间圆点 `.brand-core` **静止**，只当参考物（别让它自己缩放，第一版做错了）；
-     · 圆点外层圆圈 `.brand-core-ring` 呼吸，内圈透出 `.brand-core-glow` 柔光。
-   只动 transform / opacity（走合成层），悬停时底色变深、抽屉开着时暂停、页面失焦时暂停、
-   prefers-reduced-motion 下全部静止。
+   用户口径：「把左上角的 logo 改为 ai 图标呼吸动画（可以采用 ai 弹窗里的图标）」。
+   所以图标本体就是 AI 弹窗标题栏那颗 `.ys-ai-orb-icon`（conic 炫彩球 + 白色 Sparkles），
+   品牌按钮只负责把它的呼吸节奏叠上去 —— 入口和弹窗里看到的必须是同一个东西。
+
+   ⚠️ 这一段原来写的是「青玉圆角底 + 静止中心点 + 扩散圆圈」（.brand-core /
+      .brand-core-ring / .brand-core-glow + 对应的两个 keyframes）。换图后那套结构在
+      模板里已经没有元素了，相关规则与 keyframes 全部删除 —— 留着会让人以为页面上
+      还有一颗「带中心点的播放盘」可以调。
+   ⚠️ 呼吸只动 filter / opacity / transform（全部走合成层）；节奏见下面的
+      `.brand-ai-icon` 段（3.6s，带顶点停顿，太快就成闪了）。
    ============================================================================ */
-/* 呼吸的节奏：0 → 45% 放大、45~55% 停在顶点、再收回来 —— 中间留个「停顿」才像呼吸，
-   两个关键帧硬碰硬（0/50/100）在慢速下会看出「一顿一顿」。缓动用 sine 型贝塞尔，别用 ease-in-out。 */
-@keyframes yinshu-brand-core-ring {
-  0%   { transform: translate3d(0, 0, 0) scale(0.84); opacity: 0.95; }
-  45%  { transform: translate3d(0, 0, 0) scale(1.52); opacity: 0.5; }
-  55%  { transform: translate3d(0, 0, 0) scale(1.52); opacity: 0.5; }
-  100% { transform: translate3d(0, 0, 0) scale(0.84); opacity: 0.95; }
-}
-@keyframes yinshu-brand-core-glow {
-  0%   { opacity: 0.3; }
-  45%  { opacity: 0.85; }
-  55%  { opacity: 0.85; }
-  100% { opacity: 0.3; }
-}
-
 .brand-halo {
   -webkit-tap-highlight-color: transparent;
-}
-/* 用户 2026-09-28 的最终口径：「**圆点不变，是圆点外层的圆圈呼吸效果**」。
-   呼吸交给 HTML 元素（不是 SVG circle：SVG 的 transform 不参与合成，慢速动画会顿）；
-   柔光**只动 opacity**，缩放 radial-gradient 等于每帧重新栅格化。 */
-.brand-halo .brand-disc circle:last-of-type {
-  animation: none;
-}
-.brand-halo .brand-core {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 5px;
-  height: 5px;
-  margin: -2.5px 0 0 -2.5px;
-  border-radius: 9999px;
-  background: rgb(255 255 255 / 0.96);
-  pointer-events: none;
-}
-.brand-halo .brand-core-ring {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 12px;
-  height: 12px;
-  margin: -6px 0 0 -6px;
-  border-radius: 9999px;
-  border: 1.5px solid rgb(255 255 255 / 0.92);
-  pointer-events: none;
-  will-change: transform, opacity;
-  backface-visibility: hidden;
-  animation: yinshu-brand-core-ring 3.2s cubic-bezier(0.37, 0, 0.63, 1) infinite;
-}
-.brand-halo .brand-core-glow {
-  position: absolute;
-  inset: 5px;
-  border-radius: 9999px;
-  /* 光晕跟着品牌青玉走（原来写死 emerald-500 的 rgb(16 185 129)） */
-  background: radial-gradient(circle, rgb(255 255 255 / 0.5) 0%, rgb(11 138 102 / 0.34) 46%, rgb(11 138 102 / 0) 72%);
-  pointer-events: none;
-  will-change: opacity;
-  animation: yinshu-brand-core-glow 3.2s cubic-bezier(0.37, 0, 0.63, 1) infinite;
 }
 .brand-halo:active {
   transform: scale(0.97);
 }
-/* 抽屉开着 = 用户已经知道这里是什么了，动效停住，别一直晃 */
-.brand-halo-open .brand-core-ring,
-.brand-halo-open .brand-core-glow {
-  animation-play-state: paused;
-}
-
-/* v2.1.66：页面不可见 / 窗口失焦时也停 —— 在飞牛宿主里 iframe 被别的窗格盖住、
-   用户正在拖分栏的时候，品牌呼吸没必要继续跑。<html> 上的 ys-app-idle 由 ImmersivePlayer
-   里的 visibilitychange + window blur/focus 维护。 */
-html.ys-app-idle .brand-halo .brand-core-ring,
-html.ys-app-idle .brand-halo .brand-core-glow {
-  animation-play-state: paused;
-}
 
 @media (prefers-reduced-motion: reduce) {
-  .brand-halo .brand-core-glow,
-  .brand-halo .brand-core-ring,
+  .ys-ai-star-sub,
+  .ys-ai-orb-icon,
   .ys-ambient__orb {
     animation: none !important;
+  }
+}
+
+/* ── AI 助手图标：一点轻微呼吸（2026-10-29 定稿）────────────────────────
+   用户在同一个下午连提两次，第一次「把 logo 改为 ai 图标呼吸动画」、第二次
+   「ai 光球和呼吸动画不好看，太杂乱了。就简单图标加一点动效就好」——所以这里
+   刻意**只做一层**东西：图标本身明暗呼吸。没有彩色 conic 球、没有外圈光晕、
+   没有缩放，顶栏那颗就是「青玉圆角底 + 白色 Sparkles」，安静地一亮一暗。
+
+   · 0%→45%→55%→100%：暗起、亮到顶点顿一下、再暗回去 —— 顶点留 10% 的停顿才像
+     呼吸（两个关键帧硬碰硬会看出「一顿一顿」）；缓动用 sine 型贝塞尔。
+   · 只动 filter/opacity，**不动 transform**：Sparkles 是 18px 细线图标，缩放会让
+     线条在小尺寸下发糊；drop-shadow 跟着字形轮廓走，比 blur 盒子更像「灯在亮」。
+   · 幅度克制：brightness 0.92→1.12、opacity 0.88→1，能看出在动，但不抢注意力。
+
+   ⚠️ 2026-10-29 删除：`.brand-ai-halo`（图标外那圈 42px 径向光晕 + scale 1→1.28
+      的 `yinshu-brand-ai-halo`）以及它在暂停规则 / reduced-motion 里的引用，
+      都是上一版「AI 光球」的配套，球撤回后它们没有任何元素可挂。 */
+/* AI 图标：主星静止 + 副星闪烁（2026-10-29 用户第三次改口径）
+   原文：「ai图标缩小,采用黑白配色.白底黑图标,呼吸灯改为图标的副星星闪烁,主星星不变.」
+   → 按钮底是白底、图标是黑星（颜色由模板的 text 类决定，这里只管动效）。
+     · .ys-ai-star-main 主星：完全静止（不参与任何动画）；
+     · .ys-ai-star-sub  副星：叠在右上角，只做 opacity + scale 的闪烁 ——
+       小尺寸元素上「闪」比「呼吸」更干脆，也更像星空/亮点，而主星稳住不动，
+       整颗图标就不会有「整块一明一暗」的廉价感。
+   副星用 transform-origin: center，缩到 0.55 再弹回 1，节奏 2.4s 带一次短促停顿。 */
+.ys-ai-stars {
+  position: relative;
+  isolation: isolate;
+}
+.ys-ai-star-main {
+  display: block;
+  /* 主星不动。留这一条是为了让「谁在动」在代码里一目了然。 */
+  animation: none;
+}
+.ys-ai-star-sub {
+  top: -3px;
+  right: -4px;
+  color: currentColor;
+  transform-origin: center;
+  will-change: opacity, transform;
+  animation: yinshu-ai-star-twinkle 2.4s ease-in-out infinite;
+}
+@keyframes yinshu-ai-star-twinkle {
+  0%, 100% { opacity: 0.15; transform: scale(0.6); }
+  35%      { opacity: 1;    transform: scale(1); }
+  55%      { opacity: 1;    transform: scale(1); }
+  80%      { opacity: 0.15; transform: scale(0.6); }
+}
+/* 助手开着 = 用户已经在看它了，闪烁停住 */
+.brand-halo-open .ys-ai-star-sub {
+  animation-play-state: paused;
+  opacity: 1;
+}
+html.ys-app-idle .ys-ai-star-sub {
+  animation-play-state: paused;
+}
+
+/* ── AI 弹窗：Apple Intelligence 风格的 Apple AI 观感 ─────────────────
+   核心是「干净浅色玻璃面板 + 紧贴边缘的一圈旋转 conic 细环」，不是大面积
+   模糊色斑。结构：.ys-ai-aura 装饰层只剩一层——
+     · .ys-ai-aura__wash  面板外极轻的一圈柔光（drop-shadow 式环境光），让面板
+                          从背景里"浮"出来，而不是发光发热。
+   彩色部分由 .ys-ai-veil 那层「从边框向内渐隐」的方向性渐变承担。
+   ⚠️ 2026-10-29 用户「跑马灯边框太碍眼了,可以不用,就要炫彩的流光渐变」：
+     贴边旋转细环（.ys-ai-edge）整条删除，只留渐隐流光。 */
+
+.ys-ai-halo {
+  /* 高度规则不可删：它优先于 Tailwind utilities，手机端靠 --ys-ai-vh 跟随键盘。
+     不写 position: relative，避免覆盖模板 fixed；装饰层以这个 fixed 外壳定位。 */
+  height: min(760px, 86vh);
+  border-radius: 26px;
+  padding: 4px;
+  isolation: isolate;
+  /* 居中用**独立的 translate 属性**（CSS Transforms Level 2），不用 transform。
+     踩坑：以前把 -translate-x-1/2 -translate-y-1/2 写在模板上（Tailwind 编译成
+     transform: translate(var(--tw-translate-x), var(--tw-translate-y)) ...），而入场
+     过渡 .ys-ai-halo-in 又对 transform 做 transition —— 过渡期间 transform 从
+     scale(0.985) 这一条**不带平移分量**的值起步，居中的 -50% 被吃掉，
+     于是弹窗先出现在「左上角原点」偏右下方的位置、再被推回正中，用户看到的就是
+     「先是从下面弹出来的，停顿一下才居中」。写成 translate 属性后，transform 只管
+     scale，两者互不干扰，第一帧就在正中。 */
+  translate: -50% -50%;
+  /* 面板外侧一圈很轻的柔光（像 Apple 面板浮在背景上），不抢戏。 */
+  box-shadow:
+    0 0 0 1px rgb(255 255 255 / 0.18),
+    0 30px 80px -30px rgb(30 41 59 / 0.45);
+}
+
+.ys-ai-aura {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+/* 外晕：一层极淡的径向柔光，只在面板边缘附近，给"玻璃浮起来"的感觉。 */
+.ys-ai-aura__wash {
+  position: absolute;
+  inset: -6px;
+  border-radius: inherit;
+  background:
+    radial-gradient(120% 60% at 50% -10%, rgb(56 189 248 / 0.22), transparent 60%),
+    radial-gradient(120% 60% at 50% 110%, rgb(168 85 247 / 0.18), transparent 60%);
+  filter: blur(10px);
+  opacity: 0.55;
+}
+
+/* ── 2026-10-29 用户：「跑马灯边框太碍眼了,可以不用,就要炫彩的流光渐变」──
+   → 整条「贴边旋转细环」（.ys-ai-edge / .ys-ai-edge__spin / @keyframes ys-ai-ring-turn
+   / ys-ai-ring-breathe）已全部删除。它是一圈硬边、又在转，看起来就是跑马灯。
+   现在只剩「从边框向内渐隐」的那层渐变（.ys-ai-veil），颜色靠 hue-rotate 缓慢漂移，
+   没有硬边、没有绕圈跑动。 */
+
+
+/* Vue Transition 复用原 modelValue：光先柔亮，关闭时先收敛，面板随后淡出。
+   用 > .enter-from-class 限制在光效根节点，避免干扰弹窗自身的 transform 动画。 */
+.ys-ai-halo > .ys-ai-aura.enter-from-class,
+.ys-ai-halo > .ys-ai-aura.leave-to-class {
+  opacity: 0;
+  transform: scale(0.985);
+}
+.ys-ai-halo > .ys-ai-aura.enter-to-class,
+.ys-ai-halo > .ys-ai-aura.leave-from-class {
+  opacity: 1;
+  transform: scale(1);
+}
+.ys-ai-halo > .ys-ai-aura.enter-active-class {
+  transition: opacity 460ms ease-out, transform 520ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.ys-ai-halo > .ys-ai-aura.leave-active-class {
+  transition: opacity 170ms ease-in, transform 190ms ease-in;
+}
+
+/* Apple 风格光球图标：conic 渐变模拟球体，内凹高光在左上。 */
+.ys-ai-orb-icon {
+  background: conic-gradient(from 210deg,
+    #3b82f6, #8b5cf6, #ec4899, #f97316, #22d3ee, #3b82f6);
+  box-shadow:
+    inset -2px -2px 4px rgb(0 0 0 / 0.25),
+    inset 2px 2px 4px rgb(255 255 255 / 0.45),
+    0 2px 8px rgb(139 92 246 / 0.35);
+}
+/* ── 边缘流光：**一张静态渐变，形状就是圆角矩形本身** ────────────────
+   2026-10-29 用户：「弹出窗四个角有个白色的弧形。你看下是啥，修复掉」
+   另附：同一条要求里的「继续增加内边距，大一点」在
+   components/AssistantDrawer.vue 的 class 里（pt-6 / px-7），不在本文件。
+
+   根因（这是一个结构性 bug，不是参数问题）：旧实现用「五档同心矩形环带」——
+   带 22px 圆角的矩形 + padding + mask 挖空 content-box + 每档 blur 2~24px。
+   但在 CSS 里，一个 blur(16px) 的**直角矩形**，四个角本来就会被糊成圆弧：角的
+   外侧被糊进去、内侧被糊出去，结果就是一个半径约 16~24px 的圆弧亮斑——而真实
+   圆角只有 22px，两者的圆心位置对不上，所以四个角各自浮出一小段**比边框更亮的
+   白色弧**。档位越靠内、环越窄，弧形越独立，看起来就是「四个角有白色弧形」。
+
+   修法：不再用「环带 + padding + mask-composite + blur」这套几何，改成
+   **在面板自己的圆角矩形上刷一张方向性渐变**——渐变的停止位置由面板自身的长宽
+   算出来，圆角矩形本身由 border-radius 裁剪。这样四个角天然就是同一个圆角，
+   不会再冒出第二段弧；同时也彻底摆脱了子元素 padding 的百分比解析到父宽度的坑。
+
+   渐变的几何（不写死像素，全部按面板自身尺寸自适应）：
+   · 横向两张（`to right` / `to left`）的渐变线长度 = 面板宽度，纵向两张用面板高度。
+   · ⚠️ 2026-10-29 修正过一次「渐变消失」：当时用 `mask-composite: intersect`
+     让四张求**交集**——交集只覆盖面板**中部**，边框那一圈反而被排除在外；而
+     `.ys-ai-glass` 是不透明白底、又压在 z-index 2 之上，于是边框的光整个被
+     白底盖掉，看起来就是「渐变没了」。
+     正确做法是求**并集**（每层留一条自己那侧的边带、把中间挖空，四张 add 叠起来）：
+     边框四周一定保留，中心才留空。
+   ⚠️ 这一层必须叠在玻璃**之上**（z-index 3），否则向内那半边被白色面板吃掉。
+
+   每一层边带 mask 的写法：`linear-gradient(to bottom, 透明 0 → 全亮 25% → 25%~100% 全亮)`
+   再配 `content-box xor = 挖空中间`，即「只有这一侧边带是亮的」。
+   */
+.ys-ai-veil {
+  position: absolute;
+  inset: 4px;              /* 与玻璃面板边缘对齐（.ys-ai-halo 的 padding 是 4px） */
+  z-index: 3;
+  /* 必须跟玻璃面板自己的圆角（--ys-radius-overlay = 16px）一致，不能用 inherit：
+     外层 .ys-ai-halo 是 26px，比面板大 10px。若这层用 26px，流光会在四个角
+     从面板外侧绕出去，形成「比边框更亮的一段弧」——正是用户说的白色弧形。 */
+  border-radius: var(--ys-radius-overlay);
+  overflow: hidden;
+  pointer-events: none;
+  contain: paint;
+  animation: ys-ai-veil-breathe 5.4s ease-in-out infinite,
+             ys-ai-veil-hue 11s linear infinite;
+}
+
+/* 四边各一张「从边框向内淡出」的渐变，叠成四层 mask。
+   每张都是「边框处全亮 → 25% 处开始回落 → 75% 起完全透明」。 */
+.ys-ai-veil__glow {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: conic-gradient(from 0deg,
+    #3b82f6, #8b5cf6, #ec4899, #f97316, #22d3ee, #3b82f6 60%,
+    #8b5cf6, #ec4899, #f97316, #22d3ee, #3b82f6);
+  /* ── 兼容优先的写法（2026-10-29 三修）─────────────────────────────
+     历史教训，别再来一遍：
+     ① 旧实现是「五档同心矩形环 + blur(2~24px)」——CSS 里**直角矩形一 blur，四角必然
+        糊成圆弧**，而面板本身是 16px 圆角，两者圆心对不上，于是四角各浮出一段比边框
+        更亮的白色弧。所以不能用 blur 做环。
+     ② 第二次改成四张渐变求交（mask-composite: intersect）——交集只覆盖面板中部，
+        边框那圈被排除，玻璃白底再一盖，就成了「渐变没了」。
+     ③ 想用 `mask-composite: add/exclude` 做「并集边带 + 挖空中心」，但 Chromium
+        会把整串运算塌成 source-over（每个元素都是 independent），结果是整块盖住内容。
+     结论：**只用单层 mask，不写 mask-composite**。单层 = 一张横渐变 × 一张竖渐变，
+     用 `mask-composite: intersect` 求交也只影响这一对（Chromium 支持），
+     得到一圈「内缩渐隐」的柔和边带：靠边满色、向内 26% 处淡出为透明，
+     形状被 border-radius 裁成面板自己的圆角 —— 四角天然是面板的角，不会多出第二段弧。
+     ──────────────────────────────────────────────────────────── */
+  -webkit-mask:
+    linear-gradient(to right, transparent 0%, #000 13%, #000 87%, transparent 100%),
+    linear-gradient(to bottom, transparent 0%, #000 13%, #000 87%, transparent 100%);
+  -webkit-mask-composite: source-in;
+          mask:
+    linear-gradient(to right, transparent 0%, #000 13%, #000 87%, transparent 100%),
+    linear-gradient(to bottom, transparent 0%, #000 13%, #000 87%, transparent 100%);
+          mask-composite: intersect;
+  opacity: 0.9;
+}
+
+/* 色相缓慢漂移 = 光在呼吸着变色。合成阶段完成，不触发重绘/重光栅化。 */
+@keyframes ys-ai-veil-hue {
+  from { filter: hue-rotate(0deg); }
+  to   { filter: hue-rotate(360deg); }
+}
+/* 呼吸：外层 veil 自己再叠一条 opacity 心跳。 */
+@keyframes ys-ai-veil-breathe {
+  0%, 100% { opacity: 0.86; }
+  50% { opacity: 1; }
+}
+
+
+/* 内层玻璃：Apple 风格浅色面板。
+   ⚠️ 2026-10-29 用户口径：「ai助手，点开会透明一下看到后面的。修复。不修要背景透明效果」
+   —— 即**不要**再让背后页面从面板里透出来（不要那种打开瞬间能看见后面内容的玻璃感）。
+   所以这里：
+     · 底色改成**完全不透明**的纯白（原来是 0.72，靠 backdrop-filter 去糊背后内容）；
+     · 去掉 backdrop-filter / -webkit-backdrop-filter（面板不再采样背后页面，
+       顺带省掉每帧全块 blur(24px) saturate(1.6) 的重算）；
+     · 不再需要 background-color 过渡（没有半透明 → 实底的切换了）。
+   外圈那圈流光（.ys-ai-aura / .ys-ai-veil）不受影响，仍在面板之外，
+   视觉上还是「实心面板 + 一圈流动光边」。 */
+.ys-ai-glass {
+  position: relative;
+  z-index: 2;
+  min-height: 0;
+  background: #fff;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.8);
+}
+
+/* ── 内容层压在流光之上（2026-10-29 用户第二次反馈）──────────────────────
+   用户：「输入框和顶部组件还是会被渐变遮住一点，或者你有办法让这两个
+   往中间靠点，或者他们的层高在渐变上面」。
+
+   根因：.ys-ai-veil 是 z-index 3（必须盖在玻璃 z-index 2 之上，否则向内那半边
+   会被半透明面板吃掉），而标题栏 / 底部输入区在面板里是普通流内元素 —— 它们
+   落在同一个层叠上下文里、且 z-index 为 auto，所以被 veil 整块罩住。veil 是
+   pointer-events:none 不会挡点击，但流光那层会罩在它们上面、把文字压暗。
+
+   改法：给面板里三段内容（标题栏、消息区、输入区）各加一个 .ys-ai-layer，
+   z-index 抬到 4 —— 比 veil 高一级，文字与输入框永远在最上面。
+   ⚠️ 这三层必须是 position: relative / absolute 之一，否则 z-index 不生效
+      （sticky / fixed 的 z-index 会另起层叠上下文，别用在消息区上）。
+   ⚠️ 流光因此只在「内容层下面的边带」里可见：一圈框内的柔光，不再盖住文字。 */
+.ys-ai-layer {
+  position: relative;
+  z-index: 4;
+}
+
+/* ── 全屏遮罩（2026-10-29 四次修正）──────────────────────────────────
+   第一版：Tailwind backdrop-blur-sm —— 元素进 DOM 第一帧就全额模糊，和自身
+   opacity 淡入错拍，观感"先看到清晰的页面，再啪一下糊住"。
+   第二版：遮罩进 DOM 先 blur(0)，300ms 过渡爬到 blur(10px)。观感对了，但
+   实测把入场帧率又吃掉一截（软件渲染 28.6 → 25.7fps）。
+   第三版：遮罩不模糊，只做半透明暗化；背后页面的模糊改由 html[data-ai-open='1']
+   上那条整页 `filter: blur()` 实现。
+   第四版（现行）：用户要求「不要背景透明/透视效果」—— 背后页面**不再变糊**，
+   那层整页 filter 已删除。遮罩只负责把背景压暗（暗到不动人），面板本身是纯白实底，
+   所以不存在"透过面板看见后面"的情况。 */
+.ys-ai-backdrop {
+  background: rgb(15 23 42 / 0.45);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+/* ── 弹窗入场/退场的时间轴（2026-10-29）──────────────────────────────
+   原来是 Tailwind 的 transition-all duration-300：opacity 和 transform 一起 300ms 走完，
+   面板在头 100ms 里几乎看不见 —— 用户体感就是「点了没反应，过一会儿才弹出来」。
+   现在不透明度只走 150ms（眼睛立刻「看到」），缩放继续 300ms 收尾（有运动但不拖）。 */
+.ys-ai-halo-in {
+  transition: opacity 150ms ease-out,
+              transform 300ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.ys-ai-halo-out {
+  transition: opacity 150ms ease-in,
+              transform 190ms ease-in;
+}
+
+/* 入场/退场这段（约 300ms）里曾把面板的 backdrop-filter 停掉省算力。
+   2026-10-29 面板改成纯白实底（见 .ys-ai-glass），面板根本没有 backdrop-filter 了，
+   原来的 `html[data-ai-anim='1'] .ys-ai-glass` 与「打开期间把底色提到 0.86」两条
+   规则一并删除，免得留下误导性的死代码（data-ai-anim 状态本身还保留，见
+   AssistantDrawer.vue 的注释，可用于将来给别的层做开关）。 */
+
+
+/* 减弱动态：不跑色相漂移与呼吸，只留一层静态的渐隐流光。
+   （贴边细环 .ys-ai-edge 已于 2026-10-29 整条删除，这里不再引用它。） */
+@media (prefers-reduced-motion: reduce) {
+  .ys-ai-aura,
+  .ys-ai-veil { animation: none !important; filter: none !important; }
+  .ys-ai-aura { opacity: 0.6; }
+  .ys-ai-aura__wash { opacity: 0.35; }
+  .ys-ai-veil { opacity: 0.7; }
+}
+
+/* 手机：贴底做成整屏弹层。居中弹窗在键盘弹出时会被顶得看不见输入框，
+   所以窄屏改成 bottom-sheet 形态（保留顶部圆角与那圈光边）。
+
+   ⚠️ 锚点必须是 **top**，不能是 bottom（2026-10-28 真机排查的最终结论）：
+   手机上 fixed 元素的 bottom:0 锚的是**布局视口**底边——软键盘弹出后布局视口
+   高度并不变（变的是 visualViewport），所以 bottom:0 的弹窗永远贴在屏幕最底、
+   被键盘整个盖住；光把 height 缩到「键盘之外的高度」没用，它只是变矮，仍贴底。
+   正确做法：top = visualViewport.offsetTop（键盘弹出时通常仍为 0），
+   height = visualViewport 高度（--ys-ai-vh 由 AssistantDrawer 实时写入），
+   于是弹窗永远精确铺满「键盘以上的可视区」，输入区正好在键盘上沿。
+   没有该变量时（老浏览器）退回 88vh，行为与以前一致。
+
+   注意这里的写法：**先定「竖屏 = 满高」再写「横屏 = 居中」**，别反过来把横屏
+   塞进这个媒体查询里 —— 见下面横屏块的注释。 */
+@media (max-width: 640px) {
+  .ys-ai-halo.ys-ai-halo--open {
+    left: 0;
+    right: 0;
+    top: var(--ys-ai-vtop, 0px);
+    bottom: auto;
+    width: 100%;
+    height: var(--ys-ai-vh, 88vh);
+    transform: none;
+    translate: none;
+    border-radius: 24px 24px 0 0;
+    /* 手机同样留 4px 光带（左/右/上）；底边贴屏幕，不留 */
+    padding: 4px 4px 0;
+  }
+  .ys-ai-halo.ys-ai-halo--open .ys-ai-glass {
+    border-radius: 22px 22px 0 0;
+  }
+  /* 渐隐流光跟随满高形态：底部贴屏幕，所以不留底边、只保留上方圆角 */
+  .ys-ai-halo.ys-ai-halo--open .ys-ai-veil {
+    inset: 4px 4px 0;
+    border-radius: 22px 22px 0 0;
+  }
+}
+
+/* 手机横屏：整屏贴底会把内容压成一条缝，改成左右留白、上下居中。
+   ★ 必须是**平级**的 (max-width + orientation: landscape) 查询，不能嵌套在
+   上面那个块里：Safari 17 对嵌套 @media 条件合成有 bug，内层条件会被吞掉，
+   横屏那条规则于是也作用在竖屏上 —— 表现就是弹窗被「居中 + translateY(-50%)」
+   拉高了 400px，输入框落到屏幕外（2026-10-28 真机症状）。 */
+@media (max-width: 640px) and (orientation: landscape) {
+  .ys-ai-halo.ys-ai-halo--open {
+    left: 8px;
+    right: 8px;
+    top: 50%;
+    bottom: auto;
+    width: auto;
+    height: var(--ys-ai-vh, 92vh);
+    transform: none;
+    translate: 0 -50%;
+    border-radius: 18px;
+    padding: 4px;
+  }
+  .ys-ai-halo.ys-ai-halo--open .ys-ai-glass {
+    border-radius: 16px;
   }
 }
 
@@ -626,8 +1150,14 @@ html:not(.ys-ambient-anim) .ys-ambient__orb {
   --ys-panel: rgb(26 26 28 / 0.74);
   --ys-panel-strong: rgb(18 18 20 / 0.88);
   --ys-panel-soft: rgb(255 255 255 / 0.07);
-  --ys-line: rgb(255 255 255 / 0.1);
-  --ys-line-strong: rgb(255 255 255 / 0.16);
+  /* 2026-10-29 根因修复：这两个变量原名 --ys-line / --ys-line-strong，
+     但亮色段里 --ys-border: var(--ys-line) 是**延迟求值**的 —— 后面的 :root 块
+     会把全站 173 处 `border-[var(--ys-border)]` 的颜色改成 10% 白，贴在白画布上
+     等于隐形，这正是「卡片之间没有区分」的根因。
+     深色玻璃描边只有 2 个消费者（.ys-glass / .ys-glass-soft），
+     所以这里改用独立名字，不再污染亮色结构线。 */
+  --ys-glass-line: rgb(255 255 255 / 0.1);
+  --ys-glass-line-strong: rgb(255 255 255 / 0.16);
   /* ⚠️ 这里**不再**重定义 --ys-text / --ys-text-faint：
      它们是「亮色正文色」，被亮底组件（SegmentedControl 等）引用。
      上一版在深色皮肤里把 --ys-text 改成了白色，导致亮底 hover 文字变白看不见。
@@ -635,10 +1165,12 @@ html:not(.ys-ambient-anim) .ys-ambient__orb {
   --ys-text-on-dark: rgb(255 255 255 / 0.94);
   --ys-text-dim: rgb(255 255 255 / 0.6);
   --ys-text-on-dark-faint: rgb(255 255 255 / 0.4);
-  --ys-accent-on-dark: #34c759;
+  --ys-accent-on-dark: rgb(var(--ys-accent-400-rgb)); /* 深色面（播放栏/沉浸页）上的强调色，跟随主题 */
   --ys-shadow: 0 8px 30px rgb(0 0 0 / 0.28);
   --ys-shadow-soft: 0 4px 16px rgb(0 0 0 / 0.18);
-  --ys-ambient-primary: #2c4a44;
+  /* 2026-10-29：--ys-ambient-primary 原是旧青玉 #2c4a44 的字面量，改为跟随主题色；
+     secondary / tertiary 已无消费者（环境光渐变直接用了 accent 变量），保留占位。 */
+  --ys-ambient-primary: rgb(var(--ys-accent-500-rgb));
   --ys-ambient-secondary: #262f4b;
   --ys-ambient-tertiary: #3a2f4d;
 }
@@ -648,12 +1180,12 @@ html:not(.ys-ambient-anim) .ys-ambient__orb {
   background: var(--ys-panel);
   backdrop-filter: blur(20px) saturate(140%);
   -webkit-backdrop-filter: blur(20px) saturate(140%);
-  border: 1px solid var(--ys-line);
+  border: 1px solid var(--ys-glass-line);
   box-shadow: var(--ys-shadow);
 }
 .ys-glass-soft {
   background: var(--ys-panel-soft);
-  border: 1px solid var(--ys-line);
+  border: 1px solid var(--ys-glass-line);
 }
 
 /* 播放栏 = 浮动胶囊。尺寸照 trim.music 的真实实现：宽 576 / 高 72 / 居中 / 圆角≈胶囊。 */
@@ -661,10 +1193,24 @@ html:not(.ys-ambient-anim) .ys-ambient__orb {
   width: min(576px, calc(100vw - 24px));
   border-radius: 9999px;
 }
-/* .music-player-glass：blur(12px) + 一点阴影，边框跟主题走。变量留着便于调。 */
+/* .music-player-glass：磨砂半透明玻璃（2026-10-29 用户给了参考图要求「播放条和搜索按钮
+   改为这种磨砂半透明玻璃效果」）。
+   · 覆盖 .ys-glass 的 --ys-panel（rgb(26 26 28 / 0.74) 那版偏实），改用 0.48 的近黑半透明，
+     背后内容靠 backdrop-blur 糊成磨砂而不是被底色闷掉；
+   · blur 12px → 28px、saturate 140% → 180%：磨砂颗粒感主要来自模糊半径与饱和度，
+     半径太小背后是「一团糊」、太大又贵（滑动时 html[data-swiping] 会关掉，见下方规则）；
+   · 边框/阴影仍沿用 .ys-glass 的 --ys-line / --ys-shadow，不另造。
+   播放条胶囊里还有一层封面染色（.ys-player-clip），透明度已同步调低，
+   总不透明度 ≈ 0.70 —— 再低白字压不住亮背景。变量留着便于调。 */
 .ys-player-glass {
-  backdrop-filter: var(--ys-player-glass-filter, blur(12px)) saturate(140%);
-  -webkit-backdrop-filter: var(--ys-player-glass-filter, blur(12px)) saturate(140%);
+  /* 2026-10-29 用户：「整体玻璃效果不强啊,磨砂过了.再透一点」
+     → 底色 0.48 → 0.30（少闷一层），模糊 28px → 12px（磨砂颗粒收回成薄玻璃），
+     饱和度 180% → 165%（过高的 saturate 会把背后的浅色页放大成一层灰雾）。
+     配合 .ys-player-clip 里那层压暗从 0.28 降到 0.12，整体不透明度约 0.42 ——
+     背后的内容能看清轮廓，白字仍然压得住。 */
+  background: rgb(16 16 18 / 0.30);
+  backdrop-filter: var(--ys-player-glass-filter, blur(12px)) saturate(165%);
+  -webkit-backdrop-filter: var(--ys-player-glass-filter, blur(12px)) saturate(165%);
 }
 
 /* ── 环境光（沉浸页背景） ── 未播放时静止、播放时才动；reduced-motion 下全部停。 */
@@ -694,8 +1240,8 @@ html:not(.ys-ambient-anim) .ys-ambient__orb {
   opacity: 0;
   transition: opacity 0.8s var(--ys-ease);
   background-image:
-    radial-gradient(150% 126% at 6% 4%, rgb(44 74 68 / 0.72) 0%, rgb(44 74 68 / 0.26) 46%, transparent 76%),
-    radial-gradient(120% 120% at 90% 10%, rgb(38 47 75 / 0.55) 0%, transparent 70%);
+    radial-gradient(150% 126% at 6% 4%, rgb(var(--ys-accent-500-rgb) / 0.42) 0%, rgb(var(--ys-accent-500-rgb) / 0.16) 46%, transparent 76%),
+    radial-gradient(120% 120% at 90% 10%, rgb(var(--ys-accent-700-rgb) / 0.5) 0%, transparent 70%);
 }
 .ys-ambient__orb {
   position: absolute;
@@ -710,19 +1256,19 @@ html:not(.ys-ambient-anim) .ys-ambient__orb {
 .ys-ambient__orb--a {
   left: -12%;
   top: -18%;
-  background: radial-gradient(circle, rgb(44 74 68 / 0.7) 0%, transparent 66%);
+  background: radial-gradient(circle, rgb(var(--ys-accent-500-rgb) / 0.7) 0%, transparent 66%);
   animation: ys-orb-a 18s ease-in-out infinite;
 }
 .ys-ambient__orb--b {
   right: -16%;
   top: 4%;
-  background: radial-gradient(circle, rgb(38 47 75 / 0.66) 0%, transparent 68%);
+  background: radial-gradient(circle, rgb(var(--ys-accent-300-rgb) / 0.5) 0%, transparent 68%);
   animation: ys-orb-b 22s ease-in-out infinite;
 }
 .ys-ambient__orb--c {
   left: 16%;
   bottom: -20%;
-  background: radial-gradient(circle, rgb(58 47 77 / 0.6) 0%, transparent 70%);
+  background: radial-gradient(circle, rgb(var(--ys-accent-700-rgb) / 0.55) 0%, transparent 70%);
   animation: ys-orb-c 26s ease-in-out infinite;
 }
 .ys-ambient[data-playing='true'] .ys-ambient__base,
@@ -816,10 +1362,62 @@ html:not(.ys-ambient-anim) .ys-ambient__orb {
   contain-intrinsic-size: 800px 900px;
 }
 
+/* 内层滑轨拖动时的整页位移（2026-10-28）：
+   手指在「页内分段」上左右划时，SwipePager 把位移写进 --rail-dx，
+   整页（连同它的分段器）跟着动，内层再额外横移一页宽 —— 于是分段器本身也在滑。
+   只动 transform（合成器通道），不加 transition（由弹簧每帧驱动）。 */
+/* ⚠️ 2026-10-29：这条已停用（保留注释说明为什么）。
+   旧设计是「分段器 + 内容」一起装在滑轨里，拖动时整页跟着手指走。
+   但那样一页里只能有一份分段器，而 App.vue 按分段写了多份副本 ——
+   滑到第 2 格时第 1 格的分段器被推到视口外（用户看到「分段器整块飞走」）。
+   现在分段器留在 `page-head-<页>` 插槽里固定不动，只有内容进滑轨，
+   **整页不再需要跟随位移**，所以下面这条规则停用。
+   如果以后又想让头部跟手，必须先保证一页只有一份头部。 */
+/*
+[data-swipe-viewport][data-rail-shift='1'] .swipe-page {
+  transform: translate3d(var(--rail-dx, 0px), 0, 0);
+}
+*/
+
+/* 分段落位后的「定住」（2026-10-29）：
+   内层弹簧跑完时 dxInner 已经归零，而父级改分段引发的重渲染还没落地 ——
+   这一两帧里内层轨道仍是上一段的位移，会看到「抖一下」。SwipePager 在这段时间
+   给视口标 data-rail-fixed="1"，用 --rail-fix（新段的下标位移）压住它，
+   换完段再撤掉，回到由内层轨道自己写 transform 的常规路径。 */
+[data-swipe-viewport][data-rail-fixed='1'] [data-rail-level='inner'] > [data-swipe-track] {
+  transform: translate3d(var(--rail-fix, 0px), 0, 0) !important;
+}
+
 html[data-swiping='1'] .ys-glass,
-html[data-swiping='1'] .ys-player-glass {
+html[data-swiping='1'] .ys-player-glass,
+/* Tailwind 的 backdrop-blur-* 工具类（45 处）：滑动时页面里所有模糊层都在跟着平移，
+   每帧都要重新采样背后的内容 —— 这是手机上横滑掉帧的最大一笔开销。 */
+html[data-swiping='1'] [class*='backdrop-blur'],
+/* 各页面自己用 style 写的玻璃容器 */
+html[data-swiping='1'] .swipe-page [style*='backdrop-filter'] {
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
+}
+
+/* 滑动期间相邻页面不许自己横向滚：手指在视口上横移时，如果某一层还留着
+   横向滚动余量（哪怕 1px），浏览器会先尝试滚它 → 整划被吃掉，表现为"滑不动"。 */
+[data-swipe-viewport],
+[data-swipe-viewport] .swipe-page,
+[data-swipe-viewport] [data-rail-level='inner'] {
+  overflow-x: hidden;
+  overscroll-behavior-x: contain;
+}
+
+/* 横向滑轨交给指针事件处理，别再让浏览器自己接管（iOS 上的 double-tap/长按选择会打断手势） */
+[data-swipe-viewport] .swipe-page {
+  touch-action: pan-y;
+  -webkit-tap-highlight-color: transparent;
+}
+/* 只在真的在动的时候才提示合成器（常驻 will-change 会让每页都长驻一个合成层，反而更耗显存） */
+html[data-swiping='1'] [data-swipe-viewport] .swipe-page,
+[data-swipe-viewport][data-rail-shift='1'] .swipe-page,
+html[data-swiping='1'] [data-swipe-viewport] [data-swipe-track] {
+  will-change: transform;
 }
 
 /* ============================================================================
@@ -848,6 +1446,66 @@ html[data-swiping='1'] .ys-player-glass {
   animation-duration: 0ms;
 }
 
+/* ── 焦点收在整块框上（2026-10-28 用户口径）──
+   以前 input 自带 :focus 环/内描边，聚焦时只有输入区亮一块、跟玻璃胶囊的圆角和不齐。
+   现在输入框不画聚焦样式，改由整块玻璃胶囊表态：外圈一道绿色光环（与播放进度的绿一致）
+   + 边框提亮。环用 box-shadow 画，不占布局、不改变圆角，胶囊两端永远是同一个圆。 */
+.ys-barsearch--focusable {
+  transition:
+    transform 240ms var(--ys-ease),
+    opacity 200ms var(--ys-ease),
+    box-shadow 180ms var(--ys-ease),
+    border-color 180ms var(--ys-ease);
+}
+.ys-barsearch--focusable:focus-within,
+.ys-barsearch--focused {
+  border-color: rgba(34, 197, 94, 0.55) !important;
+  box-shadow:
+    0 0 0 1px rgba(34, 197, 94, 0.45),
+    0 0 0 4px rgba(34, 197, 94, 0.16),
+    var(--ys-shadow) !important;
+}
+/* 输入框自身去掉所有浏览器画出来的聚焦装饰（Chrome/Safari/Firefox 三套），
+   也不吃 Tab 焦点框 —— 那由上面 .ys-barsearch--focusable 统一表达。
+   type=search 的清除叉与内阴影一并清掉，右侧只留那颗搜索按钮。 */
+.ys-barsearch__input {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  border: 0;
+}
+.ys-barsearch__input:focus,
+.ys-barsearch__input:focus-visible {
+  /* ⚠️ 必须 !important：style.css 的 @layer base 里有一条全局
+     `input[type="search"]:focus-visible { box-shadow: 0 0 0 3px accent-ring }`，
+     Tailwind 的 @layer base 自带 `*{box-shadow:none}` 也在同一层、先声明，
+     所以那条会赢过这里的普通声明 —— 不压下去输入框里就还是有自己的一圈焦点框
+     （2026-10-28 用户：「聚焦框依然显示在输入框」）。这里按控件止血，不动全局。 */
+  outline: none !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  background: transparent;
+}
+.ys-barsearch__input::-webkit-search-decoration,
+.ys-barsearch__input::-webkit-search-cancel-button,
+.ys-barsearch__input::-webkit-search-results-button {
+  -webkit-appearance: none;
+  appearance: none;
+  display: none;
+}
+.ys-barsearch__input::placeholder {
+  color: rgba(255, 255, 255, 0.45);
+}
+/* 搜索按钮：桌面端悬停只提亮不放大（放大时右边缘会顶出胶囊圆角），
+   关闭态改用半透明白而不是整块 40% 透明度 —— 后者在深色玻璃上边缘会发灰。 */
+.ys-barsearch__go {
+  -webkit-tap-highlight-color: transparent;
+}
+.ys-barsearch__go:focus-visible {
+  outline: 2px solid rgba(34, 197, 94, 0.7);
+  outline-offset: 2px;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .ys-barsearch {
     transition-duration: 0ms;
@@ -866,4 +1524,43 @@ html[data-swiping='1'] .ys-player-glass {
     transform: none;
     box-shadow: none;
   }
+}
+
+/* ══════════════ 侧栏折叠：平滑收拢，避免「文字瞬间消失 / 整块塌下去」的断裂感
+   2026-10-29 用户：「收缩的时候,听管配置消失的时候,整个缩小了感觉有断裂感」
+   → 折叠时：块级内容用 grid 1fr→0fr 收高，文字用 opacity + max-width 淡出收起，
+     两者都带 transition，跟侧栏宽度变化同步（200ms）。 */
+.sb-collapse {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows 220ms cubic-bezier(0.22, 1, 0.36, 1),
+              opacity 180ms ease-out,
+              padding 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.sb-collapse > .sb-collapse-inner {
+  min-height: 0;
+  overflow: hidden;
+}
+.sb-collapsed .sb-collapse {
+  grid-template-rows: 0fr;
+  opacity: 0;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+}
+.sb-label {
+  max-width: 14rem;
+  opacity: 1;
+  overflow: hidden;
+  transition: opacity 160ms ease-out, max-width 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.sb-collapsed .sb-label {
+  max-width: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+.sb-badge {
+  transition: opacity 160ms ease-out;
+}
+.sb-collapsed .sb-badge {
+  opacity: 0;
 }

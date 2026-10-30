@@ -20,14 +20,14 @@
       aria-label="版本更新"
       @click.self="emit('close')"
     >
-      <div class="w-full max-w-md rounded-2xl border border-gray-100 bg-white p-5 shadow-2xl">
+      <div class="w-full max-w-md rounded-2xl border border-[var(--ys-border)] bg-white p-5 shadow-2xl">
         <div class="mb-3 flex items-center justify-between">
           <h3 class="flex items-center gap-1.5 text-sm font-bold text-gray-800">
-            <ArrowUpCircle class="h-4 w-4 text-emerald-500" />
+            <ArrowUpCircle class="h-4 w-4 text-emerald-600" />
             <span>版本更新</span>
           </h3>
           <button
-            class="text-gray-400 transition-colors hover:text-gray-600"
+            class="text-gray-500 transition-colors hover:text-gray-600"
             title="关闭"
             aria-label="关闭"
             @click="emit('close')"

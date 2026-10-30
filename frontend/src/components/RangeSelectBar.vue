@@ -19,12 +19,12 @@
         autocomplete="off"
         spellcheck="false"
         :placeholder="placeholder"
-        class="w-[132px] rounded-lg border border-[var(--ys-border)] bg-white px-2.5 py-1 text-[11.5px] tabular-nums text-[var(--ys-text)] outline-none transition-colors placeholder:text-[var(--ys-text-faint)] focus:border-emerald-400"
+        class="w-[132px] rounded-lg border border-[var(--ys-border)] bg-white px-2.5 py-1 text-[11.5px] tabular-nums text-[var(--ys-text)] outline-none transition-colors placeholder:text-[var(--ys-text-aux)] focus:border-emerald-200"
         @keyup.enter="apply"
       />
       <button
         type="button"
-        class="ys-press rounded-lg bg-emerald-500 px-2.5 py-1 text-[11.5px] font-semibold text-white transition-colors hover:bg-emerald-600"
+        class="ys-press rounded-lg bg-emerald-600 px-2.5 py-1 text-[11.5px] font-semibold text-white transition-colors hover:bg-emerald-700"
         :title="`当前共 ${total} 行，输入 100 = 前 100 首，11-200 = 第 11 到 200 首`"
         @click="apply"
       >选择</button>
@@ -37,9 +37,15 @@
       >清空选择</button>
     </div>
 
-    <span class="text-[10.5px] text-[var(--ys-text-faint)]">
+    <span class="text-[10.5px] text-[var(--ys-text-aux)]">
       共 {{ total }} 行 · 例 100 / 11-200 / 1-10,80
     </span>
+
+    <!-- 右侧追加区（2026-10-29 用户：「下载页面,全选当前的功能,移到下方,替换按序号选的文字」）：
+         「全选当前」原来在顶部工具栏那一行，用户希望它落到下方、和按序号选摆在一起。
+         用插槽接，是为了让 RangeSelectBar 自己不关心「全选」的业务语义
+         （它只管解析行号范围）。 -->
+    <span v-if="$slots.extra" class="ml-auto flex items-center gap-1.5"><slot name="extra" /></span>
   </div>
 
   <InlineNotice v-if="error" :text="error" :log-link="false" />

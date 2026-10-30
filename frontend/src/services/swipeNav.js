@@ -14,17 +14,28 @@
  */
 /** 起始多少像素内先定方向（轴向锁定）：手指抖 8px 很常见，再小就分不清"想横滑"还是"想竖滚" */
 export const AXIS_LOCK_PX = 8
+/**
+ * 手势**已锁定某条轴**之后，反向轴的让步比例（见 axisYields）。
+ * 1.2 = 反向位移超过正向 1.2 倍才改主意。取略大于 1 是刻意的：
+ * 手指横滑时上下抖个十来像素很常见，不该因此把这一划交还给页面滚动。
+ */
+export const AXIS_YIELD_RATIO = 1.2
 /** 拖过视口宽度的这个比例就算翻页（手指够不到 1/3，25% 更跟手） */
 export const COMMIT_RATIO = 0.25
 /** 或者甩得够快（px/ms）也算翻页 —— 手机上"短促一甩"比"拖够距离"更常用 */
 export const COMMIT_VELOCITY = 0.3
 /** 到头阻尼系数（只能拉动 40%，像橡皮筋；再小会觉得"拽不动"） */
 export const RUBBER_FACTOR = 0.4
-/** 松手后最短/最长动画时长（ms）—— 稍微放长一点，落位别一下就停住 */
-export const SETTLE_MIN_MS = 220
-export const SETTLE_MAX_MS = 420
-/** 兼容旧名：默认动画时长 */
-export const SNAP_MS = 280
+/**
+ * 松手后最短/最长动画时长（ms）。
+ * ⚠️ 2026-10-28 用户反馈「滑动切换也有点卡」。原来 220~420ms 是按"看着舒服"调的，
+ *    但在手机上，落位动画每多跑一帧就是多一帧持续合成开销，手感也会发"黏"。
+ *    iOS 自己的分页落位大约 180~320ms，这里对齐到 160~320ms：更跟手、也更省。
+ */
+export const SETTLE_MIN_MS = 160
+export const SETTLE_MAX_MS = 320
+/** 兼容旧名：默认动画时长（对齐新的落位区间中值） */
+export const SNAP_MS = 240
 
 /**
  * 松手后的动画时长：跟手指的速度走 —— 甩得越快，收得越快（iOS 那种"顺着劲儿滑过去"）。
@@ -127,6 +138,29 @@ export function lockAxis(dx, dy) {
 }
 
 /**
+ * 已经锁定轴向之后，这一帧要不要**放手**（把这一划还给页面自己的滚动/点击）。
+ *
+ * ⚠️ 2026-10-28 新增。原来只在锁定那一刻判一次方向，之后不再复查，于是：
+ *   · 想横滑但起手先竖着挪了一点 → 被判成竖向滚，整划放掉，用户的感觉是"滑不动"；
+ *   · 反过来，竖向滚动起手带一点横移 → 被判成横滑并 preventDefault，
+ *     结果**页面滚不动**（这就是「滑动切换也有问题」里最难复现的那一半）。
+ * 现在按"相对比例"复查：锁定横向后，只有纵向位移明显压过横向（>1.2 倍）才算改主意；
+ * 锁定竖向时同理。横向回摆不设让步（手指横滑时上下抖是常态，不能因此丢掉这一划）。
+ *
+ * @param {'x'|'y'} axis 已锁定的轴
+ * @param {number} dx 累计横向位移
+ * @param {number} dy 累计纵向位移
+ * @param {number} ratio 反向轴超过正向轴多少倍才放手
+ */
+export function axisYields(axis, dx, dy, ratio = AXIS_YIELD_RATIO) {
+  const ax = Math.abs(dx)
+  const ay = Math.abs(dy)
+  if (axis === 'x') return ay > ax * ratio
+  if (axis === 'y') return ax > ay * ratio
+  return false
+}
+
+/**
  * 到头阻尼：第一页再往右拉、最后一页再往左拉，都只能拉动一点点（跟手但不越界）。
  * @param {number} dx 原始位移
  * @param {{canPrev:boolean, canNext:boolean}} opts
@@ -209,4 +243,134 @@ export function resolveSwipeTarget(order, current, dir) {
   if (i === -1) return dir === 'next' ? order[0] : order[order.length - 1]
   const j = dir === 'next' ? i + 1 : i - 1
   return j >= 0 && j < order.length ? order[j] : null
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   统一滑轨：**页内小导航也按顺序滑进整条链**
+
+   用户 2026-10-29（第三次纠正同一个诉求）：
+   「我想要的导航滑动切换页面，是包括了页面中的小导航。我举例，曲库换到下一个
+     页面应该是补全，继续滑是修复……最后快照继续滑就是订阅。其他几个导航页面里
+     有这种都统一为这样包含小页面」
+
+   也就是：手指左右滑 = 走一条**扁平链**，页内分段是链上的一项，而不是压在页里的另一张网：
+     发现(发现段) → 发现(榜单段) → 曲库 → 整理(补全) → 整理(修复) → 整理(音质) → 整理(快照)
+     → 订阅 → 下载(队列) → 下载(歌单) → 下载(记录) → 音源 → 账号 → 系统(设置) → 系统(日志)
+   向左滑永远是「链上的下一项」，不管下一项是同页的另一个分段还是别的页。
+
+   落地时仍要区分两种「下一个」：
+     · `view` 变了  → 整页横滑（外层轨道动）；
+     · 只有 `segment` 变 → 只动这一页的内容（内层轨道动），页头的小导航固定在原处。
+   因为内外两条轨道是**两条独立的链**，所以这里不能只传一个扁平下标 ——
+   必须把「扁平位置 → (视图, 分段)」拆成两个下标，见下面的 splitRail。
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/** 没有分段的视图在扁平链里记作 '<view>::'，分段视图记作 '<view>:<segment>' */
+const RAIL_SEP = ':'
+
+/**
+ * 把「视图顺序 + 每页分段表」摊平成一条链。
+ *
+ * @param {string[]} order 视图 id 顺序（= 桌面侧栏 / 底栏顺序）
+ * @param {Record<string,string[]>} segsMap 每个视图的分段 id（没有就等于不分段）
+ * @returns {Array<{key:string, view:string, segment:string}>} 链上每一项带上它就够还原位置
+ */
+export function flattenRail(order, segsMap = {}) {
+  const out = []
+  for (const view of Array.isArray(order) ? order : []) {
+    const segs = (segsMap && segsMap[view]) || []
+    if (!segs.length) {
+      out.push({ key: view + RAIL_SEP, view, segment: '' })
+      continue
+    }
+    for (const segment of segs) out.push({ key: view + RAIL_SEP + segment, view, segment })
+  }
+  return out
+}
+
+/**
+ * 当前所在位置在链上的下标。
+ *
+ * ⚠️ 认不出来（视图刚换过、分段还没同步上）时**退到这一页的第一项**，
+ *    而不是 -1：-1 会让「下一项」算成链首，一划就跳回第一个页面。
+ */
+export function railIndexOf(rail, view, segment = '') {
+  if (!Array.isArray(rail) || !rail.length) return -1
+  if (segment) {
+    const exact = rail.findIndex((it) => it.view === view && it.segment === segment)
+    if (exact !== -1) return exact
+  }
+  const first = rail.findIndex((it) => it.view === view)
+  if (first !== -1) return first
+  return -1
+}
+
+/**
+ * 链上下标 → 内外两条轨道各自该停的格子下标。
+ *
+ * 外层轨道 = 视图顺序（不变）；内层轨道 = 当前页的所有分段。
+ * 外层的落位与内层的落位都按**该轨道自己的格子**算，所以：
+ *   · 从「曲库」滑到「整理/补全」：外层 library→tidy 走一格，内层落在第 0 段；
+ *   · 从「整理/补全」滑到「整理/修复」：外层不动（仍停在 tidy 那一格 = tidy 下标），
+ *     内层走一格 —— 页头的小导航不动，只有下面内容滑走，正是要的效果。
+ *
+ * @param {Array<{view:string,segment:string}>} rail
+ * @param {string[]} order
+ * @param {Record<string,string[]>} segsMap
+ * @param {number} index 目标在链上的下标
+ * @param {string} [fallbackView] 认不出时用的视图（一般是当前页）
+ */
+export function splitRail(rail, order, segsMap, index, fallbackView) {
+  const item = Array.isArray(rail) ? rail[Math.max(0, index)] : null
+  const view = (item && item.view) || fallbackView || ''
+  const segment = item ? item.segment : ''
+  const orderArr = Array.isArray(order) ? order : []
+  const segs = (segsMap && segsMap[view]) || []
+  const segIdx = segs.indexOf(segment)
+  return {
+    view,
+    segment,
+    outerIndex: Math.max(0, orderArr.indexOf(view)),
+    innerIndex: segIdx === -1 ? 0 : segIdx,
+  }
+}
+
+/**
+ * 扁平链上的相邻项。到头返回 null（不循环 —— 页面不是环形的）。
+ * @returns {{prev: object|null, next: object|null}}
+ */
+export function railNeighbors(rail, index) {
+  if (!Array.isArray(rail) || index < 0 || index >= rail.length) return { prev: null, next: null }
+  return { prev: index > 0 ? rail[index - 1] : null, next: index + 1 < rail.length ? rail[index + 1] : null }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   页内分段：**进页先落到哪一段**
+
+   用户 2026-10-29：「我滑动后确实能到下一页，但如果该页面有子导航，就出现
+   滑到其他页面、然后跳到子导航」—— 左滑进入下一页时，那页的分段自己跳了一下。
+
+   成因不在滑动本身，而在路由的「点按语义」：一次普通视图切换是**点按导航**，
+   点按的意图是「我要看这一页最该先看的那一段」，所以 goView 会按是否需要刷新
+   把分段重置成默认段。但**滑动是平推**，用户要的是"隔壁那页保持我刚才看的样子"。
+   两者共用一条 Reset 路径，滑过去就会看见分段被改掉。
+
+   这里给出滑动专用的取值：
+     · 目标页**看过**（hasVisited）→ 沿用它上次停留的段（remembered）；
+     · 没看过 → 默认段；
+     · 记着的段已经不存在了（改名/删掉）→ 也退回默认段。
+   返回 null 表示"不改，保持现状"。
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * 滑动进入某一页时该显示哪一段。
+ * @param {string[]} segs 目标页的分段 id（顺序即默认顺序）
+ * @param {{remembered?:string, hasVisited?:boolean, defaultSegment?:string}} state
+ * @returns {string|null}
+ */
+export function segmentOnEnter(segs, { remembered, hasVisited = false, defaultSegment: def } = {}) {
+  if (!Array.isArray(segs) || segs.length === 0) return null
+  const fallback = segs.includes(def) ? def : segs[0]
+  if (!hasVisited) return fallback
+  return segs.includes(remembered) ? remembered : fallback
 }

@@ -49,28 +49,52 @@
          （PageShell / SearchView 的自带标题都已撤掉）。
          2026-10-23 追加：「去掉桌面端」——桌面端有侧栏高亮指路，这一格的标题已按
          `sm:hidden` 收敛到手机端，详见下面 h1 上方的注释。
-         品牌按钮仍是「开放接口」入口（点图标滑出抽屉）。
+         ⚠️ 2026-10-29 修正：品牌按钮**不再是**「开放接口」入口 —— 按 10-28 的口径
+         （「原来的 api 接口页面改为弹窗放在设置，免责声明旁边」，见 ApiModal.vue 头注释），
+         开放接口已经搬到「设置 → 关于」里的按钮，左上角这颗改成 **AI 助手入口**。
+         这条注释曾是旧口径，我按文件整份回退时把它一起带回来了，按钮的 @click 于是
+         又指回 showApiDrawer（用户看到的就是「logo 怎么又退回之前的接口了」）。
+         2026-10-29 再改：右上角那颗 Sparkles 小按钮已删，AI 助手**只**从左上角这颗进；
+         品牌图标本身也换成了 AI 弹窗同款的光球（.ys-ai-orb-icon），带呼吸动画。
          ⚠️ `pt-safe` 挂 header、真实内边距挂内层 div —— 两者挂同一元素会互相覆盖。 -->
-    <header class="pt-safe z-20 shrink-0 border-b border-[var(--ys-border)] bg-[var(--ys-surface-glass)] backdrop-blur-xl backdrop-saturate-150">
+    <!--
+      顶栏只服务**手机端**（品牌/AI 入口、当前页名、音源胶囊、播放器入口全带 sm:hidden）。
+      2026-10-30 修：这层 `<header>` 自己没写 sm:hidden，于是桌面端留下一条
+      56px + 1px 底边线的**空白站位**——用户看到的「页面离顶点还有段距离」就是它。
+      桌面端「我在哪」由左侧栏高亮回答，不需要顶栏；整块直接隐藏，内容从顶点开始。
+    -->
+    <header class="pt-safe z-20 shrink-0 border-b border-[var(--ys-border)] bg-[var(--ys-surface-glass)] backdrop-blur-xl backdrop-saturate-150 sm:hidden">
       <div class="flex h-[52px] items-center gap-2 px-3 sm:h-[56px] sm:px-5">
         <button
           type="button"
-          class="brand-halo group flex shrink-0 cursor-pointer items-center gap-2.5 rounded-[13px]"
-          :class="{ 'brand-halo-open': showApiDrawer }"
-          title="开放接口 · 供 AI 与外部程序调用"
-          aria-label="开放接口"
-          @click="showApiDrawer = true"
+          class="brand-halo brand-halo--ai group flex shrink-0 cursor-pointer items-center gap-2.5 rounded-[12px] sm:hidden"
+          :class="{ 'brand-halo-open': showAssistant }"
+          title="AI 助手"
+          aria-label="AI 助手"
+          @click="showAssistant = true"
         >
-          <span class="relative grid h-9 w-9 shrink-0 place-items-center rounded-[11px] bg-[linear-gradient(180deg,#14A87E_0%,#0B8A66_100%)] text-white shadow-[0_1px_2px_rgba(0,0,0,0.12),inset_0_1px_0_rgba(255,255,255,0.22)] transition-[filter,transform] duration-200 group-hover:brightness-105 group-active:scale-[0.97]">
-            <span class="brand-core-glow" aria-hidden="true"></span>
-            <Disc class="brand-disc h-[18px] w-[18px]" />
-            <!-- 中间圆点（静止，盖住 Disc 的内圈）+ 它外层那个**呼吸的圆圈** -->
-            <span class="brand-core" aria-hidden="true"></span>
-            <span class="brand-core-ring" aria-hidden="true"></span>
+          <!--
+            品牌图标 = **AI 助手**（2026-10-29 用户两次口径的最终版）。
+
+            第一次用户说「把左上角的 logo 改为 ai 图标呼吸动画（可以采用 ai 弹窗里的图标）」，
+            我照字面做成了弹窗标题栏那颗 conic 炫彩光球 + 外圈光晕 —— 用户反馈「太杂乱了，
+            就简单图标加一点动效就好」。所以现在**不做彩色球、不做光晕环**：
+              · 图标：白底黑图标（2026-10-29 用户口径：缩小 + 黑白，副星闪烁、主星不动）。
+                品牌色已并入主题系统（四套强调色），图标本身不染色，避免主题一换就变味；
+              · 动效：只给图标一层很轻的明暗呼吸（brightness + opacity，3.6s），
+                没有缩放、没有扩散圈、没有彩色流光 —— 看得出「活着」，但不会抢注意力。
+            暂停条件见 style.css 的 .brand-ai-icon 那段（弹窗开着 / 页面不可见 / 减弱动效）。
+          -->
+          <!-- 2026-10-29 口径：缩小 + 黑白配色（白底黑图标），副星闪烁、主星不动。 -->
+          <span class="relative grid h-8 w-8 shrink-0 place-items-center rounded-[8px] border border-[var(--ys-border)] bg-white text-[var(--ys-text)] shadow-[0_1px_2px_rgba(0,0,0,0.06)] transition-[filter,transform] duration-200 group-hover:brightness-[0.97]">
+            <span class="ys-ai-stars relative grid place-items-center" aria-hidden="true">
+              <Sparkles class="ys-ai-star-main h-[15px] w-[15px]" :stroke-width="2" />
+              <Sparkles class="ys-ai-star-sub absolute h-[6px] w-[6px]" :stroke-width="2.4" />
+            </span>
           </span>
           <span class="hidden text-left leading-tight sm:block">
             <b class="block text-[15px] font-semibold tracking-[-0.01em] text-[var(--ys-text)]">曲率</b>
-            <small class="block text-[10px] font-medium tracking-[0.02em] text-[var(--ys-text-faint)]">AI Music Hub</small>
+            <small class="block text-[10px] font-medium tracking-[0.02em] text-[var(--ys-text-aux)]">AI Music Hub</small>
           </span>
         </button>
 
@@ -99,28 +123,24 @@
                强调色应该留给「正在发生的事」，而不是每个常驻控件。 -->
           <button
             @click="navigateTo('sources')"
-            class="flex min-w-0 max-w-[92px] items-center gap-1.5 rounded-full border border-[var(--ys-border)] bg-white/70 px-2 py-1.5 text-[var(--ys-text-muted)] transition-colors hover:bg-white hover:text-[var(--ys-text)] sm:max-w-none sm:px-3"
+            class="flex min-w-0 max-w-[92px] items-center gap-1.5 rounded-full border border-[var(--ys-border)] bg-white/70 px-2 py-1.5 text-[var(--ys-text-muted)] transition-colors hover:bg-white hover:text-[var(--ys-text)] sm:hidden"
             :title="`当前音源：${activeSourceMeta?.name || '未设置'} —— 点开管理音源`"
             :aria-label="`当前音源：${activeSourceMeta?.name || '未设置'}，打开音源管理`"
           >
-            <span class="h-1.5 w-1.5 shrink-0 rounded-full" :class="activeSourceMeta ? 'bg-emerald-500' : 'bg-amber-400'"></span>
+            <span class="h-1.5 w-1.5 shrink-0 rounded-full" :class="activeSourceMeta ? 'bg-[var(--ys-ok)]' : 'bg-[var(--ys-warn)]'"></span>
             <span class="truncate text-[11px] font-medium sm:hidden">{{ shortSourceName }}</span>
             <span class="hidden truncate text-[11px] font-medium sm:inline">{{ activeSourceMeta?.name || '音源' }}</span>
           </button>
-          <!-- AI 助手入口：2026-10-26 新增。放在头部最右，与音源胶囊同排。 -->
-          <button
-            @click="showAssistant = true"
-            class="shrink-0 rounded-[10px] border border-[var(--ys-border)] bg-white/70 p-2 text-[var(--ys-text-muted)] transition-colors hover:bg-white hover:text-emerald-600"
-            title="AI 助手"
-            aria-label="AI 助手"
-          >
-            <Sparkles class="h-4 w-4" />
-          </button>
+          <!--
+            AI 助手入口只剩**左上角那颗 AI 光球**（2026-10-29 用户：「右上角的 ai 图标去掉」）。
+            原来这里还有一颗 Sparkles 小方按钮，和品牌按钮是同一个入口 —— 同一件事摆两处，
+            只是让头部更挤。删掉后手机端也没有损失：品牌按钮在手机上照常可见可点。
+          -->
           <!-- 播放器入口在桌面侧栏底部，手机没有侧栏，所以只有手机在这儿放一个图标入口 -->
           <button
             v-if="currentSong"
             @click="showImmersive = true"
-            class="shrink-0 rounded-[10px] border border-[var(--ys-border)] bg-white/70 p-2 text-[var(--ys-text-muted)] transition-colors hover:bg-white hover:text-[var(--ys-text)] sm:hidden"
+            class="shrink-0 rounded-[8px] border border-[var(--ys-border)] bg-white/70 p-2 text-[var(--ys-text-muted)] transition-colors hover:bg-white hover:text-[var(--ys-text)] sm:hidden"
             title="打开播放器"
             aria-label="打开播放器"
           >
@@ -135,8 +155,16 @@
          为了不制造 250 行纯缩进 diff，里面的缩进没有跟着加一级。 -->
     <div class="flex min-h-0 flex-1">
 
-    <!-- ════════════ 桌面左侧栏（sm+ 才出现；手机用底部标签栏） ════════════ -->
-    <aside class="z-20 hidden w-[216px] shrink-0 flex-col border-r border-[var(--ys-border)] bg-[#FBFBFD] sm:flex">
+    <!-- ════════════ 桌面左侧栏（sm+ 才出现；手机用底部标签栏） ════════════
+         2026-10-29 用户：「将ai图标和右边的音源按钮调整到左侧边栏.放在侧栏底部.
+         看我给你的图片.加入版本号和项目地址(模仿图片).增加侧栏收缩功能.」
+         → 顶栏的 AI 图标与音源胶囊搬进侧栏底部（顶栏只留手机端那份）；
+           侧栏底部新增：AI 图标、音源胶囊、版本号 + 项目地址、收缩按钮。
+           收缩后宽度 216px → 56px，导航只留图标。 -->
+    <aside
+      class="z-20 hidden shrink-0 flex-col border-r border-[var(--ys-border)] bg-[var(--ys-chrome)] sm:flex transition-[width] duration-200 ease-out"
+      :class="[sidebarCollapsed ? 'w-[56px] sb-collapsed' : 'w-[216px]']"
+    >
       <!--
         品牌 + 开放接口入口都搬到**顶部一条栏**了（2026-10-18 用户口径：「把页面名移到
         logo 和音源那行去」）——侧栏不再有品牌行，从导航直接开始，省下 68px。
@@ -148,38 +176,43 @@
            中文这么排会碎成一条虚线，改成 11px 常规灰即可。 -->
       <nav class="no-scrollbar min-h-0 flex-1 space-y-5 overflow-y-auto px-2 py-4" aria-label="主导航">
         <div v-for="g in navGroups" :key="g.id">
-          <p class="mb-1 px-2.5 text-[11px] font-medium text-[var(--ys-text-faint)]">{{ g.name }}</p>
+          <div class="sb-collapse"><p class="sb-collapse-inner mb-1.5 px-2.5 text-[11px] font-medium text-[var(--ys-text-aux)]">{{ g.name }}</p></div>
           <div class="space-y-0.5">
             <button
               v-for="item in g.items"
               :key="item.id"
               @click="goView(item.id)"
-              :title="item.name"
-              :aria-label="item.name"
+              :title="item.id === 'push' && pushBadge.show ? `${item.name} —— ${pushBadge.title}` : item.name"
+              :aria-label="item.id === 'push' && pushBadge.show ? `${item.name} —— ${pushBadge.title}` : item.name"
               :aria-current="currentView === item.id ? 'page' : undefined"
               :class="[
-                'ys-press flex w-full items-center gap-2.5 rounded-[9px] px-2.5 py-[7px] text-[13px] font-medium',
+                'relative flex w-full items-center rounded-[var(--ys-radius-control)] px-2.5 py-[7px] text-[13px] font-medium transition-colors duration-[var(--ys-dur-1)]',
+                sidebarCollapsed ? 'justify-center' : 'gap-2.5',
+                /* 飞牛口径：选中 = 白底 + 1px 结构线压在 F3F3F3 框架层上（**不是彩色底**，
+                   也不是靠阴影浮起）。这是它侧栏最标志性的一笔，别改成 bg-emerald-50。 */
                 currentView === item.id
-                  ? 'bg-white text-[var(--ys-text)] shadow-[0_1px_2px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.04]'
-                  : 'text-[var(--ys-text-muted)] hover:bg-black/[0.04] hover:text-[var(--ys-text)]'
+                  ? 'bg-white text-[var(--ys-text)] shadow-[0_1px_2px_rgba(0,0,0,0.06)]'
+                  : 'text-[var(--ys-text-secondary)] hover:bg-[var(--ys-surface-hover)] hover:text-[var(--ys-text)]'
               ]"
             >
               <component
                 :is="item.icon"
                 class="h-4 w-4 shrink-0"
-                :class="currentView === item.id ? 'text-[var(--ys-accent)]' : 'text-[var(--ys-text-faint)]'"
+                :class="currentView === item.id ? 'text-[var(--ys-accent)]' : 'text-[var(--ys-text-aux)]'"
                 :stroke-width="1.8"
               />
-              <span class="truncate">{{ item.name }}</span>
+              <!-- 有订阅任务时，导航项文字换成问题精简文案（1 个任务）或「任务进行ing」（多个），
+                   见 services/sidebarBadges.js；没任务时照常写「订阅更新」。 -->
+              <span class="sb-label truncate">{{ navLabelWithBadge(item.id, item.name, pushBadge) }}</span>
               <!-- 下载进行中的数量角标（跟着任务走，队列空了自动消失） -->
               <span
                 v-if="item.id === 'download' && downloadManager.activeCount.value > 0"
-                class="ml-auto grid shrink-0 place-items-center rounded-full bg-emerald-500 px-1.5 py-px text-[10px] font-semibold text-white"
+                class="sb-badge ml-auto grid shrink-0 place-items-center rounded-full bg-[var(--ys-accent)] px-1.5 py-px text-[10px] font-semibold text-white"
               >{{ downloadManager.activeCount.value }}</span>
               <!-- 订阅总数角标（静态计数，灰色不抢眼） -->
               <span
                 v-else-if="item.id === 'push' && pushEngine.pushTotalCount.value > 0"
-                class="ml-auto shrink-0 rounded-full bg-black/[0.05] px-1.5 py-px text-[10px] font-medium text-[var(--ys-text-muted)]"
+                class="sb-badge ml-auto shrink-0 rounded-full bg-[var(--ys-surface-control)] px-1.5 py-px text-[10px] font-medium text-[var(--ys-text-secondary)]"
               >{{ pushEngine.pushTotalCount.value }}</span>
             </button>
           </div>
@@ -187,14 +220,16 @@
       </nav>
 
       <!-- 任务状态：只列「需要你处理」的项；都为 0 时给一句明确结论，而不是摆一排 0。
-           跳转走 resolveRoute 的别名表（tab: 'complete'→整理页、'download'→下载队列…）。 -->
-      <div class="shrink-0 border-t border-[var(--ys-border)] px-2 py-3" v-if="statusItems.length">
-        <p class="mb-1 px-2.5 text-[11px] font-medium text-[var(--ys-text-faint)]">任务状态</p>
+           跳转走 resolveRoute 的别名表（tab: 'complete'→整理页、'download'→下载队列…）。
+           侧栏收缩时整个隐藏（56px 放不下文字+数字）。 -->
+      <div class="sb-collapse shrink-0 border-t border-[var(--ys-border)] px-2 py-3" v-if="statusItems.length">
+        <div class="sb-collapse-inner">
+        <p class="mb-1.5 px-2.5 text-[11px] font-medium text-[var(--ys-text-aux)]">任务状态</p>
         <div class="space-y-0.5">
           <button
             v-for="s in statusItems" :key="s.id"
             @click="s.go()"
-            class="ys-press flex w-full items-center gap-2 rounded-[9px] px-2.5 py-1.5 text-left text-[12px] text-[var(--ys-text-muted)] hover:bg-black/[0.04] hover:text-[var(--ys-text)]"
+            class="flex w-full items-center gap-2 rounded-[var(--ys-radius-control)] px-2.5 py-1.5 text-left text-[12px] text-[var(--ys-text-secondary)] transition-colors duration-[var(--ys-dur-1)] hover:bg-[var(--ys-surface-hover)] hover:text-[var(--ys-text)]"
             :title="s.label"
           >
             <component :is="s.icon" class="h-3.5 w-3.5 shrink-0" :class="s.iconClass" :stroke-width="1.8" />
@@ -202,37 +237,94 @@
             <span class="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium" :class="s.badgeClass">{{ s.count }}</span>
           </button>
         </div>
+        </div>
       </div>
 
-      <!-- 侧栏底部：版本更新入口（只在检测到更新 / 更新在跑时出现）+ 播放器入口（音源胶囊已搬到顶部一条栏，同一个按钮不出现两次） -->
-      <div class="shrink-0 space-y-2 border-t border-[var(--ys-border)] p-3">
+      <!-- 侧栏底部：只留两颗图标按钮 —— 项目图标（AI 助手）+ 音源。
+           2026-10-29 用户：「只保留ai图标和音源图标,不需要曲率文字和音源文字,就用音源首字代表就可以了.
+           ai图标缩小,采用黑白配色.白底黑图标,呼吸灯改为图标的副星星闪烁,主星星不变.」
+           → 去掉品牌文字与音源名；AI 图标改为白底黑星，一颗大星（主，静止）+ 一颗小星（副，闪烁）；
+             音源用首字代表（如「极」）。
+           其余（版本号 / GitHub / 更新 / 播放器 / 收缩）保留，折叠时收高淡出。 -->
+      <div class="shrink-0 border-t border-[var(--ys-border)] p-2.5" :class="sidebarCollapsed ? 'space-y-1.5' : 'space-y-2'">
+        <!-- 图标列：展开时 AI 与音源并排；侧栏收缩时改为竖排一列（AI → 音源 → 地球），
+             2026-10-29 用户：「收缩的时候,应该适配一下.垂直排列ai,音源,地球图标,这些按钮.」 -->
+        <div class="flex items-center justify-center" :class="sidebarCollapsed ? 'flex-col gap-1.5' : 'flex-row gap-2'">
+          <!-- 项目图标（AI 助手）：白底 + 黑星主星 + 黑星副星闪烁 -->
+          <button
+            @click="showAssistant = true"
+            class="brand-halo brand-halo--ai group flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-[12px] border border-[var(--ys-border)] bg-white text-[var(--ys-text)] shadow-[0_1px_2px_rgba(0,0,0,0.06)] transition-[filter,transform] duration-200 hover:brightness-[0.97]"
+            :class="{ 'brand-halo-open': showAssistant }"
+            title="AI 助手"
+            aria-label="AI 助手"
+          >
+            <span class="ys-ai-stars relative grid place-items-center" aria-hidden="true">
+              <Sparkles class="ys-ai-star-main h-[17px] w-[17px]" :stroke-width="2" />
+              <Sparkles class="ys-ai-star-sub absolute h-[7px] w-[7px]" :stroke-width="2.4" />
+            </span>
+          </button>
+
+          <!-- 音源：用音源首字代表 -->
+          <button
+            @click="navigateTo('sources')"
+            class="group relative grid h-9 w-9 shrink-0 cursor-pointer place-items-center rounded-[12px] border border-[var(--ys-border)] bg-white/80 text-[13px] font-semibold text-[var(--ys-text-muted)] transition-colors hover:bg-white hover:text-[var(--ys-text)]"
+            :title="`当前音源：${activeSourceMeta?.name || '未设置'} —— 点开管理音源`"
+            :aria-label="`当前音源：${activeSourceMeta?.name || '未设置'}，打开音源管理`"
+          >
+            <span class="leading-none">{{ sourceInitial }}</span>
+            <span class="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full ring-2 ring-[var(--ys-chrome)]" :class="activeSourceMeta ? 'bg-[var(--ys-ok)]' : 'bg-[var(--ys-warn)]'"></span>
+          </button>
+        </div>
+
+        <!-- 版本号 + 项目地址（2026-10-29 用户：「项目地址的图标替换到互联网图标,并且版本号也可以跳转」）
+             → 图标由 Github 换成互联网（Globe）；版本号整行变成链接，和图标一起指向同一个仓库地址。
+             图标已在链接里，所以版本号前不再单独放一颗地球。 -->
+        <div class="flex items-center justify-center">
+          <a
+            :href="PROJECT_URL"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="group inline-flex shrink-0 items-center justify-center text-orange-500 transition-colors hover:text-orange-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-orange-400"
+            :class="sidebarCollapsed
+              ? 'h-8 w-8 rounded-[var(--ys-radius-control)] border border-[var(--ys-line-control)] bg-white hover:bg-[var(--ys-surface-hover)]'
+              : 'min-w-0 rounded-[8px] px-1 py-0.5 pr-1.5 hover:bg-[var(--ys-surface-hover)]'"
+            :title="`v${appVersion} · 打开项目主页（${PROJECT_URL_LABEL}）`"
+            :aria-label="`版本 v${appVersion}，点击打开项目主页`"
+          >
+            <Globe class="h-3.5 w-3.5 shrink-0 text-orange-400 transition-transform duration-200 group-hover:rotate-[18deg]" :class="sidebarCollapsed ? '' : 'mr-0.5'" :stroke-width="1.8" />
+            <span class="sb-label truncate text-[11px] font-medium leading-none">v{{ appVersion }}</span>
+          </a>
+        </div>
+
+        <!-- 版本更新入口（只在检测到更新 / 更新在跑时出现） -->
         <button
           v-if="updateEntry"
           @click="showUpdateModal = true"
-          class="ys-press flex w-full items-center gap-1.5 rounded-[10px] border px-3 py-2 text-[12px] font-medium shadow-sm transition-colors"
+          class="ys-press flex w-full items-center gap-1.5 rounded-[8px] border px-3 py-2 text-[12px] font-medium shadow-sm transition-colors"
           :class="updateEntry.tone === 'done'
-            ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
-            : 'border-[var(--ys-border)] bg-white text-[var(--ys-text)] hover:bg-gray-50'"
+            ? 'border-[var(--ys-accent-soft)] bg-[var(--ys-accent-soft)] text-[var(--ys-accent)] hover:brightness-[0.98]'
+            : 'border-[var(--ys-line-control)] bg-white text-[var(--ys-text)] hover:bg-[var(--ys-surface-hover)]'"
           :title="updateEntry.tone === 'done' ? '新版本已安装，点击重启生效' : '有新版本可更新，点击查看'"
         >
           <ArrowUpCircle
             class="h-3.5 w-3.5 shrink-0 text-[var(--ys-accent)]"
             :class="{ 'animate-pulse': updateEntry.tone === 'new' }"
           />
-          <span class="min-w-0 flex-1 truncate text-left">{{ updateEntry.label }}</span>
+          <span class="sb-label min-w-0 flex-1 truncate text-left">{{ updateEntry.label }}</span>
           <span
             v-if="updateEntry.tone === 'new'"
-            class="shrink-0 rounded-full bg-[var(--ys-accent-soft)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--ys-accent)]"
+            class="sb-label shrink-0 rounded-full bg-[var(--ys-accent-soft)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--ys-accent)]"
           >更新</span>
         </button>
+
+        <!-- 侧栏收缩按钮（2026-10-29 用户：「折叠按钮不需要外框卡片包裹.直接图标就好」） -->
         <button
-          v-if="currentSong"
-          @click="showImmersive = true"
-          class="ys-press flex w-full items-center justify-center gap-1.5 rounded-[10px] border border-[var(--ys-border)] bg-white px-3 py-2 text-[12px] font-medium text-[var(--ys-text)] shadow-sm hover:bg-gray-50"
-          title="打开播放器"
+          @click="toggleSidebar"
+          class="flex w-full items-center justify-center rounded-[var(--ys-radius-control)] py-1.5 text-[var(--ys-text-aux)] transition-colors hover:bg-[var(--ys-surface-hover)] hover:text-[var(--ys-text)]"
+          :title="sidebarCollapsed ? '展开侧栏' : '收缩侧栏'"
+          :aria-label="sidebarCollapsed ? '展开侧栏' : '收缩侧栏'"
         >
-          <Disc class="h-3.5 w-3.5 text-[var(--ys-accent)]" />
-          <span class="truncate">打开播放器</span>
+          <component :is="sidebarCollapsed ? PanelLeftOpen : PanelLeftClose" class="h-4 w-4" :stroke-width="1.8" />
         </button>
       </div>
     </aside>
@@ -242,7 +334,14 @@
 
       <!-- Main Content -->
       <!-- 主内容区：左右滑动切页（跟手位移 / 到头阻尼 / 速度判定，见 components/SwipePager.vue） -->
-      <SwipePager :order="swipeOrderList" :current="currentView" @update:current="v => goView(v)">
+      <SwipePager
+        :order="swipeOrderList"
+        :current="currentView"
+        :segment="segmentOf(currentView)"
+        :inner-segs="innerSegsMap"
+        @update:current="v => goView(v)"
+        @update:segment="v => setSegment(currentView, v)"
+      >
         <!--
           发现音乐（发现 / 榜单）—— 2026-10-15 重构把「榜单管理」从顶层页降为**页内第二段**。
           理由：它和「发现」都是浏览内容，平级排在导航里只会让导航越来越长（用户反馈过「挤」）；
@@ -256,77 +355,138 @@
           SearchView 收 `segment` prop 自己决定渲染哪一段；榜榜单的注入设置是
           它内部一个可折叠面板，不再是独立的一页。
         -->
-        <template #view-search>
-          <div class="flex h-full min-h-0 flex-col">
-            <div class="shrink-0 border-b border-[var(--ys-border)] bg-[var(--ys-surface-glass)] px-3 py-2 backdrop-blur-xl">
-              <SegmentedControl
-                :segments="decoratedSegments('search')"
-                :model-value="segmentOf('search')"
-                @update:model-value="v => setSegment('search', v)"
-              />
-            </div>
-            <div class="grid min-h-0 flex-1 grid-cols-1">
-              <SearchView
-                v-if="segMounted('search', 'discover')"
-                :segment="segmentOf('search')"
-                :active-source="activeSourceMeta"
-                :active-source-ids="activeSourceIds"
-                :play-mode="playMode"
-                :current-song="currentSong"
-                :is-playing="isPlaying"
-                @update:play-mode="val => playMode = val"
-                @play="playSong"
-                @play-all="playAllSongs"
-                @navigate="view => goView(view)"
-                @prev="playPrev"
-                @next="playNext"
-                @toggle-play="togglePlay"
-                :bar-query="barSearchQuery"
-                :bar-search-nonce="barSearchNonce"
-              />
-            </div>
+        <!--
+          ═══ 分段页的三个槽位（2026-10-29 第五次改版：小导航固定，只滑内容）═══════════
+
+          用户口径：「页内小导航组件应该固定吧，不跟随滑动，只有导航栏下面的页面滑动。
+          除了大导航页之间切换，小导航组件跟随大页面滑动」。
+
+          所以每个分段页正好写三样东西：
+            · `#page-head-<页>`  —— 分段器。钉死在内层滑轨**外面**，页内换段时一动不动；
+            · `#inner-<页>-<段>` —— 只放内容。站在内层滑轨上，页内换段时只有它滑；
+            · 大导航之间换页时，上面两块都在同一个 `<section>` 里，被外层轨道整块推走 ——
+              那正是「小导航跟随大页面滑动」的那半句。
+          ⚠️ 不要再写 `#view-<页>` 外壳：SwipePager 判定这一页有内层滑轨后只渲染 inner 分支。
+          ⚠️ 也不要像上一版那样把分段器复制到每一格里：页内换段时它会跟着飞走。
+        -->
+
+        <!-- 发现音乐（发现 / 榜单）：两段都是**浏览**，由同一个 SearchView 渲染
+             （收 `segment` prop 自己决定渲哪一段，见 2026-10-18 的说明）。 -->
+        <template #page-head-search>
+          <div class="bg-white px-4 pt-3 pb-1">
+            <SegmentedControl
+              :segments="decoratedSegments('search')"
+              :model-value="segmentOf('search')"
+              @update:model-value="v => setSegment('search', v)"
+            />
           </div>
         </template>
+        <template #inner-search-discover>
+          <div class="grid h-full grid-cols-1">
+            <SearchView
+              v-if="segMounted('search', 'discover')"
+              segment="discover"
+              :active-source="activeSourceMeta"
+              :active-source-ids="activeSourceIds"
+              :play-mode="playMode"
+              :current-song="currentSong"
+              :is-playing="isPlaying"
+              @update:play-mode="val => playMode = val"
+              @play="playSong"
+              @play-all="playAllSongs"
+              @navigate="view => goView(view)"
+              @prev="playPrev"
+              @next="playNext"
+              @toggle-play="togglePlay"
+              :bar-query="barSearchQuery"
+              :bar-search-nonce="barSearchNonce"
+            />
+          </div>
+        </template>
+        <template #inner-search-charts>
+          <div class="grid h-full grid-cols-1">
+            <SearchView
+              v-if="segMounted('search', 'charts')"
+              segment="charts"
+              :active-source="activeSourceMeta"
+              :active-source-ids="activeSourceIds"
+              :play-mode="playMode"
+              :current-song="currentSong"
+              :is-playing="isPlaying"
+              @update:play-mode="val => playMode = val"
+              @play="playSong"
+              @play-all="playAllSongs"
+              @navigate="view => goView(view)"
+              @prev="playPrev"
+              @next="playNext"
+              @toggle-play="togglePlay"
+              :bar-query="barSearchQuery"
+              :bar-search-nonce="barSearchNonce"
+            />
+          </div>
+        </template>
+
         <template #view-library>
           <LibraryManager class="h-full" @play="playSong" />
         </template>
-        <template #view-tidy>
-          <!-- 2026-10-21 用户口径：「补全整理的功能不要再用 ⋯ 按钮了，换成顶部的导航栏，
-               一个功能页面可以常驻，归类放在一起」——补全 / 查重 / 体检 / 记录 / 替换音质
-               升为顶部分段（与发现 / 下载 / 系统同一套壳层机制）。
-               TidyView 只挂载一次、各段 v-show 常驻，段间状态不丢：
-               跑完的体检结果切走再切回来还在。 -->
-          <div class="flex h-full min-h-0 flex-col">
-            <div class="shrink-0 border-b border-[var(--ys-border)] bg-[var(--ys-surface-glass)] px-3 py-2 backdrop-blur-xl">
-              <SegmentedControl
-                :segments="decoratedSegments('tidy')"
-                :model-value="segmentOf('tidy')"
-                @update:model-value="v => setSegment('tidy', v)"
-              >
-                <template #trail>
-                  <TidyDirChip />
-                </template>
-              </SegmentedControl>
-            </div>
-            <TidyView class="min-h-0 flex-1" />
+
+        <!-- 补全整理（补全 / 修复 / 音质 / 快照）：TidyView 只挂载一次、各段 v-show 常驻，
+             段间状态不丢（跑完的体检结果切走再切回来还在）。音质段的内容是 QualityView。 -->
+        <template #page-head-tidy>
+          <div class="bg-white px-4 pt-3 pb-1">
+            <SegmentedControl
+              :segments="decoratedSegments('tidy')"
+              :model-value="segmentOf('tidy')"
+              @update:model-value="v => setSegment('tidy', v)"
+            >
+              <template #trail>
+                <TidyDirChip />
+              </template>
+            </SegmentedControl>
           </div>
         </template>
+        <template #inner-tidy-complete>
+          <TidyView class="h-full" segment="complete" />
+        </template>
+        <template #inner-tidy-repair>
+          <TidyView class="h-full" segment="repair" />
+        </template>
+        <template #inner-tidy-quality>
+          <div class="grid h-full grid-cols-1">
+            <QualityView
+              v-if="segMounted('tidy', 'quality')"
+              v-show="segmentOf('tidy') === 'quality'"
+            />
+          </div>
+        </template>
+        <template #inner-tidy-records>
+          <TidyView class="h-full" segment="records" />
+        </template>
+
         <template #view-push>
           <PushManager class="h-full" />
         </template>
-        <!-- 下载（队列 / 歌单 / 自动记录）：分段器由壳提供，DownloadHub 读 navBus 的当前分段 -->
-        <template #view-download>
-          <div class="flex h-full min-h-0 flex-col">
-            <div class="shrink-0 border-b border-[var(--ys-border)] bg-[var(--ys-surface-glass)] px-3 py-2 backdrop-blur-xl">
-              <SegmentedControl
-                :segments="decoratedSegments('download')"
-                :model-value="segmentOf('download')"
-                @update:model-value="v => setSegment('download', v)"
-              />
-            </div>
-            <DownloadHub class="min-h-0 flex-1" :active-source="activeSourceMeta" />
+
+        <!-- 下载（队列 / 歌单导入 / 自动记录）：DownloadHub 读 navBus 的当前分段 -->
+        <template #page-head-download>
+          <div class="bg-white px-4 pt-3 pb-1">
+            <SegmentedControl
+              :segments="decoratedSegments('download')"
+              :model-value="segmentOf('download')"
+              @update:model-value="v => setSegment('download', v)"
+            />
           </div>
         </template>
+        <template #inner-download-queue>
+          <DownloadHub class="h-full" :active-source="activeSourceMeta" segment="queue" />
+        </template>
+        <template #inner-download-playlist>
+          <DownloadHub class="h-full" :active-source="activeSourceMeta" segment="playlist" />
+        </template>
+        <template #inner-download-autodl>
+          <DownloadHub class="h-full" :active-source="activeSourceMeta" segment="autodl" />
+        </template>
+
         <template #view-sources>
           <SourceManager
             @source-changed="onSourceChanged"
@@ -335,29 +495,39 @@
           />
         </template>
         <template #view-accounts><AccountManager /></template>
-        <!--
-          系统（日志 + 设置）—— 两者都是「工具/配置」页：出问题时来看，改完就走。
-          并成一段之后导航短了一项，且这两件事本来就常一起来（日志里看到失败 → 去设置改参数）。
-        -->
-        <template #view-system>
-          <div class="flex h-full min-h-0 flex-col">
-            <div class="shrink-0 border-b border-[var(--ys-border)] bg-[var(--ys-surface-glass)] px-3 py-2 backdrop-blur-xl">
-              <SegmentedControl
-                :segments="decoratedSegments('system')"
-                :model-value="segmentOf('system')"
-                @update:model-value="v => setSegment('system', v)"
-              />
-            </div>
-            <div class="grid min-h-0 flex-1 grid-cols-1">
-              <LogViewer v-if="segMounted('system', 'logs')" v-show="segmentOf('system') === 'logs'" />
-              <AppSettings
-                v-if="segMounted('system', 'settings')"
-                v-show="segmentOf('system') === 'settings'"
-                @open-disclaimer="openDisclaimer(false)"
-              />
-            </div>
+        <!-- 系统（设置 / 日志）：都是「工具/配置」页，出问题时来看，改完就走。
+             日志里看到失败 → 去设置改参数，所以并成一页的两段。 -->
+        <template #page-head-system>
+          <div class="bg-white px-4 pt-3 pb-1">
+            <SegmentedControl
+              :segments="decoratedSegments('system')"
+              :model-value="segmentOf('system')"
+              @update:model-value="v => setSegment('system', v)"
+            />
           </div>
         </template>
+        <!--
+          ⚠️ 2026-10-29：每格只放**自己那一段**的组件。
+          之前两格是把「设置 + 日志」原封不动各贴一份（靠 v-show 互斥隐藏），
+          结果同一个 AppSettings 挂了两份实例：它内部拉状态、订阅事件的副作用被跑两遍，
+          用户在上面填的东西也可能被另一份的刷新覆盖 —— 滑轨一页一格的写法下，
+          组件实例就该跟格子一一对应。
+        -->
+        <template #inner-system-settings>
+          <div class="grid h-full grid-cols-1">
+            <AppSettings
+              v-if="segMounted('system', 'settings')"
+              v-show="segmentOf('system') === 'settings'"
+              @open-disclaimer="openDisclaimer(false)"
+            />
+          </div>
+        </template>
+        <template #inner-system-logs>
+          <div class="grid h-full grid-cols-1">
+            <LogViewer v-if="segMounted('system', 'logs')" v-show="segmentOf('system') === 'logs'" />
+          </div>
+        </template>
+
       </SwipePager>
     </div>
 
@@ -377,7 +547,7 @@
     <nav class="mobile-dock fixed inset-x-0 bottom-0 z-30 pb-[var(--safe-bottom)]" aria-label="主导航">
       <div
         class="mx-3 mt-1 flex h-14 items-stretch transition-[gap] duration-300 ease-out motion-reduce:duration-0"
-        :class="islandOpen ? 'gap-0' : 'gap-2'"
+        :class="islandOpen ? 'island-merged gap-0' : 'gap-2'"
       >
         <!-- 左椭圆：导航（灵动岛打开时它变成搜索输入框） -->
         <div
@@ -398,7 +568,7 @@
               :aria-current="currentView === item.id ? 'page' : undefined"
               :class="[
                 'relative flex flex-1 flex-col items-center justify-center gap-0.5 text-[10px] font-medium transition-colors',
-                currentView === item.id ? 'text-[var(--ys-accent)]' : 'text-[var(--ys-text-faint)]'
+                currentView === item.id ? 'text-[var(--ys-accent)]' : 'text-[var(--ys-text-aux)]'
               ]"
             >
               <component :is="item.icon" class="h-[18px] w-[18px]" />
@@ -413,7 +583,7 @@
               :aria-expanded="showMoreDrawer"
               :class="[
                 'relative flex flex-1 flex-col items-center justify-center gap-0.5 text-[10px] font-medium transition-colors',
-                showMoreDrawer ? 'text-[var(--ys-accent)]' : 'text-[var(--ys-text-faint)]'
+                showMoreDrawer ? 'text-[var(--ys-accent)]' : 'text-[var(--ys-text-aux)]'
               ]"
             >
               <MoreHorizontal class="h-[18px] w-[18px]" />
@@ -421,12 +591,12 @@
               <!-- 下载现在住在抽屉里：进行中的数量就挂在这个入口上 -->
               <span
                 v-if="downloadManager.activeCount.value > 0"
-                class="absolute right-[22%] top-1 min-w-[15px] rounded-full bg-emerald-500 px-1 text-center text-[9px] font-bold leading-[15px] text-white"
+                class="absolute right-[22%] top-1 min-w-[15px] rounded-full bg-[var(--ys-accent)] px-1 text-center text-[9px] font-bold leading-[15px] text-white"
               >{{ downloadManager.activeCount.value }}</span>
               <!-- 否则有「需要你处理」的事项时给个红点（抽屉里才是完整列表） -->
               <span
                 v-else-if="statusItems.some((s) => s.tone === 'error' || s.tone === 'warn')"
-                class="absolute right-[24%] top-2 h-1.5 w-1.5 rounded-full bg-rose-500"
+                class="absolute right-[24%] top-2 h-1.5 w-1.5 rounded-full bg-[var(--ys-danger)]"
               ></span>
             </button>
           </div>
@@ -445,13 +615,13 @@
               enterkeyhint="search"
               placeholder="搜索歌曲、歌手、专辑…"
               aria-label="搜索歌曲、歌手、专辑"
-              class="min-w-0 flex-1 bg-transparent text-[13px] text-[var(--ys-text)] outline-none placeholder:text-[var(--ys-text-faint)]"
+              class="min-w-0 flex-1 bg-transparent text-[13px] text-[var(--ys-text)] outline-none placeholder:text-[var(--ys-text-aux)]"
               @keydown.esc="closeIsland"
             />
             <button
               v-if="islandQuery"
               type="button"
-              class="shrink-0 rounded-full p-1 text-[var(--ys-text-faint)] transition-colors hover:bg-black/[0.05] hover:text-[var(--ys-text-muted)]"
+              class="shrink-0 rounded-full p-1 text-[var(--ys-text-aux)] transition-colors hover:bg-black/[0.05] hover:text-[var(--ys-text-muted)]"
               title="清空"
               aria-label="清空"
               @click="islandQuery = ''"
@@ -472,17 +642,15 @@
           :class="[
             islandOpen
               ? 'rounded-l-none border-l-0 border-[var(--ys-accent)] bg-[var(--ys-accent)] text-white'
-              : 'border-[var(--ys-border)] text-[var(--ys-text-faint)] active:text-[var(--ys-accent)]',
+              : 'border-[var(--ys-border)] text-[var(--ys-text-aux)] active:text-[var(--ys-accent)]',
           ]"
         >
           <span class="relative grid place-items-center">
             <Search v-if="!islandOpen" class="h-[19px] w-[19px]" />
             <ArrowRight v-else class="h-[19px] w-[19px]" />
-            <!-- 正在播放时给个小绿点：这一颗圆也是「实时」的（用户口径：第二个实时显示小圆） -->
-            <span
-              v-if="isPlaying && !islandOpen"
-              class="island-live-dot absolute -right-1 -top-1 h-2 w-2 rounded-full bg-emerald-500"
-            ></span>
+            <!-- 2026-10-28 用户口径：「取消灵动岛搜索按钮的绿点」——
+                 这颗「正在播放」绿点已撤掉，呼吸绿点改由左上角 AI 图标承担。
+                 chartRelocation.test.mjs 有反向断言钉住这条，别再加回来。 -->
           </span>
         </button>
       </div>
@@ -543,7 +711,7 @@
               :key="item.id"
               @click="goView(item.id)"
               :class="[
-                'ys-press flex w-full items-center gap-3 rounded-[10px] px-3 py-3 text-[13px] font-medium',
+                'ys-press flex w-full items-center gap-3 rounded-[8px] px-3 py-3 text-[13px] font-medium',
                 currentView === item.id
                   ? 'bg-white text-[var(--ys-text)] shadow-[0_1px_2px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.04]'
                   : 'text-[var(--ys-text-muted)] hover:bg-black/[0.05] hover:text-[var(--ys-text)]'
@@ -554,17 +722,17 @@
               <!-- 下载住进抽屉后，进行中的数量在这里也看得到（与标签栏入口同一个数） -->
               <span
                 v-if="item.id === 'download' && downloadManager.activeCount.value > 0"
-                class="shrink-0 rounded-full bg-emerald-500 px-1.5 py-px text-[10px] font-semibold text-white"
+                class="shrink-0 rounded-full bg-[var(--ys-accent)] px-1.5 py-px text-[10px] font-semibold text-white"
               >{{ downloadManager.activeCount.value }}</span>
             </button>
 
             <!-- 任务状态（手机：抽屉里看；桌面：侧栏底部） -->
             <template v-if="statusItems.length">
-              <p class="mb-1 mt-4 px-3 text-[11px] font-medium text-[var(--ys-text-faint)]">任务状态</p>
+              <p class="mb-1 mt-4 px-3 text-[11px] font-medium text-[var(--ys-text-aux)]">任务状态</p>
               <button
                 v-for="s in statusItems" :key="s.id"
                 @click="goView(s.tab); showMoreDrawer = false"
-                class="ys-press flex w-full items-center gap-2 rounded-[10px] px-3 py-2 text-left text-[12px] text-[var(--ys-text-muted)] hover:bg-black/[0.05] hover:text-[var(--ys-text)]"
+                class="ys-press flex w-full items-center gap-2 rounded-[8px] px-3 py-2 text-left text-[12px] text-[var(--ys-text-muted)] hover:bg-black/[0.05] hover:text-[var(--ys-text)]"
                 :title="s.label"
               >
                 <component :is="s.icon" class="h-3.5 w-3.5 shrink-0" :class="s.iconClass" />
@@ -579,7 +747,7 @@
               @click="showUpdateModal = true"
               class="mb-2 flex w-full min-w-0 items-center gap-1.5 rounded-full border px-3 py-2 text-[11px] font-medium transition-colors"
               :class="updateEntry.tone === 'done'
-                ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                ? 'border-[var(--ys-accent-soft)] bg-[var(--ys-accent-soft)] text-[var(--ys-accent)]'
                 : 'border-[var(--ys-border)] bg-white text-[var(--ys-text)]'"
               :title="updateEntry.tone === 'done' ? '新版本已安装，点击重启生效' : '有新版本可更新，点击查看'"
             >
@@ -592,10 +760,10 @@
             </button>
             <button
               @click="navigateTo('sources')"
-              class="flex w-full min-w-0 items-center gap-1.5 rounded-full border border-[var(--ys-border)] bg-white px-3 py-2 text-[var(--ys-text-muted)] transition-colors hover:bg-gray-50 hover:text-[var(--ys-text)]"
+              class="flex w-full min-w-0 items-center gap-1.5 rounded-full border border-[var(--ys-border)] bg-white px-3 py-2 text-[var(--ys-text-muted)] transition-colors hover:bg-[var(--ys-surface-hover)] hover:text-[var(--ys-text)]"
               :title="`当前音源：${activeSourceMeta?.name || '未设置'} —— 点开管理音源`"
             >
-              <span class="h-1.5 w-1.5 shrink-0 rounded-full" :class="activeSourceMeta ? 'bg-emerald-500' : 'bg-amber-400'"></span>
+              <span class="h-1.5 w-1.5 shrink-0 rounded-full" :class="activeSourceMeta ? 'bg-[var(--ys-ok)]' : 'bg-[var(--ys-warn)]'"></span>
               <span class="truncate text-[11px]">{{ activeSourceMeta?.name || '音源' }}</span>
             </button>
           </div>
@@ -613,8 +781,8 @@
     -->
     <DownloadDirModal />
 
-    <!-- ── 开放接口抽屉（从品牌图标右侧滑出） ── -->
-    <ApiDrawer v-model="showApiDrawer" />
+    <!-- ── 开放接口弹窗（入口在「设置 → 关于」，不再挂在品牌按钮上） ── -->
+    <ApiModal v-model="showApiDrawer" />
     <AssistantDrawer v-model="showAssistant" />
 
     <!-- ── 版本更新弹窗（侧栏底部入口点开；内容复用系统页那张 UpdateCard） ── -->
@@ -644,17 +812,17 @@
       :is-resolving="isResolving"
       :play-mode="playMode"
       :collapsed="playerBarCollapsed"
+      :sidebar-collapsed="sidebarCollapsed"
       :lyric="lyricData"
       @update:play-mode="val => playMode = val"
       @toggle-play="togglePlay"
       @prev="playPrev"
       @next="playNext"
       @seek="onSeek"
-      @toggle-lyrics="() => { showImmersive = true }"
-      @toggle-fullscreen="() => { showImmersive = true }"
       @toggle-view="v => goView(v)"
       @volume-change="onVolumeChange"
       @toggle-collapse="playerBarCollapsed = !playerBarCollapsed"
+      @toggle-fullscreen="showImmersive = true"
       @search="searchFromPlayerBar"
       @stop="stopPlayback"
     />
@@ -675,7 +843,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { lxRuntime } from './engine/lx-runtime'
-import { SearchAPI, SourcesAPI, NasAPI } from './api/client'
+import { SearchAPI, SourcesAPI, NasAPI, AppAPI } from './api/client'
 import SearchView from './components/SearchView.vue'
 import SourceManager from './components/SourceManager.vue'
 import PlayerBar from './components/PlayerBar.vue'
@@ -684,9 +852,10 @@ import DownloadDrawer from './components/DownloadDrawer.vue'
 import DownloadDirModal from './components/DownloadDirModal.vue'
 import LibraryManager from './components/LibraryManager.vue'
 import TidyView from './components/TidyView.vue'
+import QualityView from './components/QualityView.vue'
 import PushManager from './components/PushManager.vue'
 import DownloadHub from './components/DownloadHub.vue'
-import ApiDrawer from './components/ApiDrawer.vue'
+import ApiModal from './components/ApiModal.vue'
 import AssistantDrawer from './components/AssistantDrawer.vue'
 import DisclaimerModal from './components/DisclaimerModal.vue'
 import AccountManager from './components/AccountManager.vue'
@@ -716,9 +885,11 @@ import {
   Compass, Trophy, Cpu, Disc, Library, UserRound, ScrollText, Settings,
   Wand2, Send, Download, ListMusic, ListPlus, CloudDownload,
   MoreHorizontal, X, Loader2, AlertTriangle, Search, ArrowRight,
-  Sparkles, Copy, ScanSearch, History, Gauge, ArrowUpCircle,
+  Sparkles, Copy, ScanSearch, History, Gauge, ArrowUpCircle, Wrench,
+  Github, PanelLeftOpen, PanelLeftClose, Globe, Volume2,
 } from 'lucide-vue-next'
 import { sidebarStatusItems } from './services/libraryView'
+import { pushNavBadge, navLabelWithBadge } from './services/sidebarBadges'
 
 // ?fps=1 → 显示帧率探针（见 components/FpsMeter.vue）
 const showFpsMeter = typeof location !== 'undefined' && location.search.includes('fps=1')
@@ -782,6 +953,19 @@ const showApiDrawer = ref(false)
 
 // AI 助手抽屉（2026-10-26 新增）
 const showAssistant = ref(false)
+
+// 侧栏收缩（2026-10-29 用户：「增加侧栏收缩功能」）
+const sidebarCollapsed = ref(loadBool('sidebarCollapsed', false))
+function toggleSidebar() {
+  sidebarCollapsed.value = !sidebarCollapsed.value
+  savePref('sidebarCollapsed', sidebarCollapsed.value ? '1' : '0')
+}
+
+// 应用版本号（侧栏底部显示，2026-10-29 用户要求）
+const appVersion = ref('')
+/** 项目主页（侧栏底部的版本号 / 互联网图标都指向这里）。 */
+const PROJECT_URL = 'https://github.com/liwenyao016828/fnmusic'
+const PROJECT_URL_LABEL = 'GitHub' 
 
 // 手机「更多」右侧抽屉（次要入口：整理 / 音源 / 账号 / 系统）。
 // 用户口径：「说『样式』指的是呈现方式，不是位置；次要入口要做右侧抽屉」。
@@ -904,7 +1088,7 @@ const NAV_ICONS = { search: Compass, library: Library, tidy: Wand2, push: Send, 
 // 用户 2026-10-26：「下载-歌单更名为歌单导入，图标也修改下」——原来的 ListOrdered（三横线带序号的清单）
 // 看起来像「有序列表」而不是「往队列里加东西」，换成 ListPlus（清单 + 加号），
 // 正是「粘链接进来、整单加进下载队列」这个动作。
-const SEGMENT_ICONS = { discover: Compass, charts: Trophy, queue: ListMusic, playlist: ListPlus, autodl: CloudDownload, logs: ScrollText, settings: Settings, complete: Sparkles, dedupe: Copy, audit: ScanSearch, records: History, quality: Gauge }
+const SEGMENT_ICONS = { discover: Compass, charts: Trophy, queue: ListMusic, playlist: ListPlus, autodl: CloudDownload, logs: ScrollText, settings: Settings, complete: Sparkles, repair: Wrench, dedupe: Copy, audit: ScanSearch, records: History, quality: Gauge }
 
 const navItems = VIEWS.map((v) => ({ ...v, icon: NAV_ICONS[v.id] }))
 
@@ -934,6 +1118,19 @@ const navGroups = NAV_GROUPS.map((g) => ({
   items: viewsOfGroup(g.id).map((v) => ({ ...v, icon: NAV_ICONS[v.id] })),
 }))
 
+/**
+ * 订阅任务的导航徽标（2026-10-29 用户：订阅状态显示在「订阅更新」那一项上，
+ * 不再列进左下角「任务状态」；只有 1 个任务时显示问题精简文案，多个时显示「任务进行ing」）。
+ * 数据口径与 pushEngine 的轮询同源，逻辑全在 services/sidebarBadges.js（有单测钉住）。
+ */
+const pushBadge = computed(() => pushNavBadge({
+  pushRunning: pushEngine.runningIds.value.length,
+  pending: pushEngine.monitorStats.value?.pending,
+  failed: pushEngine.monitorStats.value?.failed,
+  missing: pushEngine.monitorStats.value?.missing,
+  pendingBaseline: pushEngine.pendingBaseline.value,
+}))
+
 /** 手机底部标签栏：4 个高频视图 + 「更多」 */
 const mobileTabs = MOBILE_TAB_IDS
   .map((id) => navItems.find((i) => i.id === id))
@@ -958,12 +1155,17 @@ const STATUS_ICONS = {
   'push-running': Loader2, baseline: AlertTriangle,
   'push-failed': AlertTriangle, 'push-pending': Loader2, 'push-missing': AlertTriangle,
 }
+// 状态色（v2.28.0 飞牛化）：一律走语义令牌，别再写 emerald/amber/rose 色阶名 ——
+// 那些类名的值现在虽然也是飞牛色，但语义上「进行中=绿」本来就不对（进行中是蓝）。
 const STATUS_ICON_CLASS = {
-  progress: 'text-emerald-500', warn: 'text-amber-500', error: 'text-rose-500', muted: 'text-gray-400',
+  progress: 'text-[var(--ys-accent)]', warn: 'text-[var(--ys-warn)]',
+  error: 'text-[var(--ys-danger)]', muted: 'text-[var(--ys-text-aux)]',
 }
 const STATUS_BADGE_CLASS = {
-  progress: 'bg-emerald-50 text-emerald-600', warn: 'bg-amber-50 text-amber-600',
-  error: 'bg-rose-50 text-rose-600', muted: 'bg-gray-100 text-gray-500',
+  progress: 'bg-[var(--ys-accent-soft)] text-[var(--ys-accent)]',
+  warn: 'bg-[#FFF8E8] text-[#B96D00]',
+  error: 'bg-[#FFF1F0] text-[var(--ys-danger)]',
+  muted: 'bg-[var(--ys-surface-control)] text-[var(--ys-text-secondary)]',
 }
 const statusItems = computed(() =>
   sidebarStatusItems({
@@ -1007,6 +1209,27 @@ function segMounted(view, seg) {
   return !!mountedSegs.value[`${view}:${seg}`]
 }
 
+/**
+ * 传给 SwipePager 的分段表：{ 视图 id: [段 id, ...] }。
+ *
+ * ⚠️⚠️ 2026-10-29（第六次改版，修用户报的「看不到大导航里的页面了」）：
+ * 内层滑轨的**全部开关**就是这个 prop —— SwipePager 只认 `props.innerSegs`
+ * （见它的 innerHasRail / railList）。之前一直没传，于是：
+ *   · 内层滑轨从不启用，组件永远走 `<slot v-else name="view-XXX">` 那条老分支；
+ *   · 而 App.vue 已经改成写 `#page-head-*` + `#inner-*` 槽（没有 `#view-*`），
+ *     老分支渲染空插槽 → **整页空白**。
+ * 传上之后：滑轨链 = 视图×分段（曲库 → 整理/补全 → 整理/修复 → … → 订阅），
+ * 页内换段只动内容、页头的小导航钉住，跨页时整块（含小导航）一起横滑。
+ */
+const innerSegsMap = computed(() => {
+  const map = {}
+  for (const v of VIEWS) {
+    const ids = segmentsOf(v.id).map((sg) => sg.id)
+    if (ids.length > 1) map[v.id] = ids
+  }
+  return map
+})
+
 // 启动时把默认段标为已挂载（否则当前段是空白）
 for (const v of VIEWS) setSegment(v.id, defaultSegment(v.id))
 
@@ -1016,6 +1239,16 @@ const shortSourceName = computed(() => {
   const full = (activeSourceMeta.value?.name || '').trim()
   if (!full) return '音源'
   return full.length > 2 ? full.slice(0, 2) : full
+})
+
+/**
+ * 音源首字（侧栏底部那颗音源图标里显示）。
+ * 2026-10-29 用户：「就用音源首字代表就可以了」——原来是两位缩写，现在收成单字。
+ */
+const sourceInitial = computed(() => {
+  const full = (activeSourceMeta.value?.name || '').trim()
+  if (!full) return '源'
+  return full.slice(0, 1).toUpperCase()
 })
 
 /**
@@ -1084,6 +1317,14 @@ watch(playMode, (val) => {
 onMounted(async () => {
   audioEl.value = audioRef.value
   downloadManager.loadConfig()
+
+  // 获取应用版本号（侧栏底部显示，2026-10-29 用户要求）。静默失败，不影响其他启动逻辑。
+  // 注意：后端统一包了一层 {code, data}，axios 的 res.data 是这一整个 body，
+  // 真正的版本号在 res.data.data.version（踩过一次：直接读 .version 会一直是空串）。
+  try {
+    const res = await AppAPI.getVersion()
+    appVersion.value = res?.data?.version || res?.version || ''
+  } catch (_) { /* 拿不到就用空字符串，侧栏不显示版本号 */ }
 
   // 推送引擎是全局单例（services/pushEngine.js）：8 秒轮询 + 自动补下载机器住在应用层，
   // 不再挂在某个页面的生命周期上（以前绑在 LibraryManager 的 onMounted/onUnmounted，

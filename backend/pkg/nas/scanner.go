@@ -71,6 +71,18 @@ type BrowseData struct {
 	HiddenDirs  []string `json:"hidden_dirs,omitempty"`
 }
 
+// getAvailableVolumes 没有显式授权时的兜底：挂载点探测。
+//
+// ⚠️ 2026-10-29：以前这里把 `/home` 也当成「卷」—— 在飞牛上 `/home` 里放的是各用户
+// 家目录（`/home/liwenyao`），它作为允许根会把**整个家目录**纳入可删范围，
+// 并且让回收站计算把 `.tidy_trash` 落到用户没权限写的 `/home/.tidy_trash`
+// （用户报「本地曲库删歌…实际没有删除」的直接原因）。
+//
+// 现在 `/home` **无条件不收**，不是「有条件地收」：任何环境（包括家目录自己就是挂载点的
+// 老式发行版）都别指望这个兜底把你家目录放出来。理由是这里的返回值直接当**删除/浏览的
+// 安全边界**用，猜错一次的代价是整个家目录可被删；而真心需要家目录里的曲库时，
+// 有两条明确的路可走 —— `FN_ALLOWED_ROOTS` 环境变量，或飞牛管理员授权目录
+// （见 AllowedRoots 的 ①/② 优先级）。这类授权是显式的，出问题也能一眼看出是谁配的。
 func getAvailableVolumes() []string {
 	vols := make([]string, 0)
 	for i := 1; i <= 16; i++ {
@@ -79,7 +91,7 @@ func getAvailableVolumes() []string {
 			vols = append(vols, p)
 		}
 	}
-	for _, p := range []string{"/media", "/mnt", "/home"} {
+	for _, p := range []string{"/media", "/mnt"} {
 		if fi, err := os.Stat(p); err == nil && fi.IsDir() {
 			vols = append(vols, p)
 		}

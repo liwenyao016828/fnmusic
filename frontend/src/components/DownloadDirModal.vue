@@ -20,7 +20,7 @@
       v-if="downloadManager.showDirModal.value"
       class="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs"
     >
-      <div class="bg-white rounded-2xl max-w-md w-full p-5 shadow-2xl border border-gray-100 space-y-4 max-h-[85vh] overflow-y-auto">
+      <div class="bg-white rounded-2xl max-w-md w-full p-5 shadow-2xl border border-[var(--ys-border)] space-y-4 max-h-[85vh] overflow-y-auto">
         <div class="flex items-center justify-between">
           <h3 class="text-sm font-bold text-gray-800 flex items-center gap-1.5">
             <Folder class="w-4 h-4 text-amber-500" />
@@ -28,7 +28,7 @@
           </h3>
           <button
             @click="downloadManager.showDirModal.value = false"
-            class="text-gray-400 hover:text-gray-600"
+            class="text-gray-500 hover:text-gray-600"
           >
             <X class="w-4 h-4" />
           </button>
@@ -40,13 +40,13 @@
             v-model="downloadManager.editDownloadDir.value"
             type="text"
             placeholder="/vol1/Music"
-            class="w-full px-3 py-2 rounded-xl bg-gray-50 border border-gray-200 text-xs font-mono text-gray-800 focus:outline-none focus:border-emerald-400"
+            class="w-full px-3 py-2 rounded-xl bg-[var(--ys-surface-sunken)] border border-[var(--ys-line-control)] text-xs font-mono text-gray-800 focus:outline-none focus:border-emerald-200"
           />
         </div>
 
         <!-- 目录浏览器 -->
         <div>
-          <div class="flex items-center justify-between text-xs text-gray-400 mb-1.5">
+          <div class="flex items-center justify-between text-xs text-gray-500 mb-1.5">
             <span>NAS 存储卷目录浏览：</span>
             <div class="flex items-center gap-3">
               <!-- 隐藏目录开关：曲库可能在 .dev/music 这类点目录里（用户 2026-10-25 报障），
@@ -54,7 +54,7 @@
               <label class="flex cursor-pointer items-center gap-1 text-[11px] text-gray-500">
                 <input
                   type="checkbox"
-                  class="h-3 w-3 accent-emerald-500"
+                  class="h-3 w-3"
                   :checked="downloadManager.browseShowHidden.value"
                   @change="downloadManager.setBrowseShowHidden($event.target.checked)"
                 />
@@ -78,7 +78,7 @@
           >
             这个目录里还有 {{ downloadManager.browseHiddenCount.value }} 个隐藏文件夹没显示<template v-if="downloadManager.browseHiddenDirs.value.length">（{{ downloadManager.browseHiddenDirs.value.join('、') }}）</template> · 点这里显示
           </button>
-          <div class="max-h-48 overflow-y-auto border border-gray-100 rounded-xl bg-gray-50 p-2 space-y-1 divide-y divide-gray-100">
+          <div class="max-h-48 overflow-y-auto border border-[var(--ys-border)] rounded-xl bg-[var(--ys-surface-sunken)] p-2 space-y-1 divide-y divide-[var(--ys-border)]">
             <div
               v-for="folder in downloadManager.browseFolders.value" :key="folder.path"
               @click="downloadManager.browseDir(folder.path)"
@@ -88,9 +88,9 @@
                 <Folder class="w-3.5 h-3.5 text-amber-400 shrink-0" />
                 <span class="truncate">{{ folder.name }}</span>
               </div>
-              <span class="text-[10px] text-gray-400 shrink-0 font-mono">{{ folder.audio_count }} 首</span>
+              <span class="text-[10px] text-gray-500 shrink-0 font-mono">{{ folder.audio_count }} 首</span>
             </div>
-            <div v-if="!downloadManager.browseFolders.value.length" class="py-4 text-center text-xs text-gray-400">
+            <div v-if="!downloadManager.browseFolders.value.length" class="py-4 text-center text-xs text-gray-500">
               {{ downloadManager.browseHiddenCount.value > 0 ? '这一层只有隐藏文件夹，点上面的提示条显示' : '当前目录下无子文件夹' }}
             </div>
           </div>
@@ -102,14 +102,14 @@
         <div class="flex justify-end gap-2 pt-2">
           <button
             @click="downloadManager.showDirModal.value = false"
-            class="px-4 py-1.5 rounded-xl text-xs text-gray-500 hover:bg-gray-100"
+            class="px-4 py-1.5 rounded-xl text-xs text-gray-500 hover:bg-[var(--ys-surface-hover)]"
           >
             取消
           </button>
           <button
             @click="downloadManager.saveDownloadDir()"
             :disabled="downloadManager.isSavingDir.value"
-            class="px-5 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white font-semibold text-xs shadow-sm disabled:opacity-50"
+            class="px-5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs shadow-sm disabled:opacity-50"
           >
             {{ downloadManager.isSavingDir.value ? '保存中...' : '确定设为下载目录' }}
           </button>

@@ -29,6 +29,9 @@ export function useLyricGaps(deps) {
   const selectedCount = computed(() => items.value.filter(it => it.selected && !it.written).length)
   const foundCount = computed(() => items.value.filter(it => it.ok && !it.written).length)
   const allSelected = computed(() => items.value.length > 0 && items.value.every(it => it.selected || it.written))
+  // 清单是「元数据补全扫描时顺手拉回来的」还是用户自己点「扫描缺歌词」拉的 ——
+  // 只用来把话说明白（2026-10-29 用户要求：补全扫描完，这张卡里就该有歌）。
+  const autoFilled = ref(false)
 
   function cacheKey() {
     const d = (dir() || '').trim()
@@ -60,9 +63,21 @@ export function useLyricGaps(deps) {
     save()
   }
 
-  async function scan() {
+  /**
+   * 扫一遍缺歌词。
+   *
+   * `quiet: true` 是给「元数据补全扫描时顺手带上」用的：这个接口只读后端索引
+   * （不逐首打外网，很快），所以补全一开跑就并行拉一次，用户回到这张卡时清单
+   * 已经在了，不必再点一次「扫描缺歌词」。安静模式下不刷成功提示，免得好消息
+   * 盖掉「预览完成」那条；出错仍然要说 —— 但用单独的角标说，不抢提示条。
+   */
+  async function scan(opts = {}) {
+    const quiet = !!opts.quiet
     const d = (dir() || '').trim()
-    if (!d) return flash('先在「选项」里填曲库目录', true)
+    if (!d) {
+      if (!quiet) flash('先在「选项」里填曲库目录', true)
+      return
+    }
     scanning.value = true
     try {
       const res = await TidyAPI.lyricGaps({ dir: d, limit: 1000 })
@@ -72,8 +87,9 @@ export function useLyricGaps(deps) {
       items.value = list
       total.value = Number(res.data?.total) || list.length
       at.value = Math.floor(Date.now() / 1000)
+      autoFilled.value = quiet
       save()
-      if (!list.length) flash('这个目录里的歌都有歌词了')
+      if (!list.length && !quiet) flash('这个目录里的歌都有歌词了')
     } catch (e) {
       flash(failText('扫描缺歌词', e), true)
     } finally {
@@ -148,7 +164,7 @@ export function useLyricGaps(deps) {
   }
 
   return {
-    items, total, scanning, fetching, writing, atText, selectedCount, foundCount, allSelected,
+    items, total, scanning, fetching, writing, atText, selectedCount, foundCount, allSelected, autoFilled,
     scan, restore, save, clear, toggle, toggleAll, fetchPreview, write,
   }
 }

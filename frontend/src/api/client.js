@@ -233,7 +233,19 @@ export const QualityAPI = {
     api.post('/quality/scan', { action, mode, limit }).then(res => res.data),
   // 替换 = 逐条走外网重新取更高音质的文件再落盘，一批 50 条轻松超过默认 30s，
   // 长超时必须放宽（对齐 PushAPI.run 的长任务口径）。
-  replace: (paths) => api.post('/quality/replace', { paths }, { timeout: 600000 }).then(res => res.data),
+  //
+  // `picks`（2026-10-29 加）：{path: 'lx'|'dl'|'native'} —— 用户在「替换音质」表里
+  // 逐行指定的「这首歌用这个音源替换」。
+  // ⚠️ 后端今天**不吃**这个字段：`/api/quality/replace` 只解 `{paths}`，
+  //    intercept.ReplaceQuality(ctx, paths) 每条一律用 entry.best（各渠道最高档位）。
+  //    多出来的 `picks` 会被 Go 的 json 解码静默忽略，不会报错。
+  //    先按这个形状发出去：后端补上按渠道取音时（ReplaceQuality 收 map[path]channel），
+  //    前端不用再改一次。别在别处依赖它“已生效”。
+  replace: (paths, picks) => {
+    const hasPicks = picks && typeof picks === 'object' && Object.keys(picks).length > 0
+    return api.post('/quality/replace', hasPicks ? { paths, picks } : { paths }, { timeout: 600000 })
+      .then(res => res.data)
+  },
   // 后台「音质补强」（用户 2026-10-25：自动补强得有地方控制）。
   // get   = 读状态：开关/间隔/模式/每轮几首 + 欠账条数与下一次何时跑；
   // save  = 改设置（与 /api/config 同一套选择性合并，只传要改的键即可）；
@@ -516,6 +528,15 @@ export const TidyAPI = {
   audit: (dir, sample) => api.get('/library/audit', { params: { dir, sample } }).then(res => res.data),
   index: (dir) => api.get('/library/index', { params: { dir } }).then(res => res.data),
   indexList: (dir, offset = 0, limit = 100) => api.get('/library/index/list', { params: { dir, offset, limit } }).then(res => res.data),
+  /**
+   * 曲库索引分页查询，**带关键词与字段筛选**（2026-10-28 歌曲修复用）。
+   *
+   * 和 indexList 的差别：关键词/筛选在服务端做，`total` 是**筛完之后**的总数 ——
+   * 前端「本页内过滤」会让分页数字对不上（第 3 页可能整页都被筛空）。
+   * `filter`: 'no_lyric' | 'no_cover' | ''。
+   */
+  searchIndex: (params) =>
+    api.get('/library/index/list', { params }).then(res => res.data),
   indexStats: (dir) => api.get('/library/index/stats', { params: { dir } }).then(res => res.data),
   /**
    * 各字段缺口统计（只读索引，不开文件，秒回）。
@@ -724,6 +745,17 @@ export const AssistantAPI = {
   confirm: (actionId, approved, onEvent) =>
     streamChat('/assistant/confirm', { action_id: actionId, approved: !!approved }, onEvent),
   sessions: () => api.get('/assistant/sessions').then(res => (res.data && res.data.sessions) || []),
+  /**
+   * 读取助手设置（启用开关 / 执行模式 / 能力禁用表）。
+   * 注意：后端把设置放在顶层的 `settings` 字段（不是 data 信封），
+   * 取错层级会让界面永远显示默认值、点保存也谈不上「生效」。
+   */
+  getSettings: () => api.get('/assistant/settings').then(res => res.data && res.data.settings),
+  /** 保存助手设置；只传要改的字段，返回保存后的完整设置。 */
+  saveSettings: (patch) =>
+    api.post('/assistant/settings', patch).then(res => res.data && res.data.settings),
+  /** 能力清单（名称、说明、风险等级），用于设置面板里的能力开关。 */
+  capabilities: () => api.get('/assistant/capabilities').then(res => res.data && (res.data.capabilities || res.data)),
   newSession: () => api.post('/assistant/session').then(res => (res.data && res.data.session) || {}),
   history: (id) => api.get('/assistant/session', { params: { id } }).then(res => (res.data && res.data.session) || null),
   removeSession: (id) => api.delete('/assistant/session', { params: { id } }).then(res => res.data),

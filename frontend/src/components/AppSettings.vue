@@ -3,7 +3,47 @@
     <div class="space-y-4">
       <InlineNotice v-if="notice" :text="notice" :tone="noticeOk ? 'ok' : 'error'" :log-link="!noticeOk" />
 
-      <!-- ⑤ 下载音质
+      <!-- ① 外观（2026-10-29 新增：主题色）
+           四套强调色：钴蓝（默认）/ 青玉（改版前的老品牌色）/ 樱粉 / 石墨灰。
+           选中的色块用**白底 + 强调色描边 + 强调色勾**表示，不用彩色填充 ——
+           这是飞牛的口径（选中态是「底色淡彩 + 描边」，不是一整块重色）。
+           改完立刻生效：主题只是 html 的 data-theme，全站按钮/图标/描边一起变。 -->
+      <DisclosureSection
+        :open="openKey === 'appearance'"
+        @toggle="toggleSection('appearance')"
+        :summary="themeSummary"
+        :icon="Palette"
+        title="外观"
+        hint="换整站的强调色：主按钮、图标、描边、进度条、选中行底都会跟着变。立即生效，并保存在这台设备上。"
+      >
+        <div class="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <button
+            v-for="t in themeList"
+            :key="t.id"
+            type="button"
+            class="rounded-xl border p-3 text-left transition"
+            :class="themeId === t.id
+              ? 'border-[var(--ys-accent)] bg-[var(--ys-accent-soft)]'
+              : 'border-[var(--ys-border)] bg-white hover:border-[var(--ys-border-strong)]'"
+            @click="pickTheme(t.id)"
+          >
+            <span class="flex items-center gap-2">
+              <span
+                class="h-5 w-5 shrink-0 rounded-full border"
+                :style="{ background: t.color, borderColor: themeId === t.id ? 'transparent' : 'rgba(0,0,0,0.08)' }"
+              />
+              <span class="text-[13px] font-medium text-[var(--ys-text)]">{{ t.label }}</span>
+              <span
+                v-if="themeId === t.id"
+                class="ml-auto text-[11px] font-medium text-[var(--ys-accent)]"
+              >使用中</span>
+            </span>
+            <span v-if="t.hint" class="mt-1 block text-[11px] leading-relaxed text-[var(--ys-text-muted)]">{{ t.hint }}</span>
+          </button>
+        </div>
+      </DisclosureSection>
+
+      <!-- ② 下载音质
            小节简介统一走 SectionCard 的 subTitle（2026-10-18 用户口径：「去掉简介」，改成悬浮可见）。
            原来那句里还写着 Markdown 的 ** 星号，页面会照原样显示 —— 顺手去掉。 -->
       <DisclosureSection
@@ -53,12 +93,12 @@
                   <span class="text-[13px] font-medium text-[var(--ys-text)]">{{ c.name }}</span>
                   <span
                     v-if="c.checked"
-                    class="ys-num rounded-[6px] bg-[var(--ys-surface-sunken)] px-1.5 py-0.5 text-[10px] text-[var(--ys-text-muted)]"
+                    class="ys-num rounded-[8px] bg-[var(--ys-surface-sunken)] px-1.5 py-0.5 text-[10px] text-[var(--ys-text-muted)]"
                   >{{ c.rank }}</span>
                   <!-- 当前选中的洛雪音源：多选=轮询 / 单选=简称 / 未选=未选择（需求 m04229） -->
                   <span
                     v-if="c.id === 'lx'"
-                    class="shrink-0 rounded-[6px] bg-[var(--ys-surface-sunken)] px-1.5 py-0.5 text-[10px] text-[var(--ys-text-muted)]"
+                    class="shrink-0 rounded-[8px] bg-[var(--ys-surface-sunken)] px-1.5 py-0.5 text-[10px] text-[var(--ys-text-muted)]"
                     :class="{ 'text-[var(--ys-accent)]': lxScripts.length > 0 }"
                     :title="lxSourceTitle"
                   >{{ lxSourceLabel }}</span>
@@ -68,7 +108,7 @@
               <div class="flex shrink-0 items-center gap-1">
                 <button
                   type="button"
-                  class="ys-press grid h-6 w-6 place-items-center rounded-[7px] border border-[var(--ys-border)] text-[var(--ys-text-muted)] transition-colors hover:border-[var(--ys-border-strong)] disabled:pointer-events-none disabled:opacity-30"
+                  class="ys-press grid h-6 w-6 place-items-center rounded-[8px] border border-[var(--ys-border)] text-[var(--ys-text-muted)] transition-colors hover:border-[var(--ys-border-strong)] disabled:pointer-events-none disabled:opacity-30"
                   :disabled="!c.checked || c.rank <= 1"
                   title="上移（提高优先级）"
                   @click="moveChannel(c.id, -1)"
@@ -77,7 +117,7 @@
                 </button>
                 <button
                   type="button"
-                  class="ys-press grid h-6 w-6 place-items-center rounded-[7px] border border-[var(--ys-border)] text-[var(--ys-text-muted)] transition-colors hover:border-[var(--ys-border-strong)] disabled:pointer-events-none disabled:opacity-30"
+                  class="ys-press grid h-6 w-6 place-items-center rounded-[8px] border border-[var(--ys-border)] text-[var(--ys-text-muted)] transition-colors hover:border-[var(--ys-border-strong)] disabled:pointer-events-none disabled:opacity-30"
                   :disabled="!c.checked || c.rank >= channels.length"
                   title="下移（降低优先级）"
                   @click="moveChannel(c.id, 1)"
@@ -118,9 +158,25 @@
             @click="saveNaming(o.value)"
           >
             <div class="text-[13px] font-medium text-[var(--ys-text)]">{{ o.label }}</div>
-            <div class="mt-1 rounded-lg bg-[#FAFAFC] px-2 py-1.5 font-mono text-[11px] text-[var(--ys-text-muted)]">{{ o.sample }}</div>
+            <div class="mt-1 rounded-lg bg-[var(--ys-surface-sunken)] px-2 py-1.5 font-mono text-[11px] text-[var(--ys-text-muted)]">{{ o.sample }}</div>
           </button>
         </div>
+      </DisclosureSection>
+
+      <!-- ⑦½ 命名解析规则（2026-10-29 从「补全整理 → 歌名修复」搬来）
+           「文件名解析 / 命名解析」是**配置**不是操作 —— 它们决定「文件名怎么拆成
+           歌名 + 歌手」，一次设好长期生效，跟设置页其他小节同一性质。
+           放在整理页里，用户每次修歌名都要穿过一屏配置才够到「扫描歌名」。
+           组件自包含（自己拉规则 / 试算 / 生成 / 保存），见 NameRulesPanel.vue。 -->
+      <DisclosureSection
+        :open="openKey === 'namerules'"
+        @toggle="toggleSection('namerules')"
+        :summary="nameRulesSummary"
+        :icon="FileSearch"
+        title="命名解析规则"
+        hint="决定「文件名怎么拆成歌名 + 歌手」。规则命中时不再调用 AI（省钱、可预期、可手改）；修歌名修不准时，先来这里把规则补上。"
+      >
+        <NameRulesPanel />
       </DisclosureSection>
 
       <!-- ⑧ 存储目录 -->
@@ -141,12 +197,12 @@
                 type="text"
                 spellcheck="false"
                 placeholder="/vol1/Music"
-                class="w-full rounded-xl border border-gray-200 px-3 py-2 text-[13px] focus:border-emerald-500 focus:outline-none"
+                class="w-full rounded-xl border border-[var(--ys-line-control)] px-3 py-2 text-[13px] focus:border-emerald-500 focus:outline-none"
               />
               <!-- 用户 2026-10-25：不要「必须手输」，点一下就从目录树里选 -->
               <button
                 type="button"
-                class="shrink-0 rounded-xl border border-emerald-200 bg-emerald-50 px-3 text-[12px] font-medium text-emerald-700 hover:bg-emerald-100"
+                class="shrink-0 rounded-xl border border-emerald-200 bg-emerald-50 px-3 text-[12px] font-medium text-emerald-600 hover:bg-emerald-50"
                 @click="dirPicker = { open: true, field: 'download', start: downloadDir }"
               >选择</button>
             </div>
@@ -159,16 +215,16 @@
                 type="text"
                 spellcheck="false"
                 placeholder="/vol2/MediaCache"
-                class="w-full rounded-xl border border-gray-200 px-3 py-2 text-[13px] focus:border-emerald-500 focus:outline-none"
+                class="w-full rounded-xl border border-[var(--ys-line-control)] px-3 py-2 text-[13px] focus:border-emerald-500 focus:outline-none"
               />
               <button
                 type="button"
-                class="shrink-0 rounded-xl border border-emerald-200 bg-emerald-50 px-3 text-[12px] font-medium text-emerald-700 hover:bg-emerald-100"
+                class="shrink-0 rounded-xl border border-emerald-200 bg-emerald-50 px-3 text-[12px] font-medium text-emerald-600 hover:bg-emerald-50"
                 @click="dirPicker = { open: true, field: 'cache', start: cacheDir || downloadDir }"
               >选择</button>
               <button
                 type="button"
-                class="shrink-0 rounded-xl border border-gray-200 px-3 text-[12px] text-gray-600 hover:border-gray-300"
+                class="shrink-0 rounded-xl border border-[var(--ys-border)] px-3 text-[12px] text-gray-600 hover:border-[var(--ys-line-control)]"
                 title="回到默认位置（跟下载目录同卷，提升是 rename，不跨盘）"
                 @click="cacheDir = ''"
               >恢复默认</button>
@@ -184,22 +240,22 @@
                 type="text"
                 spellcheck="false"
                 placeholder="/vol1/Logs"
-                class="w-full min-w-0 flex-1 rounded-xl border border-gray-200 px-3 py-2 text-[13px] focus:border-emerald-500 focus:outline-none"
+                class="w-full min-w-0 flex-1 rounded-xl border border-[var(--ys-line-control)] px-3 py-2 text-[13px] focus:border-emerald-500 focus:outline-none"
               />
               <button
                 type="button"
-                class="shrink-0 rounded-xl border border-emerald-200 bg-emerald-50 px-3 text-[12px] font-medium text-emerald-700 hover:bg-emerald-100"
+                class="shrink-0 rounded-xl border border-emerald-200 bg-emerald-50 px-3 text-[12px] font-medium text-emerald-600 hover:bg-emerald-50"
                 @click="dirPicker = { open: true, field: 'log', start: logDir || downloadDir }"
               >选择</button>
               <button
                 type="button"
-                class="shrink-0 rounded-xl border border-gray-200 px-3 text-[12px] text-gray-600 hover:border-gray-300"
+                class="shrink-0 rounded-xl border border-[var(--ys-border)] px-3 text-[12px] text-gray-600 hover:border-[var(--ys-line-control)]"
                 title="关闭落盘：日志只在内存里保留，重启即清空（默认行为）"
                 @click="logDir = ''"
               >恢复默认</button>
               <button
                 type="button"
-                class="shrink-0 rounded-xl bg-emerald-500 px-3 text-[12px] font-medium text-white hover:bg-emerald-600 disabled:opacity-50"
+                class="shrink-0 rounded-xl bg-emerald-600 px-3 text-[12px] font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
                 :disabled="savingLogDir"
                 @click="saveLogDir"
               >{{ savingLogDir ? '保存中…' : '保存日志位置' }}</button>
@@ -210,7 +266,7 @@
         <div class="mt-3 flex flex-wrap items-center gap-3">
           <button
             type="button"
-            class="rounded-xl bg-emerald-500 px-4 py-2 text-[13px] font-medium text-white hover:bg-emerald-600 disabled:opacity-50"
+            class="rounded-xl bg-emerald-600 px-4 py-2 text-[13px] font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
             :disabled="savingDirs"
             @click="saveDirs"
           >{{ savingDirs ? '保存中…' : '保存目录' }}</button>
@@ -234,12 +290,12 @@
         hint="这几个开关都真的控制行为（不放「点了没反应」的开关）：打开后对应的自动动作开始占磁盘和带宽。"
       >
         <div class="space-y-2">
-          <div class="flex items-start justify-between gap-3 rounded-xl border border-gray-100 bg-gray-50/60 px-3 py-2.5">
+          <div class="flex items-start justify-between gap-3 rounded-xl border border-[var(--ys-border)] bg-[var(--ys-surface-sunken)] px-3 py-2.5">
             <div class="min-w-0">
               <div class="flex items-center gap-2">
                 <span class="text-[13px] font-medium text-[var(--ys-text)]">收藏自动下载并绑定本地</span>
                 <span :class="['text-[10px] px-1.5 py-0.5 rounded-full border font-mono',
-                               favAutoDownload ? 'border-emerald-200 bg-emerald-50 text-emerald-600' : 'border-gray-200 text-gray-400']">
+                               favAutoDownload ? 'border-emerald-200 bg-emerald-50 text-emerald-600' : 'border-[var(--ys-border)] text-gray-500']">
                   {{ favAutoDownload ? '已开启' : '已关闭' }}
                 </span>
               </div>
@@ -254,24 +310,24 @@
               :disabled="favAutoBusy"
               @click="toggleFavAutoDownload"
               :class="['relative w-11 h-6 rounded-full transition-colors shrink-0 disabled:opacity-50',
-                       favAutoDownload ? 'bg-emerald-500' : 'bg-black/[0.12]']">
+                       favAutoDownload ? 'bg-emerald-600' : 'bg-black/[0.12]']">
               <span :class="['absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform',
                              favAutoDownload ? 'translate-x-5' : '']" />
             </button>
           </div>
 
-          <div class="flex items-start justify-between gap-3 rounded-xl border border-gray-100 bg-gray-50/60 px-3 py-2.5">
+          <div class="flex items-start justify-between gap-3 rounded-xl border border-[var(--ys-border)] bg-[var(--ys-surface-sunken)] px-3 py-2.5">
             <div class="min-w-0">
               <div class="flex items-center gap-2">
                 <span class="text-[13px] font-medium text-[var(--ys-text)]">边听边下</span>
                 <span :class="['text-[10px] px-1.5 py-0.5 rounded-full border font-mono',
-                               teeEnabled ? 'border-emerald-200 bg-emerald-50 text-emerald-600' : 'border-gray-200 text-gray-400']">
+                               teeEnabled ? 'border-emerald-200 bg-emerald-50 text-emerald-600' : 'border-[var(--ys-border)] text-gray-500']">
                   {{ teeEnabled ? '已开启' : '已关闭' }}
                 </span>
               </div>
               <p class="mt-0.5 text-[11px] leading-relaxed text-[var(--ys-text-muted)]">
                 边听边写进磁盘，整首播完提升进曲库。
-                <span class="text-gray-400">半截文件会丢弃。</span>
+                <span class="text-gray-500">半截文件会丢弃。</span>
               </p>
             </div>
             <button
@@ -280,7 +336,7 @@
               :disabled="teeBusy"
               @click="toggleTee"
               :class="['relative w-11 h-6 rounded-full transition-colors shrink-0 disabled:opacity-50',
-                       teeEnabled ? 'bg-emerald-500' : 'bg-black/[0.12]']">
+                       teeEnabled ? 'bg-emerald-600' : 'bg-black/[0.12]']">
               <span :class="['absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform',
                              teeEnabled ? 'translate-x-5' : '']" />
             </button>
@@ -289,19 +345,19 @@
           <!-- 后台音质补强（v2.22，用户 2026-10-25 m00286）：
                「音质补强是不是有个自动补强？下载-自动记录里有个记录，但是我没法控制呢？
                 增加相应的定时按钮，补强音质来源，音质。」-->
-          <div class="rounded-xl border border-gray-100 bg-gray-50/60 px-3 py-2.5">
+          <div class="rounded-xl border border-[var(--ys-border)] bg-[var(--ys-surface-sunken)] px-3 py-2.5">
             <div class="flex items-start justify-between gap-3">
               <div class="min-w-0">
                 <div class="flex items-center gap-2">
                   <span class="text-[13px] font-medium text-[var(--ys-text)]">后台音质补强</span>
                   <span :class="['text-[10px] px-1.5 py-0.5 rounded-full border font-mono',
-                                 upgrade.enabled ? 'border-emerald-200 bg-emerald-50 text-emerald-600' : 'border-gray-200 text-gray-400']">
+                                 upgrade.enabled ? 'border-emerald-200 bg-emerald-50 text-emerald-600' : 'border-[var(--ys-border)] text-gray-500']">
                     {{ upgrade.enabled ? (upgrade.running ? '运行中' : '已开启') : '已关闭' }}
                   </span>
                 </div>
                 <p class="mt-0.5 text-[11px] leading-relaxed text-[var(--ys-text-muted)]">
                   把「收藏时各渠道都没给无损」的那批歌按节奏重试。
-                  <span class="text-gray-400">这就是「自动记录」里那行「音质补强」。</span>
+                  <span class="text-gray-500">这就是「自动记录」里那行「音质补强」。</span>
                 </p>
               </div>
               <button
@@ -310,14 +366,14 @@
                 :disabled="upgradeBusy"
                 @click="toggleUpgrade"
                 :class="['relative w-11 h-6 rounded-full transition-colors shrink-0 disabled:opacity-50',
-                         upgrade.enabled ? 'bg-emerald-500' : 'bg-black/[0.12]']">
+                         upgrade.enabled ? 'bg-emerald-600' : 'bg-black/[0.12]']">
                 <span :class="['absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform',
                                upgrade.enabled ? 'translate-x-5' : '']" />
               </button>
             </div>
 
             <!-- 展开只在开启时出现：关着的时候排一排设置会让人以为它还在跑 -->
-            <div v-if="upgrade.enabled" class="mt-2 space-y-2 border-t border-gray-100 pt-2">
+            <div v-if="upgrade.enabled" class="mt-2 space-y-2 border-t border-[var(--ys-border)] pt-2">
               <!-- 节奏 -->
               <div class="flex flex-wrap items-center gap-x-3 gap-y-1.5">
                 <span class="w-[68px] shrink-0 text-xs font-medium text-gray-700">节奏</span>
@@ -329,8 +385,8 @@
                     @click="saveUpgrade({ interval_minutes: o.minutes })"
                     :class="['ys-press rounded-full border px-2.5 py-1 text-[11px] transition-colors disabled:opacity-50',
                              upgrade.interval_minutes === o.minutes
-                               ? 'border-emerald-300 bg-emerald-50 font-semibold text-emerald-700'
-                               : 'border-gray-200 bg-white text-gray-600']"
+                               ? 'border-emerald-200 bg-emerald-50 font-semibold text-emerald-600'
+                               : 'border-[var(--ys-border)] bg-white text-gray-600']"
                   >{{ o.label }}</button>
                 </div>
               </div>
@@ -345,8 +401,8 @@
                     @click="saveUpgrade({ batch: n })"
                     :class="['ys-press rounded-full border px-2.5 py-1 text-[11px] transition-colors disabled:opacity-50',
                              upgrade.batch === n
-                               ? 'border-emerald-300 bg-emerald-50 font-semibold text-emerald-700'
-                               : 'border-gray-200 bg-white text-gray-600']"
+                               ? 'border-emerald-200 bg-emerald-50 font-semibold text-emerald-600'
+                               : 'border-[var(--ys-border)] bg-white text-gray-600']"
                   >{{ n }} 首</button>
                 </div>
               </div>
@@ -356,7 +412,7 @@
                 <span class="min-w-0 flex-1 text-[11px] leading-relaxed text-gray-600">{{ channelsSummary }}</span>
                 <button
                   type="button"
-                  class="ys-press shrink-0 rounded-full border border-gray-200 bg-white px-2.5 py-1 text-[11px] text-gray-600"
+                  class="ys-press shrink-0 rounded-full border border-[var(--ys-border)] bg-white px-2.5 py-1 text-[11px] text-gray-600"
                   title="取音渠道只有一份设置：补强与收藏自动下载用的是同一串渠道"
                   @click="jumpSection('channels')"
                 >改渠道</button>
@@ -369,7 +425,7 @@
                 </span>
                 <button
                   type="button"
-                  class="ys-press shrink-0 rounded-full border border-gray-200 bg-white px-2.5 py-1 text-[11px] text-gray-600"
+                  class="ys-press shrink-0 rounded-full border border-[var(--ys-border)] bg-white px-2.5 py-1 text-[11px] text-gray-600"
                   @click="jumpSection('quality')"
                 >改音质</button>
               </div>
@@ -377,25 +433,25 @@
               <div class="flex flex-wrap items-center gap-2 pt-0.5">
                 <button
                   type="button"
-                  class="ys-press rounded-full bg-emerald-500 px-3 py-1 text-[11px] font-semibold text-white disabled:opacity-50"
+                  class="ys-press rounded-full bg-emerald-600 px-3 py-1 text-[11px] font-semibold text-white disabled:opacity-50"
                   :disabled="upgradeBusy"
                   title="不管 24 小时冷却，现在就把欠得最久的那几首再试一遍"
                   @click="runUpgrade(true)"
                 >立即补一轮</button>
                 <button
                   type="button"
-                  class="ys-press rounded-full border border-gray-200 bg-white px-3 py-1 text-[11px] text-gray-600 disabled:opacity-50"
+                  class="ys-press rounded-full border border-[var(--ys-border)] bg-white px-3 py-1 text-[11px] text-gray-600 disabled:opacity-50"
                   :disabled="upgradeBusy"
                   title="只补「本来就该补」的那批，不给刚失败过的再打电话"
                   @click="runUpgrade(false)"
                 >按计划补</button>
-                <span class="text-[11px] text-[var(--ys-text-faint)]">{{ upgradePendingText }}</span>
+                <span class="text-[11px] text-[var(--ys-text-aux)]">{{ upgradePendingText }}</span>
               </div>
               <p v-if="upgrade.note" class="text-[11px] text-emerald-600">{{ upgrade.note }}</p>
             </div>
           </div>
 
-          <div class="rounded-xl border border-gray-100 bg-gray-50/60 px-3 py-2.5">
+          <div class="rounded-xl border border-[var(--ys-border)] bg-[var(--ys-surface-sunken)] px-3 py-2.5">
             <div class="flex items-center justify-between gap-3">
               <div class="min-w-0">
                 <span class="text-[13px] font-medium text-[var(--ys-text)]">下载时附带</span>
@@ -404,7 +460,7 @@
                 </p>
               </div>
             </div>
-            <div class="mt-2 space-y-2 border-t border-gray-100 pt-2">
+            <div class="mt-2 space-y-2 border-t border-[var(--ys-border)] pt-2">
               <div class="flex items-start justify-between gap-3">
                 <div class="min-w-0">
                   <div class="text-xs font-medium text-gray-700">歌词</div>
@@ -418,7 +474,7 @@
                   :disabled="lyricBusy"
                   @click="toggleLyric"
                   :class="['relative w-11 h-6 rounded-full transition-colors shrink-0 disabled:opacity-50',
-                           lyricAutoDownload ? 'bg-emerald-500' : 'bg-black/[0.12]']">
+                           lyricAutoDownload ? 'bg-emerald-600' : 'bg-black/[0.12]']">
                   <span :class="['absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform',
                                  lyricAutoDownload ? 'translate-x-5' : '']" />
                 </button>
@@ -436,7 +492,7 @@
                   :disabled="coverBusy"
                   @click="toggleCover"
                   :class="['relative w-11 h-6 rounded-full transition-colors shrink-0 disabled:opacity-50',
-                           coverEmbed ? 'bg-emerald-500' : 'bg-black/[0.12]']">
+                           coverEmbed ? 'bg-emerald-600' : 'bg-black/[0.12]']">
                   <span :class="['absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform',
                                  coverEmbed ? 'translate-x-5' : '']" />
                 </button>
@@ -451,10 +507,10 @@
 
       <!-- ③ 关于 / 导出日志：不再是一张「带图标方块」的卡（那套视觉语言属于内容分区），
            收尾信息用一个安静的信息块：版本一行 + 两个轻按钮。 -->
-      <section class="mt-1 rounded-[var(--ys-radius-card)] border border-[var(--ys-border)] bg-[#FBFBFD] px-4 py-3.5 sm:px-5">
+      <section class="mt-1 rounded-[var(--ys-radius-card)] border border-[var(--ys-border)] bg-[var(--ys-surface-sunken)] px-4 py-3.5 sm:px-5">
         <div class="flex flex-wrap items-center gap-x-5 gap-y-1 text-[11.5px] text-[var(--ys-text-muted)]">
           <span class="flex items-center gap-1.5">
-            <Info class="h-3.5 w-3.5 text-[var(--ys-text-faint)]" :stroke-width="1.8" />
+            <Info class="h-3.5 w-3.5 text-[var(--ys-text-aux)]" :stroke-width="1.8" />
             曲率 <span class="font-mono">{{ version || '…' }}</span>
           </span>
           <span>自用；没有商用的取舍</span>
@@ -462,20 +518,30 @@
         <div class="mt-2.5 flex flex-wrap items-center gap-2">
           <button
             type="button"
-            class="ys-press rounded-[9px] border border-[var(--ys-border)] bg-white px-3 py-1.5 text-[12px] font-medium text-[var(--ys-text-muted)] transition-colors hover:text-[var(--ys-text)] disabled:opacity-50"
+            class="ys-press rounded-[8px] border border-[var(--ys-border)] bg-white px-3 py-1.5 text-[12px] font-medium text-[var(--ys-text-muted)] transition-colors hover:text-[var(--ys-text)] disabled:opacity-50"
             :disabled="exporting"
             :title="exportTitle"
             @click="exportLogs"
           >{{ exporting ? '打包中…' : '导出运行日志' }}</button>
           <button
             type="button"
-            class="ys-press rounded-[9px] border border-[var(--ys-border)] bg-white px-3 py-1.5 text-[12px] font-medium text-[var(--ys-text-muted)] transition-colors hover:text-[var(--ys-text)]"
+            class="ys-press rounded-[8px] border border-[var(--ys-border)] bg-white px-3 py-1.5 text-[12px] font-medium text-[var(--ys-text-muted)] transition-colors hover:text-[var(--ys-text)]"
             title="查看软件功能、第三方音源与内容授权的使用说明"
             @click="emit('open-disclaimer')"
           >免责声明与合规</button>
-          <span v-if="exportNote" class="text-[12px] text-[var(--ys-text-faint)]">{{ exportNote }}</span>
+          <!-- 2026-10-28：开放接口从「左上角品牌按钮」搬到这里（品牌按钮改成了 AI 助手入口） -->
+          <button
+            type="button"
+            class="ys-press rounded-[8px] border border-[var(--ys-border)] bg-white px-3 py-1.5 text-[12px] font-medium text-[var(--ys-text-muted)] transition-colors hover:text-[var(--ys-text)]"
+            title="查看供 AI 与外部程序调用的 HTTP 接口文档，一键复制 curl"
+            @click="showApiModal = true"
+          >开放接口</button>
+          <span v-if="exportNote" class="text-[12px] text-[var(--ys-text-aux)]">{{ exportNote }}</span>
         </div>
       </section>
+
+      <!-- 开放接口弹窗：只在打开时挂载（ApiConsole 会拉一次接口目录，不必常驻） -->
+      <ApiModal v-model="showApiModal" />
 
     </div>
   </PageShell>
@@ -485,17 +551,24 @@
 import { computed, onMounted, ref } from 'vue'
 import PageShell from './PageShell.vue'
 import DisclosureSection from './DisclosureSection.vue'
-import { AudioLines, ChevronDown, ChevronUp, Download, FileAudio, FolderCog, Info, Route } from 'lucide-vue-next'
+// 2026-10-29：命名解析规则从「补全整理 → 歌名修复」搬来（配置不是操作）
+import NameRulesPanel from './NameRulesPanel.vue'
+import { AudioLines, ChevronDown, ChevronUp, Download, FileAudio, FileSearch, FolderCog, Info, Palette, Route } from 'lucide-vue-next'
 import { ConfigAPI, DownloadAPI, LogsAPI, AppAPI, ChartInjectAPI, SourcesAPI, QualityAPI, DEFAULT_AUTO_DOWNLOAD_CHANNELS } from '../api/client'
 import { QUALITY_OVERRIDE_OPTIONS } from '../services/qualityOverride'
+import { THEMES, loadTheme, setTheme } from '../services/theme'
 import { fail, apiError } from '../services/userMsg'
 import { logInfo } from '../services/appLog'
 import InlineNotice from './InlineNotice.vue'
 import NasDirPicker from './NasDirPicker.vue'
 import UpdateCard from './UpdateCard.vue'
+import ApiModal from './ApiModal.vue'
 
 /** 条款弹窗由 App.vue 持有（openDisclaimer），这里只负责把「想看条款」这件事报上去。 */
 const emit = defineEmits(['open-disclaimer'])
+
+/** 开放接口弹窗：本地状态即可（只有设置页自己会打开它）。 */
+const showApiModal = ref(false)
 
 // 成功/失败提示：沿用全局的 InlineNotice（AiSettingsPanel 同款），
 // 不是弹 toast —— 本项目提示已经够多了，能就地显示就别再弹一层。
@@ -504,6 +577,21 @@ const emit = defineEmits(['open-disclaimer'])
 const openKey = ref('')
 function toggleSection(k) {
   openKey.value = openKey.value === k ? '' : k
+}
+
+/* ── 外观（主题色，2026-10-29）────────────────────────────────────────
+   主题是「整站强调色」，不是单个组件的状态，所以实现极薄：
+   选中的 id → setTheme() → 写 html 的 data-theme + 存到服务端偏好，
+   其余交给 CSS 变量（--ys-accent-* 一族）。
+   这里只需要记住「当前是哪个」，好让色块显示选中态。 */
+const themeList = THEMES
+const themeId = ref(loadTheme())
+const themeSummary = computed(() => {
+  const t = themeList.find((x) => x.id === themeId.value)
+  return t ? `强调色 · ${t.label}` : '强调色 · 钴蓝'
+})
+function pickTheme(id) {
+  themeId.value = setTheme(id)
 }
 // 「跳到某个设置分组」而不是「切换」：从补强那块点「改渠道」时，目标分组可能
 // 本来就没展开 —— 用 toggle 会出现「点了没反应」（它刚好是开着的就被关掉了）。
@@ -515,11 +603,16 @@ const qualitySummary = computed(() => {
   const o = qualityOptions.find((x) => x.value === qualityValue.value)
   return o ? o.label : '跟随各处设置'
 })
+
 const namingSummary = computed(() => {
   const o = namingOptions.find((x) => x.value === namingValue.value)
   return o ? o.sample || o.label : '默认命名'
 })
 const dirsSummary = computed(() => downloadDir.value || '默认位置')
+// 命名解析规则小节：规则条数就是这个配置「有多重」的最好概括。
+// NameRulesPanel 自己拉规则，父组件不知道条数 —— 所以这里给一句稳定的说明，
+// 具体几条让用户点开看（比在这里再请求一次接口诚实）。
+const nameRulesSummary = '自定义正则 · 命中时不调 AI'
 const behaviorSummary = computed(() => {
   const on = []
   if (favAutoDownload.value) on.push('收藏自动下载')
@@ -720,6 +813,8 @@ const exportTitle = '打包日志、环境信息与配置（凭据已抹除）�
 
 onMounted(() => {
   load()
+  // 主题可能在别的设备上改过（服务端偏好优先），进设置页时同步一次显示。
+  themeId.value = loadTheme()
 })
 
 async function load() {

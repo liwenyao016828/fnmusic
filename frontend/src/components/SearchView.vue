@@ -4,14 +4,14 @@
          页面名「发现音乐」已搬到 App.vue 顶部那一条栏（2026-10-18 用户口径：「把发现了、
          本地曲库等页面名，移到 logo 和音源管理那行去」），这里只在**搜索结果态**出现
          「返回发现」+ 平台筛选 —— 发现态下整条不渲染，hero 直接从顶部开始。 -->
-    <div v-if="currentMode === 'search'" class="px-5 sm:px-8 pt-4 sm:pt-5 pb-3 bg-white border-b border-gray-100 shrink-0">
+    <div v-if="currentMode === 'search'" class="px-5 sm:px-8 pt-4 sm:pt-5 pb-3 bg-white border-b border-[var(--ys-border)] shrink-0">
       <div class="max-w-[1500px] mx-auto space-y-2.5">
 
         <!-- 搜索结果态：给一个回发现页的入口 —— 原来这个「清空并返回」按钮挂在搜索框上，
              2026-09-28 搜索框搬去底部播放栏后，得在这里留一个，否则进了结果页回不去。 -->
         <button
           @click="resetToDiscover"
-          class="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-semibold text-gray-600 transition-all hover:border-emerald-300 hover:text-emerald-600"
+          class="rounded-lg border border-[var(--ys-border)] bg-white px-3 py-1.5 text-xs font-semibold text-gray-600 transition-all hover:border-emerald-200 hover:text-emerald-600"
         >← 返回发现</button>
 
         <div class="flex items-center gap-1.5 overflow-x-auto pb-0.5">
@@ -20,7 +20,7 @@
             @click="switchPlatform(p.id)"
             :class="[
               'px-2.5 sm:px-3 py-1 rounded-lg text-xs font-medium transition-all whitespace-nowrap flex items-center gap-1',
-              selectedPlatform === p.id ? 'bg-emerald-500 text-white shadow-sm' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+              selectedPlatform === p.id ? 'bg-emerald-600 text-white shadow-sm' : 'bg-[var(--ys-surface-control)] text-gray-500 hover:bg-[var(--ys-surface-hover)]'
             ]"
           >
             <span>{{ p.icon }}</span><span>{{ p.name }}</span>
@@ -37,7 +37,7 @@
         官方协议由后端内置，免脚本即可搜索 / 逛榜单 / 看歌单 / 看歌词；
         只有「取直链」这一步需要 LX 协议。因此这里只提示，不禁用。
       -->
-      <div v-if="!hasActiveSource" class="max-w-[1500px] mx-auto px-5 pt-6 pb-0 sm:px-8 sm:pt-7">
+      <div v-if="!hasActiveSource" class="max-w-[1500px] mx-auto px-4 pt-5 pb-0 sm:px-7 sm:pt-6">
         <div class="flex flex-wrap items-center gap-2.5 rounded-xl border border-amber-200 bg-amber-50/70 px-4 py-2.5 text-[11px] leading-relaxed text-amber-900">
           <Radio class="w-3.5 h-3.5 shrink-0 text-amber-600" />
           <span class="min-w-0 flex-1">
@@ -46,18 +46,18 @@
           </span>
           <button
             @click="emit('navigate', 'sources')"
-            class="shrink-0 cursor-pointer rounded-lg bg-emerald-500 px-3 py-1.5 font-semibold text-white transition-all hover:bg-emerald-600"
+            class="shrink-0 cursor-pointer rounded-lg bg-emerald-600 px-3 py-1.5 font-semibold text-white transition-all hover:bg-emerald-700"
           >导入音源</button>
         </div>
       </div>
 
       <!-- 榜单 / 歌单 / 分享链接加载失败：一句原因 + 「查看日志」入口（替代原来的 alert） -->
-      <div v-if="loadError" class="max-w-[1500px] mx-auto px-5 pt-6 pb-0 sm:px-8 sm:pt-7">
+      <div v-if="loadError" class="max-w-[1500px] mx-auto px-4 pt-5 pb-0 sm:px-7 sm:pt-6">
         <InlineNotice :text="loadError" />
       </div>
 
       <!-- 订阅结果提示：订阅成功 / 已停止更新 / 失败原因 -->
-      <div v-if="subNotice" class="max-w-[1500px] mx-auto px-5 pt-6 pb-0 sm:px-8 sm:pt-7">
+      <div v-if="subNotice" class="max-w-[1500px] mx-auto px-4 pt-5 pb-0 sm:px-7 sm:pt-6">
         <InlineNotice :text="subNotice" :tone="subNoticeTone" />
       </div>
 
@@ -67,7 +67,7 @@
         右：深色「正在播放」卡
         主色用项目 emerald，未照搬 flow 的蓝。
       -->
-      <div v-if="currentMode === 'discover' && !isChartsSegment" class="max-w-[1500px] mx-auto px-5 pt-6 pb-0 sm:px-8 sm:pt-7">
+      <div v-if="currentMode === 'discover' && !isChartsSegment" class="max-w-[1500px] mx-auto px-4 pt-5 pb-0 sm:px-7 sm:pt-6">
         <div class="grid grid-cols-1 gap-[18px] lg:grid-cols-[1.35fr_0.65fr]">
 
           <!--
@@ -79,10 +79,10 @@
             榜单有自己的顶层导航段，不必在发现页再放第二个入口。
             说明性文案一律收进 title（悬浮可见），不常驻占位。
           -->
-          <div class="flex min-w-0 flex-col rounded-[18px] border border-[var(--ys-border)] bg-white px-6 py-6 shadow-[0_1px_2px_rgba(0,0,0,0.03)] sm:px-[30px] sm:py-[26px]">
+          <div class="flex min-w-0 flex-col rounded-[var(--ys-radius-block)] border border-[var(--ys-border)] bg-white px-6 py-6 sm:px-[30px] sm:py-[26px]">
             <div class="flex items-start justify-between gap-3">
               <div class="min-w-0">
-                <div class="text-[12px] font-medium tracking-[0.01em] text-[var(--ys-text-faint)]">{{ heroEyebrow }}</div>
+                <div class="text-[12px] font-medium tracking-[0.01em] text-[var(--ys-text-aux)]">{{ heroEyebrow }}</div>
                 <h1
                   class="my-2 text-[26px] font-semibold tracking-[-0.02em] text-[var(--ys-text)] sm:text-[30px]"
                   title="搜索全网曲库，或浏览官方榜单与精选歌单"
@@ -96,7 +96,7 @@
                 :disabled="accountsLoading"
                 title="重新读取两个平台的连接状态"
                 aria-label="刷新连接状态"
-                class="mt-1 grid h-8 w-8 shrink-0 place-items-center rounded-full text-[var(--ys-text-faint)] transition-colors hover:bg-black/[0.04] hover:text-[var(--ys-text)] disabled:opacity-50"
+                class="mt-1 grid h-8 w-8 shrink-0 place-items-center rounded-full text-[var(--ys-text-aux)] transition-colors hover:bg-black/[0.04] hover:text-[var(--ys-text)] disabled:opacity-50"
               >
                 <RefreshCw class="h-4 w-4" :class="accountsLoading ? 'animate-spin' : ''" />
               </button>
@@ -115,7 +115,7 @@
             <div class="mt-4 grid grid-cols-2 gap-3 md:gap-4">
               <div
                 v-for="p in recommendPlatforms" :key="p.id"
-                class="overflow-hidden rounded-[14px] border border-[var(--ys-border)] bg-[#FAFAFC]"
+                class="overflow-hidden rounded-[12px] border border-[var(--ys-border)] bg-[var(--ys-surface-sunken)]"
               >
                 <!-- 卡片头：平台名与说明全部收进 title，只留品牌标 + 连接状态
                      （用户 2026-10-18：「把图标从 q 改为 qq，w 改为网易，或者你改为他们的
@@ -144,7 +144,7 @@
                         referrerpolicy="no-referrer"
                         @error="(e) => (e.target.style.display = 'none')"
                       />
-                      <div v-else class="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-gray-100 text-[12px] font-bold text-gray-400 sm:h-9 sm:w-9 sm:text-[13px]">
+                      <div v-else class="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[var(--ys-surface-sunken)] text-[12px] font-bold text-gray-500 sm:h-9 sm:w-9 sm:text-[13px]">
                         {{ (p.nickname || p.name).slice(0, 1) }}
                       </div>
                       <div class="min-w-0 flex-1">
@@ -164,19 +164,19 @@
                       :title="p.dailyHint"
                       class="ys-press flex w-full items-center gap-2 rounded-[12px] border border-[var(--ys-border)] px-2.5 py-2.5 text-left hover:border-emerald-500/30 hover:bg-[var(--ys-accent-soft)] disabled:opacity-60 sm:gap-3 sm:px-3.5 sm:py-3"
                     >
-                      <div class="grid h-8 w-8 shrink-0 place-items-center rounded-[10px] bg-[var(--ys-accent-soft)] text-[var(--ys-accent)] sm:h-9 sm:w-9">
+                      <div class="grid h-8 w-8 shrink-0 place-items-center rounded-[8px] bg-[var(--ys-accent-soft)] text-[var(--ys-accent)] sm:h-9 sm:w-9">
                         <CalendarHeart class="w-4 h-4" />
                       </div>
                       <div class="min-w-0 flex-1">
                         <b class="block text-[12px] font-medium text-[var(--ys-text)] sm:text-[13px]">每日推荐</b>
                       </div>
-                      <Loader2 v-if="recommendLoading === p.id + ':daily'" class="w-4 h-4 shrink-0 animate-spin text-emerald-500" />
-                      <ChevronRight v-else class="w-4 h-4 shrink-0 text-[var(--ys-text-faint)]" />
+                      <Loader2 v-if="recommendLoading === p.id + ':daily'" class="w-4 h-4 shrink-0 animate-spin text-emerald-600" />
+                      <ChevronRight v-else class="w-4 h-4 shrink-0 text-[var(--ys-text-aux)]" />
                     </button>
 
                     <!-- 我的歌单（最多 4 个） -->
                     <div v-if="p.playlists.length" class="mt-2.5">
-                      <span class="mb-1.5 block text-[11px] text-[var(--ys-text-faint)]">我的歌单</span>
+                      <span class="mb-1.5 block text-[11px] text-[var(--ys-text-aux)]">我的歌单</span>
                       <div class="flex flex-wrap gap-1.5">
                         <button
                           v-for="pl in p.playlists.slice(0, 4)" :key="pl.id"
@@ -187,7 +187,7 @@
                         >{{ pl.name }}</button>
                       </div>
                     </div>
-                    <p v-else-if="p.playlistsLoading" class="mt-2.5 text-[11px] text-[var(--ys-text-faint)]">正在读取歌单…</p>
+                    <p v-else-if="p.playlistsLoading" class="mt-2.5 text-[11px] text-[var(--ys-text-aux)]">正在读取歌单…</p>
                   </template>
 
                   <!-- 未连接：就地扫码登录（二维码弹窗在本组件里，不再跳到「账号连接」）。
@@ -197,7 +197,7 @@
                       @click="startPlatformLogin(p)"
                       :disabled="!!platformBusy"
                       :title="p.loginHint"
-                      class="ys-press rounded-[10px] bg-emerald-500 px-3.5 py-1.5 text-[12px] font-semibold text-white hover:bg-emerald-600 disabled:opacity-50"
+                      class="ys-press rounded-[8px] bg-emerald-600 px-3.5 py-1.5 text-[12px] font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
                     >{{ platformBusy === p.id + ':qr' ? '正在获取二维码…' : '扫码登录' }}</button>
                   </div>
                 </div>
@@ -221,8 +221,8 @@
                 全角偏细的字形，粗细与描边对不上，是「不像原生控件」的直接原因。
               · 主播放键反转成**白底黑图标**（Apple Music 桌面的做法），整块只有这一个高对比焦点。
           -->
-          <div class="hidden items-center gap-4 rounded-[18px] bg-[#0B0B0C] px-5 py-5 text-white shadow-[0_18px_48px_rgba(0,0,0,0.14)] md:flex">
-            <div class="grid h-[92px] w-[92px] shrink-0 place-items-center overflow-hidden rounded-[14px] bg-white/[0.06] text-white/30">
+          <div class="hidden items-center gap-4 rounded-[var(--ys-radius-block)] bg-[#0B0B0C] px-5 py-5 text-white shadow-[0_18px_48px_rgba(0,0,0,0.14)] md:flex">
+            <div class="grid h-[92px] w-[92px] shrink-0 place-items-center overflow-hidden rounded-[12px] bg-white/[0.06] text-white/30">
               <img
                 v-if="currentSong?.cover"
                 :src="currentSong.cover"
@@ -278,9 +278,9 @@
       -->
       <div
         v-if="currentMode === 'discover' && !isChartsSegment && sortedCategories.length > 0"
-        class="max-w-[1500px] mx-auto px-5 pt-3.5 sm:px-8"
+        class="max-w-[1500px] mx-auto px-4 pt-3.5 sm:px-7"
       >
-        <div class="rounded-[18px] border border-[var(--ys-border)] bg-white px-2.5 py-2 shadow-[0_1px_2px_rgba(0,0,0,0.03)] sm:px-3.5 sm:py-2.5">
+        <div class="rounded-[var(--ys-radius-block)] border border-[var(--ys-border)] bg-white px-2.5 py-2 sm:px-3.5 sm:py-2.5">
           <div class="flex items-start gap-1.5">
             <div
               ref="catBoxRef"
@@ -320,7 +320,7 @@
         同一份 toplists、同一个卡片网格、同一个注入开关，只是入口不同。
       -->
 
-      <div v-if="currentMode === 'discover' && isChartsSegment" class="max-w-[1500px] mx-auto px-5 py-6 pb-28 pb-dock sm:px-8 sm:py-7 sm:pb-24">
+      <div v-if="currentMode === 'discover' && isChartsSegment" class="max-w-[1500px] mx-auto px-4 py-4 pb-28 pb-dock sm:px-7 sm:py-6 sm:pb-24">
         <!-- 榜单网格：**只**长在导航「榜单」段里。
              2026-10-18 用户口径：「去掉排行榜单和精选歌单（切换胶囊），发现页默认展示歌单」——
              发现页不再渲染这张网格，删掉 ChartManager.vue 后「榜单管理」收成这里一个折叠面板：
@@ -331,7 +331,7 @@
             @click="showInjectPanel = !showInjectPanel"
             :aria-expanded="showInjectPanel"
             title="勾选后这些榜单会以在线歌单出现在飞牛音乐里；只保留能播放的曲目，所以会比平台榜单短"
-            class="flex w-full items-center gap-x-2 gap-y-1 rounded-xl border border-gray-100 bg-white px-3.5 py-2.5 text-left transition-colors hover:border-emerald-200"
+            class="flex w-full items-center gap-x-2 gap-y-1 rounded-xl border border-[var(--ys-border)] bg-white px-3.5 py-2.5 text-left transition-colors hover:border-emerald-200"
           >
             <Trophy class="w-4 h-4 shrink-0 text-amber-500" />
             <span class="text-[12px] font-bold text-gray-800 whitespace-nowrap">排行榜单</span>
@@ -343,39 +343,39 @@
             <!-- 面板收着的时候也要能一眼看出注入开没开、有没有在用 -->
             <span
               class="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold whitespace-nowrap"
-              :class="chartInjectEnabled ? 'bg-emerald-50 text-emerald-600' : 'bg-gray-100 text-gray-400'"
+              :class="chartInjectEnabled ? 'bg-emerald-50 text-emerald-600' : 'bg-[var(--ys-surface-sunken)] text-gray-500'"
             >{{ chartInjectEnabled ? '注入已开' : '注入已关' }}</span>
             <ChevronRight
-              class="w-3.5 h-3.5 shrink-0 text-gray-400 transition-transform duration-200 motion-reduce:duration-0"
+              class="w-3.5 h-3.5 shrink-0 text-gray-500 transition-transform duration-200 motion-reduce:duration-0"
               :class="showInjectPanel ? 'rotate-90' : ''"
             />
           </button>
 
           <!-- 展开：与旧「榜单管理」页同一批开关，只是不再各占一屏 -->
-          <div v-if="showInjectPanel" class="mt-2 space-y-2 rounded-xl border border-gray-100 bg-white p-3.5">
+          <div v-if="showInjectPanel" class="mt-2 space-y-2 rounded-xl border border-[var(--ys-border)] bg-white p-3.5">
             <div class="flex flex-wrap items-center gap-2">
               <button
                 type="button"
                 :disabled="chartInjectBusy"
                 @click="toggleChartInjectEnabled"
                 class="rounded-full px-3 py-1 text-[11px] font-bold transition-colors disabled:opacity-40"
-                :class="chartInjectEnabled ? 'bg-emerald-500 text-white' : 'bg-gray-100 text-gray-500'"
+                :class="chartInjectEnabled ? 'bg-emerald-600 text-white' : 'bg-[var(--ys-surface-sunken)] text-gray-500'"
               >{{ chartInjectEnabled ? '已启用' : '已停用' }}</button>
               <button
                 type="button" :disabled="chartInjectBusy" @click="selectAllLoaded"
-                class="rounded-full border border-gray-200 px-3 py-1 text-[11px] font-bold text-gray-600 transition-colors hover:border-emerald-300 hover:text-emerald-600 disabled:opacity-40"
+                class="rounded-full border border-[var(--ys-border)] px-3 py-1 text-[11px] font-bold text-gray-600 transition-colors hover:border-emerald-200 hover:text-emerald-600 disabled:opacity-40"
               >全部启用</button>
               <button
                 type="button" :disabled="chartInjectBusy" @click="clearChartInjects"
-                class="rounded-full border border-gray-200 px-3 py-1 text-[11px] font-bold text-gray-600 transition-colors hover:border-rose-300 hover:text-rose-500 disabled:opacity-40"
+                class="rounded-full border border-[var(--ys-border)] px-3 py-1 text-[11px] font-bold text-gray-600 transition-colors hover:border-rose-300 hover:text-rose-500 disabled:opacity-40"
               >全部关闭</button>
               <button
                 type="button" :disabled="chartInjectBusy" @click="selectOnlyChartPlatform('wy')"
-                class="rounded-full border border-gray-200 px-3 py-1 text-[11px] font-bold text-gray-600 transition-colors hover:border-emerald-300 hover:text-emerald-600 disabled:opacity-40"
+                class="rounded-full border border-[var(--ys-border)] px-3 py-1 text-[11px] font-bold text-gray-600 transition-colors hover:border-emerald-200 hover:text-emerald-600 disabled:opacity-40"
               >仅网易云</button>
               <button
                 type="button" :disabled="chartInjectBusy" @click="selectOnlyChartPlatform('tx')"
-                class="rounded-full border border-gray-200 px-3 py-1 text-[11px] font-bold text-gray-600 transition-colors hover:border-emerald-300 hover:text-emerald-600 disabled:opacity-40"
+                class="rounded-full border border-[var(--ys-border)] px-3 py-1 text-[11px] font-bold text-gray-600 transition-colors hover:border-emerald-200 hover:text-emerald-600 disabled:opacity-40"
               >仅 QQ 音乐</button>
               <span class="text-[10px] text-gray-300">{{ chartInjectBusy ? '保存中…' : injectSavedText }}</span>
             </div>
@@ -383,10 +383,10 @@
             <!-- 页面注入开关：注的是**飞牛自带页面**（首页/歌单页那几个卡），与上面「榜单进歌单」是两件事。
                  解释文字收进 title，不再常驻两行小字。 -->
             <label
-              class="flex cursor-pointer items-start gap-2 rounded-lg bg-gray-50 px-3 py-2"
+              class="flex cursor-pointer items-start gap-2 rounded-lg bg-[var(--ys-surface-sunken)] px-3 py-2"
               title="关掉就逐字节原样返回官方页面 —— 页面显示不对时这是退路；改动在飞牛页面下次加载时生效"
             >
-              <input type="checkbox" :checked="uiInjectEnabled" :disabled="chartInjectBusy" @change="toggleUIInject" class="mt-0.5 shrink-0 accent-emerald-500" />
+              <input type="checkbox" :checked="uiInjectEnabled" :disabled="chartInjectBusy" @change="toggleUIInject" class="mt-0.5 shrink-0" />
               <span class="min-w-0 text-[11px] leading-snug text-gray-600">
                 <strong class="text-gray-700">同时重排飞牛自带的页面</strong>
               </span>
@@ -395,7 +395,7 @@
             <!-- 显示首数（用户 2026-10-24：榜单首数可设）。
                  这里只设**全局**的；单个榜要在卡片上单独调（见卡片右上角的下拉）。
                  后端 0 = 跟随内置默认（100），所以「默认」这一档发的是 clear。 -->
-            <div class="flex flex-wrap items-center gap-2 rounded-lg bg-gray-50 px-3 py-2"
+            <div class="flex flex-wrap items-center gap-2 rounded-lg bg-[var(--ys-surface-sunken)] px-3 py-2"
                  title="每个注入的榜单在飞牛音乐里显示多少首；单个榜单可以在卡片上单独改">
               <span class="text-[11px] font-bold text-gray-700 whitespace-nowrap">显示首数</span>
               <SelectField
@@ -404,11 +404,11 @@
                 :options="CHART_SIZE_OPTIONS"
                 @update:model-value="onPickGlobalChartSize"
               />
-              <span class="text-[10px] text-gray-400">{{ chartSizeHint }}</span>
+              <span class="text-[10px] text-gray-500">{{ chartSizeHint }}</span>
             </div>
 
             <!-- 音质：勾选的榜单在飞牛里点播放/下载时用哪一档（后端拦截层读它） -->
-            <div class="flex flex-wrap items-center gap-2 rounded-lg bg-gray-50 px-3 py-2" :title="autoDownloadQualityHint">
+            <div class="flex flex-wrap items-center gap-2 rounded-lg bg-[var(--ys-surface-sunken)] px-3 py-2" :title="autoDownloadQualityHint">
               <span class="text-[11px] font-bold text-gray-700 whitespace-nowrap">音质下载</span>
               <SelectField
                 class="w-36"
@@ -421,15 +421,15 @@
             <p v-if="chartInjectError" class="text-[11px] text-rose-500">{{ chartInjectError }}</p>
           </div>
         </div>
-        <div v-if="isLoadingCharts" class="flex flex-col items-center justify-center py-20 text-gray-400">
-          <Loader2 class="w-8 h-8 animate-spin text-emerald-500 mb-2" />
+        <div v-if="isLoadingCharts" class="flex flex-col items-center justify-center py-20 text-gray-500">
+          <Loader2 class="w-8 h-8 animate-spin text-emerald-600 mb-2" />
           <p class="text-xs">正在载入权威榜单...</p>
         </div>
         <div v-else class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
           <div
             v-for="chart in toplists" :key="chart.id"
             @click="openChartDetail(chart)"
-            class="relative bg-white rounded-xl border border-gray-100 p-2.5 hover:border-emerald-300 hover:shadow-sm transition-all cursor-pointer flex items-center gap-3 group"
+            class="relative bg-white rounded-xl border border-[var(--ys-border)] p-2.5 hover:border-emerald-200 hover:shadow-sm transition-all cursor-pointer flex items-center gap-3 group"
           >
             <!--
               注入开关（右上角）。`@click.stop` —— 卡片整块是「看榜单详情」，
@@ -443,8 +443,8 @@
               @click.stop="toggleChartInject(chart)"
               class="absolute right-2 top-2 z-10 rounded-full px-2 py-0.5 text-[10px] font-bold transition-all disabled:opacity-40 whitespace-nowrap"
               :class="isChartInjected(chart)
-                ? 'bg-emerald-500 text-white shadow-sm'
-                : 'bg-gray-100/90 text-gray-400 opacity-60 group-hover:opacity-100 group-hover:bg-emerald-50 group-hover:text-emerald-600'"
+                ? 'bg-emerald-600 text-white shadow-sm'
+                : 'bg-[var(--ys-surface-sunken)] text-gray-500 opacity-60 group-hover:opacity-100 group-hover:bg-emerald-50 group-hover:text-emerald-600'"
             >{{ isChartInjected(chart) ? '★ 已注入' : '+ 注入' }}</button>
             <!-- 已注入的榜：右下角标出「这个榜显示几首」，点一下改成别的数（只改这一个榜）。
                  未注入时不显示 —— 那是配置噪音。 -->
@@ -454,16 +454,16 @@
               :disabled="chartInjectBusy"
               title="点一下改这个榜显示多少首（只影响这一个榜）"
               @click.stop="cycleChartSize(chart)"
-              class="absolute bottom-2 right-2 z-10 rounded-full bg-gray-100/90 px-2 py-0.5 text-[10px] font-bold text-gray-500 transition-colors hover:bg-emerald-50 hover:text-emerald-600 disabled:opacity-40 whitespace-nowrap"
+              class="absolute bottom-2 right-2 z-10 rounded-full bg-[var(--ys-surface-sunken)] px-2 py-0.5 text-[10px] font-bold text-gray-500 transition-colors hover:bg-emerald-50 hover:text-emerald-600 disabled:opacity-40 whitespace-nowrap"
             >{{ chartSizeOf(chart) }} 首</button>
             <!-- 固定 76x76px 尺寸封面，杜绝撑大 -->
             <div
-              class="relative rounded-lg overflow-hidden bg-gray-100 shrink-0 shadow-2xs"
+              class="relative rounded-lg overflow-hidden bg-[var(--ys-surface-sunken)] shrink-0"
               style="width: 76px; height: 76px; min-width: 76px; min-height: 76px; max-width: 76px; max-height: 76px;"
             >
               <img :src="chart.cover" alt="cover" referrerpolicy="no-referrer" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" />
               <div class="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
-                <div class="w-7 h-7 rounded-full bg-emerald-500 text-white flex items-center justify-center shadow-md">
+                <div class="w-7 h-7 rounded-full bg-emerald-600 text-white flex items-center justify-center shadow-md">
                   <Play class="w-3.5 h-3.5 ml-0.5 fill-current" />
                 </div>
               </div>
@@ -479,7 +479,7 @@
               </h4>
               <div class="space-y-0.5">
                 <p v-for="(t, idx) in chart.tracks.slice(0, 3)" :key="idx" class="text-[11px] text-gray-500 truncate leading-tight">
-                  <span class="text-gray-400 font-mono text-[10px] mr-1">{{ idx + 1 }}.</span>
+                  <span class="text-gray-500 font-mono text-[10px] mr-1">{{ idx + 1 }}.</span>
                   {{ t }}
                 </p>
                 <p v-if="!chart.tracks.length" class="text-[10px] text-gray-300 italic">点击查看完整歌曲</p>
@@ -490,21 +490,21 @@
       </div>
 
       <!-- 2. 发现大厅 - 精选歌单网格（发现段的**默认也是唯一**的内容，不再有榜单/歌单切换） -->
-      <div v-else-if="currentMode === 'discover' && !isChartsSegment" class="max-w-[1500px] mx-auto px-5 py-6 pb-28 pb-dock sm:px-8 sm:py-7 sm:pb-24">
-        <div v-if="isLoadingPlaylists" class="flex flex-col items-center justify-center py-20 text-gray-400">
-          <Loader2 class="w-8 h-8 animate-spin text-emerald-500 mb-2" />
+      <div v-else-if="currentMode === 'discover' && !isChartsSegment" class="max-w-[1500px] mx-auto px-4 py-4 pb-28 pb-dock sm:px-7 sm:py-6 sm:pb-24">
+        <div v-if="isLoadingPlaylists" class="flex flex-col items-center justify-center py-20 text-gray-500">
+          <Loader2 class="w-8 h-8 animate-spin text-emerald-600 mb-2" />
           <p class="text-xs">正在载入精选歌单...</p>
         </div>
         <div v-else class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 sm:gap-3.5">
           <div
             v-for="pl in playlists" :key="pl.id"
             @click="openPlaylistDetail(pl)"
-            class="bg-white rounded-xl border border-gray-100 p-2 hover:border-emerald-300 hover:shadow-sm transition-all cursor-pointer group flex flex-col"
+            class="bg-white rounded-xl border border-[var(--ys-border)] p-2 hover:border-emerald-200 hover:shadow-sm transition-all cursor-pointer group flex flex-col"
           >
-            <div class="relative aspect-square rounded-lg overflow-hidden bg-gray-100 mb-2">
+            <div class="relative aspect-square rounded-lg overflow-hidden bg-[var(--ys-surface-sunken)] mb-2">
               <img :src="pl.cover" alt="cover" referrerpolicy="no-referrer" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" />
               <div class="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
-                <div class="w-8 h-8 rounded-full bg-emerald-500 text-white flex items-center justify-center shadow-lg">
+                <div class="w-8 h-8 rounded-full bg-emerald-600 text-white flex items-center justify-center shadow-lg">
                   <Play class="w-4 h-4 ml-0.5 fill-current" />
                 </div>
               </div>
@@ -515,7 +515,7 @@
             <h4 class="text-xs font-semibold text-gray-800 line-clamp-2 leading-snug group-hover:text-emerald-600 transition-colors mb-1">
               {{ pl.title }}
             </h4>
-            <p class="text-[10px] text-gray-400 truncate mt-auto">
+            <p class="text-[10px] text-gray-500 truncate mt-auto">
               {{ pl.track_count ? pl.track_count + ' 首 · ' : '' }}{{ pl.creator }}
             </p>
           </div>
@@ -523,20 +523,20 @@
       </div>
 
       <!-- 3. 歌曲列表视图 (搜索结果 / 榜单详情 / 歌单详情 公用) -->
-      <div v-else class="max-w-[1500px] mx-auto px-5 py-6 pb-28 pb-dock sm:px-8 sm:py-7 sm:pb-24 space-y-3">
+      <div v-else class="max-w-[1500px] mx-auto px-4 py-4 pb-28 pb-dock sm:px-7 sm:py-6 sm:pb-24 space-y-3">
         <!-- 头部导航与批量操作工具栏 -->
-        <div class="bg-white rounded-xl border border-gray-100 p-3.5 shadow-xs">
+        <div class="bg-white rounded-xl border border-[var(--ys-border)] p-3.5">
           <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-2.5">
             <div class="flex items-center gap-2.5 min-w-0">
               <button
                 @click="resetToDiscover"
-                class="p-1.5 rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-100 transition-colors shrink-0"
+                class="p-1.5 rounded-lg border border-[var(--ys-border)] text-gray-500 hover:bg-[var(--ys-surface-hover)] transition-colors shrink-0"
                 title="返回发现"
               >
                 <ArrowLeft class="w-4 h-4" />
               </button>
               <div
-                class="rounded-lg overflow-hidden bg-gray-100 shrink-0 flex items-center justify-center shadow-2xs"
+                class="rounded-lg overflow-hidden bg-[var(--ys-surface-sunken)] shrink-0 flex items-center justify-center"
                 style="width: 44px; height: 44px; min-width: 44px; min-height: 44px;"
               >
                 <img v-if="currentDetailMeta?.cover" :src="currentDetailMeta.cover" alt="cover" referrerpolicy="no-referrer" class="w-full h-full object-cover" />
@@ -545,9 +545,9 @@
               <div class="min-w-0">
                 <h3 class="text-sm font-bold text-gray-800 flex items-center gap-2 truncate">
                   <span class="truncate">{{ currentDetailMeta?.title || (query ? `搜索：“${query}”` : '歌曲列表') }}</span>
-                  <span class="text-xs text-gray-400 font-normal shrink-0">({{ activeSongList.length }} 首)</span>
+                  <span class="text-xs text-gray-500 font-normal shrink-0">({{ activeSongList.length }} 首)</span>
                 </h3>
-                <p class="text-xs text-gray-400 truncate max-w-md">
+                <p class="text-xs text-gray-500 truncate max-w-md">
                   {{ currentDetailMeta?.desc || (currentMode === 'search' ? '跨平台聚合搜索结果' : '曲率 播放列表') }}
                 </p>
               </div>
@@ -559,7 +559,7 @@
               <button
                 @click="playAllSongs"
                 :disabled="!activeSongList.length"
-                class="px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-semibold flex items-center gap-1.5 shadow-sm transition-all disabled:opacity-50"
+                class="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center gap-1.5 shadow-sm transition-all disabled:opacity-50"
               >
                 <Play class="w-3.5 h-3.5 fill-current" />
                 <span>播放全部</span>
@@ -568,7 +568,7 @@
               <!-- 播放模式切换 (顺序、随机、循环) -->
               <button
                 @click="cyclePlayMode"
-                class="px-2.5 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-medium flex items-center gap-1.5 transition-all"
+                class="px-2.5 py-1.5 rounded-lg bg-[var(--ys-surface-control)] hover:bg-[var(--ys-surface-hover)] text-gray-700 text-xs font-medium flex items-center gap-1.5 transition-all"
                 :title="'当前模式：' + playModeLabel"
               >
                 <component :is="playModeIcon" class="w-3.5 h-3.5 text-emerald-600" />
@@ -579,7 +579,7 @@
               <button
                 @click="batchDownloadAll"
                 :disabled="!activeSongList.length"
-                class="px-3 py-1.5 rounded-lg border transition-all text-xs font-semibold flex items-center gap-1.5 shadow-xs bg-emerald-50 hover:bg-emerald-100 border-emerald-200 text-emerald-700 cursor-pointer"
+                class="px-3 py-1.5 rounded-lg border transition-all text-xs font-semibold flex items-center gap-1.5 bg-emerald-50 hover:bg-emerald-50 border-emerald-200 text-emerald-600 cursor-pointer"
                 title="一键下载当前全部歌曲到 NAS"
               >
                 <HardDriveDownload class="w-3.5 h-3.5 shrink-0" />
@@ -595,7 +595,7 @@
                   v-if="!subscription"
                   @click="openSubDialog"
                   :disabled="subscribingSub || !activeSongList.length"
-                  class="px-3 py-1.5 rounded-lg border transition-all text-xs font-semibold flex items-center gap-1.5 shadow-xs bg-blue-50 hover:bg-blue-100 border-blue-200 text-blue-700 cursor-pointer disabled:opacity-50"
+                  class="px-3 py-1.5 rounded-lg border transition-all text-xs font-semibold flex items-center gap-1.5 bg-blue-50 hover:bg-blue-100 border-blue-200 text-blue-700 cursor-pointer disabled:opacity-50"
                   title="订阅这个歌单：以后新增的歌自动下载 / 同步到飞牛音乐歌单（可选）"
                 >
                   <BellPlus class="w-3.5 h-3.5 shrink-0" />
@@ -606,8 +606,8 @@
                   <span
                     class="px-3 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5"
                     :class="subscription.active
-                      ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
-                      : 'bg-gray-50 border-gray-200 text-gray-500'"
+                      ? 'bg-emerald-50 border-emerald-200 text-emerald-600'
+                      : 'bg-[var(--ys-surface-sunken)] border-[var(--ys-border)] text-gray-500'"
                     :title="subscription.active ? '正在自动下载新增曲目并同步飞牛歌单' : '已暂停，随时可以恢复'"
                   >
                     <BellPlus class="w-3.5 h-3.5 shrink-0" />
@@ -616,7 +616,7 @@
                   <button
                     @click="toggleCurrentSubscription"
                     :disabled="togglingSub"
-                    class="px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-100 text-gray-600 text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50"
+                    class="px-3 py-1.5 rounded-lg border border-[var(--ys-border)] hover:bg-[var(--ys-surface-hover)] text-gray-600 text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50"
                   >
                     <span>{{ togglingSub ? '处理中…' : (subscription.active ? '停止更新' : '恢复更新') }}</span>
                   </button>
@@ -628,7 +628,7 @@
                 v-else
                 @click="openMonitorDialog"
                 :disabled="!activeSongList.length"
-                class="px-3 py-1.5 rounded-lg border transition-all text-xs font-semibold flex items-center gap-1.5 shadow-xs bg-blue-50 hover:bg-blue-100 border-blue-200 text-blue-700 cursor-pointer disabled:opacity-50"
+                class="px-3 py-1.5 rounded-lg border transition-all text-xs font-semibold flex items-center gap-1.5 bg-blue-50 hover:bg-blue-100 border-blue-200 text-blue-700 cursor-pointer disabled:opacity-50"
                 title="把当前列表建成定时监控：以后该来源有新歌会自动下载"
               >
                 <BellPlus class="w-3.5 h-3.5 shrink-0" />
@@ -638,7 +638,7 @@
               <!-- 设置下载目录 -->
               <button
                 @click="downloadManager.openDirModal()"
-                class="px-2 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-100 text-gray-600 text-xs flex items-center gap-1 transition-all cursor-pointer"
+                class="px-2 py-1.5 rounded-lg border border-[var(--ys-border)] hover:bg-[var(--ys-surface-hover)] text-gray-600 text-xs flex items-center gap-1 transition-all cursor-pointer"
                 :title="'当前保存目录：' + downloadManager.currentDownloadDir.value"
               >
                 <Folder class="w-3.5 h-3.5 text-amber-500" />
@@ -650,18 +650,18 @@
         </div>
 
         <!-- 歌曲列表主体 -->
-        <div v-if="isLoadingDetail || isSearching" class="flex flex-col items-center justify-center py-20 text-gray-400">
-          <Loader2 class="w-8 h-8 animate-spin text-emerald-500 mb-2" />
+        <div v-if="isLoadingDetail || isSearching" class="flex flex-col items-center justify-center py-20 text-gray-500">
+          <Loader2 class="w-8 h-8 animate-spin text-emerald-600 mb-2" />
           <p class="text-xs">{{ isSearching ? '正在检索歌曲...' : '正在载入曲目列表...' }}</p>
         </div>
 
-        <div v-else-if="!activeSongList.length" class="flex flex-col items-center justify-center py-20 text-gray-400 bg-white rounded-xl border border-gray-100">
+        <div v-else-if="!activeSongList.length" class="flex flex-col items-center justify-center py-20 text-gray-500 bg-white rounded-xl border border-[var(--ys-border)]">
           <Music2 class="w-10 h-10 text-gray-300 mb-2" />
           <p class="text-sm font-semibold text-gray-600">未找到相关歌曲</p>
-          <p class="text-xs text-gray-400 mt-1">请尝试更换关键词或在「音源管理」载入更多音源</p>
+          <p class="text-xs text-gray-500 mt-1">请尝试更换关键词或在「音源管理」载入更多音源</p>
         </div>
 
-        <div v-else class="bg-white rounded-xl border border-gray-100 divide-y divide-gray-100 overflow-hidden shadow-2xs">
+        <div v-else class="bg-white rounded-xl border border-[var(--ys-border)] divide-y divide-[var(--ys-border)] overflow-hidden">
           <div
             v-for="(song, idx) in activeSongList" :key="song.id || idx"
             @click="playSong(song, idx)"
@@ -674,11 +674,11 @@
             -->
             <span class="w-5 sm:w-6 text-center text-xs text-gray-300 font-mono group-hover:hidden hide-on-touch shrink-0">{{ idx + 1 }}</span>
             <div class="w-5 sm:w-6 hidden group-hover:flex show-on-touch-flex items-center justify-center shrink-0">
-              <Play class="w-3.5 h-3.5 text-emerald-500 fill-current" />
+              <Play class="w-3.5 h-3.5 text-emerald-600 fill-current" />
             </div>
 
             <!-- 封面缩略图 -->
-            <div class="w-9 h-9 rounded-lg overflow-hidden bg-gray-100 shrink-0 flex items-center justify-center shadow-2xs">
+            <div class="w-9 h-9 rounded-lg overflow-hidden bg-[var(--ys-surface-sunken)] shrink-0 flex items-center justify-center">
               <img v-if="song.cover" :src="song.cover" alt="cover" referrerpolicy="no-referrer" class="w-full h-full object-cover" @error="song.cover = ''" />
               <span v-else class="text-base">🎵</span>
             </div>
@@ -688,18 +688,18 @@
               <p class="text-xs sm:text-sm font-medium text-gray-800 truncate group-hover:text-emerald-600 transition-colors">
                 {{ song.name }}
               </p>
-              <p class="text-[11px] text-gray-400 truncate">
+              <p class="text-[11px] text-gray-500 truncate">
                 {{ song.singer }}{{ song.album ? ' · ' + song.album : '' }}
               </p>
             </div>
 
             <!-- 渠道标识 -->
-            <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500 font-mono shrink-0">
+            <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-[var(--ys-surface-sunken)] text-gray-500 font-mono shrink-0">
               {{ song.source || 'wy' }}
             </span>
 
             <!-- 时长 -->
-            <span class="text-xs text-gray-400 font-mono shrink-0 w-11 text-right">
+            <span class="text-xs text-gray-500 font-mono shrink-0 w-11 text-right">
               {{ formatDuration(song.interval || song.duration) }}
             </span>
 
@@ -719,10 +719,10 @@
               <span
                 v-else-if="downloadManager.isSongDownloading(song)"
                 @click="downloadManager.open()"
-                class="px-2 py-0.5 rounded-lg bg-emerald-50/60 text-emerald-600 text-[11px] flex items-center gap-1 cursor-pointer hover:bg-emerald-100 transition-colors"
+                class="px-2 py-0.5 rounded-lg bg-emerald-50/60 text-emerald-600 text-[11px] flex items-center gap-1 cursor-pointer hover:bg-emerald-50 transition-colors"
                 title="点击查看下载任务进度"
               >
-                <Loader2 class="w-3.5 h-3.5 animate-spin text-emerald-500" />
+                <Loader2 class="w-3.5 h-3.5 animate-spin text-emerald-600" />
                 <span class="hidden sm:inline">下载中</span>
               </span>
 
@@ -731,7 +731,7 @@
               <button
                 v-else
                 @click.stop="downloadSingleSong(song)"
-                class="p-1.5 rounded-lg hover:bg-emerald-50 text-gray-400 hover:text-emerald-600 transition-colors cursor-pointer"
+                class="p-1.5 rounded-lg hover:bg-emerald-50 text-gray-500 hover:text-emerald-600 transition-colors cursor-pointer"
                 title="下载歌曲到 NAS"
               >
                 <Download class="w-4 h-4" />
@@ -743,7 +743,7 @@
         <!-- 触底自动加载的状态行：平时不说话，加载中/没有更多才露一句 -->
         <div
           v-if="currentMode === 'search' && !isSearching && activeSongList.length"
-          class="py-3 text-center text-[11px] text-gray-400"
+          class="py-3 text-center text-[11px] text-gray-500"
         >
           <span v-if="isLoadingMore">正在加载更多…</span>
           <span v-else-if="!hasMore && activeSongList.length >= SEARCH_PAGE_SIZE">没有更多了</span>
@@ -778,10 +778,10 @@
   -->
   <Teleport to="body">
     <div v-if="showSubDialog" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs">
-      <div class="bg-white rounded-2xl max-w-md w-full p-5 shadow-2xl border border-gray-100 max-h-[85vh] overflow-y-auto">
+      <div class="bg-white rounded-2xl max-w-md w-full p-5 shadow-2xl border border-[var(--ys-border)] max-h-[85vh] overflow-y-auto">
         <div class="flex items-center justify-between mb-3">
           <h3 class="text-sm font-bold text-gray-800">订阅更新</h3>
-          <button @click="showSubDialog = false" class="text-gray-400 hover:text-gray-600">
+          <button @click="showSubDialog = false" class="text-gray-500 hover:text-gray-600">
             <X class="w-4 h-4" />
           </button>
         </div>
@@ -791,31 +791,31 @@
           <b class="text-amber-600">第一次只记录、不下载</b>，之后每轮自动下载新增曲目。
         </p>
 
-        <div class="rounded-lg border border-gray-200 px-3.5 py-3 mb-3">
+        <div class="rounded-lg border border-[var(--ys-border)] px-3.5 py-3 mb-3">
           <p class="mb-2.5 text-[12px] font-medium text-gray-700">这个订阅要做什么</p>
           <div class="space-y-2.5">
             <div class="flex items-start gap-2.5">
               <button
                 class="flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-1.5 text-[12px] font-medium transition-all"
-                :class="subForm.download ? 'bg-emerald-500 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'"
+                :class="subForm.download ? 'bg-emerald-600 text-white' : 'bg-[var(--ys-surface-control)] text-gray-600 hover:bg-[var(--ys-surface-hover)]'"
                 @click="subForm.download = !subForm.download"
               >
                 <Check v-if="subForm.download" class="w-3.5 h-3.5" />
                 下载到本地曲库
               </button>
-              <span class="pt-1.5 text-[11px] leading-relaxed text-gray-400">每轮发现的新歌自动下载到本地</span>
+              <span class="pt-1.5 text-[11px] leading-relaxed text-gray-500">每轮发现的新歌自动下载到本地</span>
             </div>
             <div class="flex items-start gap-2.5">
               <button
                 class="flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-1.5 text-[12px] font-medium transition-all disabled:opacity-40"
-                :class="subForm.fnos ? 'bg-emerald-500 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'"
+                :class="subForm.fnos ? 'bg-emerald-600 text-white' : 'bg-[var(--ys-surface-control)] text-gray-600 hover:bg-[var(--ys-surface-hover)]'"
                 :disabled="!subFnosReady"
                 @click="subForm.fnos = !subForm.fnos"
               >
                 <Check v-if="subForm.fnos" class="w-3.5 h-3.5" />
                 同步到飞牛歌单
               </button>
-              <span class="pt-1.5 text-[11px] leading-relaxed text-gray-400">
+              <span class="pt-1.5 text-[11px] leading-relaxed text-gray-500">
                 {{ subFnosReady ? '把曲库里匹配上的曲目写进飞牛音乐歌单' : '飞牛音乐未连接，先到「账号连接」登录' }}
               </span>
             </div>
@@ -825,11 +825,11 @@
         <InlineNotice v-if="subNotice" :text="subNotice" :tone="subNoticeTone" />
 
         <div class="flex justify-end gap-2 mt-3">
-          <button @click="showSubDialog = false" class="px-3 py-1.5 rounded-lg text-xs text-gray-500 hover:bg-gray-50">取消</button>
+          <button @click="showSubDialog = false" class="px-3 py-1.5 rounded-lg text-xs text-gray-500 hover:bg-[var(--ys-surface-hover)]">取消</button>
           <button
             @click="subscribeCurrent"
             :disabled="subscribingSub || (!subForm.download && !subForm.fnos)"
-            class="px-3.5 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-semibold disabled:opacity-50"
+            class="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold disabled:opacity-50"
           >{{ subscribingSub ? '订阅中…' : '开始订阅' }}</button>
         </div>
       </div>
@@ -838,10 +838,10 @@
 
   <!-- ── 一键监控弹窗 ── -->
   <Teleport to="body">
-    <div v-if="showMonitorDialog" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs">      <div class="bg-white rounded-2xl max-w-md w-full p-5 shadow-2xl border border-gray-100 max-h-[85vh] overflow-y-auto">
+    <div v-if="showMonitorDialog" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs">      <div class="bg-white rounded-2xl max-w-md w-full p-5 shadow-2xl border border-[var(--ys-border)] max-h-[85vh] overflow-y-auto">
         <div class="flex items-center justify-between mb-3">
           <h3 class="text-sm font-bold text-gray-800">建立定时监控</h3>
-          <button @click="showMonitorDialog = false" class="text-gray-400 hover:text-gray-600">
+          <button @click="showMonitorDialog = false" class="text-gray-500 hover:text-gray-600">
             <X class="w-4 h-4" />
           </button>
         </div>
@@ -854,23 +854,23 @@
         <div class="space-y-3">
           <label class="block text-[11px] text-gray-500">
             监控名称
-            <input v-model="monitorForm.name" class="mt-1 w-full px-2.5 py-1.5 rounded-lg border border-gray-200 text-xs" />
+            <input v-model="monitorForm.name" class="mt-1 w-full px-2.5 py-1.5 rounded-lg border border-[var(--ys-line-control)] text-xs" />
           </label>
           <label class="block text-[11px] text-gray-500">
             歌曲来源
-            <select v-model="monitorForm.mode" class="mt-1 w-full px-2.5 py-1.5 rounded-lg border border-gray-200 text-xs">
+            <select v-model="monitorForm.mode" class="mt-1 w-full px-2.5 py-1.5 rounded-lg border border-[var(--ys-line-control)] text-xs">
               <option value="current">当前列表（{{ activeSongList.length }} 首）</option>
               <option value="playlist">绑定歌单链接（需填写）</option>
             </select>
           </label>
           <label v-if="monitorForm.mode === 'playlist'" class="block text-[11px] text-gray-500">
             歌单链接
-            <input v-model="monitorForm.link" class="mt-1 w-full px-2.5 py-1.5 rounded-lg border border-gray-200 text-xs font-mono"
+            <input v-model="monitorForm.link" class="mt-1 w-full px-2.5 py-1.5 rounded-lg border border-[var(--ys-line-control)] text-xs font-mono"
               placeholder="https://music.163.com/playlist?id=..." />
           </label>
           <label class="block text-[11px] text-gray-500">
             检查间隔
-            <select v-model.number="monitorForm.interval" class="mt-1 w-full px-2.5 py-1.5 rounded-lg border border-gray-200 text-xs">
+            <select v-model.number="monitorForm.interval" class="mt-1 w-full px-2.5 py-1.5 rounded-lg border border-[var(--ys-line-control)] text-xs">
               <option :value="60">每小时</option>
               <option :value="180">每 3 小时</option>
               <option :value="360">每 6 小时</option>
@@ -888,9 +888,9 @@
         />
 
         <div class="mt-4 flex justify-end gap-2">
-          <button @click="showMonitorDialog = false" class="px-3 py-1.5 rounded-lg text-xs text-gray-500 hover:bg-gray-50">取消</button>
+          <button @click="showMonitorDialog = false" class="px-3 py-1.5 rounded-lg text-xs text-gray-500 hover:bg-[var(--ys-surface-hover)]">取消</button>
           <button @click="createMonitorFromList" :disabled="creatingMonitor"
-            class="px-4 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-semibold disabled:opacity-50">
+            class="px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold disabled:opacity-50">
             {{ creatingMonitor ? '创建中...' : '创建并监控' }}
           </button>
         </div>

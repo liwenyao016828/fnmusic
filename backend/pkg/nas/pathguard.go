@@ -42,7 +42,8 @@ var (
 // 顺序：
 //  1. 飞牛开放 API 返回的管理员授权目录（fnOS 正规权限模型，优先）；
 //  2. 环境变量 FN_ALLOWED_ROOTS（冒号分隔）设置了（即使为空串）时，完全覆盖内置列表；
-//  3. 否则使用 getAvailableVolumes()（/vol1..16、/media、/mnt、/home）。
+//  3. 否则使用 getAvailableVolumes()（/vol1..16、/media、/mnt；**不含 /home**，
+//     家目录要走 FN_ALLOWED_ROOTS 或飞牛授权目录显式给出 —— 见那边的注释）。
 //
 // 不存在的条目会被忽略；返回空切片表示不允许访问任何路径（fail closed）。
 // 每次调用都重新探测，以便 NAS 卷在运行时挂载/卸载后立即生效（代价仅为少量 stat）；

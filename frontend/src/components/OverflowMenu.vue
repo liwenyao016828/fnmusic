@@ -23,7 +23,7 @@
   <div ref="rootRef" class="relative shrink-0">
     <button
       type="button"
-      class="ys-press flex items-center gap-1.5 rounded-[10px] text-[var(--ys-text-muted)] transition-colors hover:bg-black/[0.05] hover:text-[var(--ys-text)]"
+      class="ys-press flex items-center gap-1.5 rounded-[8px] text-[var(--ys-text-muted)] transition-colors hover:bg-black/[0.05] hover:text-[var(--ys-text)]"
       :class="label ? 'h-8 px-2.5 text-[12px] font-medium' : 'h-8 w-8 justify-center'"
       :aria-expanded="open"
       aria-haspopup="menu"
@@ -63,7 +63,7 @@
         >
           <component :is="item.icon" v-if="item.icon" class="h-4 w-4 shrink-0 opacity-70" :stroke-width="1.8" />
           <span class="min-w-0 flex-1 truncate">{{ item.label }}</span>
-          <kbd v-if="item.shortcut" class="shrink-0 text-[10px] text-[var(--ys-text-faint)]">{{ item.shortcut }}</kbd>
+          <kbd v-if="item.shortcut" class="shrink-0 text-[10px] text-[var(--ys-text-aux)]">{{ item.shortcut }}</kbd>
         </button>
         <div v-if="grouped" class="my-1 h-px bg-[var(--ys-border)]"></div>
       </div>

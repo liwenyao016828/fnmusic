@@ -3,7 +3,7 @@
     2026-10-25 用户：「元数据补全页面内的路径展示，迁移到五个分段导航行的右边。
     可以点击进行目录选择。移除补全选项里的曲库目录组件。」
 
-    曲库目录是「五个分段共用的一件事」：补全、查重、歌名修复、快照、替换音质
+    曲库目录是「整理页各分段共用的一件事」：补全、修复、快照（2026-10-29 从五段压到三段）
     扫的都是同一个目录，所以它不属于任何一张卡片，也不该藏在补全段的选项弹窗里。
     放在分段导航行右边 —— 看得见当前扫哪里，点一下就换。
 
@@ -13,7 +13,7 @@
   -->
   <button
     type="button"
-    class="ys-press flex min-w-0 max-w-[38vw] items-center gap-1.5 rounded-full border border-[var(--ys-border)] bg-[var(--ys-surface)] px-2.5 py-1 text-[11px] text-[var(--ys-text-muted)] transition-colors hover:border-[var(--ys-accent)]/40 hover:text-[var(--ys-text)] sm:max-w-[260px]"
+    class="ys-press flex min-w-0 max-w-[38vw] items-center gap-1.5 rounded-full border border-[var(--ys-border)] bg-[var(--ys-surface)] px-2.5 py-1 text-[11px] text-[var(--ys-text-muted)] transition-colors hover:border-emerald-500/40 hover:text-[var(--ys-text)] sm:max-w-[260px]"
     :title="`曲库目录：${shown}（点击选择）`"
     @click="open = true"
   >

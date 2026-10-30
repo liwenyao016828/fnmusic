@@ -3,7 +3,7 @@
     v-if="text"
     class="flex items-center gap-2 rounded-lg border px-3 py-2 text-[11px]"
     :class="tone === 'ok'
-      ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+      ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
       : 'border-rose-200 bg-rose-50 text-rose-700'"
   >
     <span class="min-w-0 flex-1 leading-relaxed">{{ text }}</span>

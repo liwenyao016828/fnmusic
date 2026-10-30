@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import {
   VIEWS,
   VIEW_IDS,
+  MOBILE_TAB_IDS,
   defaultSegment,
   segmentsOf,
   isView,
@@ -40,6 +41,9 @@ function collectSources(dir) {
   return out
 }
 
+// 2026-10-29：整理页按「补全 / 修复 / 音质 / 快照」四段重排。
+// 「替换音质」上午被独立成顶层页、下午又被用户叫回去当分段，所以顶层视图**仍是 8 个**
+// —— 顺序就是用户看到的导航顺序：听（发现 / 曲库）→ 管（整理 / 订阅 / 下载）→ 配置（音源 / 账号 / 系统）。
 test('八个顶层视图，顺序 = 导航顺序 = 滑动顺序', () => {
   assert.deepEqual(VIEW_IDS, ['search', 'library', 'tidy', 'push', 'download', 'sources', 'accounts', 'system'])
 })
@@ -90,10 +94,21 @@ test('辅助函数与注册表一致', () => {
   assert.deepEqual(segmentsOf('search').map((s) => s.id), ['discover', 'charts'])
   assert.deepEqual(segmentsOf('library'), [])
   // 补全整理的顶部分段（2026-10-21 用户口径：功能从右上角 ⋯ 升为常驻分段）
-  assert.deepEqual(segmentsOf('tidy').map((s) => s.id), ['complete', 'dedupe', 'audit', 'records', 'quality'])
+  // 2026-10-29 分类重排：按用户心智分四段 —— 补全（缺东西）/ 修复（东西不对）/
+  // 音质（换音频文件）/ 快照（怕出事）；「文件名解析 / 命名解析」搬去设置。
+  assert.deepEqual(segmentsOf('tidy').map((s) => s.id), ['complete', 'repair', 'quality', 'records'])
   assert.equal(defaultSegment('tidy'), 'complete')
+  // 老入口 'complete' 照旧落到整理页的补全段
   assert.equal(resolveRoute('complete').view, 'tidy')
   assert.equal(resolveRoute('complete').segment, 'complete')
+  // 老段 id 不能静默落到默认段：dedupe / audit 都并进了「修复」
+  assert.equal(resolveRoute('tidy', 'dedupe').segment, 'repair')
+  assert.equal(resolveRoute('tidy', 'audit').segment, 'repair')
+  // 「替换音质」回到整理页第四段：两条老入口都得落在它上面，不许静默掉回补全段
+  assert.deepEqual(resolveRoute('tidy', 'quality'), { view: 'tidy', segment: 'quality', unknown: false })
+  // 它当独立页时留下的 `#quality` 收藏 / 偏好：解析到整理页的音质段（不是默认段）
+  assert.deepEqual(resolveRoute('quality'), { view: 'tidy', segment: 'quality', unknown: false })
+  assert.equal(isView('quality'), false)  // 已不是顶层页
   assert.equal(isView('sources'), true)
   assert.equal(isView('charts'), false) // 榜单已不是顶层页
 })
@@ -130,11 +145,38 @@ test('每个顶层视图与每个分段都登记了图标（漏了就是一个�
 test('App.vue 的分页槽位与注册表一一对应（防孤儿页 ②）', () => {
   const app = readFileSync(path.join(SRC, 'App.vue'), 'utf8')
   const slots = new Set()
-  // 只认真正的插槽声明（`<template #view-…>`）——注释里会举例写 `#view-xxx`，别把它当槽位
+  // 只认真正的插槽声明（`<template #view-…>` / `<template #inner-…>`）——注释里会举例写
+  // `#view-xxx`，别把它当槽位。
   for (const m of app.matchAll(/<template\s+#view-([a-z0-9_-]+)/g)) slots.add(m[1])
+  for (const m of app.matchAll(/<template\s+#inner-([a-z0-9_-]+)-[a-z0-9_-]+/g)) slots.add(m[1])
+  /**
+   * ⚠️ 2026-10-29：分段页（> 1 段）**只写 `#inner-<页>-<段>`，不再写 `#view-<页>` 外壳**。
+   * SwipePager 的 innerHasRail 判定为真时只渲染 inner 分支，`#view-*` 是永远不渲染的死代码
+   * （删之前 search / tidy / download / system 各有一份整壳复制件）。
+   * 所以这里按「每页至少有一个 `view-` 或 `inner-` 槽」来比对。
+   */
   assert.deepEqual(
     [...slots].sort(),
     [...VIEW_IDS].sort(),
-    'App.vue 的 #view-* 槽位与 navViews.js 的顶层视图不一致（多一个 = 死页，少一个 = 空白页）',
+    'App.vue 的 #view-* / #inner-* 槽位与 navViews.js 的顶层视图不一致（多一个 = 死页，少一个 = 空白页）',
+  )
+})
+
+
+/**
+ * 手机底部标签栏的顺序必须与滑动顺序（= VIEWS）一致（2026-10-29 用户报「顺序不对」）。
+ *
+ * 底栏只该是 VIEWS 的一个**子序列**：谁是那 4 个可以挑，但先后不能自己另定一套。
+ * 它原来写成 ['search','library','push','tidy']，而 VIEWS 是 …tidy…push —— 于是手机上
+ * 底栏第三位是「订阅更新」，手指一左滑出来的却是「补全整理」，两个顺序打架。
+ */
+test('手机底栏是 VIEWS 的子序列，不另立一套顺序', () => {
+  assert.ok(MOBILE_TAB_IDS.length > 0, '底栏不能是空的')
+  const order = MOBILE_TAB_IDS.map((id) => VIEW_IDS.indexOf(id))
+  assert.ok(order.every((i) => i >= 0), `底栏里有不存在的视图：${MOBILE_TAB_IDS.join(', ')}`)
+  assert.deepEqual(
+    order,
+    [...order].sort((a, b) => a - b),
+    `底栏顺序必须跟滑动顺序一致：底栏 ${MOBILE_TAB_IDS.join(' → ')}，滑动顺序 ${VIEW_IDS.join(' → ')}`,
   )
 })

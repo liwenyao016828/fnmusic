@@ -205,11 +205,42 @@ func (s *Store) Parse(name string) Result {
 	return Parse(name)
 }
 
+// HasMatch 这个文件名是不是命中了某条**启用中的用户规则**（而非内置启发式）。
+//
+// 界面要区分「这是我配的规则算出来的」和「这是内置猜的」—— 前者用户可以改规则纠正，
+// 后者只能靠反馈。没有这个方法时只能对比结果文本，命中与碰巧相同分不开。
+func (s *Store) HasMatch(name string) bool {
+	if s == nil {
+		return false
+	}
+	s.mu.RLock()
+	compiled := s.compiled
+	s.mu.RUnlock()
+
+	base := filepath.Base(strings.TrimSpace(name))
+	for _, c := range compiled {
+		if c.re.MatchString(base) {
+			return true
+		}
+	}
+	return false
+}
+
 // applyRule 用一条规则解析；没匹配上返回 ok=false。
 func applyRule(c compiledRule, name string) (Result, bool) {
 	m := c.re.FindStringSubmatch(name)
 	if m == nil {
-		return Result{}, false
+		// 正则一般是照着「歌手-歌名」这种**不带扩展名**的样例写的，用户也多半会这么填；
+		// 但真实文件名是 `探针-支持吗.wav`，`(?P<title>.+)` 会把 `.wav` 一起吃进去，
+		// 于是写回标签的歌名变成「支持吗.wav」。这里再拿去掉扩展名的基名试一次
+		// （2026-10-28 实测发现：规则命中了，歌手对，歌名却带扩展名）。
+		if stem := strings.TrimSuffix(name, filepath.Ext(name)); stem != "" && stem != name {
+			if m = c.re.FindStringSubmatch(stem); m == nil {
+				return Result{}, false
+			}
+		} else {
+			return Result{}, false
+		}
 	}
 	names := c.re.SubexpNames()
 	r := Result{}
@@ -222,6 +253,11 @@ func applyRule(c compiledRule, name string) (Result, bool) {
 		case "artist":
 			r.Artist = v
 		case "title":
+			// 同一件事的第二道保险：样例带扩展名时，正则里可能显式写了 `\.\w+$`，
+			// 组值本身就会带扩展名 —— 歌名标签不该有它。
+			if ext := filepath.Ext(v); ext != "" && len(ext) <= 5 {
+				v = strings.TrimSpace(strings.TrimSuffix(v, ext))
+			}
 			r.Title = v
 		case "album":
 			r.Album = v

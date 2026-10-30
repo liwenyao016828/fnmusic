@@ -10,9 +10,12 @@
  */
 export function parseLyric(text) {
   if (!text) return []
+  // ⚠️ offset 标签不一定在第一行：实测 LRC（如「夜曲」）把它放在第 9 行
+  //    （[id:]/[ar:]/[ti:]/[by:]/[hash:]/[al:]/[sign:]/[qq:]/[total:] 之后）。
+  //    只在首行找 → offset 被忽略 → 整首歌的歌词比声音早/晚 N 秒，就是「对不上」。
+  //    与 ImmersivePlayer 同口径：全文搜第一处 offset。
   let offsetSec = 0
-  const firstLine = (text.split('\n')[0] || '')
-  const offsetMatch = /^\[offset:(-?\d+)\]/i.exec(firstLine)
+  const offsetMatch = /\[offset:\s*(-?\d+)\]/i.exec(text)
   if (offsetMatch) offsetSec = parseInt(offsetMatch[1], 10) / 1000
 
   const out = []
@@ -51,4 +54,31 @@ export function currentLyricLine(text, time) {
     if (t >= lines[i].time) return lines[i].text
   }
   return lines[0].text
+}
+
+/**
+ * 按偏移量整体平移 LRC 时间轴（不动歌词文本）。
+ *
+ * 2026-10-28 用户要求「调整歌词时间段」：很多人手里的 .lrc 整份早/晚几百毫秒，
+ * 逐行改不现实，这里整份平移。写回文件时用平移后的结果，所以它必须和
+ * parseLyric 用同一套时间格式（[mm:ss.xxx]）。
+ *
+ * @param {string} text 原始 LRC
+ * @param {number} offsetSec 秒，正数=整体延后（歌词更晚出现），负数=提前
+ * @returns {string} 平移后的 LRC；没有偏移或没有歌词时原样返回
+ */
+export function offsetLyric(text, offsetSec) {
+  if (!text || !offsetSec) return text || ''
+  const delta = Math.round(offsetSec * 1000)
+  return text.replace(/\[(\d{1,2}):(\d{2})(?:\.(\d{1,3}))?\]/g, (m, mm, ss, mss) => {
+    // 毫秒位补零到 3 位再转数字：`.5` 是 500ms 而不是 5ms
+    const msStr = String(mss || '0').padEnd(3, '0').slice(0, 3)
+    let total = parseInt(mm, 10) * 60000 + parseInt(ss, 10) * 1000 + parseInt(msStr, 10) + delta
+    // 平移到 0 之前就贴 0 —— 时间戳不能为负，播放器会直接丢这一行
+    if (total < 0) total = 0
+    const m2 = Math.floor(total / 60000)
+    const s2 = Math.floor((total % 60000) / 1000)
+    const ms2 = total % 1000
+    return `[${String(m2).padStart(2, '0')}:${String(s2).padStart(2, '0')}.${String(ms2).padStart(3, '0')}]`
+  })
 }

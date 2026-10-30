@@ -26,7 +26,7 @@
           </h3>
           <button
             type="button"
-            class="rounded-full p-1 text-[var(--ys-text-faint)] hover:bg-black/[0.04] hover:text-[var(--ys-text)]"
+            class="rounded-full p-1 text-[var(--ys-text-aux)] hover:bg-black/[0.04] hover:text-[var(--ys-text)]"
             @click="close()"
           >
             <X class="h-4 w-4" />
@@ -42,7 +42,7 @@
             :class="[
               'rounded-full border px-2.5 py-1 text-[11px] transition-colors',
               currentVolume === v
-                ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-600'
                 : 'border-[var(--ys-border)] text-[var(--ys-text-muted)] hover:border-emerald-200 hover:text-[var(--ys-text)]',
             ]"
             @click="load(v)"
@@ -56,7 +56,7 @@
         >
           <button
             type="button"
-            class="flex items-center gap-1.5 rounded-xl border border-emerald-200 bg-white px-3 py-1.5 text-[12px] font-medium text-emerald-700 transition-colors hover:border-emerald-300 hover:bg-emerald-50 disabled:opacity-50"
+            class="flex items-center gap-1.5 rounded-xl border border-emerald-200 bg-white px-3 py-1.5 text-[12px] font-medium text-emerald-600 transition-colors hover:border-emerald-200 hover:bg-emerald-50 disabled:opacity-50"
             :disabled="hostPicking"
             @click="pickViaHost()"
           >
@@ -67,7 +67,7 @@
               <span class="hidden sm:inline">用飞牛的文件选择器</span>
             </template>
           </button>
-          <span class="min-w-0 flex-1 text-[10px] leading-tight text-[var(--ys-text-faint)]">
+          <span class="min-w-0 flex-1 text-[10px] leading-tight text-[var(--ys-text-aux)]">
             <span
               v-if="trimForced"
               class="rounded bg-amber-100 px-1 py-0.5 font-medium text-amber-700"
@@ -104,7 +104,7 @@
             @click="parent && load(parent)"
           ><ArrowUp class="h-3.5 w-3.5" /></button>
           <template v-for="(c, i) in crumbs" :key="c.path">
-            <span v-if="i" class="text-[var(--ys-text-faint)]">/</span>
+            <span v-if="i" class="text-[var(--ys-text-aux)]">/</span>
             <button
               type="button"
               :class="[
@@ -123,18 +123,18 @@
           这里给一个显式开关，选了就记进 localStorage，下次打开还是这个偏好。
         -->
         <div class="flex items-center justify-between gap-2 border-b border-[var(--ys-border)] px-4 py-1.5">
-          <span class="font-mono text-[10px] text-[var(--ys-text-faint)]">
+          <span class="font-mono text-[10px] text-[var(--ys-text-aux)]">
             {{ folders.length ? folders.length + ' 个子目录' : '' }}
           </span>
           <label class="flex cursor-pointer items-center gap-1.5 text-[11px] text-[var(--ys-text-muted)]">
             <input
               type="checkbox"
-              class="h-3.5 w-3.5 accent-emerald-500"
+              class="h-3.5 w-3.5"
               :checked="showHidden"
               @change="setShowHidden($event.target.checked)"
             />
             <span>显示隐藏目录</span>
-            <span class="hidden text-[10px] text-[var(--ys-text-faint)] sm:inline">（. 开头的，如 .dev）</span>
+            <span class="hidden text-[10px] text-[var(--ys-text-aux)] sm:inline">（. 开头的，如 .dev）</span>
           </label>
         </div>
 
@@ -152,7 +152,7 @@
 
         <!-- 目录列表 -->
         <div class="min-h-[180px] flex-1 overflow-y-auto px-2 py-2">
-          <div v-if="loading" class="py-8 text-center text-[11px] text-[var(--ys-text-faint)]">读取目录…</div>
+          <div v-if="loading" class="py-8 text-center text-[11px] text-[var(--ys-text-aux)]">读取目录…</div>
           <template v-else>
             <button
               v-for="f in folders"
@@ -166,12 +166,12 @@
                 <Folder class="h-3.5 w-3.5 shrink-0 text-amber-400" />
                 <span class="truncate">{{ f.name }}</span>
               </span>
-              <span v-if="f.audio_count" class="shrink-0 font-mono text-[10px] text-[var(--ys-text-faint)]">{{ f.audio_count }} 首</span>
+              <span v-if="f.audio_count" class="shrink-0 font-mono text-[10px] text-[var(--ys-text-aux)]">{{ f.audio_count }} 首</span>
             </button>
-            <p v-if="!folders.length && !error" class="py-8 text-center text-[11px] text-[var(--ys-text-faint)]">
+            <p v-if="!folders.length && !error" class="py-8 text-center text-[11px] text-[var(--ys-text-aux)]">
               这个目录下没有子文件夹 —— 可以点下面「用这个目录」直接选它
             </p>
-            <p v-else-if="!folders.length && error" class="py-8 text-center text-[11px] text-[var(--ys-text-faint)]">
+            <p v-else-if="!folders.length && error" class="py-8 text-center text-[11px] text-[var(--ys-text-aux)]">
               目录没读出来，上面可以重试，或换一个位置
             </p>
           </template>
@@ -188,7 +188,7 @@
             >取消</button>
             <button
               type="button"
-              class="rounded-xl bg-emerald-500 px-4 py-1.5 text-[12px] font-medium text-white hover:bg-emerald-600 disabled:opacity-50"
+              class="rounded-xl bg-emerald-600 px-4 py-1.5 text-[12px] font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
               :disabled="!current"
               @click="choose(current)"
             >用这个目录</button>

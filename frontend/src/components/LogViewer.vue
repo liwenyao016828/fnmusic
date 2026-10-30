@@ -2,7 +2,7 @@
   <PageShell>
     <template #actions>
       <button
-        class="rounded-[10px] border border-[var(--ys-border)] bg-white px-3 py-1.5 text-[12px] font-medium text-[var(--ys-text-muted)] transition-colors hover:bg-black/[0.03] hover:text-[var(--ys-text)] disabled:opacity-50"
+        class="rounded-[8px] border border-[var(--ys-border)] bg-white px-3 py-1.5 text-[12px] font-medium text-[var(--ys-text-muted)] transition-colors hover:bg-black/[0.03] hover:text-[var(--ys-text)] disabled:opacity-50"
         :disabled="loading"
         @click="reload"
       >{{ loading ? '读取中…' : '刷新' }}</button>
@@ -11,7 +11,7 @@
            站在日志页的人根本找不到。同一件事不该让人先去猜它在哪一页。
            走的是同一个 /api/logs?format=zip（配置凭据后端已脱敏）。 -->
       <button
-        class="rounded-[10px] border border-[var(--ys-border)] bg-white px-3 py-1.5 text-[12px] font-medium text-[var(--ys-text-muted)] transition-colors hover:bg-black/[0.03] hover:text-[var(--ys-text)] disabled:opacity-50"
+        class="rounded-[8px] border border-[var(--ys-border)] bg-white px-3 py-1.5 text-[12px] font-medium text-[var(--ys-text-muted)] transition-colors hover:bg-black/[0.03] hover:text-[var(--ys-text)] disabled:opacity-50"
         :disabled="exporting"
         title="打包成一个 zip：运行日志 + 环境信息 + 脱敏后的配置，发出去排查用"
         @click="exportLogs"
@@ -20,58 +20,69 @@
            第二次才真清。只清内存里的记录，不动文件与配置。 -->
       <button
         v-if="tab !== 'task' && !clearArmed"
-        class="rounded-[10px] px-3 py-1.5 text-[12px] font-medium text-rose-600 transition-colors hover:bg-rose-50"
+        class="rounded-[8px] px-3 py-1.5 text-[12px] font-medium text-rose-600 transition-colors hover:bg-rose-50"
         @click="clearArmed = true"
       >清空</button>
       <button
         v-else-if="clearArmed"
-        class="rounded-[10px] bg-rose-600 px-3 py-1.5 text-[12px] font-medium text-white transition-colors hover:bg-rose-700"
+        class="rounded-[8px] bg-rose-600 px-3 py-1.5 text-[12px] font-medium text-white transition-colors hover:bg-rose-700"
         @click="clearLogs"
       >确认清空</button>
       <button
         v-if="clearArmed"
-        class="rounded-[10px] border border-[var(--ys-border)] bg-white px-3 py-1.5 text-[12px] font-medium text-[var(--ys-text-muted)] transition-colors hover:bg-black/[0.03]"
+        class="rounded-[8px] border border-[var(--ys-border)] bg-white px-3 py-1.5 text-[12px] font-medium text-[var(--ys-text-muted)] transition-colors hover:bg-black/[0.03]"
         @click="clearArmed = false"
       >取消</button>
     </template>
 
-    <!-- 标签 + 过滤（2026-10-18 用户「全局卡片化」：这一排控件原来裸在页面底色上，
-         现在按全站统一样式收进白底圆角卡，与下面的日志面板接成一张连贯的界面） -->
-    <div class="mb-3 flex flex-wrap items-center gap-2 rounded-[18px] border border-[var(--ys-border)] bg-white px-2.5 py-2.5 shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
+    <!--
+      标签 + 过滤（2026-10-30 飞牛化：页内导航改成**文字 tab**）──
+      原来这一排是「深底反白的胶囊按钮 + 白卡包裹」，那是控件形态。
+      飞牛的页内导航（系统设置 → 访问设置/账号安全/防护/防火墙/证书）是：
+      白底无卡片、无槽无胶囊，选中 = 深色加粗文字 + 下方 2px 强调色短线，
+      未选中 = 中灰常规字重，标签间距约 32px。右侧的过滤开关仍靠右对齐。
+    -->
+    <div class="mb-3 flex flex-wrap items-end gap-8">
       <button
         v-for="t in tabs" :key="t.id"
-        class="ys-press rounded-[9px] px-3.5 py-2 text-[12px] font-medium transition-colors"
+        class="ys-press relative flex shrink-0 items-baseline whitespace-nowrap pb-2 text-[15px] leading-[20px] transition-colors duration-[var(--ys-dur-1)]"
         :class="tab === t.id
-          ? 'bg-[var(--ys-text)] text-white'
-          : 'text-[var(--ys-text-muted)] hover:bg-black/[0.05] hover:text-[var(--ys-text)]'"
+          ? 'font-semibold text-[var(--ys-text)]'
+          : 'font-normal text-[var(--ys-text-muted)] hover:text-[var(--ys-text)]'"
         @click="switchTab(t.id)"
       >
-        {{ t.name }}<span v-if="t.count" class="ml-1.5 opacity-80">{{ t.count }}</span>
+        <span class="relative inline-flex items-baseline">
+          {{ t.name }}<span v-if="t.count" class="ml-1.5 text-[13px] opacity-80">{{ t.count }}</span>
+          <span
+            v-if="tab === t.id"
+            class="absolute -bottom-[5px] left-0 right-0 h-[2px] rounded-full bg-[var(--ys-accent)]"
+          />
+        </span>
       </button>
 
-      <label v-if="tab === 'server'" class="ml-auto flex items-center gap-1.5 text-[11px] text-[var(--ys-text-muted)]">
-        <input v-model="autoRefresh" type="checkbox" class="accent-emerald-500" />
+      <label v-if="tab === 'server'" class="ml-auto flex items-center gap-1.5 pb-2 text-[11px] text-[var(--ys-text-muted)]">
+        <input v-model="autoRefresh" type="checkbox" class="" />
         自动刷新（5 秒）
       </label>
-      <label v-else-if="tab === 'task'" class="ml-auto flex items-center gap-1.5 text-[11px] text-gray-500">
-        <input v-model="onlyFailed" type="checkbox" class="accent-emerald-500" />
+      <label v-else-if="tab === 'task'" class="ml-auto flex items-center gap-1.5 pb-2 text-[11px] text-gray-500">
+        <input v-model="onlyFailed" type="checkbox" class="" />
         只看失败
       </label>
-      <label v-else class="ml-auto flex items-center gap-1.5 text-[11px] text-gray-500">
-        <input v-model="onlyFailed" type="checkbox" class="accent-emerald-500" />
+      <label v-else class="ml-auto flex items-center gap-1.5 pb-2 text-[11px] text-gray-500">
+        <input v-model="onlyFailed" type="checkbox" class="" />
         只看失败
       </label>
     </div>
 
     <!-- 运行日志（后端 + 前端上报，同一时间轴） -->
-    <div v-if="tab === 'server'" class="overflow-hidden rounded-[18px] border border-gray-200 bg-white">
-      <p v-if="!serverEntries.length" class="m-3 rounded-xl border border-dashed border-gray-200 bg-gray-50/50 py-12 text-center text-[12px] text-gray-400">
+    <div v-if="tab === 'server'" class="overflow-hidden rounded-[var(--ys-radius-block)] border border-[var(--ys-border)] bg-white">
+      <p v-if="!serverEntries.length" class="m-3 rounded-xl border border-dashed border-[var(--ys-border)] bg-[var(--ys-surface-sunken)] py-12 text-center text-[12px] text-gray-500">
         还没有日志 —— 后端启动信息、请求与报错都会出现在这里
       </p>
       <template v-else>
-        <div class="max-h-[620px] divide-y divide-gray-50 overflow-y-auto">
+        <div class="max-h-[620px] divide-y divide-[var(--ys-border)] overflow-y-auto">
           <div v-for="(e, i) in serverEntries" :key="i" class="flex items-start gap-3 px-4 py-2">
-            <span class="shrink-0 pt-0.5 font-mono text-[11px] text-gray-400">{{ e.at }}</span>
+            <span class="shrink-0 pt-0.5 font-mono text-[11px] text-gray-500">{{ e.at }}</span>
             <span
               class="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium"
               :class="levelClass(e.level)"
@@ -87,7 +98,7 @@
             >{{ e.message }}</span>
           </div>
         </div>
-        <p class="border-t border-gray-100 px-4 py-2 text-[11px] text-gray-400">
+        <p class="border-t border-[var(--ys-border)] px-4 py-2 text-[11px] text-gray-500">
           共 {{ serverTotal }} 条 ·
           <span v-if="serverLogFile" class="text-gray-500">内存副本重启即清空，同时落盘到 {{ serverLogFile }}</span>
           <span v-else>只保留在内存里，重启应用即清空</span>
@@ -97,13 +108,13 @@
     </div>
 
     <!-- 任务日志 -->
-    <div v-else-if="tab === 'task'" class="overflow-hidden rounded-[18px] border border-gray-200 bg-white">
-      <p v-if="!visibleTaskRuns.length" class="m-3 rounded-xl border border-dashed border-[var(--ys-border)] bg-black/[0.015] py-12 text-center text-[12px] text-[var(--ys-text-faint)]">
+    <div v-else-if="tab === 'task'" class="overflow-hidden rounded-[var(--ys-radius-block)] border border-[var(--ys-border)] bg-white">
+      <p v-if="!visibleTaskRuns.length" class="m-3 rounded-xl border border-dashed border-[var(--ys-border)] bg-black/[0.015] py-12 text-center text-[12px] text-[var(--ys-text-aux)]">
         {{ onlyFailed ? '没有失败的任务记录' : '还没有任务执行记录 —— 下载、整理、推送每跑一次都会记在这里' }}
       </p>
-      <div v-else class="max-h-[620px] divide-y divide-gray-50 overflow-y-auto">
+      <div v-else class="max-h-[620px] divide-y divide-[var(--ys-border)] overflow-y-auto">
         <div v-for="(r, i) in visibleTaskRuns" :key="i" class="flex flex-wrap items-start gap-3 px-4 py-2.5">
-          <span class="shrink-0 pt-0.5 font-mono text-[11px] text-gray-400">{{ r.at }}</span>
+          <span class="shrink-0 pt-0.5 font-mono text-[11px] text-gray-500">{{ r.at }}</span>
           <span class="shrink-0 rounded-full bg-black/[0.05] px-2 py-0.5 text-[10px] text-[var(--ys-text-muted)]">{{ r.kind }}</span>
           <span
             class="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium"
@@ -118,19 +129,19 @@
     </div>
 
     <!-- 操作日志（本机留存，重启不丢） -->
-    <div v-else class="overflow-hidden rounded-[18px] border border-[var(--ys-border)] bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
-      <p v-if="!visibleLocal.length" class="m-3 rounded-xl border border-dashed border-gray-200 bg-gray-50/50 py-12 text-center text-[12px] text-gray-400">
+    <div v-else class="overflow-hidden rounded-[var(--ys-radius-block)] border border-[var(--ys-border)] bg-white">
+      <p v-if="!visibleLocal.length" class="m-3 rounded-xl border border-dashed border-[var(--ys-border)] bg-[var(--ys-surface-sunken)] py-12 text-center text-[12px] text-gray-500">
         {{ onlyFailed ? '没有失败的操作记录' : '还没有操作记录 —— 播放、搜索、下载、保存设置等操作都会记在这里；出错时附带完整信息' }}
       </p>
       <template v-else>
-        <div class="max-h-[620px] divide-y divide-gray-50 overflow-y-auto">
+        <div class="max-h-[620px] divide-y divide-[var(--ys-border)] overflow-y-auto">
           <div v-for="(e, i) in visibleLocal" :key="i" class="flex items-start gap-3 px-4 py-2">
-            <span class="shrink-0 pt-0.5 font-mono text-[11px] text-gray-400">{{ e.at }}</span>
+            <span class="shrink-0 pt-0.5 font-mono text-[11px] text-gray-500">{{ e.at }}</span>
             <span
               class="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium"
               :class="levelClass(e.level)"
             >{{ levelLabel(e.level) }}</span>
-            <span v-if="e.scope" class="shrink-0 rounded-full bg-gray-100 px-2 py-0.5 text-[10px] text-gray-600">
+            <span v-if="e.scope" class="shrink-0 rounded-full bg-[var(--ys-surface-sunken)] px-2 py-0.5 text-[10px] text-gray-600">
               {{ e.scope }}
             </span>
             <span
@@ -139,7 +150,7 @@
             >{{ e.message }}</span>
           </div>
         </div>
-        <p class="border-t border-gray-100 px-4 py-2 text-[11px] text-gray-400">
+        <p class="border-t border-[var(--ys-border)] px-4 py-2 text-[11px] text-gray-500">
           共 {{ localEntries.length }} 条 · 保存在本机浏览器，刷新与重启都不丢（最多保留 200 条）
         </p>
       </template>
@@ -198,7 +209,7 @@ function levelLabel(l) {
 function levelClass(l) {
   if (l === 'error') return 'bg-rose-50 text-rose-600'
   if (l === 'warn') return 'bg-amber-50 text-amber-700'
-  return 'bg-gray-100 text-gray-500'
+  return 'bg-[var(--ys-surface-sunken)] text-gray-500'
 }
 
 /** 日志来源：后端自身 / 网页端上报 */
@@ -207,7 +218,7 @@ function sourceLabel(s) {
 }
 
 function sourceClass(s) {
-  return s === 'frontend' ? 'bg-blue-50 text-blue-600' : 'bg-gray-100 text-gray-400'
+  return s === 'frontend' ? 'bg-blue-50 text-blue-600' : 'bg-[var(--ys-surface-sunken)] text-gray-500'
 }
 
 /** 把秒级 / 毫秒级时间戳或 ISO 字符串统一成毫秒数，便于排序 */

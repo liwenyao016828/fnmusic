@@ -30,12 +30,12 @@
         <!-- `pt-safe pb-safe`：抽屉是 inset-y-0 满高，刘海机上下两端会压住标题栏和内容 -->
         <div
           v-if="downloadManager.isOpen.value"
-          class="fixed inset-y-0 right-0 z-50 w-full sm:w-[480px] pt-safe pb-safe bg-white shadow-2xl flex flex-col overflow-hidden border-l border-gray-100"
+          class="fixed inset-y-0 right-0 z-50 w-full sm:w-[480px] pt-safe pb-safe bg-white shadow-2xl flex flex-col overflow-hidden border-l border-[var(--ys-border)]"
         >
           <!-- 顶部标题栏 -->
-          <div class="px-5 py-4 border-b border-gray-100 flex items-center justify-between bg-white shrink-0">
+          <div class="px-5 py-4 border-b border-[var(--ys-border)] flex items-center justify-between bg-white shrink-0">
             <div class="flex items-center gap-2.5">
-              <div class="w-8 h-8 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center shadow-2xs">
+              <div class="w-8 h-8 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
                 <Download class="w-4 h-4" :class="{ 'animate-bounce': downloadManager.activeCount.value > 0 }" />
               </div>
               <div>
@@ -43,26 +43,26 @@
                   <span>下载队列</span>
                   <span
                     v-if="downloadManager.activeCount.value > 0"
-                    class="px-2 py-0.5 rounded-full bg-emerald-500 text-white text-[10px] font-semibold animate-pulse"
+                    class="px-2 py-0.5 rounded-full bg-emerald-600 text-white text-[10px] font-semibold animate-pulse"
                   >
                     {{ downloadManager.activeCount.value }} 首进行中
                   </span>
                 </h3>
-                <p class="text-[11px] text-gray-400">后台持久下载，关掉本页也会继续</p>
+                <p class="text-[11px] text-gray-500">后台持久下载，关掉本页也会继续</p>
               </div>
             </div>
 
             <div class="flex items-center gap-1">
               <button
                 @click="emit('open-full')"
-                class="p-1.5 rounded-xl text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 transition-colors"
+                class="p-1.5 rounded-xl text-gray-500 hover:text-emerald-600 hover:bg-emerald-50 transition-colors"
                 title="在完整页面中打开"
               >
                 <Maximize2 class="w-4 h-4" />
               </button>
               <button
                 @click="downloadManager.close()"
-                class="p-1.5 rounded-xl text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
+                class="p-1.5 rounded-xl text-gray-500 hover:text-gray-600 hover:bg-[var(--ys-surface-hover)] transition-colors"
                 title="关闭下载面板"
               >
                 <X class="w-4 h-4" />

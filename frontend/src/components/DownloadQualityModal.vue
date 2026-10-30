@@ -23,19 +23,19 @@
         class="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4 backdrop-blur-xs"
         @click.self="close"
       >
-        <div class="max-h-[85vh] w-full max-w-[440px] overflow-y-auto rounded-2xl border border-gray-100 bg-white shadow-2xl">
+        <div class="max-h-[85vh] w-full max-w-[440px] overflow-y-auto rounded-2xl border border-[var(--ys-border)] bg-white shadow-2xl">
 
           <!-- 头部 -->
-          <div class="flex items-start justify-between gap-3 border-b border-gray-100 px-5 py-4">
+          <div class="flex items-start justify-between gap-3 border-b border-[var(--ys-border)] px-5 py-4">
             <div class="min-w-0">
               <h3 class="text-[15px] font-bold text-gray-800">选择下载音质</h3>
-              <p class="mt-1 truncate text-[11px] text-gray-400">
+              <p class="mt-1 truncate text-[11px] text-gray-500">
                 {{ song?.name || '未知歌曲' }}<span v-if="song?.singer"> · {{ song.singer }}</span>
               </p>
             </div>
             <button
               @click="close"
-              class="shrink-0 rounded-lg p-1.5 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600"
+              class="shrink-0 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-[var(--ys-surface-hover)] hover:text-gray-600"
             ><X class="w-4 h-4" /></button>
           </div>
 
@@ -43,8 +43,8 @@
           <div class="px-5 py-4">
 
             <!-- 加载中 -->
-            <div v-if="loading" class="flex items-center justify-center gap-2 py-8 text-[12px] text-gray-400">
-              <Loader2 class="w-4 h-4 animate-spin text-emerald-500" />
+            <div v-if="loading" class="flex items-center justify-center gap-2 py-8 text-[12px] text-gray-500">
+              <Loader2 class="w-4 h-4 animate-spin text-emerald-600" />
               正在查询该曲真实可用音质…
             </div>
 
@@ -76,18 +76,18 @@
                   :class="[
                     'flex w-full items-center gap-3 rounded-xl border px-3.5 py-3 text-left transition-all',
                     picked === 'highest'
-                      ? 'border-emerald-400 bg-emerald-50/70 ring-1 ring-emerald-400/20'
-                      : 'border-gray-200 hover:border-emerald-300'
+                      ? 'border-emerald-200 bg-emerald-50/70 ring-1 ring-emerald-500/20'
+                      : 'border-[var(--ys-border)] hover:border-emerald-200'
                   ]"
                 >
-                  <div class="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-emerald-500 text-white">
+                  <div class="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-emerald-600 text-white">
                     <Sparkles class="w-4 h-4" />
                   </div>
                   <div class="min-w-0 flex-1">
                     <b class="block text-[13px] text-gray-800">最高音质（自动）</b>
-                    <span class="block text-[11px] text-gray-400">从可用档位由高到低自动尝试，拿到哪个算哪个</span>
+                    <span class="block text-[11px] text-gray-500">从可用档位由高到低自动尝试，拿到哪个算哪个</span>
                   </div>
-                  <Check v-if="picked === 'highest'" class="w-4 h-4 shrink-0 text-emerald-500" />
+                  <Check v-if="picked === 'highest'" class="w-4 h-4 shrink-0 text-emerald-600" />
                 </button>
 
                 <!-- 该曲真实可用的固定档位 -->
@@ -97,43 +97,43 @@
                   :class="[
                     'flex w-full items-center gap-3 rounded-xl border px-3.5 py-3 text-left transition-all',
                     picked === q
-                      ? 'border-emerald-400 bg-emerald-50/70 ring-1 ring-emerald-400/20'
-                      : 'border-gray-200 hover:border-emerald-300'
+                      ? 'border-emerald-200 bg-emerald-50/70 ring-1 ring-emerald-500/20'
+                      : 'border-[var(--ys-border)] hover:border-emerald-200'
                   ]"
                 >
-                  <div class="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-gray-100 text-gray-500">
+                  <div class="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-[var(--ys-surface-sunken)] text-gray-500">
                     <Music class="w-4 h-4" />
                   </div>
                   <div class="min-w-0 flex-1">
                     <b class="block text-[13px] text-gray-800">{{ qualityLabel(q) }}</b>
-                    <span class="block font-mono text-[11px] text-gray-400">{{ q }}</span>
+                    <span class="block font-mono text-[11px] text-gray-500">{{ q }}</span>
                   </div>
                   <span
                     v-if="q === best"
                     class="shrink-0 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-bold text-emerald-600"
                   >该曲最高</span>
-                  <Check v-if="picked === q" class="w-4 h-4 shrink-0 text-emerald-500" />
+                  <Check v-if="picked === q" class="w-4 h-4 shrink-0 text-emerald-600" />
                 </button>
               </div>
 
               <!-- 记住为默认 -->
               <label class="mt-3 flex items-center gap-2 text-[11px] text-gray-500">
-                <input type="checkbox" v-model="remember" class="accent-emerald-500" />
+                <input type="checkbox" v-model="remember" class="" />
                 记住为默认音质（下次单曲下载不再询问）
               </label>
             </template>
           </div>
 
           <!-- 底部 -->
-          <div class="flex items-center justify-end gap-2 border-t border-gray-100 px-5 py-3.5">
+          <div class="flex items-center justify-end gap-2 border-t border-[var(--ys-border)] px-5 py-3.5">
             <button
               @click="close"
-              class="rounded-lg px-3.5 py-2 text-[12px] font-semibold text-gray-500 transition-colors hover:bg-gray-50"
+              class="rounded-lg px-3.5 py-2 text-[12px] font-semibold text-gray-500 transition-colors hover:bg-[var(--ys-surface-hover)]"
             >取消</button>
             <button
               @click="confirm"
               :disabled="loading"
-              class="rounded-lg bg-emerald-500 px-4 py-2 text-[12px] font-semibold text-white transition-all hover:bg-emerald-600 disabled:opacity-50"
+              class="rounded-lg bg-emerald-600 px-4 py-2 text-[12px] font-semibold text-white transition-all hover:bg-emerald-700 disabled:opacity-50"
             >加入下载队列</button>
           </div>
         </div>

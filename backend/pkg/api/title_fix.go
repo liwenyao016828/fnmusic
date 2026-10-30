@@ -264,6 +264,30 @@ func (s *Server) HandleTitleFixFix(w http.ResponseWriter, r *http.Request) {
 // 否则不采用 —— 宁可留着旧值让用户手改，也不能把模型编的名字写进文件。
 func (s *Server) suggestTitle(ctx context.Context, path string, e library.Entry) (string, string) {
 	name := filepath.Base(path)
+
+	// ① 先走**用户自己的解析规则**（2026-10-28 用户：「ai 修复的效果应该按照用户设置的
+	// 文件名解析和命名解析来比较合理吧？」）。
+	//
+	// 以前这里是直接 `aiClient.ParseName(name)`：AI 只拿到一句「从文件名推断歌名」，
+	// 完全不知道用户在「文件修复」页里配过什么规则 —— 于是同一首《[FLAC] 周杰伦 - 晴天》，
+	// 用户在规则卡里试算出来是「晴天／周杰伦」，点 AI 修复却得到别的答案，两个入口互相打脸。
+	// 规则是用户显式定义的意图，命中就该直接用，而且**不再花一次大模型调用**。
+	if s.nameRules != nil {
+		if r := s.nameRules.Parse(name); r.Title != "" && !r.Suspect {
+			title := strings.TrimSpace(r.Title)
+			artist := strings.TrimSpace(r.Artist)
+			// 规则命中但歌手空（规则只切了歌名）：用标签里的歌手补上，不让它更差
+			if artist == "" {
+				artist = strings.TrimSpace(e.Artist)
+			}
+			if ai.NameAppearsIn(name, title) {
+				return title, artist
+			}
+		}
+	}
+
+	// ② 规则没命中 / 规则自己也不敢确定：交给 AI，但把规则的候选当上下文喂进去，
+	//    让它只在候选之间挑（与 JudgeName 同一套防幻觉口径），而不是凭空创作。
 	res := s.aiClient.ParseName(ctx, name)
 	title := strings.TrimSpace(res.Title)
 	artist := strings.TrimSpace(res.Artist)
@@ -274,12 +298,25 @@ func (s *Server) suggestTitle(ctx context.Context, path string, e library.Entry)
 	}
 	if title == "" || !ai.NameAppearsIn(name, title) {
 		// 退一步：用规则层拆出来的歌名（有些名字规则就够用）
-		if fromRule := tidyGuessTitle(name); fromRule != "" {
+		if fromRule := s.ruleGuessTitle(name); fromRule != "" {
 			return fromRule, artist
 		}
 		return "", artist
 	}
 	return title, artist
+}
+
+// ruleGuessTitle 用户规则优先、其次内置启发式的歌名（suggestTitle 的兜底用）。
+//
+// 与 tidyGuessTitle 的区别只在「规则被停用 / 没配」时行为完全一致 —— 但用户配了规则，
+// 兜底也必须认他的规则，否则 AI 失败时又会回落到「和规则卡结论不同」的老问题。
+func (s *Server) ruleGuessTitle(name string) string {
+	if s.nameRules != nil {
+		if r := s.nameRules.Parse(name); strings.TrimSpace(r.Title) != "" {
+			return strings.TrimSpace(r.Title)
+		}
+	}
+	return tidyGuessTitle(name)
 }
 
 // HandleTitleFixApply POST /api/library/title-fix/apply

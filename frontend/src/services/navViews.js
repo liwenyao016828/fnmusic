@@ -64,13 +64,25 @@ export const VIEWS = [
     group: 'manage',
     desc: '扫描缺失，按字段补全歌词 / 封面 / 年份，以及歌名修复与查重',
     segments: [
-      { id: 'complete', name: '补全', short: '补全', desc: '扫描字段缺口，勾选要补的字段；预览确认后才写回文件' },
-      { id: 'dedupe', name: '查重', short: '查重', desc: '内容相同 / 同名不同版的重复曲目：保留一份，其余移入回收站' },
-      // 2026-10-24 用户：「去除体检中的曲库体检，更名为歌名修复，页面加入歌名修复功能」；
-      // 「记录更名为数据快照」。id 保持不变（老的 URL / 上次停留的段还能对上）。
-      { id: 'audit', name: '歌名修复', short: '修复', desc: '没有歌名 / 歌名就是文件名的曲目交给 AI 修；另含文件名体检与修复记录' },
-      { id: 'records', name: '数据快照', short: '快照', desc: '每次补全 / 修复前的快照，可逐条撤回；另有定时与手动快照' },
-      { id: 'quality', name: '替换音质', short: '音质', desc: '逐条对比洛雪 / musicdl / 原生能拿到的最高档位，勾选后替换本地文件' },
+      // ── 2026-10-29 更正（用户原话复述）──
+      // 用户 10-28 说的「补全整理只保留文件修复里的一个歌曲修复就行了，其他页面不需要」，
+      // 指的是「**其他页面**不需要歌曲修复」，不是「不需要补全」。
+      // 上一轮把它读反了，把「补全」整段删掉，用户 10-29 报「我的补全怎么不见了」—— 已恢复。
+      //
+      // ── 2026-10-29 分类重排（用户：「按你说的来」）──
+      // 分段按**用户心智**分，不按代码模块分：
+      //   · 补全 = 东西**缺**（没歌词 / 没封面 / 没年份）
+      //   · 修复 = 东西**不对**（歌名是垃圾、文件名非法、同一首有两份）
+      //   · 快照 = 怕**出事**（改前存档、改后可退）
+      // ⚠️ 2026-10-29 下午用户反悔：「音质替换还是放回补全整理页面吧」——
+      //    它当过一次独立顶层页（id `quality`），现在**回来当第四段**。
+      //    理由（用户视角）：整理曲库是一次性的活儿，音质替换也是「把这批歌弄好」，
+      //    打开「补全整理」就该一个地方把活儿做完，不该为了换音质再找一页。
+      //    所以顺序是「补 / 修 / 换 / 快照」：三种**动作**在前，快照是兜底的最后一段。
+      { id: 'complete', name: '补全', short: '补全', desc: '扫描字段缺口，勾选要补的字段；预览确认后才写回文件。缺歌词并进本段：先看词再写，命中率不高时不白改文件' },
+      { id: 'repair', name: '修复', short: '修复', desc: '整批修歌名（AI 判名 + 自定义命名规则）、查重清理、文件名体检，以及逐首修歌词 / 封面 / 标签' },
+      { id: 'quality', name: '音质', short: '音质', desc: '逐条对比洛雪 / musicdl / 原生能拿到的最高档位，勾选后用最高音质替换本地文件；也记录后台自动补强换过的曲目' },
+      { id: 'records', name: '快照', short: '快照', desc: '每次补全 / 修复前的快照，可逐条撤回；另有定时与手动快照' },
     ],
   },
   {
@@ -131,7 +143,13 @@ export const VIEW_IDS = VIEWS.map((v) => v.id)
  * 而下载队列是「挂上去就不管」的，更适合收进抽屉（抽屉里还有任务状态列表兜着）。
  * 桌面侧栏不受影响：8 个视图照样全在。
  */
-export const MOBILE_TAB_IDS = ['search', 'library', 'push', 'tidy']
+// ⚠️ 顺序必须与 VIEWS **一致**（发现 → 曲库 → 整理 → 订阅）。
+// 2026-10-29 用户报「导航页的左右滑动，切换的页面顺序不对」—— 代码里唯一一处
+// 「顺序有两个来源」就是这个数组：它原来是 search/library/**push**/tidy，
+// 而滑动顺序是 VIEWS 的 search/library/**tidy**/push。手机上底栏排在第三位的
+// 是「订阅更新」，可手指一左滑出来的是「补全整理」—— 两个顺序打架，看起来就是「顺序不对」。
+// 现在底栏只是 VIEWS 的一个**子序列**，不再自带顺序（navViews.test.mjs 钉住这条）。
+export const MOBILE_TAB_IDS = ['search', 'library', 'tidy', 'push']
 
 export function viewsOfGroup(groupId) {
   return VIEWS.filter((v) => v.group === groupId)
@@ -176,7 +194,47 @@ const ALIASES = {
   queue: { view: 'download', segment: 'queue' },
   playlist: { view: 'download', segment: 'playlist' },
   autodl: { view: 'download', segment: 'autodl' },
+  // ── 2026-10-29 整理页分类重排后的老段 id ──
+  // 「查重」与「文件修复（歌名修复 / 缺歌词）」两段并成了「修复」。
+  // 这些老深链 / 老偏好不能失效，一律指到新位置。
+  // ⚠️ `quality` 曾经是**顶层页**（10-29 上午独立出来、下午又放回整理页）：
+  //    `resolveRoute('quality')` 会先命中顶层 id，所以这里不必再写一遍；
+  //    而 `tidy/quality` 现在就是整理页的第四段，本来就解析得到。
+  dedupe: { view: 'tidy', segment: 'repair' },
+  audit: { view: 'tidy', segment: 'repair' },
 }
+
+/**
+ * 段 id 的别名：整理页 2026-10-29 重排后，老段 id 一律映射到新段。
+ *
+ * 保留这层的理由与 ALIASES 相同 —— 浏览器偏好里可能存着深链里的
+ * `#tidy/audit`，删段不映射就会静默落到默认段（用户以为「功能没了」）。
+ */
+const SEGMENT_ALIASES = {
+  // 老「查重」与老「文件修复（歌名修复 + 缺歌词）」都并进「修复」
+  dedupe: 'repair',
+  audit: 'repair',
+}
+
+/**
+ * 老「替换音质」段 → 独立页 —— **已撤销（2026-10-29 下午）**。
+ *
+ * 它曾短暂是顶层视图 `quality`，用户当天说「音质替换还是放回补全整理页面吧」，
+ * 于是 quality 又变回整理页的第四段。这里保留空表而不是删掉这段说明：
+ * 下次有人再想把某一段升成独立页，得一并想清楚「老深链怎么走」这件事
+ * （`resolveRoute('quality')` 如今直接命中整理页的 quality 段 —— 因为 tidy
+ *  有这一段、默认段回落后 `segmentsOf` 校验会命中它，见下面的解析逻辑）。
+ */
+const SEGMENT_TO_VIEW = {}
+
+/**
+ * 顶层页 → 它「放进」了哪个顶层页的哪一段（老深链 / 老偏好兼容用）。
+ *
+ * `quality`：10-29 上午曾是顶层页，浏览器偏好 / 收藏里可能存着 `#quality`。
+ * 现在它没有自己的页了，落点应是**整理页的音质段**，而不是整理页的默认段
+ * （否则用户点开收藏看到的是「补全」，会以为音质替换又不见了）。
+ */
+const VIEW_TO_SEGMENT = { quality: { view: 'tidy', segment: 'quality' } }
 
 /**
  * 解析任意视图 id（含历史别名）成 { view, segment }。
@@ -189,7 +247,33 @@ const ALIASES = {
  * @param {string} [segment] 想去的分段；不传或该视图没有这段时用默认段
  * @returns {{ view: string, segment: string, unknown: boolean }}
  */
+/**
+ * 把「调用方写的段 id」规范化成当前真实存在的段 id。
+ *
+ * 用途：调用方（组件里的 navigateTo、存下来的偏好）可能还写着老段名
+ * （`audit` / `dedupe` / `quality`），而段在 2026-10-29 重排后已经改了。
+ * 这一层保证老写法**仍然落在它想去的那个功能上**，而不是静默掉到默认段。
+ *
+ * @returns {string} 规范化后的段 id；认不出就原样返回（由调用方决定怎么处理）
+ */
+export function canonicalSegment(viewId, segment) {
+  if (!segment) return segment
+  if (SEGMENT_ALIASES[segment]) return SEGMENT_ALIASES[segment]
+  return segment
+}
+
 export function resolveRoute(id, segment) {
+  // 老段名指向另一个顶层页（SEGMENT_TO_VIEW 目前为空，留作扩展点）
+  if (segment && SEGMENT_TO_VIEW[segment]) {
+    id = SEGMENT_TO_VIEW[segment]
+    segment = ''
+  }
+  // 旧版顶层页现在住进了别人的某一段（如 quality → tidy/quality）
+  const moved = VIEW_TO_SEGMENT[id]
+  if (moved) {
+    id = moved.view
+    segment = segment || moved.segment
+  }
   const alias = ALIASES[id]
   const view = alias ? alias.view : id
   const unknown = !alias && !isView(id)
@@ -197,6 +281,7 @@ export function resolveRoute(id, segment) {
 
   const segs = segmentsOf(target)
   let seg = segment || (alias ? alias.segment : '') || defaultSegment(target)
+  if (seg && SEGMENT_ALIASES[seg]) seg = SEGMENT_ALIASES[seg]
   // 没有分段的页一律空串（模板据此决定渲不渲分段器）；有分段但认不出指定值时回落第一段
   if (!segs.length) seg = ''
   else if (!segs.some((s) => s.id === seg)) seg = segs[0].id

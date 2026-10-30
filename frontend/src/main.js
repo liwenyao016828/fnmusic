@@ -2,6 +2,7 @@ import { createApp } from 'vue'
 import App from './App.vue'
 import './style.css'
 import { initUiPrefs } from './services/prefs'
+import { applyTheme, loadTheme } from './services/theme'
 import { LogsAPI } from './api/client'
 import { setLogReporter, logError } from './services/appLog'
 import { describeError } from './services/userMsg'
@@ -33,6 +34,12 @@ app.config.errorHandler = (err, instance, info) => {
 // 后台预载窗口记忆（各页面点击状态）：从服务端文件拉取，成功后合并进内存/localStorage。
 // 失败时静默降级到 localStorage，不阻塞应用启动。
 initUiPrefs()
+
+// 主题色（2026-10-29）：四套强调色（蓝/青玉绿/樱粉/石墨灰）。
+// 先用本地缓存立刻上色（避免首屏闪一下默认蓝），再等 initUiPrefs 拉完服务端
+// 偏好后用服务端的值覆盖 —— 服务端优先，多端共享。
+applyTheme(loadTheme())
+initUiPrefs().then(() => applyTheme(loadTheme()))
 
 // 开发模式下把音源运行时挂到 window，便于在控制台排查取链问题，例如：
 //   await lxRuntime.getMusicUrl('api_xxx', 'wy', { songmid: '421423808' }, '320k')

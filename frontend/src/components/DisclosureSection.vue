@@ -12,7 +12,7 @@
         ...表单...
       </DisclosureSection>
   -->
-  <section class="overflow-hidden rounded-[var(--ys-radius-card)] border border-[var(--ys-border)] bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
+  <section class="overflow-hidden rounded-[var(--ys-radius-card)] border border-[var(--ys-border)] bg-white">
     <button
       type="button"
       class="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-black/[0.015] sm:px-5"
@@ -20,7 +20,7 @@
       :title="hint"
       @click="emit('toggle')"
     >
-      <span v-if="icon" class="grid h-8 w-8 shrink-0 place-items-center rounded-[9px] bg-[var(--ys-accent-soft)] text-[var(--ys-accent)]">
+      <span v-if="icon" class="grid h-8 w-8 shrink-0 place-items-center rounded-[8px] bg-[var(--ys-accent-soft)] text-[var(--ys-accent)]">
         <component :is="icon" class="h-4 w-4" :stroke-width="1.8" />
       </span>
       <span class="min-w-0 flex-1">
@@ -29,7 +29,7 @@
       </span>
       <slot name="actions" />
       <ChevronDown
-        class="h-4 w-4 shrink-0 text-[var(--ys-text-faint)] transition-transform duration-[260ms] ease-[cubic-bezier(0.32,0.72,0,1)]"
+        class="h-4 w-4 shrink-0 text-[var(--ys-text-aux)] transition-transform duration-[260ms] ease-[cubic-bezier(0.32,0.72,0,1)]"
         :class="open ? 'rotate-180' : ''"
         :stroke-width="1.8"
       />

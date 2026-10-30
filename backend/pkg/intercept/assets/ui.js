@@ -4,7 +4,7 @@
  * # 它做什么
  *
  *   1. 顶栏一个「曲率」入口（图标按钮，插在官方「设置」左边）；
- *   2. 点开是一块面板：正在播放的歌 + 一键「下载到曲率」、跳转曲率、偏好开关、连接状态；
+ *   2. 点开是一块面板：试听音质切换、跳转曲率、曲率助手（自然语言指令）、连接状态；
  *   3. 在线曲目的行菜单（「更多操作」）里补一条「下载到曲率」；
  *   4. 一个 toast 报下载结果。
  *
@@ -270,32 +270,6 @@
     return '';
   }
 
-  // 正在播放的那一首：官方底部播放条是一块固定宽度的浮层，里面同样用封面图
-  // 标识曲目。空着（没在放歌）时拿不到封面，返回空串 —— 面板据此把下载按钮置灰。
-  function nowPlaying() {
-    var prev = document.querySelector('button[aria-label="上一首"]');
-    if (!prev) return null;
-    var pill = prev;
-    for (var i = 0; i < 6 && pill; i++) {
-      var w = pill.getBoundingClientRect().width;
-      if (w > 600 && w < 1200) break;
-      pill = pill.parentElement;
-    }
-    if (!pill) return null;
-    var guid = guidFromRow(pill);
-    if (!guid) return null;
-    var rec = index[guid] || {};
-    var title = rec.title || '';
-    if (!title) {
-      // 旁听没拿到（例如刷新后还没发过接口请求）：从播放条的文字里取第一行。
-      var lines = String(pill.innerText || '').split('\n');
-      for (var j = 0; j < lines.length; j++) {
-        if (lines[j].trim()) { title = lines[j].trim(); break; }
-      }
-    }
-    return { guid: guid, rec: rec, title: title, online: rec.online !== false };
-  }
-
   /* ── 3. 往行菜单里补一条 ────────────────────────────────────────────── */
 
   function itemText(el) {
@@ -392,10 +366,7 @@
   var host = null, root = null, panel = null, toastEl = null, toastTimer = 0;
   var info = null;          // /api/info 的结果（版本、曲率地址）
   var infoState = 'idle';   // idle | ok | fail
-  var dlState = 'idle';     // idle | busy
-  // nowSeq 给「实际取音」那一行做竞态判据（连着切歌时先发的可能后回来）；
   // savingQuality 防止连点两次档位胶囊发两条互相覆盖的写入。
-  var nowSeq = 0;
   var savingQuality = false;
   var open = false;
 
@@ -426,14 +397,6 @@
       '.sec{padding:10px 0;border-top:1px solid ' + T.borderSoft + '}' +
       '.sec:first-of-type{border-top:0;padding-top:2px}' +
       '.h4{font-size:11px;font-weight:600;color:' + T.text4 + ';letter-spacing:.6px;margin-bottom:8px}' +
-
-      /* 正在播放：封面 + 两行文字，和官方列表项同一套排布 */
-      '.now{display:flex;align-items:center;gap:10px;padding:8px;border-radius:8px;background:' + T.rowBg + ';margin-bottom:8px}' +
-      '.cov{width:36px;height:36px;border-radius:6px;flex:none;object-fit:cover;background:' + T.ctrlBg + '}' +
-      '.cov.ph{display:flex;align-items:center;justify-content:center;color:' + T.text4 + '}' +
-      '.meta{min-width:0;flex:1}' +
-      '.mt{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
-      '.ms{font-size:11px;color:' + T.text4 + ';white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}' +
 
       '.btn{width:100%;border:1px solid ' + T.borderSoft + ';background:' + T.ctrlBg + ';color:' + T.text + ';' +
         'border-radius:8px;padding:8px 12px;font-family:inherit;font-size:13px;font-weight:600;cursor:pointer;' +
@@ -473,8 +436,6 @@
       '.srow .df{font-size:10px;color:' + T.text4 + ';flex:none}' +
 
       /* 开关：配色跟官方（开启用品牌色）*/
-      '.swrow{display:flex;align-items:center;justify-content:space-between;gap:12px;cursor:pointer}' +
-      '.swrow span.lb{font-size:13px}' +
       '.sw{width:34px;height:20px;border-radius:999px;background:' + T.switchOff + ';flex:none;position:relative;' +
         'transition:background .16s}' +
       '.sw::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;' +
@@ -580,40 +541,6 @@
     hd.appendChild(x);
     p.appendChild(hd);
 
-    // ── 正在播放 + 下载 ──
-    var s1 = el('div', 'sec');
-    s1.appendChild(el('div', 'h4', '正在播放'));
-    var now = el('div', 'now');
-    var cov = el('img', 'cov');
-    cov.alt = '';
-    cov.hidden = true;
-    var ph = el('div', 'cov ph');
-    ph.innerHTML = ICON_WAVE;
-    var meta = el('div', 'meta');
-    var mt = el('div', 'mt', '没有正在播放的歌曲');
-    var ms = el('div', 'ms', '在飞牛音乐里播一首在线歌曲');
-    meta.appendChild(mt);
-    meta.appendChild(ms);
-    // 「实际取音：<源> · <档位>」那一行。**只有后端知道**这两件事 ——
-    // 档位是解析时回读出来的（平台会静默降级），源也可能被下载源池换过。
-    // 所以它是异步问 `/api/now` 填上来的；没拿到就整行隐藏，不显示猜测值。
-    var mq = el('div', 'mq', '');
-    mq.hidden = true;
-    meta.appendChild(mq);
-    now.appendChild(cov);
-    now.appendChild(ph);
-    now.appendChild(meta);
-    s1.appendChild(now);
-    var dl = el('button', 'btn pri');
-    dl.innerHTML = ICON_WAVE + '<span>下载到曲率</span>';
-    dl.disabled = true;
-    dl.addEventListener('click', function () {
-      var np = nowPlaying();
-      if (np && np.guid) download(np.guid, refreshNow);
-    });
-    s1.appendChild(dl);
-    p.appendChild(s1);
-
     // ── 试听音质（v2.1.120）──
     // 用户 2026-10-07：「在线播放用的哪个源、什么音质，能有切换的按钮吗？」
     // 档位清单**由后端给**（`/api/info` 的 quality_options），界面不自己写死 ——
@@ -641,31 +568,6 @@
     s2.appendChild(el('p', 'hint', '批量下载 · 整理曲库 · 榜单管理'));
     p.appendChild(s2);
 
-    // ── 偏好 ──
-    var s3 = el('div', 'sec');
-    s3.appendChild(el('div', 'h4', '偏好'));
-    var row = el('div', 'swrow');
-    row.appendChild(el('span', 'lb', '行菜单显示「下载到曲率」'));
-    var sw = el('span', 'sw');
-    sw.setAttribute('role', 'switch');
-    row.appendChild(sw);
-    row.addEventListener('click', function () {
-      var on = sw.classList.toggle('on');
-      sw.setAttribute('aria-checked', on ? 'true' : 'false');
-      try { localStorage.setItem(PREF_MENU, on ? '1' : '0'); } catch (e) {}
-      if (!on) {
-        // 关掉之后，已经展开的菜单里那一条要立刻消失（否则「关了还在」）
-        var mine = document.querySelectorAll('.' + MARK);
-        for (var i = 0; i < mine.length; i++) {
-          if (mine[i].parentNode) mine[i].parentNode.removeChild(mine[i]);
-        }
-      } else {
-        decorateVisibleMenus();
-      }
-    });
-    s3.appendChild(row);
-    p.appendChild(s3);
-
     // ── 指令条（AI + 开关）──
     // 面板里唯一的「说话」入口：一句自然语言 → 一张卡片。
     // 本地规则先接（开关/状态/帮助），接不住才问大模型（见后端
@@ -675,7 +577,7 @@
     var cmdrow = el('div', 'cmdrow');
     var cmdin = el('input', 'cmdin');
     cmdin.type = 'text';
-    cmdin.placeholder = '说点什么…（如「关掉收藏自动下载」）';
+    cmdin.placeholder = '说点什么…（如「状态」「有哪些开关」）';
     cmdin.setAttribute('aria-label', '给曲率助手下指令');
     var cmdsend = el('button', 'cmdsend', '发送');
     cmdsend.addEventListener('click', function () { sendCommand(cmdin.value); });
@@ -688,7 +590,9 @@
     var card = el('div', 'card');
     card.hidden = true;
     s4.appendChild(card);
-    s4.appendChild(el('p', 'hint', '能问：开关状态、诊断、曲库情况；也可以直接让曲率助手回答。'));
+    s4.appendChild(el('p', 'hint',
+      '能问：开关状态、诊断、曲库情况。其它问题会转给曲率的大模型' +
+      '（需先在曲率「设置 → 账号连接 → AI 大模型」里配好）。'));
     p.appendChild(s4);
 
     // ── 状态 ──
@@ -700,7 +604,7 @@
     p.appendChild(ft);
 
     p.__q = {
-      ver: ver, cov: cov, ph: ph, mt: mt, ms: ms, mq: mq, dl: dl, go: go, sw: sw,
+      ver: ver, go: go,
       dot: dot, state: state, chips: chips, chipBtns: {},
       cmdin: cmdin, cmdsend: cmdsend, card: card
     };
@@ -766,68 +670,6 @@
     if (right + 320 > window.innerWidth) right = 12;
     panel.style.top = top + 'px';
     panel.style.right = right + 'px';
-  }
-
-  function refreshNow() {
-    if (!panel) return;
-    var q = panel.__q;
-    var np = nowPlaying();
-    var can = !!(np && np.guid && np.online);
-    if (np && np.guid) {
-      q.mt.textContent = np.title || '这首歌';
-      var bits = [];
-      if (np.rec.artists) bits.push(np.rec.artists);
-      if (np.rec.source) bits.push(sourceLabel(np.rec.source));
-      q.ms.textContent = bits.join(' · ') || '在线曲目';
-      q.cov.src = BASE.replace(/\/_qulv$/, '/api/v1/static/cover') +
-        '?coverId=' + encodeURIComponent(np.guid) + '&size=160';
-      q.cov.hidden = false;
-      q.ph.hidden = true;
-    } else {
-      q.mt.textContent = '没有正在播放的歌曲';
-      q.ms.textContent = '在飞牛音乐里播一首在线歌曲';
-      q.cov.hidden = true;
-      q.ph.hidden = false;
-    }
-    loadNow(np && np.guid);
-    if (dlState === 'busy') {
-      q.dl.disabled = true;
-      q.dl.querySelector('span').textContent = '正在下载…';
-    } else {
-      q.dl.disabled = !can;
-      q.dl.querySelector('span').textContent = '下载到曲率';
-      q.dl.title = can ? '' : '本地曲目不用下载（已经在 NAS 上了）';
-    }
-  }
-
-  // loadNow 问后端「这首歌这次实际用了哪条源、哪一档」。
-  //
-  // 用自增序号做**竞态**判据：连着切歌时先发的请求可能后回来 ——
-  // 不判就会把上一首的源与档位显示在这一首下面，看起来像「源记错了」。
-  function loadNow(guid) {
-    var q = panel && panel.__q;
-    if (!q) return;
-    if (!guid) {
-      q.mq.hidden = true;
-      q.mq.textContent = '';
-      return;
-    }
-    var seq = ++nowSeq;
-    fetch(BASE + '/api/now?guid=' + encodeURIComponent(guid), { credentials: 'same-origin' })
-      .then(function (res) { return res.json(); })
-      .then(function (body) {
-        if (seq !== nowSeq || !panel || panel.__q !== q) return; // 已经切歌 / 面板重建
-        var d = (body && (body.data || body)) || {};
-        if (!d.platform && !d.tier) { q.mq.hidden = true; return; }
-        var bits = [];
-        if (d.platform) bits.push('取音 ' + sourceLabel(d.platform));
-        if (d.tier) bits.push(qualityLabel(d.tier));
-        q.mq.textContent = bits.join(' · ');
-        q.mq.hidden = false;
-      })
-      .catch(function () {
-        if (seq === nowSeq && panel && panel.__q === q) q.mq.hidden = true;
-      });
   }
 
   // refreshQuality 按后端的档位清单画胶囊，并高亮当前值。
@@ -913,14 +755,6 @@
     }
   }
 
-  function refreshPref() {
-    if (!panel) return;
-    var q = panel.__q;
-    var on = menuItemAllowed();
-    q.sw.className = on ? 'sw on' : 'sw';
-    q.sw.setAttribute('aria-checked', on ? 'true' : 'false');
-  }
-
   function toggle(force) {
     var next = force === undefined ? !open : !!force;
     if (!next) {
@@ -931,8 +765,6 @@
     if (!ensureHost()) return;
     open = true;
     place();
-    refreshPref();
-    refreshNow();
     refreshInfo();
     refreshQuality();
     panel.classList.add('show');
@@ -1187,8 +1019,6 @@
     if (!guid) { toast('没认出这首歌，请重新打开一次行菜单', 'err'); return; }
     var rec = index[guid] || {};
     var name = rec.title ? '《' + rec.title + '》' : '这首歌';
-    dlState = 'busy';
-    refreshNow();
     toast('正在下载 ' + name + '，文件大时可能要等一会儿…', '');
 
     // 下载是同步长请求（解析 + 抓取 + 写标签 + 落盘），后端给了 5 分钟预算。
@@ -1212,8 +1042,7 @@
     }).catch(function (err) {
       toast('下载失败：' + ((err && err.message) || err), 'err');
     }).then(function () {
-      dlState = 'idle';
-      if (done) done(); else refreshNow();
+      if (done) done();
     });
   }
 

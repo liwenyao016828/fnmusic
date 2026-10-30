@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>曲率 AI · Siri 流光弹窗</title>
+<style>
+  /* ============ 设计令牌 ============ */
+  :root {
+    --siri-orange: #ff6b35;
+    --siri-yellow: #ffd60a;
+    --siri-green:  #30d158;
+    --siri-cyan:   #00d4d4;
+    --siri-blue:   #0a84ff;
+    --siri-purple: #bf5af2;
+    --siri-pink:   #ff2d55;
+    --ease-spring: cubic-bezier(.22, 1.12, .36, 1);
+    --ring-w: 2px;              /* 流光描边厚度 */
+  }
+
+  /* 让 conic-gradient 的起始角可被 keyframes 补间 —— 渐变在转，而不是整块在转 */
+  @property --angle {
+    syntax: '<angle>';
+    initial-value: 0deg;
+    inherits: false;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+
+  /* 舞台：干净的中性底色，没有任何彩色几何色块 */
+  body {
+    margin: 0;
+    display: grid;
+    place-items: center;
+    font: 15px/1.5 -apple-system, "SF Pro Text", "PingFang SC", "Helvetica Neue", system-ui, sans-serif;
+    color: #fff;
+    overflow: hidden;
+    background:
+      radial-gradient(120% 85% at 50% -10%, #1a1d25 0%, #0d0f14 45%, #07080b 100%);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ============ 触发按钮（同样是 2px 边缘流光）============ */
+  .trigger {
+    position: relative;
+    z-index: 2;
+    padding: 14px 26px;
+    border: 0;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, .08);
+    backdrop-filter: blur(18px) saturate(160%);
+    -webkit-backdrop-filter: blur(18px) saturate(160%);
+    color: #fff;
+    font: 600 15px/1 inherit;
+    letter-spacing: .02em;
+    cursor: pointer;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, .22),
+      0 14px 40px rgba(0, 0, 0, .5);
+    transition: transform .3s var(--ease-spring), background .3s;
+  }
+
+  /* 用 mask 抠出 2px 环带，叠在按钮上方，只露边缘 */
+  .trigger::before {
+    content: "";
+    position: absolute;
+    inset: -1px;
+    border-radius: inherit;
+    padding: var(--ring-w);
+    background: conic-gradient(from var(--angle),
+      var(--siri-orange), var(--siri-yellow), var(--siri-green),
+      var(--siri-cyan), var(--siri-blue), var(--siri-purple), var(--siri-pink), var(--siri-orange));
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+            mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+            mask-composite: exclude;
+    animation: sweep 5s linear infinite;
+    pointer-events: none;
+  }
+
+  .trigger:hover { transform: translateY(-2px); background: rgba(255, 255, 255, .13); }
+  .trigger:active { transform: scale(.96); }
+
+  @keyframes sweep { to { --angle: 360deg; } }
+
+  /* ============ 遮罩层 ============ */
+  .overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 10;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+    background: rgba(4, 5, 9, 0);
+    backdrop-filter: blur(0px);
+    -webkit-backdrop-filter: blur(0px);
+    visibility: hidden;
+    transition:
+      background .45s ease,
+      backdrop-filter .45s ease,
+      -webkit-backdrop-filter .45s ease,
+      visibility 0s linear .45s;
+  }
+
+  .overlay.is-open {
+    visibility: visible;
+    background: rgba(4, 5, 9, .55);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    transition-delay: 0s;
+  }
+
+  /* ============ 弹窗外壳：padding 就是描边宽度 ============ */
+  .popup {
+    position: relative;
+    padding: var(--ring-w);
+    width: min(384px, 100%);
+    border-radius: 36px;
+    overflow: hidden;                 /* 圆角裁剪，流光被锁在壳内 */
+    isolation: isolate;
+    transform: scale(.86) translateY(16px);
+    opacity: 0;
+    will-change: transform, opacity;
+    transition:
+      transform .5s var(--ease-spring),
+      opacity .35s ease;
+    /* 唯一允许的“外溢”：极淡的 box-shadow 环境光，不是色块 */
+    box-shadow:
+      0 0 0 1px rgba(255, 255, 255, .05),
+      0 18px 50px -12px rgba(0, 0, 0, .65),
+      0 0 42px -20px rgba(126, 176, 255, .5);
+  }
+
+  .overlay.is-open .popup {
+    transform: scale(1) translateY(0);
+    opacity: 1;
+  }
+
+  /* 流光环：conic-gradient 只存在于 2px 环带内（mask 挖空中心） */
+  .ring {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    border-radius: inherit;
+    padding: var(--ring-w);
+    background: conic-gradient(from var(--angle),
+      var(--siri-orange), var(--siri-yellow), var(--siri-green),
+      var(--siri-cyan), var(--siri-blue), var(--siri-purple), var(--siri-pink), var(--siri-orange));
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+            mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+            mask-composite: exclude;
+    animation: sweep 6.5s linear infinite, ring-breathe 4.2s ease-in-out infinite;
+    pointer-events: none;
+  }
+
+  @keyframes ring-breathe { 0%, 100% { opacity: .88; } 50% { opacity: 1; } }
+
+  /* ============ 面板：干净的半透明白玻璃 ============ */
+  .panel {
+    position: relative;
+    z-index: 2;
+    border-radius: 34px;
+    padding: 22px 22px 26px;
+    display: grid;
+    gap: 18px;
+    background: rgba(255, 255, 255, .07);
+    backdrop-filter: blur(20px) saturate(170%);
+    -webkit-backdrop-filter: blur(20px) saturate(170%);
+    border: 1px solid rgba(255, 255, 255, .2);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .26);
+  }
+
+  /* ============ 内容 ============ */
+  .p-head { display: flex; align-items: center; gap: 12px; }
+
+  /* AI 图标（唯一的彩色元素，尺寸很小） */
+  .orb {
+    position: relative;
+    width: 44px; height: 44px;
+    flex: none;
+    border-radius: 50%;
+    background: conic-gradient(from var(--angle),
+      var(--siri-cyan), var(--siri-blue), var(--siri-purple),
+      var(--siri-pink), var(--siri-orange), var(--siri-yellow), var(--siri-green), var(--siri-cyan));
+    animation: sweep 4s linear infinite;
+    box-shadow: 0 0 14px -2px rgba(10, 132, 255, .55);
+  }
+  .orb::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    background: radial-gradient(circle at 32% 26%, rgba(255, 255, 255, .9), rgba(255, 255, 255, .1) 48%, rgba(0, 0, 0, .25) 100%);
+    mix-blend-mode: screen;
+  }
+
+  .p-head-txt { flex: 1; min-width: 0; }
+  .p-head-txt h2 { margin: 0; font-size: 16px; font-weight: 650; letter-spacing: .01em; }
+
+  .status {
+    margin: 2px 0 0;
+    font-size: 12.5px;
+    color: rgba(255, 255, 255, .55);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .status b {
+    font-weight: 600;
+    background: linear-gradient(90deg, rgba(255, 255, 255, .45), #fff, rgba(255, 255, 255, .45));
+    background-size: 200% 100%;
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+    animation: shimmer 2.8s linear infinite;
+  }
+  @keyframes shimmer { to { background-position: -200% 0; } }
+
+  .icon-btn {
+    width: 32px; height: 32px; flex: none;
+    display: grid; place-items: center;
+    border-radius: 50%;
+    border: 1px solid rgba(255, 255, 255, .16);
+    background: rgba(255, 255, 255, .08);
+    color: rgba(255, 255, 255, .75);
+    font-size: 13px; line-height: 1; cursor: pointer;
+    transition: background .25s, transform .25s, color .25s;
+  }
+  .icon-btn:hover { background: rgba(255, 255, 255, .18); color: #fff; transform: scale(1.08); }
+  .icon-btn:active { transform: scale(.9); }
+
+  /* 正在播放 */
+  .now-playing {
+    display: flex; align-items: center; gap: 13px;
+    padding: 11px;
+    border-radius: 20px;
+    background: rgba(255, 255, 255, .06);
+    border: 1px solid rgba(255, 255, 255, .12);
+  }
+  .cover {
+    width: 56px; height: 56px; flex: none;
+    border-radius: 14px;
+    display: grid; place-items: center;
+    font-size: 22px;
+    background: rgba(255, 255, 255, .13);
+    border: 1px solid rgba(255, 255, 255, .16);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .26);
+  }
+  .meta { min-width: 0; }
+  .meta b { display: block; font-size: 14.5px; font-weight: 620; }
+  .meta span {
+    display: block; margin-top: 2px;
+    font-size: 12.5px; color: rgba(255, 255, 255, .55);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+
+  /* 声波：浅灰白，不用大面积彩色 */
+  .wave { display: flex; align-items: center; justify-content: center; gap: 5px; height: 34px; }
+  .wave i {
+    width: 4px; border-radius: 999px;
+    background: linear-gradient(180deg, rgba(255, 255, 255, .95), rgba(255, 255, 255, .5));
+    animation: wave 1.1s ease-in-out infinite;
+    transform-origin: center;
+  }
+  .wave i:nth-child(1) { animation-delay: -.9s; }
+  .wave i:nth-child(2) { animation-delay: -.7s; }
+  .wave i:nth-child(3) { animation-delay: -.5s; }
+  .wave i:nth-child(4) { animation-delay: -.3s; }
+  .wave i:nth-child(5) { animation-delay: -.1s; }
+  .wave i:nth-child(6) { animation-delay: -.35s; }
+  .wave i:nth-child(7) { animation-delay: -.6s; }
+  .wave i:nth-child(8) { animation-delay: -.85s; }
+
+  @keyframes wave {
+    0%, 100% { height: 7px;  opacity: .45; }
+    50%      { height: 30px; opacity: 1; }
+  }
+  .wave.is-paused i { animation-play-state: paused; }
+
+  /* 进度 */
+  .progress { display: grid; gap: 7px; }
+  .bar { position: relative; height: 4px; border-radius: 999px; background: rgba(255, 255, 255, .16); overflow: hidden; }
+  .bar > i {
+    position: absolute; inset: 0 auto 0 0;
+    width: 38%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, rgba(255, 255, 255, .6), #fff);
+  }
+  .times { display: flex; justify-content: space-between; font-size: 11px; color: rgba(255, 255, 255, .45); font-variant-numeric: tabular-nums; }
+
+  /* 控制键 */
+  .controls { display: flex; align-items: center; justify-content: center; gap: 26px; }
+  .ctrl {
+    width: 44px; height: 44px;
+    display: grid; place-items: center;
+    border: 0; border-radius: 50%;
+    background: transparent;
+    color: rgba(255, 255, 255, .8);
+    cursor: pointer;
+    transition: transform .25s var(--ease-spring), background .25s, color .25s;
+  }
+  .ctrl:hover { color: #fff; background: rgba(255, 255, 255, .1); }
+  .ctrl:active { transform: scale(.9); }
+  .ctrl svg { width: 22px; height: 22px; fill: currentColor; }
+
+  .ctrl.play {
+    width: 62px; height: 62px;
+    color: #fff;
+    background: rgba(255, 255, 255, .16);
+    border: 1px solid rgba(255, 255, 255, .22);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .3), 0 8px 24px rgba(0, 0, 0, .4);
+  }
+  .ctrl.play:hover { background: rgba(255, 255, 255, .24); }
+  .ctrl.play svg { width: 26px; height: 26px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .ring, .trigger::before, .orb, .status b { animation: none !important; }
+    .wave i { animation: none; height: 14px; opacity: .8; }
+  }
+</style>
+</head>
+<body>
+
+  <button class="trigger" id="openBtn" type="button">唤醒 曲率 AI</button>
+
+  <div class="overlay" id="overlay" aria-hidden="true">
+    <div class="popup" id="popup" role="dialog" aria-modal="true" aria-labelledby="popupTitle">
+
+      <!-- 2px 流光环：conic-gradient + mask 只留边框 -->
+      <div class="ring"></div>
+
+      <!-- 半透明白玻璃面板 -->
+      <div class="panel">
+        <header class="p-head">
+          <div class="orb"></div>
+          <div class="p-head-txt">
+            <h2 id="popupTitle">曲率 AI</h2>
+            <p class="status"><b>正在聆听 · 语音助手已就绪</b></p>
+          </div>
+          <button class="icon-btn" id="closeBtn" type="button" aria-label="关闭">✕</button>
+        </header>
+
+        <div class="now-playing">
+          <div class="cover">🎧</div>
+          <div class="meta">
+            <b>夜航星</b>
+            <span>曲率 AI · 为你的此刻挑选</span>
+          </div>
+        </div>
+
+        <div class="wave" id="wave" aria-hidden="true">
+          <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+        </div>
+
+        <div class="progress">
+          <div class="bar"><i id="barFill"></i></div>
+          <div class="times"><span id="tCur">1:14</span><span>3:18</span></div>
+        </div>
+
+        <div class="controls">
+          <button class="ctrl" type="button" aria-label="上一首">
+            <svg viewBox="0 0 24 24"><path d="M7 5h2v14H7zM20 5.6v12.8c0 .8-.9 1.3-1.6.8l-9-6.4a1 1 0 0 1 0-1.6l9-6.4c.7-.5 1.6 0 1.6.8z"/></svg>
+          </button>
+          <button class="ctrl play" id="playBtn" type="button" aria-label="播放 / 暂停">
+            <svg id="playIcon" viewBox="0 0 24 24"><path d="M8 5.2v13.6c0 .9 1 1.4 1.7.9l10.2-6.8a1 1 0 0 0 0-1.7L9.7 4.3C9 3.8 8 4.3 8 5.2z"/></svg>
+          </button>
+          <button class="ctrl" type="button" aria-label="下一首">
+            <svg viewBox="0 0 24 24"><path d="M15 5h2v14h-2zM4 5.6v12.8c0 .8.9 1.3 1.6.8l9-6.4a1 1 0 0 0 0-1.6l-9-6.4C4.9 4.3 4 4.8 4 5.6z"/></svg>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+  const overlay  = document.getElementById('overlay');
+  const openBtn  = document.getElementById('openBtn');
+  const closeBtn = document.getElementById('closeBtn');
+  const playBtn  = document.getElementById('playBtn');
+  const playIcon = document.getElementById('playIcon');
+  const wave     = document.getElementById('wave');
+  const barFill  = document.getElementById('barFill');
+  const tCur     = document.getElementById('tCur');
+
+  let open = false, playing = true, elapsed = 74, timer = null;
+
+  const PLAY_PATH  = "M8 5.2v13.6c0 .9 1 1.4 1.7.9l10.2-6.8a1 1 0 0 0 0-1.7L9.7 4.3C9 3.8 8 4.3 8 5.2z";
+  const PAUSE_PATH = "M7 5h3.2v14H7zM13.8 5H17v14h-3.2z";
+
+  function setOpen(next) {
+    open = next;
+    overlay.classList.toggle('is-open', open);
+    overlay.setAttribute('aria-hidden', String(!open));
+    if (open) { playing = true; syncPlayUI(); startTimer(); }
+    else { stopTimer(); }
+  }
+
+  function syncPlayUI() {
+    playIcon.innerHTML = '<path d="' + (playing ? PAUSE_PATH : PLAY_PATH) + '"/>';
+    wave.classList.toggle('is-paused', !playing);
+  }
+
+  function fmt(s) {
+    return Math.floor(s / 60) + ':' + String(Math.floor(s % 60)).padStart(2, '0');
+  }
+
+  function tick() {
+    if (!playing) return;
+    elapsed = (elapsed + 1) % 198;
+    barFill.style.width = (elapsed / 198 * 100).toFixed(2) + '%';
+    tCur.textContent = fmt(elapsed);
+  }
+
+  function startTimer() { if (!timer) timer = setInterval(tick, 1000); }
+  function stopTimer()  { clearInterval(timer); timer = null; }
+
+  openBtn.addEventListener('click', () => setOpen(true));
+  closeBtn.addEventListener('click', () => setOpen(false));
+  overlay.addEventListener('click', e => { if (e.target === overlay) setOpen(false); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && open) setOpen(false); });
+
+  playBtn.addEventListener('click', () => {
+    playing = !playing;
+    syncPlayUI();
+    playing ? startTimer() : stopTimer();
+  });
+
+  setTimeout(() => setOpen(true), 260);   // 演示：默认打开
+</script>
+</body>
+</html>

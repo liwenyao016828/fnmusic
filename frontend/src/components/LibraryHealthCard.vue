@@ -18,11 +18,11 @@
       <ShieldAlert class="h-3.5 w-3.5 shrink-0 text-[var(--ys-text-muted)]" />
       <div class="min-w-0 flex-1">
         <div class="text-[12px] font-semibold text-[var(--ys-text)]">文件名体检</div>
-        <div class="mt-0.5 truncate text-[10.5px] text-[var(--ys-text-faint)]">修「文件夹显示未知错误」：非法文件名、控制字符、0 字节音频、下载残留</div>
+        <div class="mt-0.5 truncate text-[10.5px] text-[var(--ys-text-aux)]">修「文件夹显示未知错误」：非法文件名、控制字符、0 字节音频、下载残留</div>
       </div>
       <button
         class="ys-press shrink-0 rounded-full px-3 py-1.5 text-[11.5px] font-medium transition-colors"
-        :class="scanning ? 'bg-[var(--ys-border)] text-[var(--ys-text-faint)]' : 'bg-[var(--ys-accent)] text-white hover:brightness-105'"
+        :class="scanning ? 'bg-[var(--ys-border)] text-[var(--ys-text-aux)]' : 'bg-[var(--ys-accent)] text-white hover:brightness-105'"
         :disabled="scanning || fixing"
         @click="runScan"
       >{{ scanning ? '扫描中…' : (report ? '重新扫描' : '开始扫描') }}</button>
@@ -40,7 +40,7 @@
     <template #actions>
       <button
         class="ys-press rounded-full px-3 py-1.5 text-[11.5px] font-medium transition-colors"
-        :class="scanning ? 'bg-[var(--ys-border)] text-[var(--ys-text-faint)]' : 'bg-[var(--ys-accent)] text-white hover:brightness-105'"
+        :class="scanning ? 'bg-[var(--ys-border)] text-[var(--ys-text-aux)]' : 'bg-[var(--ys-accent)] text-white hover:brightness-105'"
         :disabled="scanning || fixing"
         @click="runScan"
       >{{ scanning ? '扫描中…' : (report ? '重新扫描' : '开始扫描') }}</button>
@@ -48,7 +48,7 @@
 
     <!-- 卡片正文（两种外壳共用：自己开卡片 / 并进「歌名修复」） -->
   <template #body>
-    <div v-if="!report" class="rounded-[12px] border border-dashed border-[var(--ys-border)] px-4 py-6 text-center text-[11px] leading-relaxed text-[var(--ys-text-faint)]">
+    <div v-if="!report" class="rounded-[12px] border border-dashed border-[var(--ys-border)] px-4 py-6 text-center text-[11px] leading-relaxed text-[var(--ys-text-aux)]">
       <template v-if="scanning">正在扫描 {{ dirHint }} …<br />文件多的时候要几十秒</template>
       <template v-else>
         还没有扫描结果 —— 点右上「开始扫描」<br />
@@ -59,26 +59,26 @@
     <template v-else>
       <!-- 统计行：把「会让飞牛报错的」和「只是垃圾」分开说，避免用户以为删残留就能修好未知错误 -->
       <div class="grid grid-cols-3 gap-2">
-        <div class="rounded-[12px] border border-[var(--ys-border)] bg-[#FAFAFC] px-3 py-2.5">
-          <div class="text-[10.5px] text-[var(--ys-text-faint)]">扫描条目</div>
+        <div class="rounded-[12px] border border-[var(--ys-border)] bg-[var(--ys-surface-sunken)] px-3 py-2.5">
+          <div class="text-[10.5px] text-[var(--ys-text-aux)]">扫描条目</div>
           <div class="mt-0.5 font-mono text-[17px] font-semibold text-[var(--ys-text)]">{{ report.scanned }}</div>
         </div>
-        <div class="rounded-[12px] border border-[var(--ys-border)] bg-[#FAFAFC] px-3 py-2.5">
+        <div class="rounded-[12px] border border-[var(--ys-border)] bg-[var(--ys-surface-sunken)] px-3 py-2.5">
           <div class="text-[10.5px] text-rose-600">会让文件夹报错</div>
           <div class="mt-0.5 font-mono text-[17px] font-semibold" :class="report.summary.fatal ? 'text-rose-600' : 'text-[var(--ys-text)]'">{{ report.summary.fatal }}</div>
         </div>
-        <div class="rounded-[12px] border border-[var(--ys-border)] bg-[#FAFAFC] px-3 py-2.5">
+        <div class="rounded-[12px] border border-[var(--ys-border)] bg-[var(--ys-surface-sunken)] px-3 py-2.5">
           <div class="text-[10.5px] text-amber-600">其他问题</div>
           <div class="mt-0.5 font-mono text-[17px] font-semibold text-[var(--ys-text)]">{{ report.summary.total - report.summary.fatal }}</div>
         </div>
       </div>
 
-      <p class="mt-2 text-[10.5px] text-[var(--ys-text-faint)]">
+      <p class="mt-2 text-[10.5px] text-[var(--ys-text-aux)]">
         扫描目录 <span class="font-mono">{{ report.dir || dirHint }}</span> · 耗时 {{ (report.elapsedMs / 1000).toFixed(1) }}s
         <template v-if="report.truncated"> · 条目太多只看了前面一部分</template>
       </p>
 
-      <div v-if="!report.issues.length" class="mt-2 rounded-[12px] border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-[11px] text-emerald-800">
+      <div v-if="!report.issues.length" class="mt-2 rounded-[12px] border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-[11px] text-emerald-700">
         这个目录没有发现非法条目 —— 如果飞牛里还是报未知错误，那就是共享权限或索引的问题，
         到飞牛「存储管理 / 共享文件夹」里重新授权一次再试。
       </div>
@@ -96,10 +96,10 @@
               :class="causesFolderError(it.kind) ? 'bg-rose-100 text-rose-700' : 'bg-amber-100 text-amber-700'"
             >{{ issueLabel(it.kind) }}</span>
             <span class="min-w-0 flex-1 truncate font-mono text-[10.5px] text-[var(--ys-text-muted)]" :title="it.path">{{ it.name || it.path }}</span>
-            <span class="shrink-0 text-[10px] text-[var(--ys-text-faint)]">{{ fixHint(it) }}</span>
+            <span class="shrink-0 text-[10px] text-[var(--ys-text-aux)]">{{ fixHint(it) }}</span>
           </div>
         </div>
-        <p v-if="report.issues.length > visibleIssues.length" class="mt-1 text-[10.5px] text-[var(--ys-text-faint)]">
+        <p v-if="report.issues.length > visibleIssues.length" class="mt-1 text-[10.5px] text-[var(--ys-text-aux)]">
           还有 {{ report.issues.length - visibleIssues.length }} 条未列出（修复会一起处理）
         </p>
 
@@ -127,7 +127,7 @@
           >{{ fixing ? '修复中…' : (armed === 'all' ? `确认删掉 ${junkCount} 个残留` : `顺便清掉 ${junkCount} 个残留`) }}</button>
           <button
             v-if="armed"
-            class="px-2 py-1 text-[11px] text-[var(--ys-text-faint)] hover:text-[var(--ys-text)]"
+            class="px-2 py-1 text-[11px] text-[var(--ys-text-aux)] hover:text-[var(--ys-text)]"
             @click="armed = ''"
           >取消</button>
         </div>

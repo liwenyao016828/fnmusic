@@ -189,6 +189,51 @@ func pickMatch(cands []search.UnifiedSong, title, artist, fileName string) (sear
 	return search.UnifiedSong{}, false, ""
 }
 
+// pickFuzzy 模糊档：严格档全军覆没后，在**同一批干净候选**里再找一次。
+//
+// 与 pickMatch 的关系是「同一套护栏、更松的比对」：
+//
+//	· 试听片段（时长 ≤75s）照旧排除；
+//	· 版本标记照旧必须与文件名一致（文件名是原版就只接受原版）——
+//	  这一条是「不把 Live 版的年份写进原版」的关键，模糊档也不能破；
+//	· 唯一的放松是歌名/歌手不再要求「归一化后完全相等」，改走 match.FuzzyAccept。
+//
+// 返回的 why 是给预览页看的人话（会被写进 PlanItem.Note），因此必须说清
+// 「这是模糊命中，请核对」——用户要能分辨「精确补全」和「猜的」。
+func pickFuzzy(pool []search.UnifiedSong, title, artist, fileName string) (search.UnifiedSong, string, bool) {
+	if len(pool) == 0 {
+		return search.UnifiedSong{}, "", false
+	}
+	wantVariant := match.BracketedVariant(fileName)
+	var best search.UnifiedSong
+	bestScore := 0.0
+	bestKind := ""
+	for _, s := range pool {
+		if s.Duration > 0 && s.Duration <= match.PreviewDurationSec {
+			continue // 试听片段一律不要（和严格档同一条护栏）
+		}
+		if match.BracketedVariant(s.Name) != wantVariant {
+			continue // 版本对不上：宁可这次不补
+		}
+		score, kind, ok := match.FuzzyAccept(title, artist, s.Name, s.Singer)
+		if !ok {
+			continue
+		}
+		if score > bestScore {
+			best, bestScore, bestKind = s, score, kind
+		}
+	}
+	if bestScore <= 0 {
+		return search.UnifiedSong{}, "", false
+	}
+	why := "模糊匹配：「" + best.Name + "」"
+	if best.Singer != "" {
+		why += " - " + best.Singer
+	}
+	why += "（" + bestKind + "），请核对是不是同一首"
+	return best, why, true
+}
+
 // Progress 进度快照（每完成一首回调一次）
 type Progress struct {
 	Done    int    `json:"done"`
@@ -507,15 +552,25 @@ func resolveOne(ctx context.Context, t Target, opts Options) PlanItem {
 		pool = append(pool, cands...)
 	}
 
-	// 2) 规则全平台都没命中 → 请 AI 从候选里挑一条
+	// 2) 规则全平台都没命中 → 先试**模糊档**，再请 AI 从候选里挑一条
 	//
 	// 这一步解决的是「搜到了但配不上」：`MatchByNameSinger` 要求曲名归一化后完全相等，
-	// 而平台标题常带后缀（`晴天 (Live)`、`晴天 (原唱 周杰伦)`、`晴天（R&B版）`）。
-	// AI 只从候选里挑（输出序号或 null），不能引入候选外的内容。
+	// 而平台标题常带后缀（`晴天 (Live)`、`晴天 (原唱 周杰伦)`、`晴天（R&B版）`），
+	// 或者文件名本身有个错字 / 简繁不同（《後來》vs《后来》）。
+	//
+	// 顺序是「模糊 → AI」而不是反过来：模糊是本地纯计算，零延迟零成本，也能在
+	// 没配 AI 的机器上工作；AI 只在模糊也拿不准时才问。两者命中都会在 Note 里
+	// 标出来，预览页看得见 —— 模糊命中必须由用户核一眼（宁缺毋滥的底线不变）。
 	if hit.ID == "" && hit.Songmid == "" && guardNote != "" {
-		// 有「有意跳过」的候选时不再请 AI —— 见 pickMatch 的说明
+		// 有「有意跳过」的候选时不再往下走 —— 见 pickMatch 的说明
 		it.Note = guardNote
 		return it
+	}
+	fuzzyNote := ""
+	if hit.ID == "" && hit.Songmid == "" && len(pool) > 0 {
+		if s, why, ok := pickFuzzy(pool, title, artist, fileName); ok {
+			hit, fuzzyNote = s, why
+		}
 	}
 	if hit.ID == "" && hit.Songmid == "" && opts.UseAIMatch && opts.AIClient != nil && len(pool) > 0 {
 		if s, ok := pickByAI(ctx, opts.AIClient, title, artist, t.Album, pool); ok {
@@ -532,6 +587,10 @@ func resolveOne(ctx context.Context, t Target, opts Options) PlanItem {
 	it.Matched = true
 	it.MatchedBy = hit.Source
 	it.MatchedName = hit.Name
+	if fuzzyNote != "" {
+		// 模糊命中要**显式挂牌**：用户在看词/预览时能一眼看出「这条不是精确命中」。
+		addNote(&it, fuzzyNote)
+	}
 	it.Album = firstNonEmpty(t.Album, hit.Album)
 	// 记下标识，执行阶段按它取歌词封面（保证「预览什么就写什么」）
 	it.source, it.songmid, it.hash = hit.Source, hit.Songmid, hit.Hash

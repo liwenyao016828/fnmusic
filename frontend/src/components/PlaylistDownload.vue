@@ -10,7 +10,7 @@
         <div
           v-for="m in metrics"
           :key="m.label"
-          class="rounded-[var(--ys-radius-card)] border border-[var(--ys-border)] bg-white px-[18px] py-4 shadow-[0_1px_2px_rgba(0,0,0,0.03)]"
+          class="rounded-[var(--ys-radius-card)] border border-[var(--ys-border)] bg-white px-[18px] py-4"
         >
           <!-- 指标卡：标签在上（带一颗状态点表示倾向），数字在下且一律墨色 ——
                彩色大数字一排下来像仪表盘，Apple 的做法是「数字说事实，颜色只提示」。 -->
@@ -26,17 +26,17 @@
     <div class="space-y-4">
 
       <!-- ── 解析入口 ── -->
-      <div class="rounded-xl border border-gray-200 bg-white p-4">
+      <div class="rounded-xl border border-[var(--ys-border)] bg-white p-4">
         <div class="flex flex-wrap items-center justify-between gap-3">
           <div class="min-w-0">
             <b class="text-[14px] text-gray-800">歌单下载</b>
-            <p class="mt-1 text-[11px] leading-relaxed text-gray-400">
+            <p class="mt-1 text-[11px] leading-relaxed text-gray-500">
               把歌单分享链接粘到下面，点「解析」—— 网易云 / QQ 都行，App 里复制的短链也能直接用。
             </p>
           </div>
           <button
             @click="focusInput()"
-            class="shrink-0 rounded-lg bg-emerald-500 px-4 py-2 text-[12px] font-semibold text-white transition-all hover:bg-emerald-600"
+            class="shrink-0 rounded-lg bg-emerald-600 px-4 py-2 text-[12px] font-semibold text-white transition-all hover:bg-emerald-700"
           >解析歌单链接</button>
         </div>
 
@@ -46,13 +46,13 @@
             v-model="link"
             type="text"
             placeholder="粘贴歌单分享链接，例如 https://music.163.com/#/playlist?id=3778678"
-            class="min-w-[240px] flex-1 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs font-mono placeholder:text-gray-400 focus:border-emerald-400 focus:outline-none"
+            class="min-w-[240px] flex-1 rounded-lg border border-[var(--ys-line-control)] bg-[var(--ys-surface-sunken)] px-3 py-2 text-xs font-mono placeholder:text-gray-500 focus:border-emerald-200 focus:outline-none"
             @keyup.enter="parse"
           />
           <button
             @click="parse"
             :disabled="parsing || !link.trim()"
-            class="shrink-0 rounded-lg bg-emerald-500 px-4 py-2 text-[12px] font-semibold text-white transition-all hover:bg-emerald-600 disabled:opacity-50"
+            class="shrink-0 rounded-lg bg-emerald-600 px-4 py-2 text-[12px] font-semibold text-white transition-all hover:bg-emerald-700 disabled:opacity-50"
           >{{ parsing ? '解析中…' : '解析' }}</button>
         </div>
 
@@ -61,15 +61,15 @@
 
       <!-- ── 解析结果 ── -->
       <template v-if="parsed">
-        <div class="rounded-xl border border-gray-200 bg-white p-4">
+        <div class="rounded-xl border border-[var(--ys-border)] bg-white p-4">
           <div class="flex flex-wrap items-center gap-4">
-            <div class="h-[76px] w-[76px] shrink-0 overflow-hidden rounded-xl bg-gray-100">
+            <div class="h-[76px] w-[76px] shrink-0 overflow-hidden rounded-xl bg-[var(--ys-surface-sunken)]">
               <img v-if="parsed.cover" :src="parsed.cover" alt="" referrerpolicy="no-referrer" class="h-full w-full object-cover" />
               <div v-else class="grid h-full w-full place-items-center text-2xl text-gray-300">♫</div>
             </div>
             <div class="min-w-0 flex-1">
               <b class="block truncate text-[15px] text-gray-800">{{ parsed.title }}</b>
-              <p class="mt-1 text-[12px] text-gray-400">
+              <p class="mt-1 text-[12px] text-gray-500">
                 共 {{ parsed.songs.length }} 首
                 <span class="mx-1.5 text-gray-300">|</span>
                 <span class="text-emerald-600">已在库 {{ inLibraryCount }} 首</span>
@@ -80,26 +80,26 @@
             <button
               @click="downloadAll"
               :disabled="!toDownload.length"
-              class="shrink-0 rounded-lg bg-emerald-500 px-4 py-2 text-[12px] font-semibold text-white transition-all hover:bg-emerald-600 disabled:opacity-50"
+              class="shrink-0 rounded-lg bg-emerald-600 px-4 py-2 text-[12px] font-semibold text-white transition-all hover:bg-emerald-700 disabled:opacity-50"
             >{{ toDownload.length ? `一键下载全部（${toDownload.length}）` : '没有需要下载的' }}</button>
             <button
               v-if="!subscription"
               @click="subscribe"
               :disabled="subscribing"
-              class="shrink-0 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-[12px] font-semibold text-emerald-700 transition-all hover:bg-emerald-100 disabled:opacity-50"
+              class="shrink-0 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-[12px] font-semibold text-emerald-600 transition-all hover:bg-emerald-50 disabled:opacity-50"
             >{{ subscribing ? '订阅中…' : '订阅更新' }}</button>
 
             <template v-else>
               <span
                 class="shrink-0 rounded-lg border px-3 py-2 text-[12px] font-semibold"
                 :class="subscription.active
-                  ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                  : 'border-gray-200 bg-gray-50 text-gray-500'"
+                  ? 'border-emerald-200 bg-emerald-50 text-emerald-600'
+                  : 'border-[var(--ys-border)] bg-[var(--ys-surface-sunken)] text-gray-500'"
               >{{ subscription.active ? '已订阅' : '已暂停' }}</span>
               <button
                 @click="toggleSubscription"
                 :disabled="togglingSub"
-                class="shrink-0 rounded-lg border border-gray-200 bg-white px-4 py-2 text-[12px] font-semibold text-gray-600 transition-all hover:bg-gray-50 disabled:opacity-50"
+                class="shrink-0 rounded-lg border border-[var(--ys-border)] bg-white px-4 py-2 text-[12px] font-semibold text-gray-600 transition-all hover:bg-[var(--ys-surface-hover)] disabled:opacity-50"
               >{{ togglingSub ? '处理中…' : (subscription.active ? '停止更新' : '恢复更新') }}</button>
             </template>
           </div>
@@ -107,26 +107,26 @@
         </div>
 
         <!-- 歌曲列表 -->
-        <div class="overflow-hidden rounded-xl border border-gray-200 bg-white">
-          <div class="flex items-center justify-between border-b border-gray-100 px-4 py-2.5">
+        <div class="overflow-hidden rounded-xl border border-[var(--ys-border)] bg-white">
+          <div class="flex items-center justify-between border-b border-[var(--ys-border)] px-4 py-2.5">
             <span class="text-[12px] font-semibold text-gray-700">曲目列表</span>
             <label class="flex items-center gap-1.5 text-[11px] text-gray-500">
-              <input type="checkbox" v-model="hideInLibrary" class="accent-emerald-500" />
+              <input type="checkbox" v-model="hideInLibrary" class="" />
               隐藏已在库的
             </label>
           </div>
-          <div class="max-h-[520px] divide-y divide-gray-50 overflow-y-auto">
+          <div class="max-h-[520px] divide-y divide-[var(--ys-border)] overflow-y-auto">
             <div
               v-for="(s, i) in visibleSongs" :key="s.id || i"
               class="flex items-center gap-3 px-4 py-2.5"
             >
               <span class="w-6 shrink-0 text-center font-mono text-[11px] text-gray-300">{{ i + 1 }}</span>
-              <div class="h-9 w-9 shrink-0 overflow-hidden rounded-lg bg-gray-100">
+              <div class="h-9 w-9 shrink-0 overflow-hidden rounded-lg bg-[var(--ys-surface-sunken)]">
                 <img v-if="s.cover" :src="s.cover" alt="" referrerpolicy="no-referrer" class="h-full w-full object-cover" />
               </div>
               <div class="min-w-0 flex-1">
                 <b class="block truncate text-[13px] text-gray-800">{{ s.name }}</b>
-                <span class="block truncate text-[11px] text-gray-400">
+                <span class="block truncate text-[11px] text-gray-500">
                   {{ s.singer || '未知歌手' }}<span v-if="s.album"> · {{ s.album }}</span>
                 </span>
               </div>
@@ -139,7 +139,7 @@
                 class="shrink-0 rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-medium text-blue-600"
               >下载中</span>
             </div>
-            <p v-if="!visibleSongs.length" class="py-10 text-center text-[12px] text-gray-400">
+            <p v-if="!visibleSongs.length" class="py-10 text-center text-[12px] text-gray-500">
               没有可显示的曲目
             </p>
           </div>
@@ -147,9 +147,9 @@
       </template>
 
       <!-- 未解析时的空态 -->
-      <div v-else-if="!parsing" class="rounded-xl border border-dashed border-gray-200 bg-white py-16 text-center">
+      <div v-else-if="!parsing" class="rounded-xl border border-dashed border-[var(--ys-border)] bg-white py-16 text-center">
         <p class="text-[13px] font-semibold text-gray-500">还没有解析任何歌单</p>
-        <p class="mt-1 text-[11px] text-gray-400">把歌单分享链接粘到上面，点「解析」开始</p>
+        <p class="mt-1 text-[11px] text-gray-500">把歌单分享链接粘到上面，点「解析」开始</p>
       </div>
     </div>
   </component>
@@ -195,7 +195,7 @@ const metrics = computed(() => [
     label: '近 24h 成功率',
     // 没有样本时显示「—」而不是 0%：0% 会让人以为全失败了
     value: downloadManager.recentSuccessRate.value == null ? '—' : `${downloadManager.recentSuccessRate.value}%`,
-    dot: 'bg-emerald-500',
+    dot: 'bg-emerald-600',
   },
 ])
 

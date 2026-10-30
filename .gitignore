@@ -78,3 +78,27 @@ fpk-package/app.tgz
 docs/参考项目/music-tidy/server/
 docs/参考项目/music-tidy/cmd/
 docs/参考项目/music-tidy-1.14.0/server/
+
+# ──────────────────────────────────────────────────────────────
+# AI 工具 / 编辑器的本地状态（2026-10-30 补）
+#
+# 这些目录是各工具在自己磁盘上维护的索引、缓存、记忆与规则文件，
+# 与曲率的运行无关；.graphflow/ + graphflow-out/ + .mnemon/ 合计约 6 MB，
+# 且全部能从源码重建 —— 进历史只会让仓库越来越难克隆。
+# ──────────────────────────────────────────────────────────────
+.claude/
+.dsh-vision-router/
+.graphflow/
+.graphflow-cache/
+graphflow-out/
+.mnemon/
+PearAI/
+# GraphFlow 自动生成的编辑器说明文件（AGENTS.md 与 .windsurfrules 内容完全相同）
+AGENTS.md
+GEMINI.md
+.windsurfrules
+
+# 飞牛视觉重构过程中的未接线草稿：从未被任何源码 import，
+# 真正的实现已经落在 style.css + tailwind.config.js 里。只留本地磁盘备查。
+frontend/.fnos_*.css
+frontend/.fnos_*.js

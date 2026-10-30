@@ -24,6 +24,8 @@ const clientJs = read('../api/client.js')
 const downloadHubVue = read('../components/DownloadHub.vue')
 const pushManagerVue = read('../components/PushManager.vue')
 const tidyViewVue = read('../components/TidyView.vue')
+// 2026-10-29：「替换音质」从整理页独立成页 —— 它那套接线约定搬到这里继续钉。
+const qualityViewVue = read('../components/QualityView.vue')
 // 2026-10-18：榜单管理页（ChartManager.vue）已融进「发现音乐」的榜单段 ——
 // 这批开关与音质下拉现在住在 SearchView.vue 里，断言改指向它。
 const searchViewVue = read('../components/SearchView.vue')
@@ -101,7 +103,9 @@ test('下载队列：多选与一键清除记录都在，且只清「已结束�
 
 test('试听音质：注入面板的切换按钮接的是同源通道那两条接口', () => {
   assert.ok(uiJs.includes("BASE + '/api/quality'"), '面板应 POST 音质偏好')
-  assert.ok(uiJs.includes("BASE + '/api/now?guid='"), '面板应查「这首歌实际用了哪条源、哪一档」')
+  // 「正在播放」段已被移除（用户 2026-10-29 要求），面板不再查 /api/now ——
+  // 那条接口只服务于被删掉的那一段，现在由飞牛自己的播放条显示。
+  assert.ok(!uiJs.includes("BASE + '/api/now?guid='"), '面板已移除「正在播放」段，不应再查 /api/now')
   assert.ok(uiJs.includes('qualityLabel'), '应有档位标签（认不出的档位照原样显示）')
   // 后端白名单必须真的有这两条 —— 否则脚本发出去只会拿到 404。
   assert.ok(qulvbridgeGo.includes('func (i *Interceptor) handleQulvNow('), '后端应有 now 处理器')
@@ -132,12 +136,29 @@ test('推送同步历史：多选与一键清除都在，且后端真的支持�
 test('补全整理是顶部分段导航（TidyView）', () => {
   assert.match(tidyViewVue, /import \{[^}]*\bsegmentOf\b[^}]*\} from '\.\.\/services\/navBus'/,
     'TidyView 应从 navBus 读当前分段')
-  assert.match(tidyViewVue, /const sub = computed\(\(\) => segmentOf\('tidy'\)\)/,
-    '分段状态必须来自 navBus（壳层分段条与页面读同一个 source of truth）')
-  for (const seg of ['complete', 'dedupe', 'audit', 'records', 'quality']) {
+  // 2026-10-29 第六次改版：一页多格后，TidyView 的「画哪一段」改由壳传入的
+  // `segment` prop 决定（`props.segment || segmentOf('tidy')`，见 App.vue 的 #inner-tidy-*），
+  // 否则一页挂 4 份实例会全画同一段、另外三格空白。`segmentOf` 仍是兜底来源，
+  // 所以这里钉的是「有 prop 优先、无 prop 回退 navBus」这条契约，而不是旧的单一写法。
+  assert.match(tidyViewVue, /const sub = computed\(\(\) => props\.segment \|\| segmentOf\('tidy'\)\)/,
+    '分段状态：壳传 segment 优先，缺省回退 navBus（壳层分段条与页面读同一个 source of truth）')
+  // 2026-10-29 分类重排（用户：「按你说的来」）：整理页按**用户心智**分四段 ——
+  //   补全（东西缺）/ 修复（东西不对）/ 音质（换音频文件）/ 快照（怕出事）。
+  // 「音质」当过一次独立页（QualityView.vue 全屏），用户当天又说「还是放回补全整理页面吧」，
+  // 于是它回来当第四段 —— 所以 TidyView **仍然不实现**音质，音质永远是 QualityView 那个组件，
+  // 只是被塞进整理页的 #inner-tidy-quality 槽（见 App.vue）。
+  for (const seg of ['complete', 'repair', 'records']) {
     assert.ok(tidyViewVue.includes(`v-show="sub === '${seg}'"`),
       `「${seg}」段必须用 v-show 常驻（不能用 v-if，否则切走丢结果）`)
   }
+  // 老段 id 不许再出现在模板里：dedupe / audit / quality 三段已经不存在了
+  for (const gone of ['dedupe', 'audit', 'quality']) {
+    assert.ok(!tidyViewVue.includes(`v-show="sub === '${gone}'"`),
+      `「${gone}」段已下线（2026-10-29 重排），模板里不该还挂着它`)
+  }
+  // 查重只此一处：并进「修复」段（不再单开一段，也不在歌名修复卡里复制折叠区）
+  assert.ok(!tidyViewVue.includes("v-if=\"dupOpen\""),
+    '查重不该再复制一份折叠区 —— 它现在是修复段里的一张独立卡')
 })
 
 // 2026-10-24：「本地曲库 → 体检文件名」要查**用户当前看的那个目录**。
@@ -169,25 +190,49 @@ test('体检入口已从本地曲库撤掉，目录优先级仍在（NasExplorer
     '旧的 ⋯ 主菜单 tidyMenu 必须删掉 —— 主功能入口不能再藏在 ⋯ 后面')
   assert.ok(tidyViewVue.includes('completeMenu'),
     '补全段应只保留一个次要动作的 ⋯（增量扫描）')
-  // 2026-10-21（需求 m02757/m02848）：「替换音质」从占位段接成真契约 ——
-  // 原来钉「占位不得发调用」的断言作废，改钉**接线形状**（契约见 client.js QualityAPI 注释）：
+  // 2026-10-29：「替换音质」永远是**独立组件** QualityView.vue（接线形状在那边钉）。
+  // 它现在是整理页的第四段，但实现只有一份 —— TidyView 里不许出现音质逻辑
+  // （否则就是两份实现，改一处不生效；这正是上一版「音质两处各写一遍」的病根）。
+  assert.ok(!tidyViewVue.includes('QualityAPI'),
+    'TidyView 不该再有 QualityAPI —— 音质实现在 QualityView.vue，别复制回来')
+  assert.ok(!tidyViewVue.includes("sub === 'quality'"),
+    'TidyView 不该自己渲染 quality 段 —— 它由 App.vue 的 #inner-tidy-quality 槽提供')
+})
+
+/**
+ * 音质替换的接线（2026-10-29 从「补全整理」拆成独立组件 QualityView.vue 后，断言跟着搬过来；
+ * 当天下午它作为**分段**回到整理页，实现仍是这一个文件，所以断言不变）。
+ *
+ * 钉的是**契约形状**而不是某个函数名 —— 契约见 client.js 的 QualityAPI 注释：
+ * scan 是异步任务（start 只是启动，进度靠轮询 status），replace 一次最多 50 条。
+ * 这些接错时界面不会报错，只会「点了没反应」或「进度条永远不动」。
+ */
+test('音质替换页接线（QualityView）：扫描 / 轮询 / 替换 / 勾选条', () => {
   assert.ok(clientJs.includes("api.post('/quality/scan'"), 'client.js 应有 QualityAPI.scan（POST /quality/scan）')
   assert.ok(clientJs.includes("api.post('/quality/replace'"), 'client.js 应有 QualityAPI.replace（POST /quality/replace）')
-  assert.match(tidyViewVue, /import \{[^}]*QualityAPI[^}]*\} from '\.\.\/api\/client'/,
-    'TidyView 应 import QualityAPI')
-  assert.ok(tidyViewVue.includes("QualityAPI.scan('start'"), '「开始扫描」应真的发起扫描任务')
-  assert.ok(tidyViewVue.includes("QualityAPI.scan('status'"), 'running 时应轮询 status 拿进度')
-  assert.ok(tidyViewVue.includes('开始扫描'), '应有「开始扫描」主按钮')
-  assert.ok(tidyViewVue.includes('扫描中…'), 'running 时按钮应变成「扫描中…」并禁用')
-  assert.ok(tidyViewVue.includes('已中断'), '停止只停前端轮询 —— 状态必须诚实显示「已中断」')
+  assert.match(qualityViewVue, /import \{[^}]*QualityAPI[^}]*\} from '\.\.\/api\/client'/,
+    'QualityView 应 import QualityAPI')
+  assert.ok(qualityViewVue.includes("QualityAPI.scan('start'"), '「开始扫描」应真的发起扫描任务')
+  assert.ok(qualityViewVue.includes("QualityAPI.scan('status'"), 'running 时应轮询 status 拿进度')
+  assert.ok(qualityViewVue.includes("QualityAPI.scan('stop'"), '「停止」应真的通知后端停下（不只是停前端轮询）')
+  assert.ok(qualityViewVue.includes('QualityAPI.replace('), '替换应真发 POST /quality/replace')
+  assert.ok(qualityViewVue.includes('开始扫描'), '应有「开始扫描」主按钮')
+  assert.ok(qualityViewVue.includes('扫描中…'), 'running 时按钮应变成「扫描中…」并禁用')
+  assert.ok(qualityViewVue.includes('已停止'), '停止后状态必须诚实显示「已停止」')
   for (const label of ['洛雪', 'musicdl', '原生']) {
-    assert.ok(tidyViewVue.includes(label), `渠道三格应显示「${label}」`)
+    assert.ok(qualityViewVue.includes(label), `渠道三格应显示「${label}」`)
   }
-  assert.ok(tidyViewVue.includes('拿不到'), '渠道拿不到应显示灰的「拿不到」')
-  assert.ok(tidyViewVue.includes(':disabled="!e.upgradeable || e.replaced"'),
+  assert.ok(qualityViewVue.includes('拿不到'), '渠道拿不到应显示灰的「拿不到」')
+  assert.ok(qualityViewVue.includes(':disabled="!e.upgradeable || e.replaced"'),
     '勾选框必须只对 upgradeable 且未替换的行开放')
-  assert.ok(tidyViewVue.includes('用最高音质替换'), 'SelectionBar 主按钮应是「用最高音质替换」')
-  assert.ok(tidyViewVue.includes('QualityAPI.replace('), '替换应真发 POST /quality/replace')
+  assert.ok(qualityViewVue.includes('用最高音质替换'), 'SelectionBar 主按钮应是「用最高音质替换」')
+  // 必须挂在 App.vue 的**整理页音质段**槽位上（#inner-tidy-quality），
+  // 否则分段是死的（点得到、里面空白）。
+  const appVue = read('../App.vue')
+  assert.ok(appVue.includes('#inner-tidy-quality'), 'App.vue 应有 #inner-tidy-quality 槽位')
+  assert.ok(appVue.includes('<QualityView'), 'App.vue 应真的挂载 QualityView')
+  assert.ok(!appVue.includes('#view-quality'),
+    '#view-quality 是它当独立页时的旧槽位，留着就是一棵谁也点不到的孤儿树')
 })
 
 test('推送能力位是并排的卡片（PushManager）', () => {

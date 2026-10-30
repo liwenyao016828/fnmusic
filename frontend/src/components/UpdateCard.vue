@@ -3,9 +3,9 @@
     `plain`：被 UpdateModal 装进弹窗时置 true。外壳（圆角/边框/背景/内边距）和
     「版本更新」这个标题都由弹窗自己出，卡片再画一遍就是同一件事说两遍。
   -->
-  <section :class="plain ? '' : 'rounded-[var(--ys-radius-card)] border border-[var(--ys-border)] bg-white p-4 shadow-[0_1px_2px_rgba(0,0,0,0.03)] sm:p-5'">
+  <section :class="plain ? '' : 'rounded-[var(--ys-radius-card)] border border-[var(--ys-border)] bg-white p-4 sm:p-5'">
     <div v-if="!plain" class="flex items-start gap-3">
-      <span class="grid h-9 w-9 shrink-0 place-items-center rounded-[10px] bg-[var(--ys-accent-soft)] text-[var(--ys-accent)]">
+      <span class="grid h-9 w-9 shrink-0 place-items-center rounded-[8px] bg-[var(--ys-accent-soft)] text-[var(--ys-accent)]">
         <RefreshCw class="h-4 w-4" :class="{ 'animate-spin': checking || phase === 'installing' }" :stroke-width="1.8" />
       </span>
       <div class="min-w-0 flex-1">
@@ -28,12 +28,12 @@
           <span class="text-[11px] text-[var(--ys-text-muted)]">当前</span>
           <span class="font-mono text-[13px] font-medium text-[var(--ys-text)]">{{ current || '…' }}</span>
           <template v-if="latest && hasUpdate">
-            <ArrowRight class="h-3.5 w-3.5 shrink-0 text-[var(--ys-text-faint)]" :stroke-width="1.8" />
+            <ArrowRight class="h-3.5 w-3.5 shrink-0 text-[var(--ys-text-aux)]" :stroke-width="1.8" />
             <span class="text-[11px] text-[var(--ys-text-muted)]">最新</span>
             <span class="font-mono text-[13px] font-semibold text-[var(--ys-accent)]">{{ latest }}</span>
           </template>
         </div>
-        <div v-if="sizeLabel && active" class="mt-1 text-[11px] text-[var(--ys-text-faint)]">
+        <div v-if="sizeLabel && active" class="mt-1 text-[11px] text-[var(--ys-text-aux)]">
           安装包 {{ sizeLabel }}
         </div>
       </div>
@@ -42,13 +42,13 @@
         <button
           v-if="installed"
           type="button"
-          class="ys-press rounded-[9px] bg-[var(--ys-accent)] px-3.5 py-1.5 text-[12px] font-medium text-white transition-colors hover:bg-[var(--ys-accent-hover)]"
+          class="ys-press rounded-[8px] bg-[var(--ys-accent)] px-3.5 py-1.5 text-[12px] font-medium text-white transition-colors hover:bg-[var(--ys-accent-hover)]"
           @click="reloadPage"
         >刷新页面</button>
         <button
           v-else
           type="button"
-          class="ys-press rounded-[9px] px-3.5 py-1.5 text-[12px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+          class="ys-press rounded-[8px] px-3.5 py-1.5 text-[12px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50"
           :class="hasUpdate
             ? 'bg-[var(--ys-accent)] text-white hover:bg-[var(--ys-accent-hover)]'
             : 'border border-[var(--ys-border)] bg-white text-[var(--ys-text-muted)] hover:text-[var(--ys-text)]'"
@@ -72,7 +72,7 @@
          2026-10-25 用户就是卡在这里：本机能开代理，但应用由飞牛拉起、读不到环境变量。 -->
     <p
       v-if="proxyHintNeeded"
-      class="mt-2 rounded-[9px] bg-[#FFF8E6] px-2.5 py-2 text-[11px] leading-relaxed text-[#8A6100]"
+      class="mt-2 rounded-[8px] bg-[#FFF8E6] px-2.5 py-2 text-[11px] leading-relaxed text-[#8A6100]"
     >
       看起来是网络出不去 GitHub。如果这台机器需要代理才能访问外网，在下面
       <button
@@ -91,14 +91,14 @@
           :style="{ width: `${Math.max(3, progress)}%` }"
         />
       </div>
-      <div class="mt-1 flex justify-between text-[10.5px] text-[var(--ys-text-faint)]">
+      <div class="mt-1 flex justify-between text-[10.5px] text-[var(--ys-text-aux)]">
         <span>{{ progress }}%</span>
         <span v-if="phase === 'downloading' && sizeLabel">{{ sizeLabel }}</span>
         <span v-else-if="phase === 'installing'">正在安装</span>
       </div>
     </div>
 
-    <p v-if="installed" class="mt-3 rounded-[9px] bg-[var(--ys-accent-soft)] px-3 py-2 text-[11.5px] leading-relaxed text-[var(--ys-accent)]">
+    <p v-if="installed" class="mt-3 rounded-[8px] bg-[var(--ys-accent-soft)] px-3 py-2 text-[11.5px] leading-relaxed text-[var(--ys-accent)]">
       更新已启动，应用会在几十秒内重启，稍后刷新页面。
     </p>
 
@@ -117,19 +117,19 @@
       >
         <ChevronDown class="h-3.5 w-3.5 shrink-0 transition-transform" :class="{ 'rotate-180': notesOpen }" :stroke-width="1.8" />
         {{ hasUpdate ? '更新说明' : '更新日志' }}
-        <span v-if="notesVersion" class="font-normal text-[var(--ys-text-faint)]">v{{ notesVersion }}</span>
+        <span v-if="notesVersion" class="font-normal text-[var(--ys-text-aux)]">v{{ notesVersion }}</span>
       </button>
-      <p v-if="notesStale" class="mt-1 text-[10.5px] leading-relaxed text-[var(--ys-text-faint)]">
+      <p v-if="notesStale" class="mt-1 text-[10.5px] leading-relaxed text-[var(--ys-text-aux)]">
         上面这段是发布版 v{{ notesVersion }} 的说明；你跑的是 v{{ current }}（比发布版新），
         所以本版自己的说明还没上 GitHub Release。
       </p>
       <pre
         v-if="notesOpen"
-        class="mt-2 max-h-64 overflow-y-auto whitespace-pre-wrap break-words rounded-[9px] bg-[#FAFAFC] p-3 font-sans text-[11.5px] leading-relaxed text-[var(--ys-text-muted)]"
+        class="mt-2 max-h-64 overflow-y-auto whitespace-pre-wrap break-words rounded-[8px] bg-[var(--ys-surface-sunken)] p-3 font-sans text-[11.5px] leading-relaxed text-[var(--ys-text-muted)]"
       >{{ notes }}</pre>
     </div>
 
-    <div v-if="checkedAt && !hasUpdate && !checkError" class="mt-1 text-[10.5px] text-[var(--ys-text-faint)]">
+    <div v-if="checkedAt && !hasUpdate && !checkError" class="mt-1 text-[10.5px] text-[var(--ys-text-aux)]">
       上次检查：{{ checkedLabel }}
     </div>
 
@@ -146,7 +146,7 @@
       >
         <SlidersHorizontal class="h-3.5 w-3.5" :stroke-width="1.8" />
         镜像、网络与令牌
-        <span class="text-[10.5px] font-normal text-[var(--ys-text-faint)]">
+        <span class="text-[10.5px] font-normal text-[var(--ys-text-aux)]">
           {{ settingsSummary }}
         </span>
       </button>
@@ -164,24 +164,24 @@
               v-model="tokenInput"
               type="password"
               autocomplete="off"
-              class="min-w-0 flex-1 rounded-[9px] border border-[var(--ys-border)] bg-white px-2.5 py-1.5 font-mono text-[12px] text-[var(--ys-text)] outline-none placeholder:text-[var(--ys-text-faint)] focus:border-[var(--ys-accent)]"
+              class="min-w-0 flex-1 rounded-[8px] border border-[var(--ys-border)] bg-white px-2.5 py-1.5 font-mono text-[12px] text-[var(--ys-text)] outline-none placeholder:text-[var(--ys-text-aux)] focus:border-[var(--ys-accent)]"
               :placeholder="tokenSet ? '已设置（留空则不改动）' : 'github_pat_… 或 ghp_…'"
             />
             <button
               type="button"
-              class="ys-press rounded-[9px] border border-[var(--ys-border)] bg-white px-3 py-1.5 text-[12px] font-medium text-[var(--ys-text-muted)] transition-colors hover:text-[var(--ys-text)] disabled:opacity-50"
+              class="ys-press rounded-[8px] border border-[var(--ys-border)] bg-white px-3 py-1.5 text-[12px] font-medium text-[var(--ys-text-muted)] transition-colors hover:text-[var(--ys-text)] disabled:opacity-50"
               :disabled="tokenSaving || !tokenInput.trim()"
               @click="saveToken"
             >保存</button>
             <button
               v-if="tokenSet"
               type="button"
-              class="ys-press rounded-[9px] border border-[var(--ys-border)] bg-white px-3 py-1.5 text-[12px] font-medium text-rose-600 transition-colors hover:bg-rose-50 disabled:opacity-50"
+              class="ys-press rounded-[8px] border border-[var(--ys-border)] bg-white px-3 py-1.5 text-[12px] font-medium text-rose-600 transition-colors hover:bg-rose-50 disabled:opacity-50"
               :disabled="tokenSaving"
               @click="clearToken"
             >清除</button>
           </div>
-          <p v-if="tokenNote" class="mt-1 text-[11px]" :class="tokenError ? 'text-rose-600' : 'text-[var(--ys-text-faint)]'">{{ tokenNote }}</p>
+          <p v-if="tokenNote" class="mt-1 text-[11px]" :class="tokenError ? 'text-rose-600' : 'text-[var(--ys-text-aux)]'">{{ tokenNote }}</p>
         </div>
 
         <!-- ── 镜像清单（用户 2026-10-25：「增加默认镜像站，可删减增加」）──
@@ -210,7 +210,7 @@
             <li
               v-for="(m, i) in mirrorRows"
               :key="`${m.url}-${i}`"
-              class="flex items-center gap-1.5 rounded-[9px] border border-[var(--ys-border)] bg-white px-2 py-1.5"
+              class="flex items-center gap-1.5 rounded-[8px] border border-[var(--ys-border)] bg-white px-2 py-1.5"
             >
               <input
                 type="checkbox"
@@ -220,26 +220,26 @@
                 @change="toggleMirror(i, !m.disabled)"
               />
               <span class="min-w-0 flex-1">
-                <span class="block truncate font-mono text-[11.5px]" :class="m.disabled ? 'text-[var(--ys-text-faint)] line-through' : 'text-[var(--ys-text)]'">{{ m.url }}</span>
-                <span class="block truncate text-[10.5px] text-[var(--ys-text-faint)]">{{ m.name || m.url }}</span>
+                <span class="block truncate font-mono text-[11.5px]" :class="m.disabled ? 'text-[var(--ys-text-aux)] line-through' : 'text-[var(--ys-text)]'">{{ m.url }}</span>
+                <span class="block truncate text-[10.5px] text-[var(--ys-text-aux)]">{{ m.name || m.url }}</span>
               </span>
               <button
                 type="button"
-                class="ys-press shrink-0 rounded-[7px] px-1.5 py-0.5 text-[11px] text-[var(--ys-text-muted)] transition-colors hover:bg-[var(--ys-surface-sunken)] disabled:opacity-30"
+                class="ys-press shrink-0 rounded-[8px] px-1.5 py-0.5 text-[11px] text-[var(--ys-text-muted)] transition-colors hover:bg-[var(--ys-surface-hover)] disabled:opacity-30"
                 :disabled="i === 0 || mirrorSaving"
                 title="上移（越靠前越先试）"
                 @click="moveMirror(i, -1)"
               >↑</button>
               <button
                 type="button"
-                class="ys-press shrink-0 rounded-[7px] px-1.5 py-0.5 text-[11px] text-[var(--ys-text-muted)] transition-colors hover:bg-[var(--ys-surface-sunken)] disabled:opacity-30"
+                class="ys-press shrink-0 rounded-[8px] px-1.5 py-0.5 text-[11px] text-[var(--ys-text-muted)] transition-colors hover:bg-[var(--ys-surface-hover)] disabled:opacity-30"
                 :disabled="i === mirrorRows.length - 1 || mirrorSaving"
                 title="下移"
                 @click="moveMirror(i, 1)"
               >↓</button>
               <button
                 type="button"
-                class="ys-press shrink-0 rounded-[7px] px-1.5 py-0.5 text-[11px] text-rose-600 transition-colors hover:bg-rose-50 disabled:opacity-30"
+                class="ys-press shrink-0 rounded-[8px] px-1.5 py-0.5 text-[11px] text-rose-600 transition-colors hover:bg-rose-50 disabled:opacity-30"
                 :disabled="mirrorSaving"
                 title="删除这条镜像"
                 @click="removeMirror(i)"
@@ -247,7 +247,7 @@
             </li>
             <li class="text-[11px] text-[var(--ys-text-muted)]">
               GitHub 官方源
-              <span class="text-[var(--ys-text-faint)]">
+              <span class="text-[var(--ys-text-aux)]">
                 · {{ officialDisabled ? '已停用（现在只能用上面的镜像）' : '内置兜底，永远最后尝试，不可删除' }}
               </span>
               <button
@@ -265,18 +265,18 @@
               type="text"
               autocomplete="off"
               spellcheck="false"
-              class="min-w-0 flex-1 rounded-[9px] border border-[var(--ys-border)] bg-white px-2.5 py-1.5 font-mono text-[12px] text-[var(--ys-text)] outline-none placeholder:text-[var(--ys-text-faint)] focus:border-[var(--ys-accent)]"
+              class="min-w-0 flex-1 rounded-[8px] border border-[var(--ys-border)] bg-white px-2.5 py-1.5 font-mono text-[12px] text-[var(--ys-text)] outline-none placeholder:text-[var(--ys-text-aux)] focus:border-[var(--ys-accent)]"
               placeholder="https://gh-proxy.com 或 https://自建/{repo}/latest.json"
             />
             <button
               type="button"
-              class="ys-press rounded-[9px] border border-[var(--ys-border)] bg-white px-3 py-1.5 text-[12px] font-medium text-[var(--ys-text-muted)] transition-colors hover:text-[var(--ys-text)] disabled:opacity-50"
+              class="ys-press rounded-[8px] border border-[var(--ys-border)] bg-white px-3 py-1.5 text-[12px] font-medium text-[var(--ys-text-muted)] transition-colors hover:text-[var(--ys-text)] disabled:opacity-50"
               :disabled="mirrorSaving || !mirrorInput.trim()"
               @click="addMirror"
             >添加</button>
           </div>
-          <p v-if="mirrorNote" class="mt-1 text-[11px]" :class="mirrorError ? 'text-rose-600' : 'text-[var(--ys-text-faint)]'">{{ mirrorNote }}</p>
-          <p v-if="triedText" class="mt-1 break-words text-[10.5px] leading-relaxed text-[var(--ys-text-faint)]">{{ triedText }}</p>
+          <p v-if="mirrorNote" class="mt-1 text-[11px]" :class="mirrorError ? 'text-rose-600' : 'text-[var(--ys-text-aux)]'">{{ mirrorNote }}</p>
+          <p v-if="triedText" class="mt-1 break-words text-[10.5px] leading-relaxed text-[var(--ys-text-aux)]">{{ triedText }}</p>
         </div>
 
         <!-- 出站代理。只作用于「检查更新 / 下载安装包」这一条链路，不影响音源与播放。 -->
@@ -286,7 +286,7 @@
             应用由飞牛系统拉起，读不到 shell 里的 <code class="font-mono text-[10.5px]">HTTP_PROXY</code>；
             GitHub 在部分网络下必须经代理才连得上。填在这里就生效，不用改环境变量、不用重启。
           </p>
-          <p class="mt-1 text-[11px] leading-relaxed text-[var(--ys-text-faint)]">
+          <p class="mt-1 text-[11px] leading-relaxed text-[var(--ys-text-aux)]">
             支持 http / https / socks5，例如 <code class="font-mono text-[10.5px]">http://192.168.1.3:7890</code>
             或 <code class="font-mono text-[10.5px]">socks5://192.168.1.3:7891</code>。
             <b>内网与本地地址始终直连</b>，不会被绕进代理；只影响更新，不影响音源与播放。
@@ -297,24 +297,24 @@
               type="text"
               autocomplete="off"
               spellcheck="false"
-              class="min-w-0 flex-1 rounded-[9px] border border-[var(--ys-border)] bg-white px-2.5 py-1.5 font-mono text-[12px] text-[var(--ys-text)] outline-none placeholder:text-[var(--ys-text-faint)] focus:border-[var(--ys-accent)]"
+              class="min-w-0 flex-1 rounded-[8px] border border-[var(--ys-border)] bg-white px-2.5 py-1.5 font-mono text-[12px] text-[var(--ys-text)] outline-none placeholder:text-[var(--ys-text-aux)] focus:border-[var(--ys-accent)]"
               placeholder="http://192.168.1.3:7890"
             />
             <button
               type="button"
-              class="ys-press rounded-[9px] border border-[var(--ys-border)] bg-white px-3 py-1.5 text-[12px] font-medium text-[var(--ys-text-muted)] transition-colors hover:text-[var(--ys-text)] disabled:opacity-50"
+              class="ys-press rounded-[8px] border border-[var(--ys-border)] bg-white px-3 py-1.5 text-[12px] font-medium text-[var(--ys-text-muted)] transition-colors hover:text-[var(--ys-text)] disabled:opacity-50"
               :disabled="proxySaving || !proxyInput.trim()"
               @click="saveProxy"
             >保存</button>
             <button
               v-if="proxySet"
               type="button"
-              class="ys-press rounded-[9px] border border-[var(--ys-border)] bg-white px-3 py-1.5 text-[12px] font-medium text-rose-600 transition-colors hover:bg-rose-50 disabled:opacity-50"
+              class="ys-press rounded-[8px] border border-[var(--ys-border)] bg-white px-3 py-1.5 text-[12px] font-medium text-rose-600 transition-colors hover:bg-rose-50 disabled:opacity-50"
               :disabled="proxySaving"
               @click="clearProxy"
             >清除</button>
           </div>
-          <p v-if="proxyNote" class="mt-1 text-[11px]" :class="proxyError ? 'text-rose-600' : 'text-[var(--ys-text-faint)]'">{{ proxyNote }}</p>
+          <p v-if="proxyNote" class="mt-1 text-[11px]" :class="proxyError ? 'text-rose-600' : 'text-[var(--ys-text-aux)]'">{{ proxyNote }}</p>
         </div>
       </div>
     </div>

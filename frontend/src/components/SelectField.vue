@@ -17,7 +17,7 @@
       · 点击外部关闭（用捕获阶段 pointerdown，比 click 更早、更可靠）。
   -->
   <div class="block min-w-0">
-    <span v-if="label" class="mb-1 block text-[11px] text-gray-400">{{ label }}</span>
+    <span v-if="label" class="mb-1 block text-[11px] text-gray-500">{{ label }}</span>
 
     <button
       ref="triggerRef"
@@ -27,8 +27,8 @@
       :aria-expanded="open"
       aria-haspopup="listbox"
       :class="[
-        'flex w-full items-center justify-between gap-1 rounded-lg border border-gray-200 bg-white text-left text-gray-700 transition-colors',
-        'hover:border-emerald-300 focus:border-emerald-400 focus:outline-none focus:ring-2 focus:ring-emerald-400/20',
+        'flex w-full items-center justify-between gap-1 rounded-lg border border-[var(--ys-border)] bg-white text-left text-gray-700 transition-colors',
+        'hover:border-emerald-200 focus:border-emerald-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/20',
         'disabled:cursor-not-allowed disabled:opacity-50',
         compact ? 'py-1 pl-2 pr-1.5 text-[11px]' : 'py-1.5 pl-2.5 pr-2 text-[12px]',
       ]"
@@ -38,7 +38,7 @@
       <span class="min-w-0 flex-1 truncate">{{ currentLabel }}</span>
       <ChevronDown
         :class="[
-          'shrink-0 text-gray-400 transition-transform duration-150',
+          'shrink-0 text-gray-500 transition-transform duration-150',
           open && 'rotate-180',
           compact ? 'w-3 h-3' : 'w-3.5 h-3.5',
         ]"
@@ -50,7 +50,7 @@
         v-if="open"
         ref="panelRef"
         role="listbox"
-        class="fixed z-[70] overflow-y-auto rounded-xl border border-gray-200 bg-white p-1 shadow-xl ring-1 ring-black/5"
+        class="fixed z-[70] overflow-y-auto rounded-xl border border-[var(--ys-border)] bg-white p-1 shadow-xl ring-1 ring-black/5"
         :style="panelStyle"
       >
         <button
@@ -62,20 +62,20 @@
           :class="[
             'flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left text-[12px] transition-colors',
             String(o.value) === String(modelValue)
-              ? 'bg-emerald-50 font-semibold text-emerald-700'
-              : 'text-gray-700 hover:bg-gray-50',
+              ? 'bg-emerald-50 font-semibold text-emerald-600'
+              : 'text-gray-700 hover:bg-[var(--ys-surface-hover)]',
             i === activeIndex && 'ring-1 ring-inset ring-emerald-200',
           ]"
           @click="pick(o.value)"
           @mouseenter="activeIndex = i"
         >
           <span class="min-w-0 flex-1 truncate">{{ o.label }}</span>
-          <Check v-if="String(o.value) === String(modelValue)" class="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+          <Check v-if="String(o.value) === String(modelValue)" class="h-3.5 w-3.5 shrink-0 text-emerald-600" />
         </button>
       </div>
     </Teleport>
 
-    <span v-if="hint && showHint && !compact" class="mt-1 block text-[10px] leading-snug text-gray-400">{{ hint }}</span>
+    <span v-if="hint && showHint && !compact" class="mt-1 block text-[10px] leading-snug text-gray-500">{{ hint }}</span>
   </div>
 </template>
 

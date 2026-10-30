@@ -10,13 +10,16 @@
 // 所以规则搬到这里，用 `libraryView.test.mjs` 钉住。
 
 /** 侧栏项：合并前的旧 id 会留在浏览器偏好和其他组件的跳转参数里，必须映射 */
-export const LEGACY_TABS = { tidy: 'complete', playlist: 'download', ai: 'push' }
+// 2026-10-28：整理页的「补全」分段下线（合并进「文件修复」），tidy 不再映射到任何侧栏项
+// —— 目标 'complete' 已经不是合法项，硬映射只会把一张废卡片还回来。
+// 老偏好里的 'tidy' 会一路走到兜底的「推送」，和其余被搬走的项同一口径。
+export const LEGACY_TABS = { playlist: 'download', ai: 'push' }
 // nas（本地音乐）是 v2.1.120 从顶层导航搬进来的侧栏项；
 // charts（榜单管理）同一轮**搬了出去**（它现在是顶层导航里的一页），所以不在集合里 ——
 // 偏好里还留着 'charts' 的浏览器会落到默认项，不会出现「整页只剩标题栏」。
 // autodl（自动下载记录）是 v2.1.120 新增的侧栏项：飞牛页面里收藏/加歌单/点下载
 // 触发的那批下载的流水（见 pkg/online/autolog.go）。
-export const TAB_IDS = new Set(['nas', 'push', 'download', 'complete', 'autodl'])
+export const TAB_IDS = new Set(['nas', 'push', 'download', 'autodl'])
 
 /**
  * 把外部传来的侧栏项 id 归一化。
@@ -127,30 +130,33 @@ export const STATUS_TONES = ['progress', 'warn', 'error', 'muted']
  * 侧栏「任务状态」列表：**只列需要处理的事**，不摆一排恒为 0 的数字。
  *
  * 每项都带 `tab`，组件据此接上跳转（这个列表本身就是导航）。
- * 输入里 `download` 的三个数来自下载队列，`monitorStats` 来自后端 `/api/monitors` 的 stats。
+ * 输入里 `download` 的三个数来自下载队列。
+ *
+ * 2026-10-29：订阅（推送）相关的条目已全部移出（用户要求「吧左下角的任务状态中移除」），
+ * 订阅任务状态改为显示在左侧导航「订阅更新」那一项上 —— 见 services/sidebarBadges.js。
+ * 因此这里不再读 `pushRunning` / `pendingBaseline` / `monitorStats`（调用方传进来也无妨，直接忽略）。
  */
 export function sidebarStatusItems(input = {}) {
   const cj = input.completeJob || null
   const dl = input.download || {}
-  const pushRunning = Number(input.pushRunning || 0)
-  const pendingBaseline = Number(input.pendingBaseline || 0)
-  const st = input.monitorStats || null
   const out = []
 
   // 补全歌词/封面是「会真正改文件」的长任务，跑起来必须让用户知道；
   // 没在跑但有写入失败时，失败要留在这儿等人处理。
   if (cj?.running) {
-    out.push({ id: 'complete-running', label: '补全歌词封面', count: cj.total || 0, tone: 'progress', tab: 'complete' })
+    out.push({ id: 'complete-running', label: '补全歌词封面', count: cj.total || 0, tone: 'progress', tab: 'push' })
   } else if (cj?.summary?.failed > 0) {
-    out.push({ id: 'complete-failed', label: '补全写入失败', count: cj.summary.failed, tone: 'error', tab: 'complete' })
+    out.push({ id: 'complete-failed', label: '补全写入失败', count: cj.summary.failed, tone: 'error', tab: 'push' })
   }
 
   if (dl.active > 0) out.push({ id: 'dl-active', label: '下载队列进行中', count: dl.active, tone: 'progress', tab: 'download' })
   if (dl.failed > 0) out.push({ id: 'dl-failed', label: '下载失败待处理', count: dl.failed, tone: 'error', tab: 'download' })
   if (dl.paused > 0) out.push({ id: 'dl-paused', label: '下载已暂停', count: dl.paused, tone: 'warn', tab: 'download' })
 
-  if (pushRunning > 0) out.push({ id: 'push-running', label: '推送正在执行', count: pushRunning, tone: 'progress', tab: 'push' })
-  if (pendingBaseline > 0) out.push({ id: 'baseline', label: '还没开始追新', count: pendingBaseline, tone: 'warn', tab: 'push' })
+  // 2026-10-29 用户：「吧左下角的任务状态中移除」—— 订阅（推送）相关的四类条目
+  // （push-running / baseline / push-failed / push-pending / push-missing）从这一版起
+  // 不再出现在左下角：订阅任务的状态改在左侧导航那一项「订阅更新」上就地显示
+  // （见 services/sidebarBadges.js），左下角只留下载 / 补全 / 自动下载这些「队列类」的事。
 
   // 自动下载（飞牛页面里收藏 / 加歌单 / 点下载触发的那批）：**只报失败**。
   // 成功的那些是流水，摆在侧栏当常态数字只会让人习惯性忽略这一行 ——
@@ -158,12 +164,6 @@ export function sidebarStatusItems(input = {}) {
   const ad = input.autoDownload || {}
   if (ad.failed > 0) {
     out.push({ id: 'autodl-failed', label: '自动下载失败', count: ad.failed, tone: 'error', tab: 'autodl' })
-  }
-
-  if (st) {
-    if (st.failed > 0) out.push({ id: 'push-failed', label: '推送下载失败', count: st.failed, tone: 'error', tab: 'push' })
-    if (st.pending > 0) out.push({ id: 'push-pending', label: '待推送曲目', count: st.pending, tone: 'warn', tab: 'push' })
-    if (st.missing > 0) out.push({ id: 'push-missing', label: '曲库里还没有', count: st.missing, tone: 'muted', tab: 'push' })
   }
 
   return out

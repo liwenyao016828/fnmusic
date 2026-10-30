@@ -19,9 +19,20 @@ test('字符串 payload 是分段 id：切视图同时也切分段', () => {
 
 test('对象 payload 的 segment 字段同样能切分段（新调用形态）', () => {
   __resetNav()
-  navigateTo('tidy', { segment: 'audit', healthDir: '/vol1/Music' })
+  navigateTo('tidy', { segment: 'repair', healthDir: '/vol1/Music' })
   assert.equal(currentView.value, 'tidy')
-  assert.equal(segmentOf('tidy'), 'audit')
+  assert.equal(segmentOf('tidy'), 'repair')
+})
+
+// 2026-10-29 整理页重排：老段名必须落到**它想去的那个功能**上，不能静默掉到默认段。
+// 这正是一次「删段不映射」事故的现场 —— 用户报「我的补全怎么不见了」。
+test('老段名 audit / dedupe 会规范化到 repair，而不是掉回默认段', () => {
+  __resetNav()
+  navigateTo('tidy', { segment: 'audit' })
+  assert.equal(segmentOf('tidy'), 'repair')
+  __resetNav()
+  navigateTo('tidy', 'dedupe')
+  assert.equal(segmentOf('tidy'), 'repair')
 })
 
 test('订阅者能拿到完整 payload（含一次性数据）', () => {

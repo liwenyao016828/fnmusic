@@ -196,6 +196,39 @@ func TestRuleBeatsHeuristic(t *testing.T) {
 	}
 }
 
+// 用户按「不带扩展名」的样例写正则，真实文件名带扩展名时组值不能把扩展名吃进去。
+//
+// 2026-10-28 实测踩到：规则 `^(?P<artist>[^-]+)-(?P<title>.+)$`（样例 `探针-支持吗.mp3`）
+// 命中 `探针-支持吗.wav` 后，`(?P<title>.+)` 匹配的是整个基名，歌名被写成「支持吗.wav」，
+// 再写回标签就污染了用户的文件。
+func TestRuleDoesNotSwallowExtension(t *testing.T) {
+	s := NewStore("")
+	if _, err := s.Upsert(Rule{
+		Regex:  `^(?P<artist>[^-]+)-(?P<title>.+)$`,
+		Sample: "探针-支持吗.mp3",
+	}); err != nil {
+		t.Fatalf("保存失败：%v", err)
+	}
+	for _, name := range []string{"探针-支持吗.wav", "探针-支持吗.flac", "探针-支持吗.mp3"} {
+		got := s.Parse(name)
+		if got.Artist != "探针" || got.Title != "支持吗" {
+			t.Errorf("%s 解析 = (%q, %q)，期望 (探针, 支持吗)", name, got.Artist, got.Title)
+		}
+	}
+
+	// 正则里显式写了扩展名的，组值同样要剥掉（第二种写法，不能只修一半）
+	s2 := NewStore("")
+	if _, err := s2.Upsert(Rule{
+		Regex:  `^(?P<artist>[^-]+)-(?P<title>.+)\.mp3$`,
+		Sample: "探针-支持吗.mp3",
+	}); err != nil {
+		t.Fatalf("保存失败：%v", err)
+	}
+	if got := s2.Parse("探针-支持吗.mp3"); got.Title != "支持吗" {
+		t.Errorf("显式扩展名规则解析 = (%q, %q)，期望歌名 支持吗", got.Artist, got.Title)
+	}
+}
+
 // 未启用的规则不参与解析
 func TestStoreSkipsDisabled(t *testing.T) {
 	s := NewStore("")

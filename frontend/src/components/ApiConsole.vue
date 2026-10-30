@@ -1,7 +1,7 @@
 <template>
   <div class="h-full flex flex-col overflow-hidden select-none">
     <!-- Header -->
-    <div class="px-4 md:px-6 py-4 bg-white border-b border-gray-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shrink-0">
+    <div class="px-4 md:px-6 py-4 bg-white border-b border-[var(--ys-border)] flex flex-col sm:flex-row sm:items-center justify-between gap-3 shrink-0">
       <div>
         <h2 class="text-sm font-bold text-gray-800 flex items-center gap-2">
           开放接口 · 供 AI 与外部程序调用
@@ -9,7 +9,7 @@
             {{ visibleEndpoints.length }} 个接口
           </span>
         </h2>
-        <p class="text-xs text-gray-400 mt-0.5">
+        <p class="text-xs text-gray-500 mt-0.5">
           标准 HTTP + JSON，curl 或任意语言都能调。默认只列 AI 会用的那些（界面内部的可展开）；
           要做什么照着下面的「常见任务怎么做」按顺序调即可。
         </p>
@@ -18,7 +18,7 @@
         <button
           v-if="hiddenCount > 0"
           @click="toggleShowAll"
-          class="px-3 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-xs text-gray-600 flex items-center gap-1.5 transition-all"
+          class="px-3 py-1.5 rounded-lg bg-[var(--ys-surface-control)] hover:bg-[var(--ys-surface-hover)] text-xs text-gray-600 flex items-center gap-1.5 transition-all"
           :title="showAll ? '收回纯界面自用的接口' : `另有 ${hiddenCount} 个界面内部接口（窗口记忆、日志、批量维护音源等），展开看`"
         >
           <Eye v-if="!showAll" class="w-3.5 h-3.5" />
@@ -27,7 +27,7 @@
         </button>
         <button
           @click="copyText(catalogUrl)"
-          class="px-3 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-xs text-gray-600 flex items-center gap-1.5 transition-all"
+          class="px-3 py-1.5 rounded-lg bg-[var(--ys-surface-control)] hover:bg-[var(--ys-surface-hover)] text-xs text-gray-600 flex items-center gap-1.5 transition-all"
           title="复制接口目录地址，交给 AI 自行发现全部接口"
         >
           <Copy class="w-3.5 h-3.5" />复制目录地址
@@ -35,20 +35,20 @@
         <button
           @click="reload"
           :disabled="loading"
-          class="px-3 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-xs text-gray-600 flex items-center gap-1.5 transition-all disabled:opacity-50"
+          class="px-3 py-1.5 rounded-lg bg-[var(--ys-surface-control)] hover:bg-[var(--ys-surface-hover)] text-xs text-gray-600 flex items-center gap-1.5 transition-all disabled:opacity-50"
         >
-          <RotateCw :class="['w-3.5 h-3.5 text-emerald-500', loading ? 'animate-spin' : '']" />
+          <RotateCw :class="['w-3.5 h-3.5 text-emerald-600', loading ? 'animate-spin' : '']" />
           刷新
         </button>
       </div>
     </div>
 
-    <div class="flex-1 overflow-y-auto bg-gray-50 p-4 md:p-5 space-y-4">
+    <div class="flex-1 overflow-y-auto bg-[var(--ys-surface-sunken)] p-4 md:p-5 space-y-4">
       <!-- 运行状态 -->
       <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
-        <div class="bg-white rounded-xl border border-gray-100 p-4 shadow-2xs">
+        <div class="bg-white rounded-xl border border-[var(--ys-border)] p-4">
           <div class="flex items-center gap-2 mb-2">
-            <Activity class="w-4 h-4 text-emerald-500" />
+            <Activity class="w-4 h-4 text-emerald-600" />
             <span class="text-xs font-semibold text-gray-700">服务状态</span>
           </div>
           <div class="space-y-1 text-[11px] text-gray-500">
@@ -60,12 +60,12 @@
                 {{ authText }}
               </span>
             </div>
-            <div v-if="authNote" class="text-[10px] text-gray-400 leading-snug pt-0.5">{{ authNote }}</div>
+            <div v-if="authNote" class="text-[10px] text-gray-500 leading-snug pt-0.5">{{ authNote }}</div>
             <div class="flex justify-between"><span>跨域来源</span><span class="font-mono text-gray-700">{{ corsText }}</span></div>
           </div>
         </div>
 
-        <div class="bg-white rounded-xl border border-gray-100 p-4 shadow-2xs md:col-span-2">
+        <div class="bg-white rounded-xl border border-[var(--ys-border)] p-4 md:col-span-2">
           <div class="flex items-center justify-between mb-2">
             <div class="flex items-center gap-2">
               <Cpu class="w-4 h-4 text-blue-500" />
@@ -75,15 +75,15 @@
               @click="bridgeWorker.toggle()"
               :class="[
                 'px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all',
-                bridgeWorker.isRunning.value ? 'bg-emerald-50 text-emerald-600 border border-emerald-200' : 'bg-gray-100 text-gray-500'
+                bridgeWorker.isRunning.value ? 'bg-emerald-50 text-emerald-600 border border-emerald-200' : 'bg-[var(--ys-surface-sunken)] text-gray-500'
               ]"
             >
               {{ bridgeWorker.isRunning.value ? '运行中 · 点击停止' : '已停止 · 点击启动' }}
             </button>
           </div>
-          <p class="text-[11px] text-gray-400 leading-relaxed">
+          <p class="text-[11px] text-gray-500 leading-relaxed">
             第三方音源脚本只能在浏览器执行，因此外部 AI 提交的
-            <code class="px-1 rounded bg-gray-100 text-gray-600">/api/bridge/resolve</code>
+            <code class="px-1 rounded bg-[var(--ys-surface-sunken)] text-gray-600">/api/bridge/resolve</code>
             任务由本页面领取并完成取链。<strong class="text-gray-500">关闭本页面后，AI 将无法解析新歌曲的直链</strong>（搜索、榜单、本地曲库不受影响）。
           </p>
           <div class="flex items-center gap-4 mt-2 text-[11px] text-gray-500">
@@ -103,7 +103,7 @@
         （在线取直链必须有开着的应用页面）。
       -->
       <div v-if="guide" class="space-y-3">
-        <div class="p-3 bg-white rounded-xl border border-gray-100 shadow-2xs">
+        <div class="p-3 bg-white rounded-xl border border-[var(--ys-border)]">
           <div class="flex items-center gap-2 mb-1.5">
             <Lightbulb class="w-4 h-4 text-emerald-600" />
             <span class="text-xs font-semibold text-gray-700">这套接口是给谁用的</span>
@@ -120,13 +120,13 @@
           </ul>
         </div>
 
-        <div class="p-3 bg-white rounded-xl border border-gray-100 shadow-2xs">
+        <div class="p-3 bg-white rounded-xl border border-[var(--ys-border)]">
           <div class="text-xs font-semibold text-gray-700 mb-2">常见任务怎么做</div>
           <div class="space-y-2">
-            <div v-for="wf in guide.workflows" :key="wf.task" class="rounded-lg border border-gray-100 bg-gray-50/60 p-2.5">
+            <div v-for="wf in guide.workflows" :key="wf.task" class="rounded-lg border border-[var(--ys-border)] bg-[var(--ys-surface-sunken)] p-2.5">
               <div class="flex items-baseline gap-2 flex-wrap">
                 <b class="text-[11px] text-gray-700">{{ wf.task }}</b>
-                <span v-if="wf.summary" class="text-[10px] text-gray-400">{{ wf.summary }}</span>
+                <span v-if="wf.summary" class="text-[10px] text-gray-500">{{ wf.summary }}</span>
               </div>
               <div class="mt-1 text-[11px] text-gray-500 leading-relaxed space-y-0.5">
                 <p v-for="(s, i) in wf.steps" :key="i">{{ s }}</p>
@@ -136,7 +136,7 @@
           </div>
         </div>
 
-        <div class="p-3 bg-gray-100/60 rounded-xl">
+        <div class="p-3 bg-[var(--ys-surface-sunken)] rounded-xl">
           <div class="text-xs font-semibold text-gray-600 mb-1.5">统一约定</div>
           <ul class="text-[11px] leading-relaxed text-gray-500 space-y-1">
             <li v-for="(line, i) in guide.rules" :key="i">{{ line }}</li>
@@ -148,9 +148,9 @@
       <div v-else-if="usage.length" class="p-3 bg-emerald-50/70 rounded-xl border border-emerald-200/70">
         <div class="flex items-center gap-2 mb-1.5">
           <Lightbulb class="w-4 h-4 text-emerald-600" />
-          <span class="text-xs font-semibold text-emerald-800">给 AI 的调用建议</span>
+          <span class="text-xs font-semibold text-emerald-700">给 AI 的调用建议</span>
         </div>
-        <ul class="text-[11px] text-emerald-900/90 space-y-0.5 leading-relaxed">
+        <ul class="text-[11px] text-emerald-700/90 space-y-0.5 leading-relaxed">
           <li v-for="(line, i) in usage" :key="i">{{ line }}</li>
         </ul>
       </div>
@@ -162,7 +162,7 @@
           @click="activeCategory = cat"
           :class="[
             'px-2.5 py-1 rounded-lg text-[11px] font-medium transition-all border',
-            activeCategory === cat ? 'bg-emerald-500 text-white border-emerald-500' : 'bg-white text-gray-600 border-gray-200 hover:border-emerald-300'
+            activeCategory === cat ? 'bg-emerald-600 text-white border-emerald-500' : 'bg-white text-gray-600 border-[var(--ys-border)] hover:border-emerald-200'
           ]"
         >{{ cat }}</button>
       </div>
@@ -171,7 +171,7 @@
       <div class="space-y-2.5">
         <div
           v-for="ep in filteredEndpoints" :key="ep.method + ep.path"
-          class="bg-white rounded-xl border border-gray-100 p-4 shadow-2xs hover:border-gray-200 transition-all"
+          class="bg-white rounded-xl border border-[var(--ys-border)] p-4 hover:border-[var(--ys-border)] transition-all"
         >
           <div class="flex items-start justify-between gap-3">
             <div class="min-w-0 flex-1">
@@ -185,7 +185,7 @@
                   纯服务端
                 </span>
                 <!-- 展开内部接口时要看得出来：它们是界面自用 / 不该被外部调的，不是「漏标了」 -->
-                <span v-if="ep.role === 'internal'" class="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-500 border border-gray-200">
+                <span v-if="ep.role === 'internal'" class="text-[10px] px-1.5 py-0.5 rounded bg-[var(--ys-surface-sunken)] text-gray-500 border border-[var(--ys-border)]">
                   界面内部
                 </span>
               </div>
@@ -195,7 +195,7 @@
                 <div v-for="p in ep.params" :key="p.name" class="text-[11px] text-gray-500 flex items-start gap-1.5">
                   <span class="font-mono text-gray-700 shrink-0">{{ p.name }}</span>
                   <span v-if="p.required" class="text-rose-500 shrink-0">必填</span>
-                  <span class="text-gray-400 shrink-0">[{{ p.in }}]</span>
+                  <span class="text-gray-500 shrink-0">[{{ p.in }}]</span>
                   <span class="truncate">{{ p.desc }}</span>
                 </div>
               </div>
@@ -203,10 +203,10 @@
               <p v-if="ep.notes" class="text-[11px] text-amber-700/90 mt-2 leading-relaxed">💡 {{ ep.notes }}</p>
 
               <div v-if="ep.example" class="mt-2 flex items-center gap-1.5">
-                <pre class="flex-1 min-w-0 text-[10.5px] font-mono bg-gray-900 text-emerald-300 rounded-lg px-2.5 py-1.5 overflow-x-auto">{{ ep.example }}</pre>
+                <pre class="flex-1 min-w-0 text-[10.5px] font-mono bg-gray-900 text-emerald-200 rounded-lg px-2.5 py-1.5 overflow-x-auto">{{ ep.example }}</pre>
                 <button
                   @click="copyText(ep.example)"
-                  class="p-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-500 shrink-0 transition-colors"
+                  class="p-1.5 rounded-lg bg-[var(--ys-surface-control)] hover:bg-[var(--ys-surface-hover)] text-gray-500 shrink-0 transition-colors"
                   title="复制示例命令"
                 >
                   <Copy class="w-3.5 h-3.5" />
@@ -218,7 +218,7 @@
               v-if="canTry(ep)"
               @click="tryEndpoint(ep)"
               :disabled="trying === ep.path"
-              class="shrink-0 px-2.5 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-600 text-[11px] font-medium transition-colors disabled:opacity-50 flex items-center gap-1"
+              class="shrink-0 px-2.5 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-50 text-emerald-600 text-[11px] font-medium transition-colors disabled:opacity-50 flex items-center gap-1"
             >
               <Loader2 v-if="trying === ep.path" class="w-3 h-3 animate-spin" />
               <Play v-else class="w-3 h-3" />
@@ -228,7 +228,7 @@
 
           <!-- 试运行结果 -->
           <div v-if="tryResult && tryResult.path === ep.path" class="mt-2">
-            <pre class="text-[10.5px] font-mono bg-gray-50 border border-gray-200 rounded-lg p-2.5 max-h-56 overflow-auto text-gray-700">{{ tryResult.text }}</pre>
+            <pre class="text-[10.5px] font-mono bg-[var(--ys-surface-sunken)] border border-[var(--ys-border)] rounded-lg p-2.5 max-h-56 overflow-auto text-gray-700">{{ tryResult.text }}</pre>
           </div>
         </div>
       </div>
@@ -327,7 +327,7 @@ function methodClass(method) {
     case 'GET': return 'bg-emerald-50 text-emerald-600 border border-emerald-200/70'
     case 'POST': return 'bg-blue-50 text-blue-600 border border-blue-200/70'
     case 'DELETE': return 'bg-rose-50 text-rose-600 border border-rose-200/70'
-    default: return 'bg-gray-100 text-gray-600'
+    default: return 'bg-[var(--ys-surface-sunken)] text-gray-600'
   }
 }
 

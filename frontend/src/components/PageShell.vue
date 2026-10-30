@@ -25,6 +25,15 @@
         <template #metrics><div>…</div></template>
         ...内容...
       </PageShell>
+
+    # v2.28.0 飞牛化（2026-10-29）
+
+    飞牛的内容区是「纯白画布 + 24px 区块节奏」，没有 1500px 这种超宽居中容器
+    （它的右边界就是窗口右边界，靠内边距呼吸）。曲率是信息密集型的，保留限宽，
+    但把留白重排成飞牛的节奏：
+      · 外层 --ys-canvas 仍是白（画布色 = 纯白，飞牛口径）
+      · 内容容器 py 从 16/28 收到 16/24（--ys-gap-section），横向 px 8 → sm:px-7
+      · 操作栏与内容的间距 mb-3/sm:mb-6 → mb-4/sm:mb-5（飞牛区块间距统一 24 的整数倍）
   -->
   <div class="h-full overflow-y-auto bg-[var(--ys-canvas)]">
     <!--
@@ -32,7 +41,7 @@
       40px 的横向留白等于白白吃掉一成宽度，而这一页要塞的是两列的卡片。
       （用户 2026-10-08：「适配手机端，一行可以用两个元素」）
     -->
-    <div class="ys-stagger mx-auto w-full max-w-[1500px] px-4 py-4 pb-28 pb-dock sm:px-8 sm:py-7 sm:pb-24">
+    <div class="ys-stagger mx-auto w-full max-w-[1500px] px-4 py-4 pb-28 pb-dock sm:px-7 sm:py-6 sm:pb-24">
 
       <!--
         操作栏（不再是「标题区」）。
@@ -48,7 +57,7 @@
         stacking context），而它在 DOM 里更靠后 —— 不加 z-index 时，⋯ 菜单弹出来会被
         下面的白色卡片盖住（2026-10-19 实测）。
       -->
-      <div v-if="$slots.actions || $slots['title-extra']" class="relative z-30 mb-3 flex flex-wrap items-center justify-between gap-2 sm:mb-6 sm:gap-3">
+      <div v-if="$slots.actions || $slots['title-extra']" class="relative z-30 mb-4 flex flex-wrap items-center justify-between gap-2 sm:mb-5 sm:gap-3">
         <div class="min-w-0">
           <slot name="title-extra" />
         </div>
@@ -64,7 +73,7 @@
       </div>
 
       <!-- 指标行 -->
-      <div v-if="$slots.metrics" class="mb-5">
+      <div v-if="$slots.metrics" class="mb-4 sm:mb-5">
         <slot name="metrics" />
       </div>
 

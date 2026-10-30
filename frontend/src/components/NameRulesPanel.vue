@@ -1,60 +1,92 @@
 <template>
   <!--
-    文件名语义解析试算 + 命名解析规则（2026-10-26 用户要求：从「账号连接 → AI 大模型」搬进
-    「补全整理 → 歌名修复」卡片。这两块本来就是「改歌名」的工具，摆在账号凭证页面里
-    既找不到、也不该跟着 AI 配置一起折叠）。
+    「文件名解析」+「命名解析」两张独立卡片（2026-10-28 用户：
+    「文件名解析和命名解析用卡片装起来（这两个是不是重复了？）」）。
 
-    # 自包含
+    # 它们不重复，但确实是同一条流水线的两段
 
-    组件自己拉规则列表、自己试算、自己保存/删除，父组件不持有任何状态 —— 这样插到
-    哪个页面都只是「多一个工具」，不需要父页面替它记 useState。
+    · **文件名解析** = 看结果：给一个文件名，立刻告诉你「这首歌的歌手 / 歌名是什么」。
+      一次性试算，不落任何配置 —— 用户拿它验证「我这条命名规则到底对不对」。
+    · **命名解析** = 定规则：把「这类文件名该怎么拆」写成一条正则存下来，
+      以后每首歌都按它拆，不再调用 AI（省钱、可预期、可手改）。
 
-    # 为什么让 AI 产出「规则」而不是「结果」
-
-    成本从「每首歌一次调用」降到「每种命名习惯一次」，而且正则用户看得懂、能自己改。
-    ⚠️ 生成与保存分成两步 —— AI 产出的正则可能语法错、匹配不上样例、提取不出字段，
-    必须先给用户看，直接存下去再让他在别处发现问题就晚了。
+    所以顺序是「先有规则 → 才有解析结果」。为了把关系说清，「文件名解析」卡片同时显示
+    两种结果：**按你的规则**算出来的、**AI 猜**出来的，并标出命中的是不是自定义规则。
   -->
   <div class="space-y-3">
-    <!-- 文件名解析试算 -->
-    <div>
-      <span class="text-xs font-semibold text-gray-700">文件名语义解析试算</span>
-      <div class="flex items-center gap-2 mt-2">
-        <input v-model="aiFilename" class="flex-1 px-2.5 py-1.5 rounded-lg border border-gray-200 text-xs font-mono"
-          placeholder="【无损】周杰伦 - 晴天.flac" />
+    <!-- ═════ 卡片一：文件名解析（试算，看结果）═════ -->
+    <SectionCard
+      :icon="FileSearch"
+      title="文件名解析"
+      sub="拿一个文件名试算：规则怎么拆、AI 怎么猜，并排对比"
+      sub-title="只是试算，不改任何配置 —— 要改拆分行为请用下面「命名解析」"
+      flush
+    >
+      <div class="flex items-center gap-2">
+        <input v-model="aiFilename" class="flex-1 px-2.5 py-1.5 rounded-lg border border-[var(--ys-line-control)] text-xs font-mono"
+          placeholder="【无损】周杰伦 - 晴天.flac"
+          @keydown.enter="runParse" />
         <button @click="runParse" :disabled="parsing"
-          class="px-3 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-xs text-gray-600 disabled:opacity-50">
+          class="px-3 py-1.5 rounded-lg bg-[var(--ys-surface-control)] hover:bg-[var(--ys-surface-hover)] text-xs text-gray-600 disabled:opacity-50">
           {{ parsing ? '解析中...' : '解析' }}
         </button>
       </div>
-      <!-- 有曲库目录时给一句可抄的样例来源，省得用户自己猜格式（dir 为空则整行不渲染，
-           行为和搬过来之前完全一样） -->
-      <p v-if="dir" class="mt-1.5 text-[11px] text-gray-400">
+      <p v-if="dir" class="mt-1.5 text-[11px] text-gray-500">
         试算用的文件名可以照抄曲库里的，例如 <span class="font-mono">{{ dir }}</span> 下的某一首
       </p>
-      <div v-if="parseResult" class="mt-2 p-2.5 rounded-lg bg-gray-50 border border-gray-100 text-[11px] text-gray-600 font-mono whitespace-pre-wrap">
-        {{ JSON.stringify(parseResult, null, 2) }}
-      </div>
-    </div>
 
-    <!-- 命名解析规则 -->
-    <div class="pt-3 border-t border-gray-50 space-y-2">
-      <div class="flex items-center justify-between">
-        <span class="text-xs font-semibold text-gray-700">命名解析规则</span>
-        <span class="text-[10px] text-gray-400">优先于内置规则</span>
+      <div v-if="parseResult" class="mt-2.5 grid gap-2 sm:grid-cols-2">
+        <div class="rounded-lg border border-emerald-200 bg-emerald-50/40 p-2.5">
+          <div class="flex flex-wrap items-center gap-1.5">
+            <span class="text-[11px] font-semibold text-emerald-600">按你的规则</span>
+            <span v-if="parseRules.from_rule" class="rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] text-emerald-600">命中自定义规则</span>
+            <span v-else class="rounded bg-[var(--ys-surface-sunken)] px-1.5 py-0.5 text-[10px] text-gray-500">内置规则</span>
+            <span v-if="parseRules.suspect" class="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-700">可能拆错</span>
+          </div>
+          <div class="mt-1 space-y-0.5 text-[11.5px] text-gray-700">
+            <div>歌手：<span class="font-medium">{{ parseRules.artist || '(空)' }}</span></div>
+            <div>歌名：<span class="font-medium">{{ parseRules.title || '(空)' }}</span></div>
+          </div>
+        </div>
+        <div class="rounded-lg border border-[var(--ys-border)] bg-[var(--ys-surface-sunken)] p-2.5">
+          <div class="flex flex-wrap items-center gap-1.5">
+            <span class="text-[11px] font-semibold text-gray-700">AI 猜的</span>
+            <span v-if="parseAiDisabled" class="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-700">AI 未配置</span>
+          </div>
+          <div class="mt-1 space-y-0.5 text-[11.5px] text-gray-700">
+            <div>歌手：<span class="font-medium">{{ parseAi.artist || '(空)' }}</span></div>
+            <div>歌名：<span class="font-medium">{{ parseAi.title || '(空)' }}</span></div>
+            <div v-if="parseAi.album" class="text-gray-500">专辑：{{ parseAi.album }}</div>
+          </div>
+        </div>
       </div>
-      <div class="flex flex-wrap items-center gap-2">
-        <input
-          v-model="ruleForm.sample"
-          class="min-w-[180px] flex-1 rounded-lg border border-gray-200 px-2.5 py-1.5 font-mono text-xs"
-          placeholder="【无损】Jay_Chou_晴天_2003.mp3"
-        />
-        <input
-          v-model="ruleForm.desc"
-          class="min-w-[150px] flex-1 rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs"
-          placeholder="一句话解释（可选）"
-        />
-      </div>
+      <p v-if="parseResult && differs" class="mt-1.5 text-[11px] leading-snug text-amber-700">
+        两边结论不一致 —— 以「按你的规则」为准（AI 只看文件名，看不到你的规则）。
+        想让它按你的规矩拆，就到下面「命名解析」把规则配好。
+      </p>
+    </SectionCard>
+
+    <!-- ═════ 卡片二：命名解析（配规则，改行为）═════ -->
+    <SectionCard
+      :icon="Regex"
+      title="命名解析"
+      sub="把「这类文件名该怎么拆」存成一条规则：以后整库按它拆，不再调用 AI"
+      sub-title="自定义规则优先于内置规则；保存前可以先校验"
+      flush
+    >
+      <div class="space-y-2">
+        <div class="flex flex-wrap items-center gap-2">
+          <input
+            v-model="ruleForm.sample"
+            class="min-w-[180px] flex-1 rounded-lg border border-[var(--ys-line-control)] px-2.5 py-1.5 font-mono text-xs"
+            placeholder="【无损】Jay_Chou_晴天_2003.mp3"
+          />
+          <input
+            v-model="ruleForm.desc"
+            class="min-w-[150px] flex-1 rounded-lg border border-[var(--ys-line-control)] px-2.5 py-1.5 text-xs"
+            placeholder="一句话解释（可选）"
+          />
+        </div>
 
       <div class="grid grid-cols-2 gap-2">
         <ActionCard
@@ -66,67 +98,68 @@
         />
         <!-- 保存之后的行为与代价：整库按这条规则解析、不再调用 AI。
              用户点「保存规则」之前要知道这件事（它决定「值不值得花一次 AI」）。 -->
-        <p class="text-[11px] leading-snug text-gray-400 sm:col-span-2 lg:col-span-3">
+        <p class="text-[11px] leading-snug text-gray-500 sm:col-span-2 lg:col-span-3">
           保存后整库按这条规则解析，<b class="text-gray-600">不再调用 AI</b>。
         </p>
         <!-- 空态卡：这句说明没有可点的动作，所以不用 ActionCard（它会渲染成一个按钮，
              点了没反应反而是个坑），只借同一套卡片排版跟动作卡并排 -->
-        <div v-if="!nameRules.length" class="rounded-xl border border-dashed border-gray-200 px-3 py-2.5">
+        <div v-if="!nameRules.length" class="rounded-xl border border-dashed border-[var(--ys-border)] px-3 py-2.5">
           <b class="block text-[12.5px] font-bold text-gray-600">还没有自定义规则</b>
-          <span class="mt-0.5 block text-[11px] leading-snug text-gray-400">常见命名会由内置规则处理</span>
+          <span class="mt-0.5 block text-[11px] leading-snug text-gray-500">常见命名会由内置规则处理</span>
         </div>
       </div>
 
       <!-- 生成结果：正则可编辑，校验通过才让保存 -->
-      <div v-if="ruleForm.regex" class="space-y-2 rounded-lg border border-gray-200 bg-gray-50/60 p-2.5">
+      <div v-if="ruleForm.regex" class="space-y-2 rounded-lg border border-[var(--ys-border)] bg-[var(--ys-surface-sunken)] p-2.5">
         <div v-if="ruleForm.error" class="text-[11px] text-rose-600">
           没通过校验：{{ ruleForm.error }}
         </div>
         <input
           v-model="ruleForm.regex"
-          class="w-full rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 font-mono text-xs"
+          class="w-full rounded-lg border border-[var(--ys-line-control)] bg-white px-2.5 py-1.5 font-mono text-xs"
         />
         <div v-if="ruleForm.note" class="text-[11px] text-gray-500">{{ ruleForm.note }}</div>
-        <div v-if="ruleForm.preview" class="font-mono text-[11px] text-emerald-700">
+        <div v-if="ruleForm.preview" class="font-mono text-[11px] text-emerald-600">
           试算：歌手={{ ruleForm.preview.artist || '(空)' }} · 歌名={{ ruleForm.preview.title || '(空)' }}
         </div>
         <div class="flex items-center gap-2">
           <button
             :disabled="ruleBusy"
-            class="rounded-lg bg-gray-100 px-2.5 py-1 text-[11px] text-gray-600 hover:bg-gray-200 disabled:opacity-50"
+            class="rounded-lg bg-[var(--ys-surface-control)] px-2.5 py-1 text-[11px] text-gray-600 hover:bg-[var(--ys-surface-hover)] disabled:opacity-50"
             @click="testNameRule"
           >校验</button>
           <button
             :disabled="ruleBusy || !ruleForm.regex"
-            class="rounded-lg bg-emerald-500 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-emerald-600 disabled:opacity-50"
+            class="rounded-lg bg-emerald-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
             @click="saveNameRule"
           >保存规则</button>
-          <button class="px-2.5 py-1 text-[11px] text-gray-400 hover:text-gray-600" @click="resetNameRule">取消</button>
+          <button class="px-2.5 py-1 text-[11px] text-gray-500 hover:text-gray-600" @click="resetNameRule">取消</button>
         </div>
       </div>
 
       <!-- 已有规则 -->
       <div v-if="nameRules.length" class="space-y-1.5">
-        <div v-for="r in nameRules" :key="r.id" class="rounded-lg border border-gray-100 bg-white p-2.5 text-[11px]">
+        <div v-for="r in nameRules" :key="r.id" class="rounded-lg border border-[var(--ys-border)] bg-white p-2.5 text-[11px]">
           <div class="flex items-start justify-between gap-2">
             <div class="min-w-0 flex-1">
               <div class="break-all font-mono text-gray-700">{{ r.regex }}</div>
-              <div class="mt-0.5 text-gray-400">
+              <div class="mt-0.5 text-gray-500">
                 <span v-if="r.note">{{ r.note }}</span>
                 <span v-if="r.sample"> · 样例：{{ r.sample }}</span>
               </div>
             </div>
             <div class="flex shrink-0 items-center gap-2">
-              <span :class="['rounded px-1.5 py-0.5 text-[10px]', r.disabled ? 'bg-gray-100 text-gray-400' : 'bg-emerald-50 text-emerald-600']">
+              <span :class="['rounded px-1.5 py-0.5 text-[10px]', r.disabled ? 'bg-[var(--ys-surface-sunken)] text-gray-500' : 'bg-emerald-50 text-emerald-600']">
                 {{ r.disabled ? '已停用' : '生效中' }}
               </span>
-              <button class="text-gray-400 hover:text-gray-600" @click="toggleNameRule(r)">{{ r.disabled ? '启用' : '停用' }}</button>
-              <button class="text-gray-400 hover:text-rose-500" @click="deleteNameRule(r)">删除</button>
+              <button class="text-gray-500 hover:text-gray-600" @click="toggleNameRule(r)">{{ r.disabled ? '启用' : '停用' }}</button>
+              <button class="text-gray-500 hover:text-rose-500" @click="deleteNameRule(r)">删除</button>
             </div>
           </div>
         </div>
       </div>
-    </div>
+      </div>
+    </SectionCard>
 
     <!-- 这个面板自己的一句话反馈（原来靠宿主页的 flash 槽） -->
     <InlineNotice v-if="notice" :text="notice" :tone="noticeOk ? 'ok' : 'error'" :log-link="!noticeOk" />
@@ -134,11 +167,12 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
-import { Sparkles } from 'lucide-vue-next'
+import { ref, computed, onMounted } from 'vue'
+import { Sparkles, FileSearch, Regex } from 'lucide-vue-next'
 import { AIAPI, TidyAPI } from '../api/client'
 import InlineNotice from './InlineNotice.vue'
 import ActionCard from './ActionCard.vue'
+import SectionCard from './SectionCard.vue'
 import { fail, apiError } from '../services/userMsg'
 
 const props = defineProps({
@@ -158,6 +192,24 @@ const emit = defineEmits(['usage-changed'])
 const aiFilename = ref('')
 const parsing = ref(false)
 const parseResult = ref(null)
+
+// 试算结果拆成两栏：规则算的（后端 by_rules）+ AI 猜的（顶层字段）
+const parseRules = computed(() => {
+  const d = parseResult.value || {}
+  return d.by_rules || { title: '', artist: '', suspect: false, from_rule: false }
+})
+const parseAi = computed(() => parseResult.value || {})
+// 「AI 未配置」：后端降级时两个字段都是空且没配模型
+const parseAiDisabled = computed(() => {
+  const d = parseResult.value
+  return !!d && !d.title && !d.artist && d.by_rules !== undefined
+})
+const differs = computed(() => {
+  const r = parseRules.value
+  const a = parseAi.value
+  if (!a.title && !a.artist) return false
+  return (r.title || '') !== (a.title || '') || (r.artist || '') !== (a.artist || '')
+})
 
 // ── 一句话反馈：本组件自己的 notice，宿主页不用给 flash 槽 ──
 const notice = ref('')
@@ -181,7 +233,7 @@ async function runParse() {
   parseResult.value = null
   try {
     const res = await AIAPI.complete({ kind: 'name_parse', filename: aiFilename.value })
-    parseResult.value = res.data || {}
+    parseResult.value = (res && res.data) || {}
     if (res.message && res.message !== 'ok') flash(res.message)
     emit('usage-changed')
   } catch (e) {

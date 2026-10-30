@@ -16,16 +16,28 @@
     「大部分入口看不见」。所以这里按容器宽度分三档降级，宽到窄依次：
 
       1. 图标 + 全名         —— 默认，最清楚；
-      2. 图标 + 短名         —— 全名放不下时，用 segment.short（「补全」「查重」…）；
-      3. 只留图标            —— 连短名都放不下时，图标 + title 气泡兜底。
+      2. 图标 + 短名         —— 全名放不下时，用 segment.short（「补全」「查重」…）。
+
+    ⚠️ 2026-10-30 飞牛化时删掉了原来的第 3 档「只留图标」：文字 tab 一旦退成纯图标，
+    就是一排看不出含义的小图标（手机窄屏上尤其糟）。现在文字始终保留，
+    放不下就**横向滚动**（overflow-x-auto + no-scrollbar，与飞牛一致）。
 
     判定用 ResizeObserver 实测**容器本身**的宽度，而不是 window 断点：
     这个分段器同时出现在整页（宽）和抽屉/窄栏（窄）里，媒体查询看的是视口，
     不知道自己是多宽，会判错。放下就不用缩，是「按可用空间降级」不是「一律缩小」。
+
+    ── v2.29.0 飞牛化（页内文字 tab）──
+    飞牛应用中心 / 系统设置里的页内导航是**文字 tab**：
+      · 白底、无槽无胶囊、无分隔线；
+      · 选中 = 深色加粗文字 + 下方 2px 强调色短线（线宽≈文字宽，不是整格宽）；
+      · 未选中 = 中灰常规字重；
+      · 字号约 15px，标签间距约 32px。
+    原来的「浅灰槽 + 白底滑块 + 描边」是控件形态，不是页内导航形态，
+    在整页顶栏里显得笨重且与飞牛完全不像 —— 现在换成文字 tab。
   -->
   <div ref="boxEl" class="flex min-w-0 items-center gap-2">
     <div
-      class="inline-flex min-w-0 max-w-full items-center gap-0.5 overflow-x-auto rounded-[var(--ys-radius-control)] bg-[var(--ys-surface-sunken)] p-1 no-scrollbar"
+      class="inline-flex min-w-0 max-w-full flex-1 items-end gap-5 overflow-x-auto no-scrollbar sm:gap-8"
       role="tablist"
     >
       <button
@@ -34,18 +46,26 @@
         role="tab"
         :aria-selected="seg.id === modelValue"
         :title="seg.desc || seg.name"
-        class="ys-press flex shrink-0 items-center gap-1.5 rounded-[8px] text-[12px] font-medium"
-        :class="labelOf(seg) ? 'px-3 py-1.5' : 'px-2 py-1.5'"
+        class="ys-press relative flex shrink-0 items-center gap-1.5 whitespace-nowrap pb-2 text-[15px] leading-[20px] transition-colors duration-[var(--ys-dur-1)]"
+        :class="seg.id === modelValue
+          ? 'font-semibold text-[var(--ys-text)]'
+          : 'font-normal text-[var(--ys-text-muted)] hover:text-[var(--ys-text)]'"
         @click="emit('update:modelValue', seg.id)"
       >
-        <component
-          :is="seg.icon"
-          v-if="seg.icon"
-          class="h-3.5 w-3.5 shrink-0"
-          :class="seg.id === modelValue ? 'text-[var(--ys-accent)]' : ''"
-          :stroke-width="1.8"
-        />
-        <span v-if="labelOf(seg)" class="whitespace-nowrap">{{ labelOf(seg) }}</span>
+        <span class="relative inline-flex items-center gap-1.5">
+          <component
+            :is="seg.icon"
+            v-if="seg.icon"
+            class="h-4 w-4 shrink-0"
+            :stroke-width="1.8"
+          />
+          <span v-if="labelOf(seg)">{{ labelOf(seg) }}</span>
+          <!-- 选中短线：宽度只跟文字走，不横贯整格 -->
+          <span
+            v-if="seg.id === modelValue"
+            class="absolute -bottom-[5px] left-0 right-0 h-[2px] rounded-full bg-[var(--ys-accent)]"
+          />
+        </span>
       </button>
     </div>
     <!--
@@ -131,31 +151,29 @@ onBeforeUnmount(() => {
 
 /**
  * 估算每个按钮的像素宽度 —— 不必精确到 1px，只需要「放不放得下」这个判断是对的。
- * 中文约 12px/字、西文约 6.5px/字（12px 字号 + 左右各 12px 内边距 + 图标与间距）。
+ * 中文约 15px/字、西文约 8px/字（15px 字号 + 图标与间距）。
  */
 function textWidth(text) {
   let px = 0
-  for (const ch of String(text || '')) px += /[\u3400-\u9fff]/.test(ch) ? 12 : 6.5
+  for (const ch of String(text || '')) px += /[\u3400-\u9fff]/.test(ch) ? 15 : 8
   return px
 }
 function btnWidth(seg, label) {
-  const icon = seg.icon ? 14 + 6 : 0 // h-3.5 + gap-1.5
-  return textWidth(label) + icon + (label ? 24 : 16)
+  const icon = seg.icon ? 16 + 6 : 0 // h-4 + gap-1.5
+  return textWidth(label) + icon + 4
 }
 
-/** 当前该显示哪种文字：'' = 只要图标 */
+/** 当前该显示哪种文字：full = 全名，short = 短名（放不下时横向滚动，不再退成纯图标） */
 const labelMode = computed(() => {
   const w = railWidth.value
   if (!w) return 'full'
-  const gap = (props.segments.length - 1) * 2 + 8 // gap-0.5 × 段间距 + p-1 内边距
+  const gap = (props.segments.length - 1) * 32 + 8 // gap-8 标签间距 + 少量余量
   const sumOf = (key) => props.segments.reduce((n, s) => n + btnWidth(s, key(s)), 0) + gap
   if (sumOf((s) => s.name) <= w) return 'full'
-  if (sumOf((s) => s.short || s.name) <= w) return 'short'
-  return 'icon'
+  return 'short'
 })
 
 function labelOf(seg) {
-  if (labelMode.value === 'icon') return ''
   if (labelMode.value === 'short') return seg.short || seg.name || ''
   return seg.name || ''
 }

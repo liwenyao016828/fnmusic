@@ -16,12 +16,12 @@
       >
         <div
           @click.stop
-          class="w-full max-w-lg bg-white rounded-2xl shadow-2xl border border-gray-100 overflow-hidden flex flex-col max-h-[86vh] my-auto animate-in fade-in zoom-in-95 duration-200 relative z-10"
+          class="w-full max-w-lg bg-white rounded-2xl shadow-2xl border border-[var(--ys-border)] overflow-hidden flex flex-col max-h-[86vh] my-auto animate-in fade-in zoom-in-95 duration-200 relative z-10"
         >
           <!-- 标题栏 (固定在顶部) -->
-          <div class="px-5 py-3.5 border-b border-gray-100 flex items-center justify-between bg-gradient-to-r from-amber-50/70 to-orange-50/70 shrink-0">
+          <div class="px-5 py-3.5 border-b border-[var(--ys-border)] flex items-center justify-between bg-gradient-to-r from-amber-50/70 to-orange-50/70 shrink-0">
             <div class="flex items-center gap-2.5">
-              <div class="w-8 h-8 rounded-xl bg-amber-500 text-white flex items-center justify-center shadow-xs">
+              <div class="w-8 h-8 rounded-xl bg-amber-500 text-white flex items-center justify-center">
                 <ShieldAlert class="w-4 h-4" />
               </div>
               <div>
@@ -38,7 +38,7 @@
             <button
               v-if="!isForce"
               @click="close"
-              class="p-1.5 rounded-xl text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
+              class="p-1.5 rounded-xl text-gray-500 hover:text-gray-600 hover:bg-[var(--ys-surface-hover)] transition-colors"
             >
               <X class="w-4 h-4" />
             </button>
@@ -102,7 +102,7 @@
           </div>
 
           <!-- 底部确认区域 -->
-          <div class="px-5 py-3.5 bg-gray-50 border-t border-gray-100 shrink-0">
+          <div class="px-5 py-3.5 bg-[var(--ys-surface-sunken)] border-t border-[var(--ys-border)] shrink-0">
             <!-- 「暂不同意」提示：内联显示，替代原来的 alert（alert 会盖住条款、也打断阅读） -->
             <p
               v-if="declineMsg"
@@ -113,11 +113,11 @@
               <input
                 type="checkbox"
                 v-model="hasAgreed"
-                class="w-4 h-4 text-emerald-600 rounded border-gray-300 focus:ring-emerald-500"
+                class="w-4 h-4 text-emerald-600 rounded border-[var(--ys-line-control)] focus:ring-emerald-500"
               />
               <span>我已充分阅读并同意以上免责声明</span>
             </label>
-            <span v-else class="text-[11px] text-gray-400 font-mono">
+            <span v-else class="text-[11px] text-gray-500 font-mono">
               协议已生效
             </span>
 
@@ -125,14 +125,14 @@
               <button
                 v-if="isForce"
                 @click="onDecline"
-                class="px-3 py-1.5 rounded-xl border border-gray-200 hover:bg-white text-gray-500 text-xs transition-all"
+                class="px-3 py-1.5 rounded-xl border border-[var(--ys-border)] hover:bg-white text-gray-500 text-xs transition-all"
               >
                 暂不同意
               </button>
               <button
                 @click="onAccept"
                 :disabled="isForce && !hasAgreed"
-                class="px-5 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-semibold shadow-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                class="px-5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 {{ isForce ? '同意并继续使用' : '我知道了' }}
               </button>

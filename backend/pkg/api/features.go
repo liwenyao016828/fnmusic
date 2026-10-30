@@ -473,6 +473,16 @@ func (s *Server) HandleLibraryIndexList(w http.ResponseWriter, r *http.Request) 
 	index := s.libraryIndex()
 
 	dirParam := strings.TrimSpace(r.URL.Query().Get("dir"))
+	// 关键词 / 字段筛选（2026-10-28，「歌曲修复」列表用）：
+	//
+	//	q=夜空           标题/歌手/专辑/路径 任一包含即命中（不区分大小写）
+	//	filter=no_lyric  只要没有歌词的
+	//	filter=no_cover  只要没有封面的
+	//
+	// 为什么放服务端：前端「本页内过滤」会让 total 与页数对不上 —— 第 3 页可能
+	// 整页都筛空，用户以为曲库没了。这里筛完再分页，total 就是筛完的总数。
+	q := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
+	filter := strings.TrimSpace(r.URL.Query().Get("filter"))
 	var items []library.Entry
 	var total int
 	if dirParam != "" {
@@ -496,12 +506,63 @@ func (s *Server) HandleLibraryIndexList(w http.ResponseWriter, r *http.Request) 
 			items = all[offset:end]
 		}
 	}
+
+	// 有筛选就从「整个目录」重新取一遍再过滤 —— 单页过滤没有意义。
+	if q != "" || filter != "" {
+		var pool []library.Entry
+		if dirParam != "" {
+			if resolved, err := resolveLibraryPath(dirParam); err == nil {
+				pool, _ = index.ListDir(resolved, 0, 0) // limit=0 由 ListDir 当「全部」
+			}
+		} else {
+			pool = index.List()
+		}
+		filtered := make([]library.Entry, 0, len(pool))
+		for _, e := range pool {
+			switch filter {
+			case "no_lyric":
+				if e.HasLyric {
+					continue
+				}
+			case "no_cover":
+				if e.HasCover {
+					continue
+				}
+			}
+			if q != "" && !entryMatches(e, q) {
+				continue
+			}
+			filtered = append(filtered, e)
+		}
+		total = len(filtered)
+		if offset >= total {
+			items = []library.Entry{}
+		} else {
+			end := offset + limit
+			if end > total {
+				end = total
+			}
+			items = filtered[offset:end]
+		}
+	}
+
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"code": 200, "message": "ok",
 		"data": map[string]interface{}{
 			"items": items, "total": total, "limit": limit, "offset": offset,
 		},
 	})
+}
+
+// entryMatches 关键词命中判断：标题 / 歌手 / 专辑 / 路径任一包含即算。
+// 路径也参与是有用的 —— 用户常按「专辑文件夹名」找歌。
+func entryMatches(e library.Entry, lowerQ string) bool {
+	for _, v := range []string{e.Title, e.Artist, e.Album, e.Path} {
+		if v != "" && strings.Contains(strings.ToLower(v), lowerQ) {
+			return true
+		}
+	}
+	return false
 }
 
 // ── 去重 ──
@@ -765,15 +826,33 @@ func (s *Server) HandleAIComplete(w http.ResponseWriter, r *http.Request) {
 			errJSON(w, http.StatusBadRequest, "请提供 filename")
 			return
 		}
+		// 2026-10-28：把「用户规则会怎么拆」一并发给界面，和 AI 的结论并排显示。
+		// 用户问的「文件名解析和命名解析是不是重复了」本质就在这儿 —— 两个卡片各算各的，
+		// 结论不同时用户根本不知道该信谁。现在同一个文件名，规则答案和 AI 答案直接摆一起。
+		ruleRes := s.nameRules.Parse(filepath.Base(strings.TrimSpace(req.Filename)))
+		ruleInfo := map[string]interface{}{
+			"title":  strings.TrimSpace(ruleRes.Title),
+			"artist": strings.TrimSpace(ruleRes.Artist),
+			"suspect": ruleRes.Suspect,
+			"from_rule": s.nameRules.HasMatch(filepath.Base(strings.TrimSpace(req.Filename))),
+		}
+
 		res := s.aiClient.ParseName(ctx, req.Filename)
+		out := map[string]interface{}{
+			"artist":    res.Artist,
+			"title":     res.Title,
+			"album":    res.Album,
+			"style":    res.Style,
+			"by_rules": ruleInfo,
+		}
 		if res.Artist == "" && res.Title == "" {
 			writeJSON(w, http.StatusOK, map[string]interface{}{
 				"code": 200, "message": "未启用 AI 或解析无结果（未配置时属正常降级）",
-				"data": res,
+				"data": out,
 			})
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]interface{}{"code": 200, "message": "ok", "data": res})
+		writeJSON(w, http.StatusOK, map[string]interface{}{"code": 200, "message": "ok", "data": out})
 		return
 	}
 
@@ -842,14 +921,38 @@ func statFile(p string) (int64, error) {
 }
 
 // joinTrash 计算回收站目录（放在曲库根目录下的 .tidy_trash）
+//
+// ⚠️ 2026-10-29 修的一个真实 bug（用户报「本地曲库删除歌曲…实际没有删除」）：
+// 以前用 `strings.HasPrefix(samplePath, root)` 判归属 —— 前缀匹配会把
+// `/home/liwenyao/Music/a.mp3` 判成落在根 `/home` 下，于是回收站被建到
+// `/home/.tidy_trash`（普通用户没权限写），挪动全部失败、文件一个都没删掉。
+// 现在按**路径分段**比较（与 nas 包的 isWithinRoot 同一规则），并取最长匹配的根，
+// 保证「最贴近的那个盘/共享目录」说了算；根自己就是路径时取它的父目录做回收站。
 func joinTrash(samplePath string) string {
 	roots := nas.AllowedRoots()
+	best := ""
 	for _, root := range roots {
-		if strings.HasPrefix(samplePath, root) {
-			return filepath.Join(root, ".tidy_trash")
+		if withinPath(root, samplePath) && len(root) > len(best) {
+			best = root
 		}
 	}
-	return filepath.Join(filepath.Dir(samplePath), ".tidy_trash")
+	if best == "" || filepath.Clean(best) == filepath.Clean(samplePath) {
+		return filepath.Join(filepath.Dir(samplePath), ".tidy_trash")
+	}
+	return filepath.Join(best, ".tidy_trash")
+}
+
+// withinPath 按路径分段判断 target 是否等于 root 或位于其下。
+// 直接 HasPrefix 会让 /vol10 命中 /vol1、/home/x 命中 /home —— 那是删歌落到错误回收站的根因。
+func withinPath(root, target string) bool {
+	root, target = filepath.Clean(root), filepath.Clean(target)
+	if root == target {
+		return true
+	}
+	if !strings.HasSuffix(root, string(filepath.Separator)) {
+		root += string(filepath.Separator)
+	}
+	return strings.HasPrefix(target, root)
 }
 
 // ── AI 配置持久化 ──

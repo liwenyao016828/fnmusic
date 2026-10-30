@@ -10,7 +10,7 @@
  * ⚠️ 只用于「跳转到某个顶层视图」这一件事，不要拿它当通用事件总线。
  */
 import { ref, computed } from 'vue'
-import { resolveRoute, VIEW_IDS, defaultSegment, segmentsOf } from './navViews.js'
+import { resolveRoute, VIEW_IDS, defaultSegment, segmentsOf, canonicalSegment } from './navViews.js'
 import { warn as feedbackWarn } from './feedback.js'
 
 /** 当前顶层视图 id（VIEW_IDS 之一） */
@@ -72,7 +72,8 @@ export function onNavigate(fn) {
  * payload 可以是分段 id 字符串（如 navigateTo('download', 'queue')），
  * 也可以是对象（如 { chartPreview }）—— 订阅者自己判断。
  *
- * 2026-10-24：对象里带 `segment` 时也切换分段（`navigateTo('tidy', { segment: 'audit', healthDir })`）。
+ * 2026-10-24：对象里带 `segment` 时也切换分段（`navigateTo('tidy', { segment: 'repair', healthDir })`）。
+ * 2026-10-29：段名会先过 canonicalSegment —— 老写法 audit / dedupe 仍落在「修复」段。
  * 以前只有字符串形态能切分段，于是「带着一次性数据跳分段」的调用要么写两次、要么干脆不切，
  * 调用方只能把数据塞进 localStorage 传——那是持久状态，用户下次从导航栏自己走进来会读到过期值。
  */
@@ -83,8 +84,10 @@ export function navigateTo(view, payload) {
   const wantSeg = typeof payload === 'string'
     ? payload
     : (payload && typeof payload === 'object' ? payload.segment : undefined)
-  const seg = typeof wantSeg === 'string' && segmentsOf(view).some((s) => s.id === wantSeg)
-    ? wantSeg
+  // 老段名（audit / dedupe）先规范化成新段（repair），否则会静默掉到默认段
+  const want = typeof wantSeg === 'string' ? canonicalSegment(view, wantSeg) : undefined
+  const seg = typeof want === 'string' && segmentsOf(view).some((s) => s.id === want)
+    ? want
     : undefined
   goView(view, seg)
   for (const fn of listeners) {

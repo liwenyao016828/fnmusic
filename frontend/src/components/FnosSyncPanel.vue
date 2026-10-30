@@ -19,17 +19,17 @@
     成功态一律静默（按钮自己的「已排队…」「检查中…」就是反馈），只有失败或需要
     用户动手时才在卡片下方出现那一行。
   -->
-  <div class="rounded-xl border border-gray-200 bg-white">
-    <div class="flex flex-wrap items-center justify-between gap-3 border-b border-gray-100 px-4 py-3.5">
+  <div class="rounded-xl border border-[var(--ys-border)] bg-white">
+    <div class="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--ys-border)] px-4 py-3.5">
       <div class="min-w-0">
         <b class="text-[14px] text-gray-800">飞牛音乐连接</b>
         <!-- 副标题只在「未连接」时出现：连上之后它就是噪音（用户要的是能干活的确认，不是介绍）。 -->
-        <p v-if="!ready" class="mt-1 text-[11px] text-gray-400">推送、曲库匹配与重扫都依赖这条连接</p>
+        <p v-if="!ready" class="mt-1 text-[11px] text-gray-500">推送、曲库匹配与重扫都依赖这条连接</p>
       </div>
       <button
         @click="check"
         :disabled="checking"
-        class="shrink-0 rounded-lg bg-emerald-500 px-3.5 py-2 text-[12px] font-semibold text-white transition-all hover:bg-emerald-600 disabled:opacity-50"
+        class="shrink-0 rounded-lg bg-emerald-600 px-3.5 py-2 text-[12px] font-semibold text-white transition-all hover:bg-emerald-700 disabled:opacity-50"
       >{{ checking ? '检查中…' : '检查连接' }}</button>
     </div>
 
@@ -53,7 +53,7 @@
       <!-- 令牌 与 曲库重扫：并排两张卡（用户要求「合并到一行，不同卡片」） -->
       <div class="grid gap-2.5 sm:grid-cols-2">
         <!-- ── 令牌 ── -->
-        <div class="rounded-xl border border-gray-200 bg-gray-50/60 px-3.5 py-3">
+        <div class="rounded-xl border border-[var(--ys-border)] bg-[var(--ys-surface-sunken)] px-3.5 py-3">
           <div class="flex flex-wrap items-center gap-2">
             <b class="text-[12px] text-gray-700">令牌</b>
             <span class="rounded-full px-2 py-0.5 text-[10px] font-medium" :class="tokenBadge.class">
@@ -64,12 +64,12 @@
             v-model="tokenInput"
             type="password"
             placeholder="粘贴临时 token（留空并保存 = 清除）"
-            class="mt-2 w-full rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-[12px] placeholder:text-gray-400 focus:border-emerald-400 focus:outline-none"
+            class="mt-2 w-full rounded-lg border border-[var(--ys-line-control)] bg-white px-3 py-1.5 text-[12px] placeholder:text-gray-500 focus:border-emerald-200 focus:outline-none"
           />
           <div class="mt-2 flex flex-wrap gap-1.5">
             <button
               type="button"
-              class="ys-press flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-[11.5px] font-medium text-gray-700 transition-colors hover:border-emerald-300 hover:text-emerald-700 disabled:opacity-50"
+              class="ys-press flex items-center gap-1.5 rounded-lg border border-[var(--ys-border)] bg-white px-2.5 py-1.5 text-[11.5px] font-medium text-gray-700 transition-colors hover:border-emerald-200 hover:text-emerald-600 disabled:opacity-50"
               :disabled="savingToken"
               title="正常不用管；取不到令牌时手工填一个排障"
               @click="saveToken"
@@ -80,7 +80,7 @@
             <button
               v-if="hasManualToken"
               type="button"
-              class="ys-press flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-[11.5px] font-medium text-gray-500 transition-colors hover:border-rose-300 hover:text-rose-600 disabled:opacity-50"
+              class="ys-press flex items-center gap-1.5 rounded-lg border border-[var(--ys-border)] bg-white px-2.5 py-1.5 text-[11.5px] font-medium text-gray-500 transition-colors hover:border-rose-300 hover:text-rose-600 disabled:opacity-50"
               :disabled="savingToken"
               title="清掉临时令牌，回到自动读取"
               @click="clearToken"
@@ -94,12 +94,12 @@
         </div>
 
         <!-- ── 曲库重扫 ── -->
-        <div class="rounded-xl border border-gray-200 bg-gray-50/60 px-3.5 py-3">
+        <div class="rounded-xl border border-[var(--ys-border)] bg-[var(--ys-surface-sunken)] px-3.5 py-3">
           <b class="text-[12px] text-gray-700">曲库重扫</b>
           <div class="mt-2">
             <button
               type="button"
-              class="ys-press flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-[11.5px] font-medium text-gray-700 transition-colors hover:border-emerald-300 hover:text-emerald-700 disabled:opacity-50"
+              class="ys-press flex items-center gap-1.5 rounded-lg border border-[var(--ys-border)] bg-white px-2.5 py-1.5 text-[11.5px] font-medium text-gray-700 transition-colors hover:border-emerald-200 hover:text-emerald-600 disabled:opacity-50"
               :disabled="rescanning || !ready"
               :title="ready ? '下载整理后会自动重扫；从别处拷歌进来才要手动点' : '先连上飞牛才能重扫'"
               @click="rescan"
@@ -141,8 +141,8 @@ const tokenBadge = computed(() => {
   switch (status.value?.token_source) {
     case 'manual': return { text: '手工指定', class: 'bg-amber-100 text-amber-700' }
     case 'env': return { text: '环境变量', class: 'bg-blue-100 text-blue-700' }
-    case 'db': return { text: '自动读取（飞牛数据库）', class: 'bg-emerald-100 text-emerald-700' }
-    default: return { text: '未取到令牌', class: 'bg-gray-200 text-gray-600' }
+    case 'db': return { text: '自动读取（飞牛数据库）', class: 'bg-emerald-50 text-emerald-600' }
+    default: return { text: '未取到令牌', class: 'bg-[var(--ys-surface-control)] text-[var(--ys-text-secondary)]' }
   }
 })
 

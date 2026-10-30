@@ -43,16 +43,16 @@
         compact
       >
         <!-- 「没有记录」与「功能没起来」必须分开说：界面上长得一样会让人以为功能坏了 -->
-        <p v-if="autoDownloadAvailable === false" class="rounded-[10px] bg-amber-50/70 px-3 py-2 text-[11px] text-amber-700">
+        <p v-if="autoDownloadAvailable === false" class="rounded-[8px] bg-amber-50/70 px-3 py-2 text-[11px] text-amber-700">
           记录功能本次没起来（数据目录不可写）—— 下面是空的，但不代表你没下过歌。
         </p>
-        <p v-else-if="!autoDownloadRecords.length" class="rounded-[10px] border border-dashed border-[var(--ys-border)] px-3 py-5 text-center text-[11px] text-[var(--ys-text-faint)]">
+        <p v-else-if="!autoDownloadRecords.length" class="rounded-[8px] border border-dashed border-[var(--ys-border)] px-3 py-5 text-center text-[11px] text-[var(--ys-text-aux)]">
           还没有自动下载记录 —— 在飞牛音乐里收藏一首在线歌曲试试
         </p>
 
         <div v-if="autoDownloadRecords.length" class="-mx-4 mt-1 overflow-x-auto sm:-mx-5">
           <table class="w-full min-w-[560px] text-[11.5px]">
-            <thead class="text-[var(--ys-text-faint)]">
+            <thead class="text-[var(--ys-text-aux)]">
               <tr>
                 <th class="w-9 px-2 py-1.5 text-left font-medium">
                   <input type="checkbox" class="align-middle" :checked="allAutoSelected" @change="toggleAllAuto" />
@@ -72,15 +72,15 @@
                 <td class="px-2 py-2">
                   <input type="checkbox" class="align-middle" :checked="autoDownloadSelected.has(r.id)" @change="toggleAutoSelect(r.id)" />
                 </td>
-                <td class="whitespace-nowrap px-2 py-2 font-mono text-[10.5px] text-[var(--ys-text-faint)]">{{ fmtAutoTime(r.at) }}</td>
+                <td class="whitespace-nowrap px-2 py-2 font-mono text-[10.5px] text-[var(--ys-text-aux)]">{{ fmtAutoTime(r.at) }}</td>
                 <td class="px-2 py-2">
                   <div class="max-w-[240px] truncate font-medium text-[var(--ys-text)]" :title="r.title">{{ r.title || '（无标题）' }}</div>
-                  <div class="max-w-[240px] truncate text-[10.5px] text-[var(--ys-text-faint)]">{{ r.artist }}</div>
+                  <div class="max-w-[240px] truncate text-[10.5px] text-[var(--ys-text-aux)]">{{ r.artist }}</div>
                 </td>
                 <td class="px-2 py-2 text-[var(--ys-text-muted)]">
                   <template v-if="r.source">{{ platformName(r.source) }}</template>
                   <template v-else>—</template>
-                  <span v-if="r.quality" class="ml-1 font-mono text-[10.5px] text-[var(--ys-text-faint)]">{{ r.quality }}</span>
+                  <span v-if="r.quality" class="ml-1 font-mono text-[10.5px] text-[var(--ys-text-aux)]">{{ r.quality }}</span>
                 </td>
                 <td class="hidden px-2 py-2 text-[var(--ys-text-muted)] sm:table-cell">
                   <!--
@@ -92,10 +92,10 @@
                   <span :title="autoTriggerHint(r.trigger)">{{ autoTriggerLabel(r.trigger) }}</span>
                 </td>
                 <td class="px-2 py-2">
-                  <span v-if="r.ok" class="rounded-[6px] bg-[var(--ys-accent-soft)] px-1.5 py-0.5 text-[var(--ys-accent)]">已下载</span>
-                  <span v-else class="rounded-[6px] bg-rose-50 px-1.5 py-0.5 text-rose-600" :title="r.error">失败</span>
+                  <span v-if="r.ok" class="rounded-[8px] bg-[var(--ys-accent-soft)] px-1.5 py-0.5 text-[var(--ys-accent)]">已下载</span>
+                  <span v-else class="rounded-[8px] bg-rose-50 px-1.5 py-0.5 text-rose-600" :title="r.error">失败</span>
                   <div v-if="!r.ok && r.error" class="mt-1 max-w-[300px] text-[10.5px] leading-snug text-rose-500">{{ r.error }}</div>
-                  <div v-if="r.path" class="mt-0.5 max-w-[300px] truncate font-mono text-[10.5px] text-[var(--ys-text-faint)]" :title="r.path">{{ r.path }}</div>
+                  <div v-if="r.path" class="mt-0.5 max-w-[300px] truncate font-mono text-[10.5px] text-[var(--ys-text-aux)]" :title="r.path">{{ r.path }}</div>
                 </td>
               </tr>
             </tbody>
@@ -145,9 +145,17 @@ import { ok as notifyOk, fail as notifyFail } from '../services/feedback'
 const props = defineProps({
   /** 当前音源元信息（队列视图解析直链用），由壳传入 */
   activeSource: Object,
+  /**
+   * 本实例负责渲染哪一段（2026-10-29 第六次改版）。
+   *
+   * 页内滑轨是「每段一个格子、每格一份内容」，而本组件**读的是 navBus 的全局分段**——
+   * 不钉住的话，队列 / 歌单 / 自动记录三格会同时渲染当前那一段，另外两格空白。
+   * 传了就以 props 为准，没传退回 navBus（单实例老用法）。
+   */
+  segment: { type: String, default: '' },
 })
 
-const sub = computed(() => segmentOf('download'))
+const sub = computed(() => props.segment || segmentOf('download'))
 
 // ── 指标行：队列 / 歌单各看各的口径（并成一页了，数字别混在一排）──
 const metrics = computed(() => {
@@ -158,13 +166,13 @@ const metrics = computed(() => {
       { label: '等待中', value: downloadManager.pendingCount.value, dot: 'bg-[var(--ys-text-faint)]' },
       { label: '失败待处理', value: downloadManager.failedCount.value, dot: 'bg-rose-500' },
       // 没有样本时显示「—」而不是 0%，否则会让人以为全失败了
-      { label: '近 24h 成功率', value: rate == null ? '—' : `${rate}%`, dot: 'bg-emerald-500' },
+      { label: '近 24h 成功率', value: rate == null ? '—' : `${rate}%`, dot: 'bg-emerald-600' },
     ]
   }
   if (sub.value === 'queue') {
     return [
       { label: '全部任务', value: downloadManager.totalCount.value, dot: 'bg-[var(--ys-text-faint)]' },
-      { label: '进行中', value: downloadManager.activeCount.value, dot: 'bg-emerald-500' },
+      { label: '进行中', value: downloadManager.activeCount.value, dot: 'bg-emerald-600' },
       { label: '已暂停', value: downloadManager.pausedCount.value, dot: 'bg-amber-500' },
       { label: '失败', value: downloadManager.failedCount.value, dot: 'bg-rose-500' },
     ]

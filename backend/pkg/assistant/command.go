@@ -32,6 +32,12 @@ type Widget struct {
 	Switches []SwitchRow `json:"switches,omitempty"`
 	Actions  []CmdAction `json:"actions,omitempty"`
 	Status   []KV        `json:"status,omitempty"`
+	// AIAvailable 说明「这台机器上有没有配好大模型」。
+	//
+	// 为什么要有这个字段：以前 AI 没配时，指令条只说一句「没听懂这句」，
+	// 用户会以为「接入坏了」。这个字段让面板能**如实说**：模型没配，
+	// 于是普通问题问不了 —— 并且告诉用户去哪配。
+	AIAvailable *bool `json:"ai_available,omitempty"`
 }
 
 // SwitchRow 是一行开关。On 为 nil 表示「配置里没写过」（三态），面板按
@@ -159,7 +165,12 @@ func MatchCommand(text string) CommandIntent {
 	}
 
 	// 2) 显式要开关列表
-	if containsAny(t, []string{"开关", "设置", "功能", "选项", "有哪些"}) {
+	//
+	// 关键词必须**足够具体**。早期这里还有「设置」「功能」「选项」三个泛词，
+	// 结果是「有哪些设置」「这个功能怎么用」这类普通问题全被截成一张开关
+	// 列表 —— 用户看到的是「不管问什么都是一堆开关」，而不是自己的问题被回答。
+	// 现在只认明确在要开关表的说法。
+	if containsAny(t, []string{"有哪些开关", "所有开关", "开关列表", "功能开关", "选项列表", "有哪些选项", "有哪些功能", "全部开关", "开关都有"}) {
 		return CommandIntent{Kind: "switches", Text: raw}
 	}
 
@@ -179,6 +190,10 @@ func MatchCommand(text string) CommandIntent {
 	}
 
 	// 6) 帮助
+	//
+	// 「什么 / 为什么 / 怎么 / 能不能」这类疑问句要在这里被截下来，
+	// 否则它们会掉到 AI 兜底 —— 而 AI 没配好时兜底只会给一句冷冰冰的
+	// 「没听懂」。疑问句先给帮助卡片（里面列了能说什么），比空卡片有用。
 	if containsAny(t, []string{"帮助", "能干嘛", "能干什么", "怎么用", "指令", "支持什么", "help", "？", "?"}) {
 		return CommandIntent{Kind: "help", Text: raw}
 	}

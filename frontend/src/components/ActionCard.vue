@@ -21,7 +21,7 @@
   <button
     type="button"
     :disabled="disabled"
-    class="ys-press group flex w-full items-start gap-2.5 rounded-[10px] border px-3 py-2.5 text-left"
+    class="ys-press group flex w-full items-start gap-2.5 rounded-[8px] border px-3 py-2.5 text-left"
     :class="disabled
       ? 'cursor-not-allowed border-[var(--ys-border)] bg-black/[0.02] opacity-55'
       : 'border-[var(--ys-border)] bg-white hover:border-emerald-500/35 hover:bg-[var(--ys-accent-soft)]'"
@@ -30,11 +30,11 @@
       :is="icon"
       v-if="icon"
       class="mt-0.5 h-4 w-4 shrink-0"
-      :class="iconClass || (disabled ? 'text-[var(--ys-text-faint)]' : 'text-[var(--ys-accent)]')"
+      :class="iconClass || (disabled ? 'text-[var(--ys-text-aux)]' : 'text-[var(--ys-accent)]')"
       :stroke-width="1.8"
     />
     <span class="min-w-0 flex-1">
-      <b class="block text-[12.5px] font-semibold" :class="disabled ? 'text-[var(--ys-text-faint)]' : 'text-[var(--ys-text)]'">
+      <b class="block text-[12.5px] font-semibold" :class="disabled ? 'text-[var(--ys-text-aux)]' : 'text-[var(--ys-text)]'">
         {{ title }}
       </b>
       <span v-if="hint" class="mt-0.5 block text-[11px] leading-snug text-[var(--ys-text-muted)]">{{ hint }}</span>

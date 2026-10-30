@@ -116,7 +116,11 @@ test('榜单仍是一等入口：charts 这个词必须还能解析到「发现�
   assert.equal(r.view, 'search')
   assert.equal(r.segment, 'charts')
   assert.ok(VIEW_IDS.includes(r.view), 'charts 该落在已登记的顶层页里')
-  assert.ok(appVue.includes('#view-search'), '应有 view-search 插槽（SwipePager 按插槽名渲染视图）')
+  // 分段页只写 inner 槽位（#view-* 外壳会被 SwipePager 的 innerHasRail 短路，是死代码）
+  assert.ok(
+    appVue.includes('#inner-search-charts'),
+    '应有 inner-search-charts 插槽（SwipePager 按插槽名渲染分段）',
+  )
   assert.ok(appVue.includes("decoratedSegments('search')"), '发现音乐应有页内分段器（发现 / 榜单）')
   assert.ok(
     appVue.includes("segMounted('search', 'discover')"),
@@ -173,7 +177,8 @@ test('本地音乐：播放意图必须从管家往上转一层', () => {
 test('侧栏项集合：有 nas、没有 charts', () => {
   assert.match(
     libraryViewJs,
-    /TAB_IDS = new Set\(\['nas', 'push', 'download', 'complete', 'autodl'\]\)/,
+    // 2026-10-28：'complete'（补全段）下线后从侧栏项里移除，其余不变
+    /TAB_IDS = new Set\(\['nas', 'push', 'download', 'autodl'\]\)/,
     'TAB_IDS 应含 nas 与 autodl、且不含 charts',
   )
   assert.ok(
@@ -235,10 +240,13 @@ test('「▶ 看一眼」回到发现页仍走导航总线，负载形如 { char
 
 test('手机底部标签栏：下载收进「更多」，整理顶上（2026-10-18 用户口径）', () => {
   // 「补全整理和下载替换一下。下载放到更多里面。」
+  // 2026-10-29：顺序改成跟滑动顺序（VIEWS）一致 —— 发现 / 曲库 / 整理 / 订阅。
+  // 底栏原来把「订阅」排在「整理」前面，而手指左滑是 曲库 → 整理，两个顺序打架，
+  // 用户报的就是「切换的页面顺序不对」。谁是那 4 项不变，只是先后不再自己另定一套。
   assert.match(
     navViewsJs,
-    /MOBILE_TAB_IDS = \['search', 'library', 'push', 'tidy'\]/,
-    '手机标签栏应是 搜索 / 本地曲库 / 订阅更新 / 补全整理 —— 下载不在其中',
+    /MOBILE_TAB_IDS = \['search', 'library', 'tidy', 'push'\]/,
+    '手机标签栏应是 发现 / 曲库 / 补全整理 / 订阅更新（顺序跟随 VIEWS）—— 下载不在其中',
   )
   assert.ok(
     !/'download'\s*\]/.test(navViewsJs.match(/MOBILE_TAB_IDS = \[[^\]]*\]/)?.[0] || ''),
@@ -270,7 +278,10 @@ test('手机底部：搜索是「灵动岛」（导航椭圆 + 搜索**正圆**�
   assert.match(appVue, /w-14 shrink-0/, '搜索圆应是固定宽的正圆（w-14 = 56px，高也是 56px）')
   assert.ok(!/flex-\[2\]/.test(appVue), '不该再有 flex-[2]（那会把右圆抻成椭圆）')
   assert.match(appVue, /gap-2/, '闭态两形状之间要有间隙')
-  assert.match(appVue, /islandOpen \? 'gap-0' : 'gap-2'/, '点开后间隙收到 0（两个形状贴合）')
+  // 2026-10-28：融合态从只写 'gap-0' 扩成 'island-merged gap-0' —— 光收间隙不够，
+  // 两半各自的 border/shadow 会在接缝堆成一道断层（用户：「还是有断层」），
+  // island-merged 负责把两半拼成一条胶囊。断言的意图（间隙收到 0）不变。
+  assert.match(appVue, /islandOpen \? 'island-merged gap-0' : 'gap-2'/, '点开后间隙收到 0（两个形状贴合）')
   assert.ok(appVue.includes('openIsland'), '点右圆应展开灵动岛')
   assert.ok(appVue.includes('submitIslandSearch'), '灵动岛内提交搜索应走同一套落地（searchFromPlayerBar）')
   assert.ok(appVue.includes('closeIsland'), '应能收回灵动岛（Esc / 点外面 / 提交后）')
@@ -280,12 +291,11 @@ test('手机底部：搜索是「灵动岛」（导航椭圆 + 搜索**正圆**�
     playerBarVue.includes('max-sm:hidden'),
     'PlayerBar 的搜索框/图标应在手机上隐藏（手机由灵动岛接管，两者同在右下角会重叠）',
   )
+  // 2026-10-28 用户反向口径：「取消灵动岛搜索按钮的绿点」——
+  // 「正在播放」的实时绿点从这颗搜索圆上撤掉了（呼吸绿点改由左上角 AI 图标承担）。
+  // 这里改成「反向断言」：别再把那颗点加回来，否则跟用户口径打架。
   assert.ok(
-    appVue.includes('island-live-dot'),
-    '搜索圆上应有「正在播放」的实时小圆点（用户口径：第二个实时显示小圆）',
-  )
-  assert.ok(
-    read('../../src/style.css').includes('.island-live-dot'),
-    'style.css 应有 .island-live-dot 的呼吸动画',
+    !appVue.includes('island-live-dot'),
+    '搜索圆上不应再有「正在播放」的绿点（2026-10-28 用户要求取消）',
   )
 })

@@ -19,7 +19,7 @@
         <div
           v-for="m in metrics"
           :key="m.label"
-          class="rounded-[var(--ys-radius-card)] border border-[var(--ys-border)] bg-white px-[18px] py-4 shadow-[0_1px_2px_rgba(0,0,0,0.03)]"
+          class="rounded-[var(--ys-radius-card)] border border-[var(--ys-border)] bg-white px-[18px] py-4"
         >
           <!-- 指标卡：标签在上（带一颗状态点表示倾向），数字在下且一律墨色 ——
                彩色大数字一排下来像仪表盘，Apple 的做法是「数字说事实，颜色只提示」。 -->
@@ -40,7 +40,7 @@
 
       <!-- 队列内容（与抽屉共用同一面板） -->
       <div
-        class="flex flex-col overflow-hidden rounded-xl border border-gray-200 bg-white"
+        class="flex flex-col overflow-hidden rounded-xl border border-[var(--ys-border)] bg-white"
         :class="embedded ? 'min-h-[420px]' : 'min-h-[460px]'"
       >
         <DownloadQueuePanel :active-source="activeSource" />
@@ -67,7 +67,7 @@ const props = defineProps({
 
 const metrics = computed(() => [
   { label: '全部任务', value: downloadManager.totalCount.value, dot: 'bg-[var(--ys-text-faint)]' },
-  { label: '进行中', value: downloadManager.activeCount.value, dot: 'bg-emerald-500' },
+  { label: '进行中', value: downloadManager.activeCount.value, dot: 'bg-emerald-600' },
   { label: '已暂停', value: downloadManager.pausedCount.value, dot: 'bg-amber-500' },
   { label: '失败', value: downloadManager.failedCount.value, dot: 'bg-rose-500' },
 ])

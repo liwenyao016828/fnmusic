@@ -13,20 +13,20 @@
       <button
         v-if="musicdlPageOpen"
         @click="musicdlPageOpen = false"
-        class="px-3 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-xs text-gray-600 flex items-center gap-1.5">
+        class="px-3 py-1.5 rounded-lg bg-[var(--ys-surface-control)] hover:bg-[var(--ys-surface-hover)] text-xs text-gray-600 flex items-center gap-1.5">
         <ArrowLeft class="w-3.5 h-3.5" />返回音源管理
       </button>
       <div v-else class="flex gap-2">
         <button @click="testActiveResolution" :disabled="isTesting || !activeSourceId"
-          class="px-3 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-xs text-gray-600 flex items-center gap-1.5 transition-all disabled:opacity-50"
+          class="px-3 py-1.5 rounded-lg bg-[var(--ys-surface-control)] hover:bg-[var(--ys-surface-hover)] text-xs text-gray-600 flex items-center gap-1.5 transition-all disabled:opacity-50"
           title="对当前激活音源发起一次真实取链测试">
           <PlayCircle :class="['w-3.5 h-3.5 text-blue-500', isTesting ? 'animate-spin' : '']" />
           {{ isTesting ? '测试中...' : '测试解析' }}
         </button>
         <button @click="probeAllSources" :disabled="isPinging || sources.length === 0"
-          class="px-3 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-xs text-gray-600 flex items-center gap-1.5 transition-all disabled:opacity-50"
+          class="px-3 py-1.5 rounded-lg bg-[var(--ys-surface-control)] hover:bg-[var(--ys-surface-hover)] text-xs text-gray-600 flex items-center gap-1.5 transition-all disabled:opacity-50"
           title="实际发起取链，检测每个音源是否真的可用">
-          <Gauge :class="['w-3.5 h-3.5 text-emerald-500', isPinging ? 'animate-spin' : '']" />
+          <Gauge :class="['w-3.5 h-3.5 text-emerald-600', isPinging ? 'animate-spin' : '']" />
           {{ isPinging ? `检测中 ${probeDone}/${sources.length}` : '全部检测' }}
         </button>
         <button v-if="sourceHealth.cooldownCount.value > 0" @click="resetAllHealth"
@@ -36,13 +36,13 @@
           重置熔断
         </button>
         <button @click="cleanupDeadSources" :disabled="cleaning || sources.length === 0"
-          class="px-3 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-xs text-gray-600 flex items-center gap-1.5 transition-all disabled:opacity-50"
+          class="px-3 py-1.5 rounded-lg bg-[var(--ys-surface-control)] hover:bg-[var(--ys-surface-hover)] text-xs text-gray-600 flex items-center gap-1.5 transition-all disabled:opacity-50"
           :title="`按测速记录点判定：最近 ${DEAD_STREAK} 次连续失败才算失效，一次性移除`">
           <Trash2 :class="['w-3.5 h-3.5 text-amber-500', cleaning ? 'animate-spin' : '']" />
           {{ cleaning ? '清理中…' : '清理失效音源' }}
         </button>
         <button @click="openImportModal"
-          class="px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-semibold flex items-center gap-1.5 shadow-sm">
+          class="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center gap-1.5 shadow-sm">
           <Plus class="w-3.5 h-3.5" />导入音源
         </button>
       </div>
@@ -60,9 +60,9 @@
       <InlineNotice :text="testMsg" :tone="testOk ? 'ok' : 'error'" :log-link="!testOk" />
 
       <!-- 清理结果提示 -->
-      <div v-if="cleanupMsg" class="rounded-xl border border-gray-200 bg-white px-3.5 py-2.5 text-[11px] text-gray-600">
+      <div v-if="cleanupMsg" class="rounded-xl border border-[var(--ys-border)] bg-white px-3.5 py-2.5 text-[11px] text-gray-600">
         {{ cleanupMsg }}
-        <button @click="cleanupMsg = ''" class="ml-2 text-gray-400 hover:text-gray-600">关闭</button>
+        <button @click="cleanupMsg = ''" class="ml-2 text-gray-500 hover:text-gray-600">关闭</button>
       </div>
 
       <!-- ── 外挂音源（musicdl）：入口行（v2.1.89 起详情在独立子页）──────
@@ -77,10 +77,10 @@
       >
         <template #actions>
           <span :class="['text-[10px] px-1.5 py-0.5 rounded-full border font-mono shrink-0', musicdlBadge.cls]">{{ musicdlBadge.text }}</span>
-          <span v-if="musicdlEnabled" class="shrink-0 font-mono text-[10px] text-gray-400">已启用 {{ musicdlSources.length }} 个源</span>
+          <span v-if="musicdlEnabled" class="shrink-0 font-mono text-[10px] text-gray-500">已启用 {{ musicdlSources.length }} 个源</span>
           <button
             @click="musicdlPageOpen = true"
-            class="shrink-0 px-3 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-xs text-gray-600 flex items-center gap-1.5">
+            class="shrink-0 px-3 py-1.5 rounded-lg bg-[var(--ys-surface-control)] hover:bg-[var(--ys-surface-hover)] text-xs text-gray-600 flex items-center gap-1.5">
             <Settings2 class="w-3.5 h-3.5" />管理音源
           </button>
         </template>
@@ -122,7 +122,7 @@
           <div
             v-for="p in protocols" :key="p.id"
             class="cursor-pointer rounded-xl border p-3.5 transition-all hover:shadow-[0_2px_8px_rgba(0,0,0,0.05)]"
-            :class="p.ready ? 'border-[var(--ys-border)] bg-white' : 'border-[var(--ys-border)] bg-[#FAFAFC]'"
+            :class="p.ready ? 'border-[var(--ys-border)] bg-white' : 'border-[var(--ys-border)] bg-[var(--ys-surface-sunken)]'"
             @click="toggleProtocol(p.id)"
             :title="expandedProtocols.includes(p.id) ? '点击收起' : '点击展开全部信息'"
           >
@@ -131,17 +131,17 @@
               <b class="min-w-0 flex-1 truncate text-sm font-medium text-[var(--ys-text)]" :title="p.name">{{ p.name }}</b>
               <span
                 class="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium"
-                :class="p.ready ? 'bg-[var(--ys-accent-soft)] text-[var(--ys-accent)]' : 'bg-black/[0.05] text-[var(--ys-text-faint)]'"
+                :class="p.ready ? 'bg-[var(--ys-accent-soft)] text-[var(--ys-accent)]' : 'bg-black/[0.05] text-[var(--ys-text-aux)]'"
               >{{ p.ready ? '已就绪' : '未就绪' }}</span>
               <ChevronDown
-                class="h-3.5 w-3.5 shrink-0 text-gray-400 transition-transform"
+                class="h-3.5 w-3.5 shrink-0 text-gray-500 transition-transform"
                 :class="expandedProtocols.includes(p.id) ? 'rotate-180' : ''"
               />
             </div>
 
             <!-- 协议 id + 执行位置：折叠时也显示（是"这协议在哪跑"的关键信息） -->
             <div class="mt-1.5 flex flex-wrap items-center gap-1.5">
-              <span class="rounded bg-white px-1.5 py-0.5 font-mono text-[10px] text-gray-400 border border-gray-200">{{ p.id }}</span>
+              <span class="rounded bg-white px-1.5 py-0.5 font-mono text-[10px] text-gray-500 border border-[var(--ys-border)]">{{ p.id }}</span>
               <span v-if="p.location === 'backend'" class="rounded bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-600">后端内置</span>
               <span v-else class="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">浏览器沙箱</span>
             </div>
@@ -150,12 +150,12 @@
             <div class="mt-2 flex flex-wrap gap-1">
               <span
                 v-for="c in p.capabilities" :key="c"
-                class="rounded-md bg-white px-1.5 py-0.5 font-mono text-[10px] text-gray-500 border border-gray-200"
+                class="rounded-md bg-white px-1.5 py-0.5 font-mono text-[10px] text-gray-500 border border-[var(--ys-border)]"
               >{{ capabilityLabel(c) }}</span>
             </div>
 
             <!-- 平台列表：折叠时也显示 -->
-            <div class="mt-2 flex flex-wrap items-center gap-1 text-[10px] text-gray-400">
+            <div class="mt-2 flex flex-wrap items-center gap-1 text-[10px] text-gray-500">
               <span>平台：</span>
               <span v-for="pf in p.platforms" :key="pf" class="font-mono">{{ pf }}</span>
               <span v-if="p.id === 'lx' && p.source_count !== undefined" class="ml-1">· 已导入 {{ p.source_count }} 个</span>
@@ -175,10 +175,10 @@
             -->
             <div
               v-if="p.id === 'official'"
-              class="mt-2.5 border-t border-gray-100 pt-2.5"
+              class="mt-2.5 border-t border-[var(--ys-border)] pt-2.5"
               @click.stop
             >
-              <div class="mb-1.5 flex flex-wrap items-center gap-1 text-[10px] text-gray-400">
+              <div class="mb-1.5 flex flex-wrap items-center gap-1 text-[10px] text-gray-500">
                 <span>当前平台</span>
                 <span class="text-gray-300">·</span>
                 <span>决定「发现 / 榜单」看哪个平台的内容</span>
@@ -191,7 +191,7 @@
                   :title="opt.desc"
                   :aria-pressed="officialPlatform === opt.id"
                   @click="setOfficialPlatform(opt.id)"
-                  class="ys-press flex items-center gap-1.5 rounded-[9px] px-2.5 py-1.5 text-[12px] font-medium transition-colors"
+                  class="ys-press flex items-center gap-1.5 rounded-[8px] px-2.5 py-1.5 text-[12px] font-medium transition-colors"
                   :class="officialPlatform === opt.id
                     ? 'bg-[var(--ys-text)] text-white'
                     : 'border border-[var(--ys-border)] bg-white text-[var(--ys-text-muted)] hover:bg-black/[0.04] hover:text-[var(--ys-text)]'"
@@ -204,7 +204,7 @@
             <!-- ⬇️ 折叠时**唯一**藏起来的东西：两段文字解释 -->
             <template v-if="expandedProtocols.includes(p.id)">
               <p class="mt-2 text-[11px] leading-relaxed text-gray-500">{{ p.description }}</p>
-              <p v-if="p.notes" class="mt-2 text-[10px] leading-relaxed text-gray-400">{{ p.notes }}</p>
+              <p v-if="p.notes" class="mt-2 text-[10px] leading-relaxed text-gray-500">{{ p.notes }}</p>
             </template>
           </div>
         </div>
@@ -219,9 +219,9 @@
           <span class="text-[11px] text-[var(--ys-text-muted)]">服务端洛雪宿主</span>
           <span
             class="rounded-full px-1.5 py-0.5 text-[10px] font-medium"
-            :class="lxHostReady ? 'bg-emerald-50 text-emerald-600' : 'bg-gray-100 text-gray-500'"
+            :class="lxHostReady ? 'bg-emerald-50 text-emerald-600' : 'bg-[var(--ys-surface-sunken)] text-gray-500'"
           >{{ lxHostLabel }}</span>
-          <span class="text-[10px] leading-relaxed text-gray-400">
+          <span class="text-[10px] leading-relaxed text-gray-500">
             可选。平台直链取不到音源时用它再兜一层；在服务端启动洛雪宿主后这里会显示「已就绪」。
           </span>
         </div>
@@ -249,17 +249,17 @@
         </div>
         <div class="space-y-2">
           <div v-for="a in apiSources" :key="a.id"
-               class="flex flex-wrap items-center gap-3 rounded-xl border border-gray-200 bg-white px-3.5 py-2.5">
+               class="flex flex-wrap items-center gap-3 rounded-xl border border-[var(--ys-border)] bg-white px-3.5 py-2.5">
             <div class="min-w-0 flex-1">
               <div class="flex flex-wrap items-center gap-2">
                 <b class="truncate text-[13px] text-gray-800">{{ a.name }}</b>
                 <span class="rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-medium text-blue-600">
                   {{ a.label || a.protocol }}
                 </span>
-                <span v-if="a.has_token" class="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] text-gray-500">已配令牌</span>
-                <span v-if="!a.enabled" class="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] text-gray-400">已停用</span>
+                <span v-if="a.has_token" class="rounded-full bg-[var(--ys-surface-sunken)] px-2 py-0.5 text-[10px] text-gray-500">已配令牌</span>
+                <span v-if="!a.enabled" class="rounded-full bg-[var(--ys-surface-sunken)] px-2 py-0.5 text-[10px] text-gray-500">已停用</span>
               </div>
-              <p class="mt-0.5 truncate font-mono text-[11px] text-gray-400">{{ a.base_url }}</p>
+              <p class="mt-0.5 truncate font-mono text-[11px] text-gray-500">{{ a.base_url }}</p>
               <p v-if="a.note" class="mt-0.5 truncate text-[11px] text-emerald-600">{{ a.note }}</p>
             </div>
             <button @click="removeApiSource(a)"
@@ -271,18 +271,18 @@
         </div>
       </SectionCard>
 
-      <div v-if="sources.length === 0" class="flex flex-col items-center justify-center rounded-[18px] border border-dashed border-gray-200 bg-white py-14 text-center">
-        <div class="mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-gray-100 text-xl text-gray-400">
+      <div v-if="sources.length === 0" class="flex flex-col items-center justify-center rounded-[var(--ys-radius-block)] border border-dashed border-[var(--ys-border)] bg-white py-14 text-center">
+        <div class="mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-[var(--ys-surface-sunken)] text-xl text-gray-500">
           📦
         </div>
         <h3 class="mb-1 text-[13px] font-semibold text-gray-700">还没有导入第三方音源</h3>
-        <p class="mb-5 max-w-sm px-4 text-[11px] leading-relaxed text-gray-400">
+        <p class="mb-5 max-w-sm px-4 text-[11px] leading-relaxed text-gray-500">
           官方协议已可用：搜索、榜单、歌单、歌词都不需要音源。<b>下载</b>由 NAS 后台执行
           （提交后关掉网页也会继续下），也不用音源；只有<b>页面内播放</b>需要导入一份
           LX 音源脚本来解析直链。
         </p>
         <button @click="openImportModal"
-          class="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-semibold flex items-center gap-1.5 shadow-sm transition-all">
+          class="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center gap-1.5 shadow-sm transition-all">
           <Plus class="w-4 h-4" />导入第三方音源
         </button>
       </div>
@@ -299,7 +299,7 @@
       <div v-else class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
         <div v-for="s in sources" :key="s.id"
           :class="[
-            'flex items-center gap-3 rounded-[18px] border border-[var(--ys-border)] bg-white p-4 transition-all cursor-pointer hover:shadow-[0_2px_10px_rgba(0,0,0,0.06)]',
+            'flex items-center gap-3 rounded-[var(--ys-radius-block)] border border-[var(--ys-border)] bg-white p-4 transition-all cursor-pointer hover:shadow-[0_2px_10px_rgba(0,0,0,0.06)]',
             isActive(s.id) ? 'border-transparent ring-2 ring-emerald-500/40' : '',
             !healthOf(s.id).available ? 'opacity-70 border-rose-200' : ''
           ]"
@@ -308,8 +308,8 @@
         >
           <!-- 左：耳机；已启用时中间叠一个单音符 -->
           <div class="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border"
-               :class="isActive(s.id) ? 'border-emerald-500/25 bg-[var(--ys-accent-soft)]' : 'border-[var(--ys-border)] bg-[#FAFAFC]'">
-            <Headphones class="h-6 w-6" :class="isActive(s.id) ? 'text-[var(--ys-accent)]' : 'text-[var(--ys-text-faint)]'" />
+               :class="isActive(s.id) ? 'border-emerald-500/25 bg-[var(--ys-accent-soft)]' : 'border-[var(--ys-border)] bg-[var(--ys-surface-sunken)]'">
+            <Headphones class="h-6 w-6" :class="isActive(s.id) ? 'text-[var(--ys-accent)]' : 'text-[var(--ys-text-aux)]'" />
             <!-- 位置往右挪一点（用户说偏左）、笔画加粗 -->
             <Music2 v-if="isActive(s.id)" :stroke-width="2.8" class="absolute h-2.5 w-2.5 translate-x-[1.5px] text-[var(--ys-accent)]" />
           </div>
@@ -321,7 +321,7 @@
           <div class="min-w-0 flex-1 overflow-hidden">
             <div class="flex items-center gap-1.5 flex-wrap">
               <span class="min-w-0 max-w-full truncate text-sm font-medium text-[var(--ys-text)]" :title="s.name">{{ s.name }}</span>
-              <span v-if="s.version" class="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-400 font-mono">v{{ s.version }}</span>
+              <span v-if="s.version" class="text-[10px] px-1.5 py-0.5 rounded bg-[var(--ys-surface-sunken)] text-gray-500 font-mono">v{{ s.version }}</span>
               <span class="text-[10px] px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200/80 font-medium">第三方</span>
             </div>
             <!-- 平台标签**必须能换行**：音源支持的平台数量不定，不换行就会横向溢出、压在右边按钮上 -->
@@ -331,15 +331,15 @@
               即：**暂时不显示**，等有真正的开发者名（而不是 dev 里的占位「张三」）再说。
               要恢复就把 `<span>{{ s.author }}</span>` + 竖线加回来。
             -->
-            <div v-if="getPlatforms(s.id).length" class="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-400">
-              <span v-for="p in getPlatforms(s.id)" :key="p" class="shrink-0 px-1.5 py-0.5 rounded bg-gray-100 text-gray-500 font-mono text-[10px]">{{ p }}</span>
+            <div v-if="getPlatforms(s.id).length" class="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-500">
+              <span v-for="p in getPlatforms(s.id)" :key="p" class="shrink-0 px-1.5 py-0.5 rounded bg-[var(--ys-surface-sunken)] text-gray-500 font-mono text-[10px]">{{ p }}</span>
             </div>
             <!-- 健康状态行 -->
             <div class="flex items-center gap-1.5 mt-1.5 text-[10px]">
               <span :class="['px-1.5 py-0.5 rounded font-medium', healthOf(s.id).badgeClass]">
                 {{ healthOf(s.id).label }}
               </span>
-              <span v-if="healthOf(s.id).rateText" class="text-gray-400">{{ healthOf(s.id).rateText }}</span>
+              <span v-if="healthOf(s.id).rateText" class="text-gray-500">{{ healthOf(s.id).rateText }}</span>
             </div>
             <!-- 最近 10 次测速记录：小长条（圆角），左旧右新，颜色按延迟分档 -->
             <div class="mt-2 flex items-center gap-1" title="最近 10 次测速记录（左旧右新）">
@@ -358,10 +358,10 @@
               class="flex h-7 min-w-[34px] items-center justify-center rounded-lg px-1.5 font-mono text-[11px] transition-colors disabled:opacity-50"
               :class="probeFailed(s.id)
                 ? 'bg-rose-50 text-rose-600 hover:bg-rose-100'
-                : (measuredLatency(s.id) ? 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100' : 'text-gray-300 hover:bg-emerald-50 hover:text-emerald-500')"
+                : (measuredLatency(s.id) ? 'bg-emerald-50 text-emerald-600 hover:bg-emerald-50' : 'text-gray-300 hover:bg-emerald-50 hover:text-emerald-600')"
               :title="'真实取链测速（' + s.name + '）'"
             >
-              <Loader2 v-if="probingIds.includes(s.id)" class="w-3.5 h-3.5 animate-spin text-emerald-500" />
+              <Loader2 v-if="probingIds.includes(s.id)" class="w-3.5 h-3.5 animate-spin text-emerald-600" />
               <span v-else-if="measuredLatency(s.id)">{{ measuredLatency(s.id) }}</span>
               <Gauge v-else class="w-3.5 h-3.5" />
             </button>
@@ -390,29 +390,29 @@
       <!-- max-h + overflow-y-auto：结果块最多 8 条 + 已选文件列表叠起来会超出手机视口，
            而面板原来是 overflow:visible 且没有 max-height —— 超出部分既看不见也滚不到。 -->
       <div
-        class="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl border border-gray-100 max-h-[85vh] overflow-y-auto"
+        class="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl border border-[var(--ys-border)] max-h-[85vh] overflow-y-auto"
         @dragover.prevent
         @drop.prevent="onDrop"
       >
         <div class="flex items-center justify-between mb-4">
           <!-- 简介统一走悬停（2026-10-18 用户口径「去掉简介」），原来那是 h3 下面常驻的一行灰字 -->
           <h3 class="text-base font-bold text-gray-800" title="两种接入方式：导入脚本，或填一个自建服务地址">导入第三方自定义音源</h3>
-          <button @click="showImportModal = false" class="text-gray-400 hover:text-gray-600"><X class="w-5 h-5" /></button>
+          <button @click="showImportModal = false" class="text-gray-500 hover:text-gray-600"><X class="w-5 h-5" /></button>
         </div>
 
         <!-- 接入方式切换 -->
-        <div class="mb-3 flex w-max items-center gap-0.5 rounded-[11px] bg-gray-100 p-1">
+        <div class="mb-3 flex w-max items-center gap-0.5 rounded-[12px] bg-[var(--ys-surface-sunken)] p-1">
           <button
             @click="importMode = 'script'"
             :class="[
-              'ys-press rounded-[9px] px-3 py-1.5 text-[12px] font-medium whitespace-nowrap transition-colors',
+              'ys-press rounded-[8px] px-3 py-1.5 text-[12px] font-medium whitespace-nowrap transition-colors',
               importMode === 'script' ? 'bg-white text-[var(--ys-text)] shadow-[0_1px_2px_rgba(0,0,0,0.06)]' : 'text-[var(--ys-text-muted)] hover:text-[var(--ys-text)]'
             ]"
           >导入脚本</button>
           <button
             @click="importMode = 'api'"
             :class="[
-              'ys-press rounded-[9px] px-3 py-1.5 text-[12px] font-medium whitespace-nowrap transition-colors',
+              'ys-press rounded-[8px] px-3 py-1.5 text-[12px] font-medium whitespace-nowrap transition-colors',
               importMode === 'api' ? 'bg-white text-[var(--ys-text)] shadow-[0_1px_2px_rgba(0,0,0,0.06)]' : 'text-[var(--ys-text-muted)] hover:text-[var(--ys-text)]'
             ]"
           >按服务地址</button>
@@ -436,9 +436,9 @@
               v-model="importUrls"
               rows="4"
               placeholder="https://raw.githubusercontent.com/.../source-a.js&#10;https://raw.githubusercontent.com/.../source-b.js"
-              class="w-full px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 text-gray-800 text-xs font-mono placeholder:text-gray-400 focus:outline-none focus:border-emerald-400 resize-y"
+              class="w-full px-3 py-2 rounded-lg bg-[var(--ys-surface-sunken)] border border-[var(--ys-line-control)] text-gray-800 text-xs font-mono placeholder:text-gray-500 focus:outline-none focus:border-emerald-200 resize-y"
             ></textarea>
-            <p class="mt-1 text-[11px] text-gray-400">已识别 {{ pendingUrlCount }} 条链接</p>
+            <p class="mt-1 text-[11px] text-gray-500">已识别 {{ pendingUrlCount }} 条链接</p>
           </div>
           <div>
             <label class="block text-xs font-medium text-gray-600 mb-1">或上传本地文件（可多选，也可以直接拖进来）</label>
@@ -455,22 +455,22 @@
               @drop.prevent.stop="onDrop"
               :class="[
                 'rounded-xl border-2 border-dashed p-2 transition-colors',
-                isDragging ? 'border-emerald-400 bg-emerald-50/70' : 'border-gray-200 bg-white'
+                isDragging ? 'border-emerald-200 bg-emerald-50/70' : 'border-[var(--ys-border)] bg-white'
               ]"
             >
               <input type="file" accept=".js,.mjs,.cjs" multiple @change="handleFilesPick"
-                class="block w-full text-xs text-gray-500 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-emerald-50 file:text-emerald-700 hover:file:bg-emerald-100 cursor-pointer" />
+                class="block w-full text-xs text-gray-500 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-emerald-50 file:text-emerald-600 hover:file:bg-emerald-50 cursor-pointer" />
               <p v-if="isDragging" class="mt-2 text-center text-[11px] font-semibold text-emerald-600">
                 松手即导入 · .js / .mjs / .cjs 都可以，一次最多 50 个
               </p>
-              <p v-else class="mt-1 text-[10px] leading-relaxed text-gray-400">
+              <p v-else class="mt-1 text-[10px] leading-relaxed text-gray-500">
                 把脚本文件拖到这块区域即可（也可以拖一条脚本直链）；手机上没有拖拽，用上面的按钮。
               </p>
               <!-- 从 NAS 直接挑：飞牛上本来就存着脚本，不必先下载到手机/电脑再上传 -->
               <button
                 type="button"
                 @click="openNasPicker"
-                class="mt-2 flex w-full items-center justify-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700 transition-colors hover:bg-emerald-100"
+                class="mt-2 flex w-full items-center justify-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-600 transition-colors hover:bg-emerald-50"
               >
                 <Folder class="w-3.5 h-3.5" />从 NAS 选择脚本
               </button>
@@ -482,11 +482,11 @@
             >{{ dropNotice }}</p>
             <!-- 已选文件：本地来的和 NAS 来的都列出来，NAS 的多显示一行来源路径 -->
             <div v-if="pickedFiles.length" class="mt-2 space-y-1">
-              <div v-for="f in pickedFiles" :key="f.filename" class="flex items-start gap-1.5 rounded-lg bg-gray-50 px-2 py-1.5">
+              <div v-for="f in pickedFiles" :key="f.filename" class="flex items-start gap-1.5 rounded-lg bg-[var(--ys-surface-sunken)] px-2 py-1.5">
                 <FileCode class="mt-0.5 w-3 h-3 shrink-0 text-emerald-600" />
                 <div class="min-w-0 flex-1">
                   <p class="truncate text-[11px] font-medium text-gray-700" :title="f.filename">{{ f.filename }}</p>
-                  <p v-if="f.fromNas" class="truncate font-mono text-[10px] text-gray-400" :title="f.fromNas">NAS：{{ f.fromNas }}</p>
+                  <p v-if="f.fromNas" class="truncate font-mono text-[10px] text-gray-500" :title="f.fromNas">NAS：{{ f.fromNas }}</p>
                 </div>
                 <button type="button" @click="pickedFiles = pickedFiles.filter(x => x.filename !== f.filename)"
                   class="shrink-0 text-gray-300 hover:text-rose-500" title="移除">
@@ -497,27 +497,27 @@
           </div>
 
           <label class="flex items-start gap-2 cursor-pointer">
-            <input v-model="autoTestAfterImport" type="checkbox" class="mt-0.5 accent-emerald-500" />
+            <input v-model="autoTestAfterImport" type="checkbox" class="mt-0.5" />
             <span class="text-[12px] text-gray-600">
               导入后自动测试每个音源
-              <span class="block text-[11px] text-gray-400">会真实发起一次取链探测，确认脚本可用；不可用的会标出来</span>
+              <span class="block text-[11px] text-gray-500">会真实发起一次取链探测，确认脚本可用；不可用的会标出来</span>
             </span>
           </label>
 
           <!-- 导入结果 -->
-          <div v-if="importReport" id="import-report" class="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5 text-[11px] leading-relaxed">
+          <div v-if="importReport" id="import-report" class="rounded-lg border border-[var(--ys-border)] bg-[var(--ys-surface-sunken)] px-3 py-2.5 text-[11px] leading-relaxed">
             <p class="font-medium text-gray-700">
               导入完成：成功 {{ importReport.imported }} 个<span v-if="importReport.skipped"> · 跳过 {{ importReport.skipped }} 个（已存在）</span><span v-if="importReport.failed"> · 失败 {{ importReport.failed }} 个</span>
             </p>
             <ul class="mt-1 space-y-0.5 text-gray-500">
               <li v-for="(r, i) in importReport.items.slice(0, 8)" :key="i" class="truncate">
-                <span :class="r.status === 'imported' ? 'text-emerald-600' : r.status === 'skipped' ? 'text-gray-400' : 'text-rose-500'">
+                <span :class="r.status === 'imported' ? 'text-emerald-600' : r.status === 'skipped' ? 'text-gray-500' : 'text-rose-500'">
                   {{ r.status === 'imported' ? '✓' : r.status === 'skipped' ? '·' : '✗' }}
                 </span>
                 {{ r.name || r.source }}<span v-if="r.reason" class="text-rose-400"> — {{ r.reason }}</span>
               </li>
             </ul>
-            <p v-if="importReport.items.length > 8" class="mt-1 text-gray-400">仅显示前 8 条，共 {{ importReport.items.length }} 条</p>
+            <p v-if="importReport.items.length > 8" class="mt-1 text-gray-500">仅显示前 8 条，共 {{ importReport.items.length }} 条</p>
 
             <!--
               导入后自动测试：进行中 → 终态结论。
@@ -531,10 +531,10 @@
                 ⏳ 正在测试新导入的音源…（{{ importProbeDone }}/{{ importTest.total }}）
               </p>
               <template v-else>
-                <p class="text-[11px] font-semibold" :class="importTest.fail.length ? 'text-amber-900' : 'text-emerald-800'">
+                <p class="text-[11px] font-semibold" :class="importTest.fail.length ? 'text-amber-900' : 'text-emerald-700'">
                   ✓ 测试完成：{{ importTest.ok.length }} 个可用<template v-if="importTest.enabledCount">（已自动启用）</template><template v-if="importTest.fail.length"> · {{ importTest.fail.length }} 个不可用</template>
                 </p>
-                <p v-if="!importTest.fail.length" class="mt-0.5 text-[11px] text-emerald-700">
+                <p v-if="!importTest.fail.length" class="mt-0.5 text-[11px] text-emerald-600">
                   已加入启用池，关掉弹窗就能直接用。
                 </p>
                 <template v-else>
@@ -572,7 +572,7 @@
                 v-model="apiBaseUrl"
                 type="text"
                 placeholder="http://192.168.1.10:8080"
-                class="w-full px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 text-gray-800 text-xs font-mono placeholder:text-gray-400 focus:outline-none focus:border-emerald-400"
+                class="w-full px-3 py-2 rounded-lg bg-[var(--ys-surface-sunken)] border border-[var(--ys-line-control)] text-gray-800 text-xs font-mono placeholder:text-gray-500 focus:outline-none focus:border-emerald-200"
               />
             </div>
             <!-- 窄屏堆成一列：手机上两列各约 165px，地址/令牌这种长文本挤在这宽度里没法看全 -->
@@ -583,7 +583,7 @@
                   v-model="apiToken"
                   type="password"
                   placeholder="留空表示无需鉴权"
-                  class="w-full px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 text-gray-800 text-xs placeholder:text-gray-400 focus:outline-none focus:border-emerald-400"
+                  class="w-full px-3 py-2 rounded-lg bg-[var(--ys-surface-sunken)] border border-[var(--ys-line-control)] text-gray-800 text-xs placeholder:text-gray-500 focus:outline-none focus:border-emerald-200"
                 />
               </div>
               <div>
@@ -592,27 +592,27 @@
                   v-model="apiName"
                   type="text"
                   placeholder="默认用服务地址"
-                  class="w-full px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 text-gray-800 text-xs placeholder:text-gray-400 focus:outline-none focus:border-emerald-400"
+                  class="w-full px-3 py-2 rounded-lg bg-[var(--ys-surface-sunken)] border border-[var(--ys-line-control)] text-gray-800 text-xs placeholder:text-gray-500 focus:outline-none focus:border-emerald-200"
                 />
               </div>
             </div>
 
             <!-- 探测 / 接入结果 -->
             <div v-if="apiMsg" class="rounded-lg border px-3 py-2.5 text-[11px] leading-relaxed"
-                 :class="apiOk ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-rose-200 bg-rose-50 text-rose-700'">
+                 :class="apiOk ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-rose-200 bg-rose-50 text-rose-700'">
               <p class="font-medium">{{ apiOk ? '✓ 接入成功' : '✗ 接入失败' }}</p>
               <p class="mt-0.5 whitespace-pre-wrap">{{ apiMsg }}</p>
             </div>
           </div>
         </template>
         <div class="mt-5 flex justify-end gap-2">
-          <button @click="showImportModal = false" class="px-4 py-2 rounded-lg text-xs text-gray-500 hover:bg-gray-50">关闭</button>
+          <button @click="showImportModal = false" class="px-4 py-2 rounded-lg text-xs text-gray-500 hover:bg-[var(--ys-surface-hover)]">关闭</button>
 
           <button
             v-if="importMode === 'script'"
             @click="submitBatchImport"
             :disabled="isImporting || !hasPendingImport"
-            class="px-5 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white font-semibold text-xs shadow-sm disabled:opacity-50"
+            class="px-5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs shadow-sm disabled:opacity-50"
           >
             {{ isImporting ? '导入中...' : `立即导入${pendingTotal ? `（${pendingTotal} 个）` : ''}` }}
           </button>
@@ -621,7 +621,7 @@
             v-else
             @click="submitApiSource"
             :disabled="isImporting || !apiBaseUrl.trim()"
-            class="px-5 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white font-semibold text-xs shadow-sm disabled:opacity-50"
+            class="px-5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs shadow-sm disabled:opacity-50"
           >
             {{ isImporting ? '探测中...' : '探测并接入' }}
           </button>
@@ -637,13 +637,13 @@
     -->
     <Teleport to="body">
       <div v-if="nasPicker.show" class="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
-        <div class="flex max-h-[80vh] w-full max-w-lg flex-col rounded-2xl border border-gray-100 bg-white p-5 shadow-xl">
+        <div class="flex max-h-[80vh] w-full max-w-lg flex-col rounded-2xl border border-[var(--ys-border)] bg-white p-5 shadow-xl">
           <div class="flex shrink-0 items-start justify-between gap-3">
             <div class="min-w-0">
               <h3 class="text-sm font-bold text-gray-800">从 NAS 选择音源脚本</h3>
-              <p class="mt-0.5 text-[11px] text-gray-400">只列 .js / .mjs 文件；可访问范围与「本地音乐」一致</p>
+              <p class="mt-0.5 text-[11px] text-gray-500">只列 .js / .mjs 文件；可访问范围与「本地音乐」一致</p>
             </div>
-            <button @click="nasPicker.show = false" class="shrink-0 text-gray-400 hover:text-gray-600" title="关闭">
+            <button @click="nasPicker.show = false" class="shrink-0 text-gray-500 hover:text-gray-600" title="关闭">
               <X class="w-5 h-5" />
             </button>
           </div>
@@ -652,7 +652,7 @@
                后端 /api/nas/browse 一直在返回 volumes（= AllowedRoots()），之前前端把它丢掉了，
                于是选择器只能看到默认打开的那一个根，其它硬盘进不去。 -->
           <div v-if="nasPicker.volumes.length" class="mt-3 flex shrink-0 flex-wrap items-center gap-1.5">
-            <span class="shrink-0 text-[11px] text-gray-400">磁盘</span>
+            <span class="shrink-0 text-[11px] text-gray-500">磁盘</span>
             <button
               v-for="v in nasPicker.volumes" :key="v"
               @click="loadNasDir(v)"
@@ -660,8 +660,8 @@
               :class="[
                 'rounded-lg px-2 py-1 font-mono text-[11px] transition-colors',
                 isCurrentVolume(v)
-                  ? 'bg-emerald-500 text-white'
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  ? 'bg-emerald-600 text-white'
+                  : 'bg-[var(--ys-surface-control)] text-gray-600 hover:bg-[var(--ys-surface-hover)]'
               ]"
             >{{ v }}</button>
           </div>
@@ -671,24 +671,24 @@
             <button
               v-if="nasPicker.parent"
               @click="loadNasDir(nasPicker.parent)"
-              class="shrink-0 rounded-lg bg-gray-100 px-2 py-1 text-[11px] text-gray-600 hover:bg-gray-200"
+              class="shrink-0 rounded-lg bg-[var(--ys-surface-control)] px-2 py-1 text-[11px] text-gray-600 hover:bg-[var(--ys-surface-hover)]"
             >← 上级</button>
             <span class="min-w-0 flex-1 truncate font-mono text-[11px] text-gray-500" :title="nasPicker.path">
               {{ nasPicker.path || '（根目录）' }}
             </span>
           </div>
 
-          <div class="mt-2 min-h-0 flex-1 overflow-y-auto rounded-xl border border-gray-100">
-            <p v-if="nasPicker.loading" class="px-3 py-6 text-center text-xs text-gray-400">读取中…</p>
+          <div class="mt-2 min-h-0 flex-1 overflow-y-auto rounded-xl border border-[var(--ys-border)]">
+            <p v-if="nasPicker.loading" class="px-3 py-6 text-center text-xs text-gray-500">读取中…</p>
             <template v-else>
               <button
                 v-for="d in nasPicker.folders" :key="d.path"
                 @click="loadNasDir(d.path)"
-                class="flex w-full items-center gap-2 border-b border-gray-50 px-3 py-2 text-left transition-colors hover:bg-gray-50"
+                class="flex w-full items-center gap-2 border-b border-gray-50 px-3 py-2 text-left transition-colors hover:bg-[var(--ys-surface-hover)]"
               >
                 <Folder class="w-3.5 h-3.5 shrink-0 text-amber-500" />
                 <span class="min-w-0 flex-1 truncate text-xs text-gray-700">{{ d.name }}</span>
-                <span v-if="d.audio_count" class="shrink-0 font-mono text-[10px] text-gray-400">{{ d.audio_count }} 首</span>
+                <span v-if="d.audio_count" class="shrink-0 font-mono text-[10px] text-gray-500">{{ d.audio_count }} 首</span>
               </button>
               <button
                 v-for="f in nasPicker.files" :key="f.path"
@@ -697,9 +697,9 @@
               >
                 <FileCode class="w-3.5 h-3.5 shrink-0 text-emerald-600" />
                 <span class="min-w-0 flex-1 truncate text-xs text-gray-700">{{ f.name }}</span>
-                <span class="shrink-0 font-mono text-[10px] text-gray-400">{{ formatBytes(f.size) }}</span>
+                <span class="shrink-0 font-mono text-[10px] text-gray-500">{{ formatBytes(f.size) }}</span>
               </button>
-              <p v-if="!nasPicker.folders.length && !nasPicker.files.length" class="px-3 py-8 text-center text-xs text-gray-400">
+              <p v-if="!nasPicker.folders.length && !nasPicker.files.length" class="px-3 py-8 text-center text-xs text-gray-500">
                 这个目录里没有子目录，也没有 .js / .mjs 文件
               </p>
             </template>
@@ -787,7 +787,7 @@ function probeDots(id) {
   const list = probeHistory.value[id] || []
   const padded = new Array(Math.max(0, PROBE_HISTORY_MAX - list.length)).fill(null).concat(list)
   return padded.map((rec, i) => {
-    if (!rec) return { key: 'e' + i, cls: 'bg-gray-100', title: '暂无记录' }
+    if (!rec) return { key: 'e' + i, cls: 'bg-[var(--ys-surface-sunken)]', title: '暂无记录' }
     const when = new Date(rec.t).toLocaleTimeString('zh-CN', { hour12: false })
     if (!rec.ok) return { key: rec.t, cls: 'bg-rose-400', title: `${when} · 取链失败` }
     return { key: rec.t, cls: 'bg-emerald-400', title: `${when} · ${rec.ms}ms` }
@@ -998,8 +998,8 @@ function healthOf(id) {
   const available = sourceHealth.isAvailable(id)
   const rate = sourceHealth.successRate(id)
   const rec = sourceHealth.get(id)
-  let badgeClass = 'bg-gray-100 text-gray-500'
-  let dotClass = 'bg-gray-300'
+  let badgeClass = 'bg-[var(--ys-surface-sunken)] text-gray-500'
+  let dotClass = 'bg-[var(--ys-line-control)]'
   if (!available) {
     badgeClass = 'bg-rose-50 text-rose-600'
     dotClass = 'bg-rose-400'
@@ -1721,14 +1721,14 @@ const musicdlErr = ref('')
 
 /** sidecar 的 state → 徽章。off/preparing/starting/ready/failed/stopped */
 const musicdlBadge = computed(() => {
-  if (!musicdlEnabled.value) return { text: '已关闭', cls: 'border-gray-200 text-gray-400' }
+  if (!musicdlEnabled.value) return { text: '已关闭', cls: 'border-[var(--ys-border)] text-gray-500' }
   const st = musicdlStatus.value?.sidecar?.state || ''
   if (st === 'ready') return { text: '运行中', cls: 'border-emerald-200 bg-emerald-50 text-emerald-600' }
   if (st === 'preparing') return { text: '准备中', cls: 'border-amber-200 bg-amber-50 text-amber-600' }
   if (st === 'starting') return { text: '启动中', cls: 'border-amber-200 bg-amber-50 text-amber-600' }
   if (st === 'failed') return { text: '启动失败', cls: 'border-rose-200 bg-rose-50 text-rose-600' }
-  if (st === 'stopped') return { text: '已停止', cls: 'border-gray-200 text-gray-400' }
-  return { text: '待启动', cls: 'border-gray-200 text-gray-400' }
+  if (st === 'stopped') return { text: '已停止', cls: 'border-[var(--ys-border)] text-gray-500' }
+  return { text: '待启动', cls: 'border-[var(--ys-border)] text-gray-500' }
 })
 
 /**

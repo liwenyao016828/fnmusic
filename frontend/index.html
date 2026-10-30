@@ -1,20 +1,24 @@
 <!doctype html>
-<html lang="zh-CN" style="background-color: #F5F5F7; color-scheme: light;">
+<html lang="zh-CN" style="background-color: #F3F3F3; color-scheme: light;">
   <head>
     <meta charset="UTF-8" />
     <meta name="referrer" content="no-referrer" />
     <link rel="icon" type="image/png" href="/favicon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <!-- 顶栏玻璃色；Safari 地址栏与 PWA 标题栏跟随画布 -->
-    <meta name="theme-color" content="#F5F5F7" />
+    <meta name="theme-color" content="#F3F3F3" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <title>曲率 - AI Music Hub</title>
     <!--
       首屏底色与字体必须在 CSS 生效前就位，否则会闪一下暗底/系统默认字体。
 
-      2026-10-19 视觉重构：应用是**亮色**界面（App.vue 画布 #f5f7f9），
-      而这里原来是 #07080d 暗底 —— 首屏会先黑一下再变白。统一成画布色 #F5F5F7。
-      字体与 tailwind.config.js 的 fontFamily.sans 保持一致（SF Pro 字栈）。
+      2026-10-19 视觉重构：应用是**亮色**界面，而这里原来是 #07080d 暗底 ——
+      首屏会先黑一下再变白。
+      2026-10-29 飞牛化：底色由旧画布 #F5F5F7 换成 --ys-chrome 的 #F3F3F3
+      （飞牛的框架层色）。**这一处很容易漏**：html/#app 的内联底色比 style.css 更早生效，
+      漏掉就会出现「CSS 变了但首屏还是旧灰」的观感——实测 body 仍算出 rgb(245,245,247)
+      就是它造成的。
+      字体与 tailwind.config.js 的 fontFamily.sans 保持一致。
     -->
     <style>
       html, body {
@@ -22,8 +26,8 @@
         padding: 0;
         width: 100%;
         height: 100%;
-        background-color: #F5F5F7;
-        color: #1D1D1F;
+        background-color: #F3F3F3;
+        color: #0B0B0C;
         font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
           "Helvetica Neue", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
         -webkit-font-smoothing: antialiased;
@@ -33,11 +37,11 @@
       #app {
         width: 100%;
         height: 100%;
-        background-color: #F5F5F7;
+        background-color: #F3F3F3;
       }
     </style>
   </head>
-  <body class="bg-gray-100 text-gray-900 select-none overflow-hidden">
+  <body class="select-none overflow-hidden">
     <div id="app"></div>
     <script type="module" src="/src/main.js"></script>
   </body>

@@ -103,7 +103,18 @@ func (s *Server) HandleNASDelete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// ③ 删除 / 挪进回收站
-	trashDir := joinTrash(resolved[0])
+	trashDir := trashDirFunc(resolved[0])
+	if mode == "trash" {
+		// 回收站目录不可写时（权限、只读盘）提前说清楚并中止 ——
+		// 否则会走到逐文件失败，用户只看到「失败 N 个」却不知道是回收站在哪。
+		if err := os.MkdirAll(trashDir, 0o755); err != nil {
+			_ = os.RemoveAll(backup.Dir())
+			errJSON(w, http.StatusInternalServerError,
+				"回收站目录不可写，已中止（没有删除任何文件）："+trashDir+" —— "+err.Error()+
+					"；可在设置里切到「直接删除」，或给这个目录写权限")
+			return
+		}
+	}
 	res := tidy.ResolveDuplicates(
 		[]tidy.DupGroup{{Type: "manual", Delete: resolved}},
 		tidy.ResolveOptions{Mode: mode, TrashDir: trashDir},
@@ -123,11 +134,20 @@ func (s *Server) HandleNASDelete(w http.ResponseWriter, r *http.Request) {
 	if mode == "delete" {
 		msg = "已删除"
 	}
+	// ⚠️ 2026-10-29：以前这里无论删成没删成都是一句 OK —— 文件一个都没动，前端却看到 code 200，
+	// 于是把行从列表里摘掉（用户报的「列表删除了，实际没有删除」）。
+	// 现在如实说：部分失败带原因是 207 语义（仍给 code 200 + failed，前端按 failed 判定），
+	// 全部失败则直接回 500，让调用方没法把它当成功。
+	if res.Failed > 0 && res.Moved == 0 && res.Deleted == 0 {
+		errJSON(w, http.StatusInternalServerError,
+			"删除失败，没有移除任何文件"+errTail(res.Errors))
+		return
+	}
 	if res.Failed > 0 {
-		msg += "，失败 " + itoa(res.Failed) + " 个"
+		msg += "，失败 " + itoa(res.Failed) + " 个" + errTail(res.Errors)
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"code": 200, "message": msg + "（可在「补全整理 → 数据快照」里恢复）",
+		"code": 200, "message": msg + recoveryNote(mode, res.Failed),
 		"data": map[string]interface{}{
 			"mode": mode, "trash_dir": trashDir, "backed_up": backedUp,
 			"moved": res.Moved, "deleted": res.Deleted, "failed": res.Failed,
@@ -135,6 +155,33 @@ func (s *Server) HandleNASDelete(w http.ResponseWriter, r *http.Request) {
 			"paths": resolved,
 		},
 	})
+}
+
+// trashDirFunc 选「回收站放哪」。默认就是 joinTrash；做成变量只为让测试能模拟
+// 「回收站目录建不出来（权限/只读盘）」而不必依赖真实文件系统权限。
+var trashDirFunc = joinTrash
+
+// errTail 把前几条失败原因串成一句话（最多 3 条，避免响应体变成日志）
+func errTail(errs []string) string {
+	if len(errs) == 0 {
+		return ""
+	}
+	n := len(errs)
+	if n > 3 {
+		n = 3
+	}
+	return "：" + strings.Join(errs[:n], "；")
+}
+
+// recoveryNote 部分失败时不能说「全部可在快照里恢复」—— 没删掉的文件本来就还在
+func recoveryNote(mode string, failed int) string {
+	if failed > 0 {
+		return "（失败的文件没有任何改动）"
+	}
+	if mode == "delete" {
+		return "（备份在数据快照里）"
+	}
+	return "（可在「补全整理 → 数据快照」里恢复）"
 }
 
 // itoa 小的整数转字符串（避免为了一个 %d 引入 fmt 在这里的噪音）

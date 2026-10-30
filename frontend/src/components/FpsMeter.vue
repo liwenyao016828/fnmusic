@@ -5,7 +5,7 @@
     必须拿到真机数字。这里除了实时 FPS，还专门记录**最近一次滑动过程中最差的一帧**——
     平均帧率好看但"某几帧掉到 100ms"才是手感的杀手。
   -->
-  <div class="pointer-events-none fixed right-2 top-2 z-[80] rounded-lg bg-black/75 px-2 py-1 font-mono text-[10px] leading-tight text-emerald-300 shadow-lg">
+  <div class="pointer-events-none fixed right-2 top-2 z-[80] rounded-lg bg-black/75 px-2 py-1 font-mono text-[10px] leading-tight text-emerald-200 shadow-lg">
     <div>FPS {{ fps }}</div>
     <div class="text-white/70">滑动最差 {{ worstDuringSwipe }}ms</div>
     <div class="text-white/40">帧 {{ frameCount }}</div>

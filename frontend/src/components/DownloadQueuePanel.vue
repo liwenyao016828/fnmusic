@@ -25,7 +25,7 @@
       -->
       <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
         <!-- 筛选：分段控件（沉底轨道 + 白色药丸），窄屏可横向滚动，不再换行挤成两行 -->
-        <div class="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto rounded-[10px] bg-[var(--ys-surface-sunken)] p-1 no-scrollbar">
+        <div class="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto rounded-[8px] bg-[var(--ys-surface-sunken)] p-1 no-scrollbar">
           <button
             v-for="tab in filterTabs" :key="tab.id"
             @click="currentFilter = tab.id"
@@ -54,7 +54,7 @@
             @click="onToggleQueue"
             class="ys-press grid h-8 w-8 place-items-center rounded-full transition-colors hover:bg-black/[0.05]"
             :class="queueNeedsResume
-              ? 'text-emerald-600 hover:text-emerald-700'
+              ? 'text-emerald-600 hover:text-emerald-600'
               : 'text-[var(--ys-text-muted)] hover:text-[var(--ys-text)]'"
             :title="queueNeedsResume ? '继续下载（队列已暂停或有暂停的任务）' : '暂停下载（不会删任务）'"
             :aria-label="queueNeedsResume ? '继续下载' : '暂停下载'"
@@ -131,7 +131,7 @@
         <button
           v-if="selectedIds.length"
           type="button"
-          class="ys-press grid h-7 w-7 place-items-center rounded-full text-[var(--ys-text-faint)] transition-colors hover:bg-black/[0.05] hover:text-[var(--ys-text)]"
+          class="ys-press grid h-7 w-7 place-items-center rounded-full text-[var(--ys-text-aux)] transition-colors hover:bg-black/[0.05] hover:text-[var(--ys-text)]"
           title="取消选择"
           @click="selected = new Set()"
         >
@@ -157,7 +157,7 @@
     v-if="backendNotice"
     class="flex shrink-0 items-start gap-1.5 border-b border-[var(--ys-border)] bg-[var(--ys-surface-sunken)] px-4 py-2 text-[11px] leading-relaxed text-[var(--ys-text-muted)]"
   >
-    <Info class="mt-[1px] h-3.5 w-3.5 shrink-0 text-[var(--ys-text-faint)]" :stroke-width="1.8" />
+    <Info class="mt-[1px] h-3.5 w-3.5 shrink-0 text-[var(--ys-text-aux)]" :stroke-width="1.8" />
     <div class="min-w-0">
       <b class="text-[var(--ys-text)]">{{ backendNotice.title }}</b>
       <span class="whitespace-pre-wrap"> —— {{ backendNotice.body }}</span>
@@ -178,7 +178,7 @@
   </div>
 
   <!-- 4. 任务列表内容区 -->
-  <div class="min-h-0 flex-1 space-y-2 overflow-y-auto bg-[#FAFAFC] p-3 sm:p-4">
+  <div class="min-h-0 flex-1 space-y-2 overflow-y-auto bg-[var(--ys-surface-sunken)] p-3 sm:p-4">
     <!--
       按序号快速勾选（2026-10-23 用户：「多选框上方增加多选功能，比如输入 100 就是 0-100，
       也可以输入 11-200」）。行号 = 每行最左边那一列 #，**按当前筛选后的可见列表数**：
@@ -191,20 +191,40 @@
       :label="`按序号选（共 ${filteredTasks.length} 行可勾）`"
       @apply="onRangeApply"
       @clear="selected = new Set()"
-    />
+    >
+      <!--
+        「全选当前」放在这里（2026-10-29 用户：「下载页面,全选当前的功能,移到下方,
+        替换按序号选的文字」）。以前它在顶部那行批量动作里，用户要往上找；
+        现在跟「按序号选」并排，两种「一次选一片」的手法是同一个位置、同一种心智。
+        没勾选时也常驻（2026-10-25 #4 的诉求：全选不能藏在勾选之后才出现），
+        列表为空时禁用但占位，避免忽隐忽现。
+      -->
+      <template #extra>
+        <button
+          type="button"
+          :disabled="filteredTasks.length === 0"
+          class="ys-press flex items-center gap-1 rounded-lg border border-[var(--ys-border)] bg-white px-2.5 py-1 text-[11.5px] font-medium text-[var(--ys-text-muted)] transition-colors hover:bg-black/[0.04] hover:text-[var(--ys-text)] disabled:cursor-not-allowed disabled:opacity-35"
+          :title="allSelected ? '取消当前筛选下的全部勾选' : '把当前筛选下的所有行都勾上（含下载中 / 排队中）'"
+          @click="onSelectionAction('all')"
+        >
+          <ListChecks class="h-3.5 w-3.5" :stroke-width="1.9" />
+          {{ allSelected ? '取消全选' : `全选当前（${filteredTasks.length}）` }}
+        </button>
+      </template>
+    </RangeSelectBar>
 
     <!-- 空状态 -->
     <div
       v-if="!filteredTasks.length"
-      class="flex flex-col items-center justify-center py-24 text-center text-gray-400"
+      class="flex flex-col items-center justify-center py-24 text-center text-gray-500"
     >
-      <div class="w-14 h-14 rounded-2xl bg-gray-100 text-gray-300 flex items-center justify-center mb-3">
+      <div class="w-14 h-14 rounded-2xl bg-[var(--ys-surface-sunken)] text-gray-300 flex items-center justify-center mb-3">
         <Music2 class="w-7 h-7" />
       </div>
       <p class="text-xs font-medium text-gray-600 mb-1">
         {{ currentFilter === 'all' ? '暂无下载任务' : `暂无${currentFilterName}任务` }}
       </p>
-      <p class="text-[11px] text-gray-400 max-w-xs">
+      <p class="text-[11px] text-gray-500 max-w-xs">
         在「发现音乐」里点下载，任务会直接提交给 NAS 后台队列
       </p>
     </div>
@@ -244,9 +264,9 @@
 
       <!-- 选中状态指示：所有行都有（2026-10-25 #4 起在跑/排队的行也能勾）；绿勾 = 已选，灰圈 = 可点但未选 -->
       <span
-        class="pointer-events-none grid h-4 w-4 shrink-0 place-items-center rounded-[5px] border transition-colors"
+        class="pointer-events-none grid h-4 w-4 shrink-0 place-items-center rounded-[6px] border transition-colors"
         :class="selected.has(task.id)
-          ? 'border-emerald-500 bg-emerald-500 text-white'
+          ? 'border-emerald-500 bg-emerald-600 text-white'
           : 'border-[var(--ys-border-strong)] bg-white text-transparent'"
         aria-hidden="true"
       >
@@ -254,7 +274,7 @@
       </span>
 
       <!-- 封面 -->
-      <div class="w-10 h-10 rounded-lg overflow-hidden bg-gray-100 shrink-0 relative flex items-center justify-center shadow-2xs">
+      <div class="w-10 h-10 rounded-lg overflow-hidden bg-[var(--ys-surface-sunken)] shrink-0 relative flex items-center justify-center">
         <img
           v-if="task.song.cover"
           :src="task.song.cover"
@@ -263,7 +283,7 @@
           class="w-full h-full object-cover"
           @error="task.song.cover = ''"
         />
-        <Music2 v-else class="h-4 w-4 text-[var(--ys-text-faint)]" :stroke-width="1.8" />
+        <Music2 v-else class="h-4 w-4 text-[var(--ys-text-aux)]" :stroke-width="1.8" />
       </div>
 
       <!-- 歌曲信息与状态 -->
@@ -273,11 +293,11 @@
             {{ task.song.name }}
           </p>
           <!-- 平台标签 -->
-          <span class="text-[9px] px-1.5 py-0.2 rounded-full bg-gray-100 text-gray-500 font-mono shrink-0">
+          <span class="text-[9px] px-1.5 py-0.2 rounded-full bg-[var(--ys-surface-sunken)] text-gray-500 font-mono shrink-0">
             {{ task.song.source || task.platform || 'kw' }}
           </span>
         </div>
-        <p class="text-[11px] text-gray-400 truncate mb-1" :title="task.song.singer">
+        <p class="text-[11px] text-gray-500 truncate mb-1" :title="task.song.singer">
           {{ task.song.singer }}{{ task.song.album ? ' · ' + task.song.album : '' }}
         </p>
 
@@ -286,10 +306,10 @@
           <!-- 后台排队中 -->
           <span
             v-if="task.status === 'pending'"
-            class="px-2 py-0.5 rounded-md bg-gray-100 text-gray-500 flex items-center gap-1"
+            class="px-2 py-0.5 rounded-md bg-[var(--ys-surface-sunken)] text-gray-500 flex items-center gap-1"
             title="已提交到 NAS 后台队列，前端关闭也会继续"
           >
-            <Clock class="w-3 h-3 text-gray-400" />
+            <Clock class="w-3 h-3 text-gray-500" />
             <span>后台排队中</span>
           </span>
 
@@ -299,7 +319,7 @@
             class="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-600 flex items-center gap-1 font-medium"
             title="由 NAS 后端执行，关掉本页/浏览器也会继续"
           >
-            <Loader2 class="w-3 h-3 animate-spin text-emerald-500" />
+            <Loader2 class="w-3 h-3 animate-spin text-emerald-600" />
             <span>后台下载中</span>
           </span>
 
@@ -317,7 +337,7 @@
             v-else-if="task.status === 'success'"
             class="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-600 flex items-center gap-1 font-medium"
           >
-            <Check class="w-3 h-3 text-emerald-500" />
+            <Check class="w-3 h-3 text-emerald-600" />
             <span>已保存至 NAS</span>
           </span>
 
@@ -341,10 +361,10 @@
           -->
           <span
             v-else-if="task.status === 'stopped'"
-            class="px-2 py-0.5 rounded-md bg-gray-100 text-gray-500 flex items-center gap-1"
+            class="px-2 py-0.5 rounded-md bg-[var(--ys-surface-sunken)] text-gray-500 flex items-center gap-1"
             :title="task.error || '已被用户停止'"
           >
-            <Square class="w-3 h-3 text-gray-400" />
+            <Square class="w-3 h-3 text-gray-500" />
             <span>已停止</span>
           </span>
         </div>
@@ -369,22 +389,22 @@
           </span>
           <span
             v-if="task.resolvedQuality && task.resolvedQuality !== task.quality"
-            class="px-1.5 py-0.5 rounded bg-gray-100 text-gray-500 font-mono"
+            class="px-1.5 py-0.5 rounded bg-[var(--ys-surface-sunken)] text-gray-500 font-mono"
             :title="'后台实际拿到的音质/容器'"
           >
             实际 {{ task.resolvedQuality }}
           </span>
           <span
             v-if="task.resolvedSource"
-            class="px-1.5 py-0.5 rounded bg-gray-100 text-gray-500 truncate max-w-[130px]"
+            class="px-1.5 py-0.5 rounded bg-[var(--ys-surface-sunken)] text-gray-500 truncate max-w-[130px]"
             :title="'实际取链渠道：' + task.resolvedSource"
           >
             {{ task.resolvedSource }}
           </span>
-          <span v-if="task.attempts > 0" class="text-gray-400">
+          <span v-if="task.attempts > 0" class="text-gray-500">
             重试 {{ task.attempts }} 次
           </span>
-          <span v-if="task.path" class="text-gray-400 truncate max-w-[220px]" :title="task.path">{{ task.path }}</span>
+          <span v-if="task.path" class="text-gray-500 truncate max-w-[220px]" :title="task.path">{{ task.path }}</span>
         </div>
       </div>
 
@@ -404,7 +424,7 @@
         <button
           v-if="task.status === 'paused'"
           @click.stop="downloadManager.resumeTask(task.id)"
-          class="p-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-600 transition-colors"
+          class="p-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-50 text-emerald-600 transition-colors"
           title="继续下载"
         >
           <PlayCircle class="w-3.5 h-3.5" :stroke-width="1.9" />
@@ -418,7 +438,7 @@
         <button
           v-if="task.status === 'stopped'"
           @click.stop="downloadManager.resumeTask(task.id)"
-          class="px-2 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-600 text-[10px] font-medium transition-colors flex items-center gap-1"
+          class="px-2 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-50 text-emerald-600 text-[10px] font-medium transition-colors flex items-center gap-1"
           title="恢复下载（重新排队并继续）"
         >
           <PlayCircle class="w-3 h-3" :stroke-width="1.9" />
@@ -429,7 +449,7 @@
         <button
           v-if="task.status === 'pending' || task.status === 'downloading' || task.status === 'paused'"
           @click.stop="downloadManager.cancelTask(task.id)"
-          class="p-1.5 rounded-lg text-gray-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
+          class="p-1.5 rounded-lg text-gray-500 hover:text-rose-600 hover:bg-rose-50 transition-colors"
           title="停止并取消此任务"
         >
           <Square class="w-3.5 h-3.5" />
@@ -448,7 +468,7 @@
 
           <button
             @click.stop="downloadManager.retryTask(task.id)"
-            class="p-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-600 transition-colors"
+            class="p-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-50 text-emerald-600 transition-colors"
             title="重新下载"
           >
             <RotateCw class="w-3.5 h-3.5" />
@@ -459,7 +479,7 @@
         <button
           v-if="task.status === 'success'"
           @click.stop="downloadManager.redownloadTasksByIds([task.id])"
-          class="p-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-600 transition-colors"
+          class="p-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-50 text-emerald-600 transition-colors"
           title="重新下载（用当前默认音质再入队一次）"
         >
           <RotateCw class="w-3.5 h-3.5" />
@@ -469,7 +489,7 @@
         <button
           v-if="task.status === 'success' || task.status === 'failed' || task.status === 'stopped'"
           @click.stop="downloadManager.removeTask(task.id)"
-          class="p-1.5 rounded-lg text-gray-300 hover:text-gray-500 hover:bg-gray-100 transition-colors"
+          class="p-1.5 rounded-lg text-gray-300 hover:text-gray-500 hover:bg-[var(--ys-surface-hover)] transition-colors"
           title="移除记录"
         >
           <Trash2 class="w-3.5 h-3.5" />
@@ -764,31 +784,24 @@ const selectionActions = computed(() => {
     })
   }
   // 全选口径 2026-10-25 改：圈「当前筛选下的全部行」，不只是已结束的。
-  acts.push({
-    key: 'all',
-    label: allSelected.value ? '取消全选' : `全选当前（${filteredTasks.value.length}）`,
-    icon: ListChecks,
-    hint: '把当前筛选下的所有行都勾上（含下载中 / 排队中），再点一次取消',
-  })
+  // ⚠️ 2026-10-29：这条从**这里**移到列表上方的 RangeSelectBar 里了
+  // （用户：「全选当前的功能,移到下方,替换按序号选的文字」）。
+  // 这里保留 'all' 这个 key 的分发分支（runSelectionAction 里仍然认它），
+  // 只是不再在这个数组里生成按钮 —— 否则上方又会多出一颗重复的全选。
   acts.push({ key: 'clear', label: `删除记录（${selectedIds.value.length}）`, icon: Trash2, danger: true, hint: '只从队列里移除记录，不删 NAS 上的文件' })
   return acts
 })
 
 /**
- * 没勾选时那一行只摆一个「全选当前（N）」—— 全选不该藏在勾选之后才出现。
- * 行数为 0 时禁用（列表空着，全选没有意义），但**仍占位**，避免它忽隐忽现。
+ * 没勾选时那一行只摆「删除记录…」这类**需要先勾选才有意义**的动作 —— 现在它是空的。
+ *
+ * ⚠️ 2026-10-29：原来这里只摆一个「全选当前（N）」，现已移到列表上方的 RangeSelectBar
+ * 右侧（用户要求「移到下方」）。返回空数组而不是删掉这个 computed，
+ * 是因为模板里 `idleActions` 仍被引用（`selectedIds.length ? selectionActions : idleActions`），
+ * 删了要连锁改模板；留一个空数组语义更清楚：没勾选时顶部这一行**不该有任何按钮**。
+ * vite build 会 tree-shake 掉未使用的变量，但这里它**是**被模板用的，不会误删。
  */
-const idleActions = computed(() => [
-  {
-    key: 'all',
-    label: allSelected.value
-      ? '取消全选'
-      : `全选当前（${filteredTasks.value.length}）`,
-    icon: ListChecks,
-    disabled: filteredTasks.value.length === 0,
-    hint: '把当前筛选下的所有行都勾上（含下载中 / 排队中），再点一次取消',
-  },
-])
+const idleActions = computed(() => [])
 
 async function onSelectionAction(key) {
   try {

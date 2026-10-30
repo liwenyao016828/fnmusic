@@ -16,33 +16,43 @@
 
     · 标题一行、副标题一行。副标题写不下就说明它该精简，而不是这张卡该变宽。
     · 需要悬浮解释的长文案挂 `subTitle`（或直接别写），别把三段话塞进头部。
-    · 卡内**不要再嵌白底卡片** —— 内层用 `bg-gray-50/70` 这类浅底分区，
+    · 卡内**不要再嵌白底卡片** —— 内层用 `bg-[var(--ys-surface-sunken)]` 这类浅底分区，
       白底嵌白底会让人分不清哪一层是边界（补全整理页以前就踩过这个）。
-    · `tone="brand"` 给「当前主任务」用（实心绿图标），其余一律 `tone="soft"`（浅灰图标）。
-      满屏实心绿等于没有重点。
+    · `tone="brand"` 给「当前主任务」用（实心蓝图标），其余一律 `tone="soft"`（浅灰图标）。
+      满屏实心蓝等于没有重点。
+
+    # v2.28.0 飞牛化改动（2026-10-29）
+
+    用户口径：「参考飞牛截图的设计语言（色彩、留白、圆角、阴影）重构界面」。
+    飞牛的卡片**没有阴影**，靠「1px 不透明结构线 + 纯白底」跟 F3F3F3 框架层拉开层次；
+    头部是「图标 + 标题 + 一行说明」的紧凑排布，留白靠 padding 而不是靠 line-height。
+    因此这里三处改动：
+      · 去掉（全站 44 张卡片叠加起来就是「灰雾」）
+      · 圆角走 --ys-radius-card（12px），内边距 p-4/p-5 → p-4/p-[18px]（飞牛更紧）
+      · 图标方块 10px → 8px 圆角、36px → 32px，跟飞牛的应用图标块同尺寸
   -->
   <section
-    class="rounded-[var(--ys-radius-card)] border border-[var(--ys-border)] bg-white p-4 shadow-[0_1px_2px_rgba(0,0,0,0.03)] sm:p-5"
+    class="rounded-[var(--ys-radius-card)] border border-[var(--ys-border)] bg-white p-4 sm:p-[18px]"
     :class="flush ? '!p-0' : ''"
   >
     <div v-if="title || $slots.actions" class="flex items-center gap-2.5">
       <span
         v-if="icon"
-        class="grid h-9 w-9 shrink-0 place-items-center rounded-[10px]"
+        class="grid h-8 w-8 shrink-0 place-items-center rounded-[var(--ys-radius-control)]"
         :class="tone === 'brand'
-          ? 'bg-emerald-500 text-white shadow-[0_1px_2px_rgba(11,138,102,0.28)]'
-          : 'bg-black/[0.04] text-[var(--ys-text-muted)]'"
+          ? 'bg-[var(--ys-accent)] text-white'
+          : 'bg-[var(--ys-surface-control)] text-[var(--ys-text-secondary)]'"
       >
-        <component :is="icon" class="h-4 w-4" />
+        <component :is="icon" class="h-[15px] w-[15px]" />
       </span>
       <div class="min-w-0 flex-1">
-        <h2 class="truncate text-[14px] font-semibold tracking-[-0.01em] text-[var(--ys-text)]" :title="titleTitle || title">{{ title }}</h2>
+        <h2 class="truncate text-[var(--ys-fs-title)] font-semibold tracking-[-0.01em] text-[var(--ys-text)]" :title="titleTitle || title">{{ title }}</h2>
         <!--
           窄屏副标题：原来是 `line-clamp` 之外一律 `truncate`（单行省略），
           像「歌名修复」段那句 60+ 字的说明在手机上只剩「没有歌名 / 歌名就是…」，
           用户根本不知道这段是干什么的。改成窄屏最多两行、sm 以上仍单行省略。
         -->
-        <p v-if="sub" class="mt-0.5 text-[11px] leading-snug text-[var(--ys-text-faint)] line-clamp-2 sm:line-clamp-1" :title="subTitle || sub">{{ sub }}</p>
+        <p v-if="sub" class="mt-1 text-[var(--ys-fs-caption)] leading-snug text-[var(--ys-text-aux)] line-clamp-2 sm:line-clamp-1" :title="subTitle || sub">{{ sub }}</p>
       </div>
       <!--
         右侧：计数徽标、次要按钮等（`shrink-0` 不能加在外层，窄屏会溢出）。

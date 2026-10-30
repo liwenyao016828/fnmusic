@@ -33,14 +33,14 @@
       aria-label="更新完成"
       @click.self="onClose"
     >
-      <div class="w-full max-w-md rounded-2xl border border-gray-100 bg-white p-5 shadow-2xl">
+      <div class="w-full max-w-md rounded-2xl border border-[var(--ys-border)] bg-white p-5 shadow-2xl">
         <div class="mb-3 flex items-center justify-between">
           <h3 class="flex items-center gap-1.5 text-sm font-bold text-gray-800">
             <component :is="headIcon" class="h-4 w-4" :class="headColor" />
             <span>{{ headTitle }}</span>
           </h3>
           <button
-            class="text-gray-400 transition-colors hover:text-gray-600"
+            class="text-gray-500 transition-colors hover:text-gray-600"
             title="关闭"
             aria-label="关闭"
             @click="onClose"
@@ -51,11 +51,11 @@
 
         <div class="space-y-2 text-sm text-gray-600">
           <p class="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-            <span class="text-xs text-gray-400">当前版本</span>
+            <span class="text-xs text-gray-500">当前版本</span>
             <span class="font-mono text-base font-semibold text-gray-800">v{{ notice.version }}</span>
             <template v-if="notice.fromVersion">
-              <span class="text-xs text-gray-400">原版本</span>
-              <span class="font-mono text-xs text-gray-400 line-through">v{{ notice.fromVersion }}</span>
+              <span class="text-xs text-gray-500">原版本</span>
+              <span class="font-mono text-xs text-gray-500 line-through">v{{ notice.fromVersion }}</span>
             </template>
           </p>
           <p v-if="notice.direction === 'down'" class="rounded-lg bg-amber-50 px-2.5 py-2 text-xs leading-relaxed text-amber-700">
@@ -66,17 +66,17 @@
                原来不管有没有说明都写「下面这些是新版本带来的变化」，而说明要等一次
                版本检查拿到 release notes 才有 —— 说明没有时这句话就变成了一句空头支票，
                下面什么都没有。现在按「有没有说明」分两种说法。 -->
-          <p v-else-if="notice.notes" class="rounded-lg bg-emerald-50 px-2.5 py-2 text-xs leading-relaxed text-emerald-700">
+          <p v-else-if="notice.notes" class="rounded-lg bg-emerald-50 px-2.5 py-2 text-xs leading-relaxed text-emerald-600">
             已经用上新版本。下面这些是新版本带来的变化。
           </p>
-          <p v-else class="rounded-lg bg-emerald-50 px-2.5 py-2 text-xs leading-relaxed text-emerald-700">
+          <p v-else class="rounded-lg bg-emerald-50 px-2.5 py-2 text-xs leading-relaxed text-emerald-600">
             已经用上新版本。这一版的更新说明暂时取不到 —— 要么 GitHub 上还没有对应版本的 Release，
             要么这台机器连不上 GitHub。不影响使用，之后可以到「系统 → 版本更新」里再查一次。
           </p>
         </div>
 
         <!-- release 说明：只在服务端缓存里正好是这一版时才有，可能为空 -->
-        <div v-if="notice.notes" class="mt-3 max-h-64 overflow-y-auto rounded-lg border border-gray-100 bg-gray-50/60 p-3">
+        <div v-if="notice.notes" class="mt-3 max-h-64 overflow-y-auto rounded-lg border border-[var(--ys-border)] bg-[var(--ys-surface-sunken)] p-3">
           <pre class="whitespace-pre-wrap break-words font-sans text-xs leading-relaxed text-gray-600">{{ notice.notes }}</pre>
         </div>
 
@@ -108,7 +108,7 @@ const headIcon = computed(() => {
   if (props.notice?.direction === 'unknown') return CheckCircle2
   return ArrowUpCircle
 })
-const headColor = computed(() => (props.notice?.direction === 'down' ? 'text-amber-500' : 'text-emerald-500'))
+const headColor = computed(() => (props.notice?.direction === 'down' ? 'text-amber-500' : 'text-emerald-600'))
 const headTitle = computed(() => {
   const d = props.notice?.direction
   if (d === 'down') return '版本已回退'

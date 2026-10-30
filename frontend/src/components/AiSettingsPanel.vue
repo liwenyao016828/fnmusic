@@ -11,60 +11,60 @@
     2026-10-26 起这里只剩「服务凭证 + 用量」两件事：文件名试算与规则生成是
     「改歌名」的工具，已搬到「补全整理 → 歌名修复」（NameRulesPanel.vue）。
   -->
-  <div class="mt-5 overflow-hidden rounded-xl border border-gray-200 bg-white">
+  <div class="mt-5 overflow-hidden rounded-xl border border-[var(--ys-border)] bg-white">
     <button
-      class="flex w-full items-center gap-2.5 px-4 py-3.5 text-left transition-colors hover:bg-gray-50"
+      class="flex w-full items-center gap-2.5 px-4 py-3.5 text-left transition-colors hover:bg-[var(--ys-surface-hover)]"
       @click="toggleOpen"
     >
-      <Sparkles class="h-4 w-4 shrink-0 text-emerald-500" />
+      <Sparkles class="h-4 w-4 shrink-0 text-emerald-600" />
       <div class="min-w-0 flex-1">
         <b class="block truncate text-[13px] font-semibold text-gray-800">AI 大模型（OpenAI 兼容接口）</b>
-        <span class="mt-0.5 block truncate text-[11px] text-gray-400">{{ summaryLine }}</span>
+        <span class="mt-0.5 block truncate text-[11px] text-gray-500">{{ summaryLine }}</span>
       </div>
       <span :class="[
         'shrink-0 rounded-full border px-2 py-0.5 text-[10px]',
-        aiConfig.available ? 'border-emerald-200 bg-emerald-50 text-emerald-600' : 'border-gray-200 bg-gray-100 text-gray-400',
+        aiConfig.available ? 'border-emerald-200 bg-emerald-50 text-emerald-600' : 'border-[var(--ys-border)] bg-[var(--ys-surface-sunken)] text-gray-500',
       ]">{{ aiConfig.available ? '已就绪' : '未启用' }}</span>
       <ChevronDown
-        class="h-4 w-4 shrink-0 text-gray-400 transition-transform" :class="open ? 'rotate-180' : ''"
+        class="h-4 w-4 shrink-0 text-gray-500 transition-transform" :class="open ? 'rotate-180' : ''"
       />
     </button>
 
-    <div v-if="open" class="space-y-3 border-t border-gray-100 p-4">
+    <div v-if="open" class="space-y-3 border-t border-[var(--ys-border)] p-4">
       <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <label class="text-[11px] text-gray-500 md:col-span-2">
           Base URL
-          <input v-model="aiForm.base_url" class="mt-1 w-full px-2.5 py-1.5 rounded-lg border border-gray-200 text-xs font-mono"
+          <input v-model="aiForm.base_url" class="mt-1 w-full px-2.5 py-1.5 rounded-lg border border-[var(--ys-line-control)] text-xs font-mono"
             placeholder="https://api.deepseek.com 或 https://ark.cn-beijing.volces.com/api/v3" />
         </label>
         <label class="text-[11px] text-gray-500">
           API Key
-          <input v-model="aiForm.api_key" type="password" class="mt-1 w-full px-2.5 py-1.5 rounded-lg border border-gray-200 text-xs font-mono"
+          <input v-model="aiForm.api_key" type="password" class="mt-1 w-full px-2.5 py-1.5 rounded-lg border border-[var(--ys-line-control)] text-xs font-mono"
             :placeholder="aiConfig.configured ? '已配置（留空表示不修改）' : 'sk-...'" />
         </label>
         <label class="text-[11px] text-gray-500">
           模型
-          <input v-model="aiForm.model" class="mt-1 w-full px-2.5 py-1.5 rounded-lg border border-gray-200 text-xs font-mono"
+          <input v-model="aiForm.model" class="mt-1 w-full px-2.5 py-1.5 rounded-lg border border-[var(--ys-line-control)] text-xs font-mono"
             placeholder="deepseek-chat" />
         </label>
         <label class="text-[11px] text-gray-500">
           超时（秒）
-          <input v-model.number="aiForm.timeout" type="number" class="mt-1 w-full px-2.5 py-1.5 rounded-lg border border-gray-200 text-xs" />
+          <input v-model.number="aiForm.timeout" type="number" class="mt-1 w-full px-2.5 py-1.5 rounded-lg border border-[var(--ys-line-control)] text-xs" />
         </label>
         <div class="flex items-end gap-2">
           <label class="flex items-center gap-1.5 text-[11px] text-gray-600">
-            <input type="checkbox" v-model="aiForm.enabled" class="accent-emerald-500" />启用
+            <input type="checkbox" v-model="aiForm.enabled" class="" />启用
           </label>
         </div>
       </div>
 
       <div class="flex items-center gap-2">
         <button @click="saveAI" :disabled="savingAI"
-          class="px-4 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-semibold disabled:opacity-50">
+          class="px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold disabled:opacity-50">
           {{ savingAI ? '保存中...' : '保存配置' }}
         </button>
         <button @click="testAI" :disabled="testingAI"
-          class="px-3 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-xs text-gray-600 disabled:opacity-50">
+          class="px-3 py-1.5 rounded-lg bg-[var(--ys-surface-control)] hover:bg-[var(--ys-surface-hover)] text-xs text-gray-600 disabled:opacity-50">
           {{ testingAI ? '测试中...' : '连通性测试' }}
         </button>
         <span v-if="aiTestMsg" class="text-[11px]" :class="aiTestOk ? 'text-emerald-600' : 'text-rose-500'">{{ aiTestMsg }}</span>
@@ -74,23 +74,23 @@
       <div class="pt-3 border-t border-gray-50">
         <div class="flex items-center justify-between mb-2">
           <span class="text-xs font-semibold text-gray-700">用量统计</span>
-          <button @click="resetUsage" class="text-[11px] text-gray-400 hover:text-rose-500">清空</button>
+          <button @click="resetUsage" class="text-[11px] text-gray-500 hover:text-rose-500">清空</button>
         </div>
         <div class="grid grid-cols-2 md:grid-cols-4 gap-2">
-          <div class="p-2.5 rounded-lg bg-gray-50 border border-gray-100">
-            <div class="text-[10px] text-gray-400">调用次数</div>
+          <div class="p-2.5 rounded-lg bg-[var(--ys-surface-sunken)] border border-[var(--ys-border)]">
+            <div class="text-[10px] text-gray-500">调用次数</div>
             <div class="text-lg font-bold text-gray-700 font-mono">{{ aiUsage.total_calls || 0 }}</div>
           </div>
-          <div class="p-2.5 rounded-lg bg-gray-50 border border-gray-100">
-            <div class="text-[10px] text-gray-400">总 tokens</div>
+          <div class="p-2.5 rounded-lg bg-[var(--ys-surface-sunken)] border border-[var(--ys-border)]">
+            <div class="text-[10px] text-gray-500">总 tokens</div>
             <div class="text-lg font-bold text-gray-700 font-mono">{{ aiUsage.total_tokens || 0 }}</div>
           </div>
-          <div class="p-2.5 rounded-lg bg-gray-50 border border-gray-100">
-            <div class="text-[10px] text-gray-400">输入 tokens</div>
+          <div class="p-2.5 rounded-lg bg-[var(--ys-surface-sunken)] border border-[var(--ys-border)]">
+            <div class="text-[10px] text-gray-500">输入 tokens</div>
             <div class="text-lg font-bold text-gray-700 font-mono">{{ aiUsage.prompt_tokens || 0 }}</div>
           </div>
-          <div class="p-2.5 rounded-lg bg-gray-50 border border-gray-100">
-            <div class="text-[10px] text-gray-400">无明细调用</div>
+          <div class="p-2.5 rounded-lg bg-[var(--ys-surface-sunken)] border border-[var(--ys-border)]">
+            <div class="text-[10px] text-gray-500">无明细调用</div>
             <div class="text-lg font-bold text-gray-700 font-mono">{{ aiUsage.missing_usage || 0 }}</div>
           </div>
         </div>
@@ -100,7 +100,7 @@
             <span>{{ v.calls }} 次 · {{ v.total }} tokens</span>
           </div>
         </div>
-        <p v-else class="mt-2 text-[11px] text-gray-400">暂无调用记录</p>
+        <p v-else class="mt-2 text-[11px] text-gray-500">暂无调用记录</p>
       </div>
 
       <!-- 2026-10-26 用户要求：文件名语义解析与命名解析规则已迁移到「补全整理 → 歌名修复」，见 NameRulesPanel.vue -->

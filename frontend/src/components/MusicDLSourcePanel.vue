@@ -27,7 +27,7 @@
     <InlineNotice :text="pageError" />
 
     <!-- ── 状态 + 总开关 ── -->
-    <div class="rounded-xl border border-gray-200 bg-white px-4 py-3.5">
+    <div class="rounded-xl border border-[var(--ys-border)] bg-white px-4 py-3.5">
       <div class="flex items-start justify-between gap-3">
         <div class="min-w-0">
           <div class="flex items-center gap-2">
@@ -44,7 +44,7 @@
           :disabled="busy"
           @click="toggleMaster"
           :class="['relative w-11 h-6 rounded-full transition-colors shrink-0 disabled:opacity-50',
-                   enabled ? 'bg-emerald-500' : 'bg-gray-200']">
+                   enabled ? 'bg-emerald-600' : 'bg-[var(--ys-line-control)]']">
           <span :class="['absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform',
                          enabled ? 'translate-x-5' : '']" />
         </button>
@@ -54,7 +54,7 @@
         <button
           v-if="canRestart"
           :disabled="restarting"
-          class="shrink-0 rounded-lg border border-gray-200 px-2 py-1 text-[11px] text-gray-600 hover:border-emerald-300 hover:text-emerald-600 disabled:opacity-50"
+          class="shrink-0 rounded-lg border border-[var(--ys-border)] px-2 py-1 text-[11px] text-gray-600 hover:border-emerald-200 hover:text-emerald-600 disabled:opacity-50"
           @click="restartSidecar">
           {{ restarting ? '正在重启…' : '重试启动' }}
         </button>
@@ -63,13 +63,13 @@
 
     <template v-if="enabled">
       <!-- ── 工具条 ── -->
-      <div class="rounded-xl border border-gray-200 bg-white px-4 py-3">
+      <div class="rounded-xl border border-[var(--ys-border)] bg-white px-4 py-3">
         <div class="flex flex-wrap items-center gap-2">
           <input
             v-model="filter"
             type="text"
             placeholder="过滤源名 / 短码…"
-            class="flex-1 min-w-[10rem] rounded-lg border border-gray-200 px-3 py-1.5 text-xs outline-none focus:border-emerald-300" />
+            class="flex-1 min-w-[10rem] rounded-lg border border-[var(--ys-line-control)] px-3 py-1.5 text-xs outline-none focus:border-emerald-200" />
           <span class="text-[11px] text-gray-500 font-mono">已启用 {{ selected.length }} / {{ total }}</span>
         </div>
         <div class="mt-2 grid grid-cols-2 gap-2 lg:grid-cols-3">
@@ -117,9 +117,9 @@
           </div>
           <!-- 说明卡：这里没有可点的动作，所以不用 ActionCard（它会渲染成一个按钮，
                点了没反应反而是个坑），只借同一套卡片排版跟动作卡并排 -->
-          <div class="rounded-xl border border-dashed border-gray-200 px-3 py-2.5">
+          <div class="rounded-xl border border-dashed border-[var(--ys-border)] px-3 py-2.5">
             <b class="block text-[12.5px] font-bold text-gray-600">试运行</b>
-            <span class="mt-0.5 block text-[11px] leading-snug text-gray-400">未启用的源可先试；不写配置、不进搜索</span>
+            <span class="mt-0.5 block text-[11px] leading-snug text-gray-500">未启用的源可先试；不写配置、不进搜索</span>
           </div>
         </div>
         <!--
@@ -146,18 +146,18 @@
       </div>
 
       <!-- ── 源列表 ── -->
-      <div class="rounded-xl border border-gray-200 bg-white overflow-hidden">
+      <div class="rounded-xl border border-[var(--ys-border)] bg-white overflow-hidden">
         <div
           v-for="s in visibleSources"
           :key="s.id"
-          class="flex items-center gap-3 px-4 py-2.5 border-b border-gray-100 last:border-b-0 hover:bg-gray-50">
+          class="flex items-center gap-3 px-4 py-2.5 border-b border-[var(--ys-border)] last:border-b-0 hover:bg-[var(--ys-surface-hover)]">
           <button
             role="switch"
             :aria-checked="isOn(s.id) ? 'true' : 'false'"
             :disabled="busy"
             @click="toggle(s.id)"
             :class="['relative w-9 h-5 rounded-full transition-colors shrink-0 disabled:opacity-50',
-                     isOn(s.id) ? 'bg-emerald-500' : 'bg-gray-200']">
+                     isOn(s.id) ? 'bg-emerald-600' : 'bg-[var(--ys-line-control)]']">
             <span :class="['absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform',
                            isOn(s.id) ? 'translate-x-4' : '']" />
           </button>
@@ -165,7 +165,7 @@
           <div class="min-w-0 flex-1">
             <div class="flex items-center gap-2">
               <span class="text-[13px] text-gray-800 truncate">{{ s.label }}</span>
-              <span class="text-[10px] font-mono text-gray-400">{{ s.id }}</span>
+              <span class="text-[10px] font-mono text-gray-500">{{ s.id }}</span>
               <span
                 v-if="s.native"
                 class="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-600 border border-amber-200"
@@ -193,7 +193,7 @@
             <button
               :disabled="previewBusy"
               @click="stopPreview"
-              class="rounded-lg border border-gray-200 px-2 py-1 text-[11px] text-gray-600 hover:border-rose-300 hover:text-rose-600 disabled:opacity-50">
+              class="rounded-lg border border-[var(--ys-border)] px-2 py-1 text-[11px] text-gray-600 hover:border-rose-300 hover:text-rose-600 disabled:opacity-50">
               停止
             </button>
           </span>
@@ -201,12 +201,12 @@
             v-else-if="!isOn(s.id)"
             :disabled="previewBusy"
             @click="startPreview(s.id)"
-            class="shrink-0 rounded-lg border border-gray-200 px-2 py-1 text-[11px] text-gray-500 hover:border-amber-300 hover:text-amber-600 disabled:opacity-50"
+            class="shrink-0 rounded-lg border border-[var(--ys-border)] px-2 py-1 text-[11px] text-gray-500 hover:border-amber-300 hover:text-amber-600 disabled:opacity-50"
             title="临时拉起这个源看看能不能用：不写进配置、不进搜索结果，5 分钟不保存自动回收">
             试运行
           </button>
         </div>
-        <div v-if="!visibleSources.length" class="px-4 py-6 text-center text-xs text-gray-400">没有匹配的源</div>
+        <div v-if="!visibleSources.length" class="px-4 py-6 text-center text-xs text-gray-500">没有匹配的源</div>
       </div>
     </template>
   </div>
@@ -260,13 +260,13 @@ let ticker = null
 let poller = null
 
 const badge = computed(() => {
-  if (!enabled.value) return { text: '已关闭', cls: 'border-gray-200 text-gray-400' }
+  if (!enabled.value) return { text: '已关闭', cls: 'border-[var(--ys-border)] text-gray-500' }
   const st = status.value?.sidecar?.state || ''
   if (st === 'ready') return { text: '运行中', cls: 'border-emerald-200 bg-emerald-50 text-emerald-600' }
   if (st === 'preparing') return { text: '准备中', cls: 'border-amber-200 bg-amber-50 text-amber-600' }
   if (st === 'starting') return { text: '启动中', cls: 'border-amber-200 bg-amber-50 text-amber-600' }
   if (st === 'failed') return { text: '启动失败', cls: 'border-rose-200 bg-rose-50 text-rose-600' }
-  return { text: '待启动', cls: 'border-gray-200 text-gray-400' }
+  return { text: '待启动', cls: 'border-[var(--ys-border)] text-gray-500' }
 })
 
 /** 状态行：失败与准备都要说清 —— 「装依赖失败」和「平台被风控」长得一模一样 */

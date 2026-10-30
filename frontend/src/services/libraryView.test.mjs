@@ -23,14 +23,21 @@ import {
 const NOW = 1758888000000 // 2025-09-26T12:00:00Z 附近，测试里当「现在」
 
 test('normalizeLibraryTab：旧 id 落到新位置，认不出来的落到推送', () => {
-  assert.equal(normalizeLibraryTab('tidy'), 'complete')
+  // ⚠️ 2026-10-28：整理页的「补全」分段下线后，'complete' 这个 id 有两种身份：
+  //   · 老浏览器偏好里的 library_tab（侧栏项）—— 现在没有这一项了，必须落到默认项；
+  //   · app 内跳转的 view id（navViews 的 ALIASES 里 complete → 整理页）。
+  // 因此 LEGACY_TABS 不能再写 tidy → 'complete'：那会把一个已删除的侧栏项还回来。
+  // 这里钉「tidy 不再映射到已删除的项」+「'complete' 作为侧栏项落空后仍兜到 push」。
+  assert.equal(LEGACY_TABS.tidy, undefined)
+  assert.equal(normalizeLibraryTab('complete'), 'push')
+  assert.equal(normalizeLibraryTab('tidy'), 'push')
   assert.equal(normalizeLibraryTab('playlist'), 'download')
   assert.equal(normalizeLibraryTab('ai'), 'push')
-  for (const id of ['nas', 'push', 'download', 'complete', 'autodl']) assert.equal(normalizeLibraryTab(id), id)
+  for (const id of ['nas', 'push', 'download', 'autodl']) assert.equal(normalizeLibraryTab(id), id)
   // 空 / 垃圾 / 已删除的页：都不能落空（模板里没有 v-else 兜底，落空就只剩标题栏）。
   // 'charts' 是**被搬走**的侧栏项（v2.1.120 升为顶层导航），老偏好里留着它必须落到默认项。
   for (const bad of ['', null, undefined, 'nope', 'setting', 'charts']) assert.equal(normalizeLibraryTab(bad), 'push')
-  assert.deepEqual(Object.keys(LEGACY_TABS).sort(), ['ai', 'playlist', 'tidy'])
+  assert.deepEqual(Object.keys(LEGACY_TABS).sort(), ['ai', 'playlist'])
 })
 
 test('TAB_IDS：本地音乐（nas）与自动下载记录（autodl）是侧栏项，榜单管理已搬出去', () => {
@@ -38,7 +45,8 @@ test('TAB_IDS：本地音乐（nas）与自动下载记录（autodl）是侧栏�
   // 用户看到的就是「点了没反应」。
   assert.ok(TAB_IDS.has('nas'), 'nas 应在 TAB_IDS 里')
   assert.ok(TAB_IDS.has('autodl'), 'autodl 应在 TAB_IDS 里')
-  assert.deepEqual([...TAB_IDS].sort(), ['autodl', 'complete', 'download', 'nas', 'push'])
+  // 2026-10-28：'complete'（补全）分段下线，不再是合法侧栏项
+  assert.deepEqual([...TAB_IDS].sort(), ['autodl', 'download', 'nas', 'push'])
   // 它是 v2.1.120 从顶层导航搬进来的，没有旧身份：LEGACY_TABS 里**不许**出现 nas ——
   // 出现意味着有人给新页编了个「旧 id」，会掩盖真正的跳转 bug。
   assert.ok(!('nas' in LEGACY_TABS))
@@ -146,11 +154,13 @@ test('sidebarStatusItems：只列需要处理的事，且顺序稳定', () => {
   })
   assert.deepEqual(full.map((s) => s.id), [
     'complete-running', 'dl-active', 'dl-failed', 'dl-paused',
-    'push-running', 'baseline', 'push-failed', 'push-pending', 'push-missing',
   ])
   // 每一项都要能点进去（tab 就是跳转目标），否则它只是摆设
+  // 2026-10-28：补全任务的状态项改跳「推送」（补全段已下线，原先的 tab:'complete' 会落空）
+  // 2026-10-29：订阅相关的 5 项（push-running / baseline / push-failed / push-pending /
+  //   push-missing）已按用户要求移出左下角任务状态 —— 它们改在导航「订阅更新」上显示。
   assert.deepEqual(full.map((s) => s.tab), [
-    'complete', 'download', 'download', 'download', 'push', 'push', 'push', 'push', 'push',
+    'push', 'download', 'download', 'download',
   ])
   for (const s of full) {
     assert.ok(s.label, `${s.id} 缺文案`)

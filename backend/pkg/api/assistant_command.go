@@ -17,6 +17,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -114,8 +115,17 @@ func (s *Server) HandleAssistantCommand(w http.ResponseWriter, r *http.Request) 
 		if err != nil {
 			// AI 没配置 / 调不通时给帮助卡片，而不是一句冷冰冰的报错 ——
 			// 面板很小，用户要的是「现在能干什么」。
+			//
+			// 但**必须说清是哪种失败**：以前统一写成「没听懂这句」，
+			// 于是「模型没配」和「模型答不上」在用户眼里是一回事，
+			// 用户会以为「接入坏了」。分清楚这两种情况，见 aiUnavailableReason。
 			wid = s.helpWidget()
-			wid.Message = "（没听懂这句，也没能问到大模型。你可以直接说「开关」「状态」或某个功能名。）"
+			available := false
+			wid.AIAvailable = &available
+			wid.Message = aiUnavailableReason(err) +
+				"\n能直接问的：\n· 「有哪些开关」—— 列出所有可切换的开关\n" +
+				"· 「打开 / 关闭 收藏自动下载」—— 直接切某个开关\n" +
+				"· 「状态」—— 曲库、下载队列、音源数"
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"code": 200, "data": wid})
 	}
@@ -178,10 +188,9 @@ func (s *Server) helpWidget() assistant.Widget {
 		Kind:  "help",
 		Title: "能说什么",
 		Message: "试试这些说法：\n" +
-			"· 「开关」或「有哪些功能」—— 列出所有可切换的开关\n" +
+			"· 「有哪些开关」—— 列出所有可切换的开关\n" +
 			"· 「打开 / 关闭 收藏自动下载」—— 直接切某个开关\n" +
 			"· 「状态」—— 曲库、下载队列、音源数\n" +
-			"· 「下载当前歌曲」—— 面板上的下载按钮\n" +
 			"· 其它问题会转给曲率的 AI 助手（需在设置里配好模型）",
 	}
 }
@@ -192,7 +201,13 @@ func (s *Server) helpWidget() assistant.Widget {
 // 输入，用户要的是一句答案，不是一串工具调用。模型没配好就如实说没配好。
 func (s *Server) aiFallbackWidget(ctx context.Context, text string) (assistant.Widget, error) {
 	if s.aiClient == nil {
-		return assistant.Widget{}, fmt.Errorf("未配置 AI")
+		return assistant.Widget{}, errAINotConfigured
+	}
+	// 模型没配好时**如实说没配好**，不要把「没配」伪装成「模型答不上」——
+	// pkg/ai 的 Chat 在未配置时是静默返回空串的（那是主流程的降级约定），
+	// 到了这里必须显式拦住，否则用户永远不知道要先去设置里配模型。
+	if !s.aiClient.RawConfig().Available() {
+		return assistant.Widget{}, errAINotConfigured
 	}
 	cctx, cancel := context.WithTimeout(ctx, 25*time.Second)
 	defer cancel()
@@ -209,4 +224,21 @@ func (s *Server) aiFallbackWidget(ctx context.Context, text string) (assistant.W
 		return assistant.Widget{}, fmt.Errorf("模型没有返回内容")
 	}
 	return assistant.Widget{Kind: "text", Title: "AI 回答", Message: out}, nil
+}
+
+// errAINotConfigured 表示「AI 大模型没配置」，与「模型调用失败」区分开。
+var errAINotConfigured = errors.New("AI 大模型还没配置")
+
+// aiUnavailableReason 把 AI 兜底失败的原因翻成一句用户看得懂的话。
+//
+// 分两种：
+//   - 没配置（enabled=false / 缺 base_url / 缺 key）→ 明确告诉用户去哪配；
+//   - 调不通（超时、网关报错）→ 说是模型没响应，并给出可试的下一步。
+//
+// 以前两者都写成「没听懂这句」，用户会以为「接入坏了」。
+func aiUnavailableReason(err error) string {
+	if errors.Is(err, errAINotConfigured) {
+		return "（大模型还没配置，所以这句只能走本地规则。到曲率「设置 → 账号连接 → AI 大模型」填好地址和密钥，这儿就能问别的了。）"
+	}
+	return "（这句没能问到大模型：" + err.Error() + "。本地还能问：开关、状态、下载当前歌曲。）"
 }

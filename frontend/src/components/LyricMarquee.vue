@@ -9,6 +9,7 @@
   -->
   <span ref="root" class="lyric-marquee">
     <span
+      :key="text"
       class="lyric-marquee__inner"
       :class="{ 'is-scrolling': scrolling, 'is-right': direction === 'right' }"
     >
@@ -33,7 +34,12 @@ let ro = null
 function measure() {
   const el = root.value
   if (!el) return
-  scrolling.value = el.scrollWidth > el.clientWidth + 1
+  // ⚠️ 只能量「一份」文本的宽度：滚动态下 inner 里有两份副本，
+  // 用 el.scrollWidth 会是两倍文本宽 → 短句也永远判定为溢出、一直在滚。
+  const textEl = el.querySelector('.lyric-marquee__text')
+  const textW = textEl ? Math.ceil(textEl.getBoundingClientRect().width) : 0
+  const boxW = Math.floor(el.clientWidth)
+  scrolling.value = textW > boxW + 1
 }
 
 onMounted(() => {
@@ -44,7 +50,12 @@ onMounted(() => {
   measure()
 })
 onUnmounted(() => { if (ro) ro.disconnect() })
-watch(() => props.text, () => nextTick(measure))
+watch(() => props.text, () => {
+  nextTick(() => {
+    measure()
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(measure)
+  })
+})
 </script>
 
 <style scoped>
@@ -52,6 +63,11 @@ watch(() => props.text, () => nextTick(measure))
   display: block;
   width: 100%;
   overflow: hidden;
+  /* 2026-10-28 用户口径：播放条歌词颜色改为白色（原来继承父级的 text-white/45，
+     太灰看不清）。这里用不透明度兜底，父级再给 text-white 也不会被覆盖。 */
+  color: rgba(255, 255, 255, 1);
+  font-size: 11px;
+  line-height: 1.35;
 }
 .lyric-marquee__inner {
   display: inline-flex;

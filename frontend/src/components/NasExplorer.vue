@@ -12,7 +12,7 @@
       同一批改造里，这排按钮也从裸在页面底色上收进了白底圆角卡（用户：「全局卡片化」）。
     -->
     <div
-      class="mb-3 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border border-gray-200 bg-white px-3.5 py-2.5"
+      class="mb-3 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border border-[var(--ys-border)] bg-white px-3.5 py-2.5"
       title="飞牛 NAS 本地曲库 · FLAC / APE / WAV / DSD / MP3 串流。"
     >
       <span class="rounded-full border border-[var(--ys-border)] bg-black/[0.03] px-2.5 py-0.5 text-[10px] font-medium tracking-[0.02em] text-[var(--ys-text-muted)]">
@@ -22,7 +22,7 @@
       <button
         @click="playAllNasSongs"
         :disabled="!songs.length"
-        class="flex items-center gap-1.5 rounded-[10px] border border-[var(--ys-border)] bg-white px-3.5 py-1.5 text-xs font-medium text-[var(--ys-text)] transition-colors hover:bg-black/[0.03] disabled:opacity-50"
+        class="flex items-center gap-1.5 rounded-[8px] border border-[var(--ys-border)] bg-white px-3.5 py-1.5 text-xs font-medium text-[var(--ys-text)] transition-colors hover:bg-black/[0.03] disabled:opacity-50"
       >
         <Play class="w-3.5 h-3.5 fill-current text-[var(--ys-accent)]" />
         <span>播放全部</span>
@@ -38,7 +38,7 @@
         :disabled="isScanning"
         :title="isScanning ? '正在重新扫描这个目录…' : '重新扫描这个目录'"
         aria-label="重新扫描"
-        class="grid h-[30px] w-[30px] place-items-center rounded-lg bg-gray-100 text-gray-600 transition-all hover:bg-gray-200 disabled:opacity-50"
+        class="grid h-[30px] w-[30px] place-items-center rounded-lg bg-[var(--ys-surface-control)] text-gray-600 transition-all hover:bg-[var(--ys-surface-hover)] disabled:opacity-50"
       >
         <RotateCw :class="['w-3.5 h-3.5', isScanning ? 'animate-spin' : '']" />
       </button>
@@ -52,7 +52,7 @@
         @click="searchOpen = !searchOpen"
         :title="searchOpen ? '收起搜索' : '搜索歌曲'"
         aria-label="搜索歌曲"
-        class="grid h-[30px] w-[30px] place-items-center rounded-lg bg-gray-100 text-gray-600 transition-all hover:bg-gray-200"
+        class="grid h-[30px] w-[30px] place-items-center rounded-lg bg-[var(--ys-surface-control)] text-gray-600 transition-all hover:bg-[var(--ys-surface-hover)]"
       >
         <Search class="w-3.5 h-3.5" />
       </button>
@@ -66,13 +66,13 @@
           type="search"
           placeholder="搜索"
           aria-label="搜索本目录歌曲"
-          class="h-8 w-32 rounded-lg border border-gray-200 bg-white px-2.5 text-xs outline-none transition-colors focus:border-sky-400 sm:w-44"
+          class="h-8 w-32 rounded-lg border border-[var(--ys-line-control)] bg-white px-2.5 text-xs outline-none transition-colors focus:border-sky-400 sm:w-44"
         />
         <button
           @click="closeSearch"
           title="清空并收起搜索"
           aria-label="清空并收起搜索"
-          class="grid h-[30px] w-[30px] place-items-center rounded-lg bg-gray-100 text-gray-500 transition-all hover:bg-gray-200 hover:text-gray-700"
+          class="grid h-[30px] w-[30px] place-items-center rounded-lg bg-[var(--ys-surface-control)] text-gray-500 transition-all hover:bg-[var(--ys-surface-hover)] hover:text-gray-700"
         >
           <X class="w-3.5 h-3.5" />
         </button>
@@ -105,7 +105,7 @@
       宽屏（lg 起）仍是「路径靠左、快速切换靠右」的一行；窄屏自动上下堆叠，
       两段各自换行 —— 不再有需要横滑才找得到的目录。
     -->
-    <div class="flex flex-col gap-2.5 rounded-xl border border-gray-200 bg-white px-4 py-3 text-xs lg:flex-row lg:items-start lg:justify-between">
+    <div class="flex flex-col gap-2.5 rounded-xl border border-[var(--ys-border)] bg-white px-4 py-3 text-xs lg:flex-row lg:items-start lg:justify-between">
       <!-- 左：当前目录（可点换目录）+ 面包屑 + 已加载数 -->
       <div class="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
         <!--
@@ -114,7 +114,7 @@
         -->
         <button
           type="button"
-          class="ys-press flex shrink-0 items-center gap-1.5 rounded-[8px] border border-[var(--ys-border)] bg-black/[0.02] px-2.5 py-1 font-mono text-[var(--ys-text-muted)] transition-colors hover:border-[var(--ys-accent)]/40 hover:text-[var(--ys-text)]"
+          class="ys-press flex shrink-0 items-center gap-1.5 rounded-[8px] border border-[var(--ys-border)] bg-black/[0.02] px-2.5 py-1 font-mono text-[var(--ys-text-muted)] transition-colors hover:border-emerald-500/40 hover:text-[var(--ys-text)]"
           :title="`当前目录：${currentDir}（点击选择曲库目录）`"
           @click="openFolderModal"
         >
@@ -140,7 +140,7 @@
           2026-10-26 用户要求加搜索与页数：搜索生效时在计数后补一段匹配数，
           扫一眼就知道是「整个目录」还是「当前关键词命中的部分」。
         -->
-        <span class="shrink-0 text-[11px] font-normal text-gray-400">
+        <span class="shrink-0 text-[11px] font-normal text-gray-500">
           (已加载 {{ songs.length }} 首歌曲<template v-if="searchText.trim()"> · 匹配 {{ filteredSongs.length }} 首</template>)
         </span>
         <!-- 枚举被上限/深度截断时必须说出来：以前只显示「已加载 1000 首」，
@@ -157,7 +157,7 @@
 
       <!-- 右：快速切换（多行铺开，窄屏折行而不是横滚） -->
       <div class="flex min-w-0 flex-wrap items-center gap-1.5 lg:max-w-[58%] lg:justify-end">
-        <span class="shrink-0 text-gray-400">快速切换:</span>
+        <span class="shrink-0 text-gray-500">快速切换:</span>
         <button
           v-for="d in quickDirs"
           :key="d"
@@ -166,8 +166,8 @@
           :class="[
             'max-w-full truncate rounded-lg px-2.5 py-1 font-mono text-[11px] transition-all',
             currentDir === d
-              ? 'bg-emerald-500 font-semibold text-white shadow-xs'
-              : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              ? 'bg-emerald-600 font-semibold text-white'
+              : 'bg-[var(--ys-surface-control)] text-gray-600 hover:bg-[var(--ys-surface-hover)]'
           ]"
         >
           {{ d }}
@@ -178,22 +178,22 @@
     <!-- Song Table List -->
     <div>
       <!-- Loading State -->
-      <div v-if="isScanning" class="h-72 flex flex-col items-center justify-center text-gray-400">
-        <RotateCw class="w-8 h-8 text-emerald-500 animate-spin mb-3" />
+      <div v-if="isScanning" class="h-72 flex flex-col items-center justify-center text-gray-500">
+        <RotateCw class="w-8 h-8 text-emerald-600 animate-spin mb-3" />
         <p class="text-sm font-medium text-gray-600">正在深度遍历 NAS 音乐文件与提取 ID3 封面...</p>
-        <p class="text-xs text-gray-400 mt-1">目录：{{ currentDir }}</p>
+        <p class="text-xs text-gray-500 mt-1">目录：{{ currentDir }}</p>
       </div>
 
       <!-- Empty State -->
-      <div v-else-if="!songs.length" class="h-72 flex flex-col items-center justify-center text-gray-400 bg-white rounded-2xl border border-gray-100 shadow-xs p-8">
+      <div v-else-if="!songs.length" class="h-72 flex flex-col items-center justify-center text-gray-500 bg-white rounded-2xl border border-[var(--ys-border)] p-8">
         <div class="w-14 h-14 rounded-2xl bg-emerald-50 flex items-center justify-center mb-3">
-          <FolderOpen class="w-7 h-7 text-emerald-500" />
+          <FolderOpen class="w-7 h-7 text-emerald-600" />
         </div>
         <p class="text-base font-semibold text-gray-700">当前目录未找到音频文件</p>
-        <p class="text-xs text-gray-400 mt-1 mb-4">当前路径：{{ currentDir }}</p>
+        <p class="text-xs text-gray-500 mt-1 mb-4">当前路径：{{ currentDir }}</p>
         <button
           @click="openFolderModal"
-          class="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-semibold shadow-sm transition-all flex items-center gap-1.5"
+          class="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-sm transition-all flex items-center gap-1.5"
         >
           <FolderOpen class="w-3.5 h-3.5" />
           <span>点击选择包含音乐的文件夹</span>
@@ -204,15 +204,15 @@
         搜索无结果（用户 2026-10-26 的搜索要求）：目录里有歌、但关键词一首都没命中。
         单独一个分支而不是在表格里渲染空 tbody —— 空表格会让人以为在加载。
       -->
-      <div v-else-if="!filteredSongs.length" class="h-72 flex flex-col items-center justify-center text-gray-400 bg-white rounded-2xl border border-gray-100 shadow-xs p-8">
-        <div class="w-14 h-14 rounded-2xl bg-gray-50 flex items-center justify-center mb-3">
-          <Search class="w-7 h-7 text-gray-400" />
+      <div v-else-if="!filteredSongs.length" class="h-72 flex flex-col items-center justify-center text-gray-500 bg-white rounded-2xl border border-[var(--ys-border)] p-8">
+        <div class="w-14 h-14 rounded-2xl bg-[var(--ys-surface-sunken)] flex items-center justify-center mb-3">
+          <Search class="w-7 h-7 text-gray-500" />
         </div>
         <p class="text-base font-semibold text-gray-700">没有匹配的歌曲</p>
-        <p class="text-xs text-gray-400 mt-1">当前关键词在「{{ songs.length }} 首」里找不到结果</p>
+        <p class="text-xs text-gray-500 mt-1">当前关键词在「{{ songs.length }} 首」里找不到结果</p>
         <button
           @click="clearSearch"
-          class="mt-4 px-4 py-2 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-600 text-xs font-semibold transition-all flex items-center gap-1.5"
+          class="mt-4 px-4 py-2 rounded-xl bg-[var(--ys-surface-control)] hover:bg-[var(--ys-surface-hover)] text-gray-600 text-xs font-semibold transition-all flex items-center gap-1.5"
         >
           <X class="w-3.5 h-3.5" />
           <span>清空搜索</span>
@@ -234,10 +234,10 @@
         ⚠️ 表格里那几个 `hidden md:/lg:table-cell` 的列（专辑/格式/大小）在手机上本来就是隐藏的，
            所以手机上只有「# / 标题 / 操作」三列，放得下。
       -->
-      <div v-else class="overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-xs">
+      <div v-else class="overflow-hidden rounded-2xl border border-[var(--ys-border)] bg-white">
         <div class="overflow-x-auto">
         <table class="w-full table-fixed text-left text-xs text-gray-600 border-collapse sm:table-auto sm:min-w-[560px]">
-          <thead class="bg-gray-50/80 border-b border-gray-100 text-gray-400 font-medium">
+          <thead class="bg-[var(--ys-surface-sunken)] border-b border-[var(--ys-border)] text-gray-500 font-medium">
             <tr>
               <!--
                 列排序（2026-10-24 用户：「曲库里面已下载的歌曲，按照最新排序，或者帮我增加列排序选项」）。
@@ -312,7 +312,7 @@
               <th class="w-[112px] py-3 px-2 text-center sm:w-20 sm:px-4">操作</th>
             </tr>
           </thead>
-          <tbody class="divide-y divide-gray-100">
+          <tbody class="divide-y divide-[var(--ys-border)]">
             <!--
               2026-10-26 分页改造：循环 pagedSongs（当前页切片），
               但「#」列与 playSong 的队列位置都要用**全局序号**
@@ -325,9 +325,9 @@
               @dblclick="playSong(song, (page - 1) * PAGE_SIZE + idx)"
               class="group cursor-pointer transition-colors hover:bg-black/[0.02]"
             >
-              <td class="py-3 px-2 sm:px-3 text-center text-gray-400 font-mono">{{ (page - 1) * PAGE_SIZE + idx + 1 }}</td>
+              <td class="py-3 px-2 sm:px-3 text-center text-gray-500 font-mono">{{ (page - 1) * PAGE_SIZE + idx + 1 }}</td>
               <td class="py-3 px-3 sm:px-4 flex items-center gap-2.5 sm:gap-3 min-w-0">
-                <div class="w-8 h-8 sm:w-9 sm:h-9 rounded-lg overflow-hidden bg-gray-100 border border-gray-200/60 shrink-0 flex items-center justify-center">
+                <div class="w-8 h-8 sm:w-9 sm:h-9 rounded-lg overflow-hidden bg-[var(--ys-surface-sunken)] border border-[var(--ys-border)] shrink-0 flex items-center justify-center">
                   <img 
                     v-if="song.cover_url" 
                     :src="song.cover_url" 
@@ -347,7 +347,7 @@
                     >
                       {{ song.title || song.filename }}
                     </p>
-                    <span v-if="song.has_lyric" class="shrink-0 rounded bg-emerald-100 px-1 py-0.2 text-[9px] font-bold text-emerald-700" title="含本地歌词">词</span>
+                    <span v-if="song.has_lyric" class="shrink-0 rounded bg-emerald-50 px-1 py-0.2 text-[9px] font-bold text-emerald-600" title="含本地歌词">词</span>
                   </div>
                   <!--
                     第二行：**艺术家**（用户 2026-09-22：「把本地音乐里的艺术家加到歌曲标题/封面的第二行」）。
@@ -363,18 +363,18 @@
                   </p>
                 </div>
               </td>
-              <td class="hidden md:table-cell py-3 px-4 text-gray-400 truncate max-w-[150px]">{{ song.album || 'NAS 音乐' }}</td>
+              <td class="hidden md:table-cell py-3 px-4 text-gray-500 truncate max-w-[150px]">{{ song.album || 'NAS 音乐' }}</td>
               <td class="hidden sm:table-cell py-3 px-3 text-center">
                 <span class="rounded border border-[var(--ys-border)] bg-black/[0.03] px-1.5 py-0.5 font-mono text-[10px] font-medium text-[var(--ys-text-muted)]">
                   {{ song.format }}
                 </span>
               </td>
-              <td class="hidden lg:table-cell py-3 px-3 text-right text-gray-400 font-mono">{{ formatSize(song.size) }}</td>
+              <td class="hidden lg:table-cell py-3 px-3 text-right text-gray-500 font-mono">{{ formatSize(song.size) }}</td>
               <td class="py-3 px-3 sm:px-4 text-center">
                 <div class="flex items-center justify-center gap-1">
                   <button 
                     @click.stop="playSong(song, (page - 1) * PAGE_SIZE + idx)"
-                    class="grid h-7 w-7 place-items-center rounded-[7px] text-[var(--ys-text-faint)] transition-colors hover:bg-[var(--ys-accent-soft)] hover:text-[var(--ys-accent)]"
+                    class="grid h-7 w-7 place-items-center rounded-[8px] text-[var(--ys-text-aux)] transition-colors hover:bg-[var(--ys-accent-soft)] hover:text-[var(--ys-accent)]"
                     title="立即播放"
                   >
                     <Play class="w-3.5 h-3.5 fill-current" />
@@ -391,7 +391,7 @@
                   <button
                     @click.stop="deleteSong(song)"
                     :disabled="deletingPaths.includes(song.path)"
-                    class="grid h-7 w-7 place-items-center rounded-[7px] text-[var(--ys-text-faint)] transition-colors hover:bg-rose-50 hover:text-rose-600 disabled:opacity-50"
+                    class="grid h-7 w-7 place-items-center rounded-[8px] text-[var(--ys-text-aux)] transition-colors hover:bg-rose-50 hover:text-rose-600 disabled:opacity-50"
                     title="删除这首歌（默认挪进回收站，可在「数据快照」里恢复）"
                   >
                     <Loader2 v-if="deletingPaths.includes(song.path)" class="w-3.5 h-3.5 animate-spin" />
@@ -403,7 +403,7 @@
                   -->
                   <button
                     @click.stop="openCoverPicker(song)"
-                    class="grid h-7 w-7 place-items-center rounded-[7px] text-[var(--ys-text-faint)] transition-colors hover:bg-sky-50 hover:text-sky-600"
+                    class="grid h-7 w-7 place-items-center rounded-[8px] text-[var(--ys-text-aux)] transition-colors hover:bg-sky-50 hover:text-sky-600"
                     title="搜索并更换封面（内嵌进音频文件）"
                   >
                     <ImageIcon class="w-3.5 h-3.5" />
@@ -422,20 +422,20 @@
         -->
         <div
           v-if="pageCount > 1"
-          class="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 border-t border-gray-100 px-3 py-2 text-xs text-gray-500"
+          class="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 border-t border-[var(--ys-border)] px-3 py-2 text-xs text-gray-500"
         >
           <button
             @click="page = Math.max(1, page - 1)"
             :disabled="page <= 1"
             aria-label="上一页"
-            class="grid h-7 w-7 place-items-center rounded-lg border border-gray-200 bg-white text-gray-600 transition-colors hover:bg-gray-100 disabled:opacity-40 disabled:hover:bg-white"
+            class="grid h-7 w-7 place-items-center rounded-lg border border-[var(--ys-border)] bg-white text-gray-600 transition-colors hover:bg-[var(--ys-surface-hover)] disabled:opacity-40 disabled:hover:bg-white"
           >
             <ChevronLeft class="w-4 h-4" />
           </button>
 
           <span class="px-1 font-mono text-[11px]">{{ page }} / {{ pageCount }}</span>
           <span class="hidden text-gray-300 sm:inline">·</span>
-          <span class="hidden text-gray-400 sm:inline">共 {{ filteredSongs.length }} 首</span>
+          <span class="hidden text-gray-500 sm:inline">共 {{ filteredSongs.length }} 首</span>
 
           <template v-for="(p, i) in pageButtons" :key="i">
             <span v-if="p === '…'" class="px-1 text-gray-300">…</span>
@@ -444,7 +444,7 @@
               @click="page = p"
               :aria-label="`第 ${p} 页`"
               :aria-current="p === page ? 'page' : undefined"
-              class="grid h-7 min-w-[28px] place-items-center rounded-lg border border-gray-200 bg-white px-1.5 font-mono transition-colors hover:bg-gray-100"
+              class="grid h-7 min-w-[28px] place-items-center rounded-lg border border-[var(--ys-border)] bg-white px-1.5 font-mono transition-colors hover:bg-[var(--ys-surface-hover)]"
               :class="p === page ? 'border-black bg-black font-semibold text-white hover:bg-black' : 'text-gray-600'"
             >
               {{ p }}
@@ -455,7 +455,7 @@
             @click="page = Math.min(pageCount, page + 1)"
             :disabled="page >= pageCount"
             aria-label="下一页"
-            class="grid h-7 w-7 place-items-center rounded-lg border border-gray-200 bg-white text-gray-600 transition-colors hover:bg-gray-100 disabled:opacity-40 disabled:hover:bg-white"
+            class="grid h-7 w-7 place-items-center rounded-lg border border-[var(--ys-border)] bg-white text-gray-600 transition-colors hover:bg-[var(--ys-surface-hover)] disabled:opacity-40 disabled:hover:bg-white"
           >
             <ChevronRight class="w-4 h-4" />
           </button>
@@ -476,18 +476,18 @@
       v-if="coverPicker.show"
       class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs"
     >
-      <div class="bg-white rounded-2xl max-w-2xl w-full p-5 shadow-2xl border border-gray-100 flex flex-col max-h-[85vh]">
+      <div class="bg-white rounded-2xl max-w-2xl w-full p-5 shadow-2xl border border-[var(--ys-border)] flex flex-col max-h-[85vh]">
         <div class="flex items-start justify-between gap-3 shrink-0">
           <div class="min-w-0">
             <h3 class="text-sm font-bold text-gray-800 flex items-center gap-1.5">
               <ImageIcon class="w-4 h-4 text-sky-500" />
               <span>更换封面</span>
             </h3>
-            <p class="mt-0.5 truncate text-[11px] text-gray-400" :title="coverPicker.song?.path">
+            <p class="mt-0.5 truncate text-[11px] text-gray-500" :title="coverPicker.song?.path">
               {{ coverPicker.song?.title || coverPicker.song?.filename }}
             </p>
           </div>
-          <button @click="coverPicker.show = false" class="text-gray-400 hover:text-gray-600">
+          <button @click="coverPicker.show = false" class="text-gray-500 hover:text-gray-600">
             <X class="w-4 h-4" />
           </button>
         </div>
@@ -499,7 +499,7 @@
             @keyup.enter="searchCovers"
             type="text"
             placeholder="改关键词再搜，或直接粘贴一张图片地址"
-            class="flex-1 rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs outline-none focus:border-sky-400"
+            class="flex-1 rounded-lg border border-[var(--ys-line-control)] px-2.5 py-1.5 text-xs outline-none focus:border-sky-400"
           />
           <button
             @click="searchCovers"
@@ -513,10 +513,10 @@
         <InlineNotice v-if="coverPicker.error" :text="coverPicker.error" class="mt-2 shrink-0" />
 
         <div class="mt-3 flex-1 overflow-y-auto">
-          <div v-if="coverPicker.loading" class="flex items-center justify-center py-10 text-xs text-gray-400">
+          <div v-if="coverPicker.loading" class="flex items-center justify-center py-10 text-xs text-gray-500">
             <Loader2 class="mr-2 h-4 w-4 animate-spin" />正在各平台搜索封面…
           </div>
-          <div v-else-if="!coverPicker.candidates.length" class="py-10 text-center text-xs text-gray-400">
+          <div v-else-if="!coverPicker.candidates.length" class="py-10 text-center text-xs text-gray-500">
             没搜到封面 —— 可以把关键词改成「歌名 歌手」再搜，或直接粘贴一张图片地址。
           </div>
           <div v-else class="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -525,7 +525,7 @@
               :key="c.cover_url"
               @click="applyCover(c.cover_url)"
               :disabled="coverPicker.applying"
-              class="overflow-hidden rounded-xl border border-gray-100 bg-gray-50 p-1.5 text-left transition-all hover:border-sky-300 hover:shadow-sm disabled:opacity-50"
+              class="overflow-hidden rounded-xl border border-[var(--ys-border)] bg-[var(--ys-surface-sunken)] p-1.5 text-left transition-all hover:border-sky-300 hover:shadow-sm disabled:opacity-50"
               :title="`${c.name || ''} ${c.artist || ''}`.trim() || c.cover_url"
             >
               <img
@@ -539,12 +539,12 @@
         </div>
 
         <div class="mt-3 flex shrink-0 items-center justify-between gap-2 border-t border-gray-50 pt-3">
-          <p class="text-[11px] text-gray-400">
+          <p class="text-[11px] text-gray-500">
             {{ coverPicker.applying ? '正在写入文件…' : '只有 MP3 / FLAC 能内嵌封面；其它格式会提示写入失败。' }}
           </p>
           <button
             @click="coverPicker.show = false"
-            class="rounded-lg px-3 py-1.5 text-xs text-gray-500 hover:bg-gray-100"
+            class="rounded-lg px-3 py-1.5 text-xs text-gray-500 hover:bg-[var(--ys-surface-hover)]"
           >
             关闭
           </button>
@@ -557,24 +557,24 @@
       v-if="showFolderModal"
       class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs"
     >
-      <div class="bg-white rounded-2xl max-w-xl w-full p-6 shadow-2xl border border-gray-100 flex flex-col max-h-[82vh]">
+      <div class="bg-white rounded-2xl max-w-xl w-full p-6 shadow-2xl border border-[var(--ys-border)] flex flex-col max-h-[82vh]">
         <!-- Modal Top Bar -->
-        <div class="flex items-center justify-between pb-4 border-b border-gray-100 shrink-0">
+        <div class="flex items-center justify-between pb-4 border-b border-[var(--ys-border)] shrink-0">
           <div>
             <h3 class="text-base font-bold text-gray-800 flex items-center gap-2">
-              <FolderOpen class="w-4 h-4 text-emerald-500" />
+              <FolderOpen class="w-4 h-4 text-emerald-600" />
               <span>选择 NAS 曲库目录</span>
             </h3>
-            <p class="text-xs text-gray-400 mt-0.5">点击进入子文件夹，或点击右侧按钮直接选用</p>
+            <p class="text-xs text-gray-500 mt-0.5">点击进入子文件夹，或点击右侧按钮直接选用</p>
           </div>
-          <button @click="showFolderModal = false" class="p-1 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600">
+          <button @click="showFolderModal = false" class="p-1 rounded-lg hover:bg-[var(--ys-surface-hover)] text-gray-500 hover:text-gray-600">
             <X class="w-5 h-5" />
           </button>
         </div>
 
         <!-- Volume Switcher Tabs -->
-        <div class="py-3 border-b border-gray-100 flex items-center gap-2 overflow-x-auto shrink-0 text-xs">
-          <span class="text-gray-400 shrink-0 font-medium">存储卷:</span>
+        <div class="py-3 border-b border-[var(--ys-border)] flex items-center gap-2 overflow-x-auto shrink-0 text-xs">
+          <span class="text-gray-500 shrink-0 font-medium">存储卷:</span>
           <button
             v-for="vol in modalVolumes"
             :key="vol"
@@ -582,8 +582,8 @@
             :class="[
               'px-3 py-1 rounded-lg font-mono transition-all flex items-center gap-1',
               modalCurrentPath.startsWith(vol)
-                ? 'bg-emerald-500 text-white font-semibold shadow-xs'
-                : 'bg-gray-100 hover:bg-gray-200 text-gray-600'
+                ? 'bg-emerald-600 text-white font-semibold'
+                : 'bg-[var(--ys-surface-control)] hover:bg-[var(--ys-surface-hover)] text-gray-600'
             ]"
           >
             <HardDrive class="w-3 h-3" />
@@ -592,9 +592,9 @@
         </div>
 
         <!-- Path Breadcrumb Bar & Back to Parent Button -->
-        <div class="py-2.5 px-3 bg-gray-50 rounded-xl my-3 flex items-center justify-between gap-2 shrink-0 text-xs">
+        <div class="py-2.5 px-3 bg-[var(--ys-surface-sunken)] rounded-xl my-3 flex items-center justify-between gap-2 shrink-0 text-xs">
           <div class="flex min-w-0 items-center gap-1 overflow-x-auto font-mono text-gray-600">
-            <span class="text-gray-400">路径:</span>
+            <span class="text-gray-500">路径:</span>
             <button
               v-for="(crumb, idx) in modalBreadcrumbs"
               :key="idx"
@@ -615,8 +615,8 @@
               @click="toggleModalHidden()"
               class="px-2.5 py-1 rounded-lg border text-[11px] font-medium flex items-center gap-1 shrink-0 transition-colors"
               :class="modalShowHidden
-                ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
-                : 'bg-white border-gray-200 hover:bg-gray-100 text-gray-600'"
+                ? 'bg-emerald-50 border-emerald-200 text-emerald-600'
+                : 'bg-white border-[var(--ys-border)] hover:bg-[var(--ys-surface-hover)] text-gray-600'"
               :title="modalShowHidden ? '不显示 . 开头的隐藏目录' : '显示 . 开头的隐藏目录'"
             >
               <component :is="modalShowHidden ? Eye : EyeOff" class="w-3 h-3" />
@@ -626,7 +626,7 @@
             <button
               v-if="modalParentPath"
               @click="modalDrillDown(modalParentPath)"
-              class="px-2.5 py-1 rounded-lg bg-white border border-gray-200 hover:bg-gray-100 text-gray-600 text-[11px] font-medium flex items-center gap-1 shrink-0 transition-colors"
+              class="px-2.5 py-1 rounded-lg bg-white border border-[var(--ys-border)] hover:bg-[var(--ys-surface-hover)] text-gray-600 text-[11px] font-medium flex items-center gap-1 shrink-0 transition-colors"
               title="返回上一级"
             >
               <CornerLeftUp class="w-3 h-3 text-gray-500" />
@@ -636,7 +636,7 @@
         </div>
 
         <!-- Folder List Area -->
-        <div class="flex-1 overflow-y-auto divide-y divide-gray-50 pr-1 min-h-[220px]">
+        <div class="flex-1 overflow-y-auto divide-y divide-[var(--ys-border)] pr-1 min-h-[220px]">
           <!--
             「开关就在眼前但看不见」兜底：后端把被折叠的隐藏子目录数量/名字回报出来，
             直接在最显眼的位置提示一句，省得用户以为目录不存在。
@@ -651,13 +651,13 @@
           </button>
 
           <!-- Loading -->
-          <div v-if="modalLoading" class="h-44 flex flex-col items-center justify-center text-gray-400">
-            <RotateCw class="w-6 h-6 text-emerald-500 animate-spin mb-2" />
+          <div v-if="modalLoading" class="h-44 flex flex-col items-center justify-center text-gray-500">
+            <RotateCw class="w-6 h-6 text-emerald-600 animate-spin mb-2" />
             <span class="text-xs">正在读取目录内容...</span>
           </div>
 
           <!-- Empty subfolders -->
-          <div v-else-if="!modalFolders.length" class="h-44 flex flex-col items-center justify-center text-gray-400">
+          <div v-else-if="!modalFolders.length" class="h-44 flex flex-col items-center justify-center text-gray-500">
             <Folder class="w-8 h-8 text-gray-300 mb-2" />
             <p class="text-xs text-gray-500">当前目录下无子文件夹</p>
             <p v-if="modalAudioCount > 0" class="text-xs text-emerald-600 mt-1 font-medium">
@@ -673,8 +673,8 @@
             class="py-2.5 px-3 flex items-center justify-between hover:bg-emerald-50/50 rounded-xl cursor-pointer transition-colors group"
           >
             <div class="flex items-center gap-2.5 overflow-hidden">
-              <Folder class="w-4 h-4 text-emerald-500 shrink-0 group-hover:scale-110 transition-transform" />
-              <span class="text-xs font-semibold text-gray-700 truncate group-hover:text-emerald-700 transition-colors">
+              <Folder class="w-4 h-4 text-emerald-600 shrink-0 group-hover:scale-110 transition-transform" />
+              <span class="text-xs font-semibold text-gray-700 truncate group-hover:text-emerald-600 transition-colors">
                 {{ f.name }}
               </span>
               <span
@@ -688,7 +688,7 @@
             <div class="flex items-center gap-1 shrink-0" @click.stop>
               <button
                 @click="confirmSelection(f.path)"
-                class="px-2.5 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-500 hover:text-white text-emerald-600 text-[11px] font-medium transition-all"
+                class="px-2.5 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-700 hover:text-white text-emerald-600 text-[11px] font-medium transition-all"
               >
                 选择此目录
               </button>
@@ -704,20 +704,20 @@
         </div>
 
         <!-- Modal Footer -->
-        <div class="pt-4 mt-2 border-t border-gray-100 flex items-center justify-between shrink-0">
+        <div class="pt-4 mt-2 border-t border-[var(--ys-border)] flex items-center justify-between shrink-0">
           <div class="text-xs text-gray-500 truncate max-w-xs">
-            当前选中：<span class="font-mono font-semibold text-emerald-700">{{ modalCurrentPath }}</span>
+            当前选中：<span class="font-mono font-semibold text-emerald-600">{{ modalCurrentPath }}</span>
           </div>
           <div class="flex items-center gap-2">
             <button
               @click="showFolderModal = false"
-              class="px-4 py-2 rounded-xl text-xs text-gray-500 hover:bg-gray-100 transition-colors"
+              class="px-4 py-2 rounded-xl text-xs text-gray-500 hover:bg-[var(--ys-surface-hover)] transition-colors"
             >
               取消
             </button>
             <button
               @click="confirmSelection(modalCurrentPath)"
-              class="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white font-semibold text-xs shadow-sm flex items-center gap-1.5 transition-all"
+              class="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs shadow-sm flex items-center gap-1.5 transition-all"
             >
               <Check class="w-3.5 h-3.5" />
               <span>确认选择此目录并扫描</span>
@@ -753,6 +753,7 @@ import {
 import InlineNotice from './InlineNotice.vue'
 import { describeError } from '../services/userMsg'
 import { logError } from '../services/appLog'
+import { deleteOutcome, normalizeScanSongs, withoutPath } from '../services/nasDelete'
 
 const emit = defineEmits(['play'])
 
@@ -915,18 +916,28 @@ const deletingPaths = ref([])
  * 真要物理删除由设置里的开关决定（删掉=真删），那种情况才值得再说一句。
  */
 async function deleteSong(song) {
+  if (!song || typeof song.path !== 'string' || !song.path) {
+    showEmbedNotice('这首歌没有可删除的文件路径', false)
+    return
+  }
   if (deletingPaths.value.includes(song.path)) return
   deletingPaths.value = [...deletingPaths.value, song.path]
   try {
     const res = await NasAPI.deleteFiles({ paths: [song.path] })
-    if (res.code !== 200) {
-      showEmbedNotice(res.message || '删除失败', false)
-      logError('删除本地文件失败', res.message)
+    // ⚠️ 2026-10-29 用户报「列表删除了，实际没有删除」：
+    //   后端把「一个都没删掉」也回报成 HTTP 200 + code 200（只在 message 里写「失败 1 个」）。
+    //   以前这里只看 res.code === 200 就摘行 —— 于是磁盘上文件还在，列表里却没了。
+    //   现在一律以 deleteOutcome（services/nasDelete.js，有单测）的执行结果为准：
+    //   只有真删掉才动列表；失败就把行留在原处并说出原因。
+    const out = deleteOutcome(res)
+    if (!out.ok) {
+      showEmbedNotice(`删除失败：${out.message}`, false)
+      logError('删除本地文件失败', out.message)
       return
     }
-    songs.value = songs.value.filter((x) => x.path !== song.path)
+    songs.value = withoutPath(songs.value, song.path)
     dropFromScanCache(song.path)
-    showEmbedNotice(`已删除「${song.title || song.filename}」${res.data?.mode === 'delete' ? '' : '，可在数据快照里恢复'}`, true)
+    showEmbedNotice(`已删除「${song.title || song.filename}」${out.mode === 'delete' ? '' : '，可在数据快照里恢复'}`, true)
   } catch (e) {
     showEmbedNotice(describeError(e, '删除失败'), false)
     logError('删除本地文件失败', e)
@@ -1080,7 +1091,10 @@ async function loadDirectories() {
 // 以前缓存里只存 songs，缓存命中那条 return 就不更新提示 ——
 // 切回刚才那个被截断的目录时，「还有没列出来的」会消失（缓存把不完整洗成了完整）。
 function applyScanView(view) {
-  songs.value = view.songs
+  // ⚠️ 2026-10-29：扫描回来的每首歌**没有 `name` 字段**（后端 Song 只给 title），
+  //    而排序/过滤/模板都假设它在 —— 这里统一补齐成字符串，别让下游猜。
+  //    normalizeScanSongs 无论如何都返回数组，坏形状也不会变成「s is not iterable」。
+  songs.value = normalizeScanSongs(view.songs)
   scanTruncated.value = view.truncated
   scanWarnings.value = view.warnings
 }
