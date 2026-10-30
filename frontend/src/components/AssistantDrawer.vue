@@ -139,20 +139,14 @@
                 <Plus class="w-4 h-4" />
               </button>
               <button
-                v-if="!showSettings"
-                @click="showSettings = true"
-                class="p-1.5 rounded-xl text-gray-500 hover:text-emerald-600 hover:bg-emerald-50 transition-colors"
+                @click="toggleSettings"
+                :class="[
+                  'p-1.5 rounded-xl transition-colors',
+                  showSettings ? 'text-emerald-600 bg-emerald-50' : 'text-gray-500 hover:text-emerald-600 hover:bg-emerald-50'
+                ]"
                 title="助手设置"
               >
                 <Settings2 class="w-4 h-4" />
-              </button>
-              <button
-                v-else
-                @click="showSettings = false"
-                class="p-1.5 rounded-xl text-emerald-600 bg-emerald-50 transition-colors"
-                title="收起设置"
-              >
-                <ChevronDown class="w-4 h-4" />
               </button>
               <button
                 @click="close"
@@ -164,18 +158,74 @@
             </div>
           </div>
 
-          <!-- 会话记录面板（折叠） -->
+          <!-- ── 侧边弹窗：会话记录 / 助手设置（2026-10-30 由「面板内折叠区」改为「右侧滑出侧栏」）──
+               用户口径：「设置和会话记录改为侧边弹窗，弹出后聊天界面虚化」。
+
+               层级（都在玻璃面板 .ys-ai-glass 的**里面**，作为它的绝对定位子节点）：
+                 聊天内容（正文层，z 自动）＜ 虚化层 .ys-ai-side-dim（z 5）＜ 侧栏 .ys-ai-side（z 6）
+               为什么放在里面而不是外面：侧栏要跟面板同高、同圆角、贴着面板右缘，
+               放外面就得自己算 720px 面板 + 26px halo 的偏移，窗口一窄全错位。
+               面板确实有 overflow-hidden，但侧栏本来就要被裁成面板的圆角形状，
+               滑出动画也是在这个矩形里做——所以裁切在这里是**要的**，不是坑。
+                 · 虚化：一层 backdrop-filter:blur(6px) 盖住聊天区（不是全屏遮罩），
+                   点它关闭侧栏；侧栏自身 backdrop-filter:none 保持清晰。
+                 · 宽度：≥640px 时 340px 从右缘滑出；手机上铺满面板整块滑入。
+                 · 进出场只动 transform + opacity（不改 width/max-height），避免布局重排。 -->
           <Transition
-            enter-active-class="transition-all duration-200 ease-out"
-            enter-from-class="max-h-0 opacity-0"
-            enter-to-class="max-h-[50vh] opacity-100"
-            leave-active-class="transition-all duration-150 ease-in"
-            leave-from-class="max-h-[50vh] opacity-100"
-            leave-to-class="max-h-0 opacity-0"
+            enter-active-class="transition-opacity duration-200 ease-out"
+            enter-from-class="opacity-0"
+            enter-to-class="opacity-100"
+            leave-active-class="transition-opacity duration-150 ease-in"
+            leave-from-class="opacity-100"
+            leave-to-class="opacity-0"
           >
-            <div v-if="showSessions" class="border-b border-[var(--ys-border)] bg-[var(--ys-surface-sunken)] shrink-0 overflow-hidden">
-              <div class="max-h-[45vh] overflow-y-auto px-3 py-2 space-y-1">
-                <p v-if="!sessions.length" class="text-center text-[11px] text-gray-500 py-4">
+            <div
+              v-if="sidePanel"
+              class="ys-ai-side-dim absolute inset-0 z-[5]"
+              @click="closeSidePanel"
+              aria-hidden="true"
+            ></div>
+          </Transition>
+          <Transition
+            enter-active-class="ys-ai-side-in"
+            enter-from-class="translate-x-full opacity-0"
+            enter-to-class="translate-x-0 opacity-100"
+            leave-active-class="ys-ai-side-out"
+            leave-from-class="translate-x-0 opacity-100"
+            leave-to-class="translate-x-full opacity-0"
+          >
+            <div
+              v-if="sidePanel"
+              class="ys-ai-side absolute right-0 top-0 z-[6] flex h-full w-full flex-col overflow-hidden sm:w-[340px]"
+            >
+              <!-- 侧栏标题 -->
+              <div class="flex items-center justify-between px-5 pb-3.5 pt-4 border-b border-[var(--ys-border)] shrink-0">
+                <div class="flex items-center gap-2 min-w-0">
+                  <History v-if="sidePanel === 'sessions'" class="w-4 h-4 text-emerald-600 shrink-0" />
+                  <Settings2 v-else class="w-4 h-4 text-emerald-600 shrink-0" />
+                  <h4 class="text-sm font-bold text-gray-800 truncate">
+                    {{ sidePanel === 'sessions' ? '会话记录' : '助手设置' }}
+                  </h4>
+                </div>
+                <button
+                  @click="closeSidePanel"
+                  class="p-1.5 rounded-lg text-gray-500 hover:text-gray-600 hover:bg-[var(--ys-surface-hover)] transition-colors"
+                  title="关闭"
+                >
+                  <X class="w-4 h-4" />
+                </button>
+              </div>
+
+              <!-- ── 会话记录 ── -->
+              <div v-if="sidePanel === 'sessions'" class="flex-1 min-h-0 overflow-y-auto overscroll-contain px-3 py-3 space-y-1.5">
+                <button
+                  @click="createSession"
+                  class="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl border border-dashed border-[var(--ys-line-control)] text-xs font-medium text-gray-500 hover:border-emerald-300 hover:text-emerald-600 transition-colors"
+                >
+                  <Plus class="w-3.5 h-3.5" />
+                  新建会话
+                </button>
+                <p v-if="!sessions.length" class="text-center text-[11px] text-gray-500 py-6">
                   还没有历史会话，发一条消息就有了
                 </p>
                 <div
@@ -183,7 +233,7 @@
                   :key="s.id"
                   @click="switchSession(s.id)"
                   :class="[
-                    'flex items-center gap-2 px-3 py-2 rounded-xl bg-white border cursor-pointer transition-colors',
+                    'group flex items-center gap-2 px-3 py-2 rounded-xl bg-white/70 border cursor-pointer transition-colors',
                     s.id === currentSessionId
                       ? 'border-emerald-200 ring-1 ring-emerald-50'
                       : 'border-[var(--ys-border)] hover:border-emerald-200'
@@ -203,22 +253,11 @@
                   </button>
                 </div>
               </div>
-            </div>
-          </Transition>
 
-          <!-- 设置面板（折叠） -->
-          <Transition
-            enter-active-class="transition-all duration-200 ease-out"
-            enter-from-class="max-h-0 opacity-0"
-            enter-to-class="max-h-[60vh] opacity-100"
-            leave-active-class="transition-all duration-150 ease-in"
-            leave-from-class="max-h-[60vh] opacity-100"
-            leave-to-class="max-h-0 opacity-0"
-          >
-            <div v-if="showSettings" class="border-b border-[var(--ys-border)] bg-[var(--ys-surface-sunken)] shrink-0 overflow-hidden">
-              <div class="max-h-[55vh] overflow-y-auto">
+              <!-- ── 助手设置 ── -->
+              <div v-else class="flex-1 min-h-0 overflow-y-auto overscroll-contain">
                 <!-- 对话模型 -->
-                <div class="px-6 py-3 border-b border-[var(--ys-border)]">
+                <div class="px-5 py-3 border-b border-[var(--ys-border)]">
                   <label class="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">对话模型</label>
                   <div class="mt-1.5 flex items-center gap-2">
                     <select
@@ -245,7 +284,7 @@
                 </div>
 
                 <!-- 执行模式 -->
-                <div class="px-6 py-3">
+                <div class="px-5 py-3 border-b border-[var(--ys-border)]">
                   <label class="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">执行模式</label>
                   <div class="mt-1.5 flex gap-2">
                     <button
@@ -253,7 +292,7 @@
                       :key="m.value"
                       @click="updateSettings({ mode: m.value })"
                       :class="[
-                        'flex-1 px-3 py-1.5 rounded-xl text-xs font-medium transition-colors',
+                        'flex-1 px-2 py-1.5 rounded-xl text-xs font-medium transition-colors',
                         settings.mode === m.value
                           ? 'bg-emerald-600 text-white shadow-sm'
                           : 'bg-white text-gray-500 hover:bg-[var(--ys-surface-hover)] border border-[var(--ys-line-control)]'
@@ -266,7 +305,7 @@
                 </div>
 
                 <!-- 总开关 -->
-                <div class="px-6 py-2 flex items-center justify-between">
+                <div class="px-5 py-2.5 flex items-center justify-between border-b border-[var(--ys-border)]">
                   <div>
                     <span class="text-xs font-medium text-gray-600">启用助手</span>
                     <p class="text-[10px] text-gray-500">关闭后模型不会调用任何能力</p>
@@ -274,7 +313,7 @@
                   <button
                     @click="updateSettings({ enabled: !settings.enabled })"
                     :class="[
-                      'relative w-11 h-6 rounded-full transition-colors',
+                      'relative w-11 h-6 rounded-full transition-colors shrink-0',
                       settings.enabled ? 'bg-emerald-600' : 'bg-[var(--ys-line-control)]'
                     ]"
                   >
@@ -288,7 +327,7 @@
                 </div>
 
                 <!-- 能力开关 -->
-                <div class="px-6 py-3">
+                <div class="px-5 py-3">
                   <label class="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">能力开关</label>
                   <p class="text-[10px] text-gray-500 mt-0.5 mb-2">关闭的能力模型不会调用（写入类操作仍需确认）</p>
                   <div class="space-y-1.5">
@@ -296,7 +335,7 @@
                       v-for="cap in capabilities"
                       :key="cap.name"
                       @click="toggleCapability(cap.name)"
-                      class="flex items-center justify-between px-3 py-2 rounded-xl bg-white border border-[var(--ys-border)] cursor-pointer hover:bg-[var(--ys-surface-sunken)] transition-colors"
+                      class="flex items-center justify-between gap-2 px-2.5 py-2 rounded-xl bg-white/70 border border-[var(--ys-border)] cursor-pointer hover:bg-[var(--ys-surface-sunken)] transition-colors"
                     >
                       <div class="min-w-0">
                         <div class="text-xs font-medium text-gray-700 truncate">{{ cap.summary || cap.name }}</div>
@@ -321,8 +360,8 @@
                 </div>
 
                 <!-- 保存失败提示（之前静默吞掉，点了像没反应） -->
-                <p v-if="saveError" class="px-6 pb-3 text-[10px] text-red-500">{{ saveError }}</p>
-                <p v-else-if="saveOk" class="px-6 pb-3 text-[10px] text-emerald-600">{{ saveOk }}</p>
+                <p v-if="saveError" class="px-5 pb-3 text-[10px] text-red-500">{{ saveError }}</p>
+                <p v-else-if="saveOk" class="px-5 pb-3 text-[10px] text-emerald-600">{{ saveOk }}</p>
               </div>
             </div>
           </Transition>
@@ -515,8 +554,17 @@ const close = () => emit('update:modelValue', false)
 const messages = ref([])
 const inputText = ref('')
 const streaming = ref(false)
-const showSettings = ref(false)
-const showSessions = ref(false)
+// 侧边弹窗（会话记录 / 助手设置）：'sessions' | 'settings' | '' —— 互斥，同一时刻只开一个
+const sidePanel = ref('')
+const showSettings = computed(() => sidePanel.value === 'settings')
+const showSessions = computed(() => sidePanel.value === 'sessions')
+function closeSidePanel() {
+  sidePanel.value = ''
+}
+function toggleSidePanel(which) {
+  sidePanel.value = sidePanel.value === which ? '' : which
+  if (sidePanel.value === 'sessions') loadSessions()
+}
 const msgContainer = ref(null)
 const inputRef = ref(null)
 const haloRef = ref(null)
@@ -841,11 +889,11 @@ async function loadSessions() {
 }
 
 function toggleSessions() {
-  showSessions.value = !showSessions.value
-  if (showSessions.value) {
-    showSettings.value = false
-    loadSessions()
-  }
+  toggleSidePanel('sessions')
+}
+
+function toggleSettings() {
+  toggleSidePanel('settings')
 }
 
 async function createSession() {
@@ -858,7 +906,7 @@ async function createSession() {
     currentSessionId.value = ''
   }
   messages.value = []
-  showSessions.value = false
+  closeSidePanel()
   scrollBottom()
 }
 
@@ -874,7 +922,7 @@ async function switchSession(id) {
     currentSessionId.value = id
     messages.value = []
   }
-  showSessions.value = false
+  closeSidePanel()
   scrollBottom()
 }
 

@@ -1114,6 +1114,49 @@ html.ys-app-idle .ys-ai-star-sub {
    AssistantDrawer.vue 的注释，可用于将来给别的层做开关）。 */
 
 
+/* ── 侧边弹窗：会话记录 / 助手设置（2026-10-30）────────────────────────
+   用户要求：「设置和会话记录改为侧边弹窗，弹出后聊天界面虚化」。
+
+   结构（2026-10-30 改）：虚化层与侧栏都是玻璃面板 .ys-ai-glass 的绝对定位子节点，
+   三层层序：聊天正文 ＜ .ys-ai-side-dim（z 5）＜ .ys-ai-side（z 6）。
+   放在面板内部是为了让侧栏天然与面板同高、贴着面板右缘、被面板圆角裁齐；
+   放外面就得自己算 720px 面板 + 26px halo 的偏移，窗口一窄就错位。
+
+   · .ys-ai-side-dim —— 只盖住聊天区（absolute inset-0），自己带 backdrop-filter:blur
+     把下面聊天气泡糊掉。它不是「暗化遮罩」，所以不加背景色，只加一层极淡的白
+     提亮，让虚化区与侧栏之间有一条柔和的明暗差。点它关闭侧栏。
+   · .ys-ai-side —— 侧栏本体。自己**不能**用 backdrop-filter：它已在虚化层之上，
+     再糊一次等于对自己背后的虚化层二次采样，白多一层全屏重算。改用
+     rgba(255 255 255 / 0.92) 近实底 + 左侧白线 + 左侧柔和投影，与磨砂面板同一质料。
+   · 进出场只动 transform + opacity（translateX 100%→0），不动 width/max-height，
+     避免侧栏每帧触发聊天区布局重排（长会话列表有几百个节点，reflow 很快掉帧）。 */
+.ys-ai-side-dim {
+  background: rgb(255 255 255 / 0.08);
+  -webkit-backdrop-filter: blur(6px) saturate(1.1);
+          backdrop-filter: blur(6px) saturate(1.1);
+}
+.ys-ai-side {
+  background: rgb(255 255 255 / 0.92);
+  border-left: 1px solid rgb(255 255 255 / 0.75);
+  box-shadow: -24px 0 60px -24px rgb(15 23 42 / 0.45);
+}
+.ys-ai-side-in {
+  transition: opacity 160ms ease-out,
+              transform 280ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.ys-ai-side-out {
+  transition: opacity 130ms ease-in,
+              transform 190ms ease-in;
+}
+
+/* 减弱动态：侧栏不做滑入滑出，直接淡入淡出；虚化保留（它是功能，不是装饰）。 */
+@media (prefers-reduced-motion: reduce) {
+  .ys-ai-side-in,
+  .ys-ai-side-out {
+    transition: opacity 120ms linear !important;
+  }
+}
+
 /* 减弱动态：不跑色相漂移与呼吸，只留一层静态的渐隐流光。
    （贴边细环 .ys-ai-edge 已于 2026-10-29 整条删除，这里不再引用它。） */
 @media (prefers-reduced-motion: reduce) {
