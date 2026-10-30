@@ -4,8 +4,11 @@
       「面板实体度」开关（2026-10-29，已换代）：
       弹窗开着时给 <html> 打上 data-ai-open。原来是让 CSS 把半透明玻璃底色的透明度
       临时提到 0.86 去兜住「开合头几帧背后页面透出来」。用户反馈仍能看见后面的页面，
-      于是直接把 .ys-ai-glass 改成**纯白不透明**（见 style.css），这条规则已删除；
-      data-ai-open 这个状态本身保留，作为「弹窗是否开着」的全局标记。
+      于是 2026-10-29 一度把 .ys-ai-glass 改成**纯白不透明**；
+      2026-10-30 用户点名「做成磨砂玻璃」→ 改成 rgba(255,255,255,.80) +
+      backdrop-filter blur(42px) saturate(1.5)，遮罩自带 blur(2px) 先糊一道背景
+      （见 style.css .ys-ai-glass / .ys-ai-backdrop）。data-ai-open 仍保留，
+      作为「弹窗是否开着」的全局标记。
     -->
     <Teleport to="body">
       <!--
@@ -50,9 +53,12 @@
       <!--
         弹窗主体（2026-10-28 由「右侧抽屉」改为「居中弹窗」）：
           外壳 .ys-ai-halo 就是 Apple Intelligence 那圈流动炫彩光边——外圈是饱和的流光，
-          内层面板用**纯白不透明**的实底盖住中间，于是光只剩「从外到内渐隐」的那一圈。
-          （2026-10-29：面板原来是 0.72 半透明玻璃 + backdrop-filter，用户要求不要透出
-          背后页面，已改成纯白实底，见 style.css 的 .ys-ai-glass。）
+          内层面板是**磨砂玻璃**（2026-10-30 换代，见 style.css 的 .ys-ai-glass）：
+          rgba 白底 + backdrop-filter blur(42px) saturate(1.5)，背后页面隔着遮罩
+          透出「糊成一片柔光」的观感，正是苹果弹窗那种磨砂感。
+          （2026-10-29 曾短暂改成纯白实底，是当时「不要透出后面」的要求；
+            2026-10-30 用户点名要磨砂玻璃，于是回到半透明 + backdrop-filter，
+            并让遮罩自己带一点 blur 把背后内容糊掉——透出来的是柔光，不是清晰页面。）
           手机上贴底做整屏弹层（不居中，键盘弹出时不会顶到看不见输入框）。
       -->
       <Transition
@@ -97,10 +103,10 @@
             <div class="ys-ai-veil__glow"></div>
           </div>
           <div
-            class="ys-ai-glass flex h-full w-full min-h-0 flex-col overflow-hidden rounded-[var(--ys-radius-overlay)] border border-white/40 shadow-[0_24px_80px_-20px_rgba(15,23,42,0.45)]"
+            class="ys-ai-glass flex h-full w-full min-h-0 flex-col overflow-hidden rounded-[var(--ys-radius-overlay)] border border-white/50 shadow-[0_24px_80px_-20px_rgba(15,23,42,0.40)]"
           >
           <!-- 顶部标题栏 -->
-          <div class="ys-ai-layer relative px-7 pb-5 pt-6 border-b border-[var(--ys-border)] flex items-center justify-between bg-white shrink-0">
+          <div class="ys-ai-layer relative px-7 pb-5 pt-6 border-b border-[var(--ys-border)] flex items-center justify-between shrink-0">
             <div class="flex items-center gap-2.5 min-w-0">
               <!-- Apple Intelligence 风格的彩色光球图标（conic 渐变球 + 白色高光），
                    与面板边缘那圈流光环同一套色序 -->
@@ -434,7 +440,7 @@
                 </div>
 
                 <!-- 助手正文 -->
-                <div v-if="msg.content" class="max-w-[85%] px-3.5 py-2 rounded-2xl rounded-bl-md bg-white border border-[var(--ys-border)] text-sm leading-relaxed text-gray-700 whitespace-pre-wrap shadow-sm">
+                <div v-if="msg.content" class="max-w-[85%] px-3.5 py-2 rounded-2xl rounded-bl-md bg-white/85 border border-[var(--ys-border)] text-sm leading-relaxed text-gray-700 whitespace-pre-wrap shadow-sm">
                   {{ msg.content }}
                 </div>
               </div>
@@ -457,7 +463,7 @@
           </div>
 
           <!-- 输入区 -->
-          <div class="ys-ai-layer relative px-7 pb-5 pt-4 border-t border-[var(--ys-border)] bg-white shrink-0">
+          <div class="ys-ai-layer relative px-7 pb-5 pt-4 border-t border-[var(--ys-border)] shrink-0">
             <div class="flex gap-2 items-end">
               <textarea
                 ref="inputRef"

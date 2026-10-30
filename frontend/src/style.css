@@ -820,7 +820,12 @@ html.ys-app-idle .ys-ai-star-sub {
   height: min(760px, 86vh);
   border-radius: 26px;
   padding: 4px;
-  isolation: isolate;
+  /* ⚠️ 2026-10-30 磨砂玻璃改造：原来的 isolation: isolate 已删除。
+     isolate 会把整个弹窗圈成独立层叠上下文，.ys-ai-glass 的 backdrop-filter
+     就采不到背后页面（只采到遮罩暗色），磨砂完全失效（实测像贴白纸）。
+     去掉后 z-index 顺序不受影响（各层仍有自己的 z-index：glow 0 / glass 2 /
+     veil 3 / layer 4），只是 .ys-ai-glow 的 blur 光不再被 isolate 裁剪——
+     它本来就外扩在面板之外，不需要裁剪。 */
   /* 居中用**独立的 translate 属性**（CSS Transforms Level 2），不用 transform。
      踩坑：以前把 -translate-x-1/2 -translate-y-1/2 写在模板上（Tailwind 编译成
      transform: translate(var(--tw-translate-x), var(--tw-translate-y)) ...），而入场
@@ -1027,23 +1032,33 @@ html.ys-app-idle .ys-ai-star-sub {
 }
 
 
-/* 内层玻璃：Apple 风格浅色面板。
-   ⚠️ 2026-10-29 用户口径：「ai助手，点开会透明一下看到后面的。修复。不修要背景透明效果」
-   —— 即**不要**再让背后页面从面板里透出来（不要那种打开瞬间能看见后面内容的玻璃感）。
-   所以这里：
-     · 底色改成**完全不透明**的纯白（原来是 0.72，靠 backdrop-filter 去糊背后内容）；
-     · 去掉 backdrop-filter / -webkit-backdrop-filter（面板不再采样背后页面，
-       顺带省掉每帧全块 blur(24px) saturate(1.6) 的重算）；
-     · 不再需要 background-color 过渡（没有半透明 → 实底的切换了）。
-   外圈那圈流光（.ys-ai-aura / .ys-ai-veil）不受影响，仍在面板之外，
-   视觉上还是「实心面板 + 一圈流动光边」。 */
+/* 内层玻璃：Apple 风格**磨砂玻璃**面板（2026-10-30 换代）。
+   ⚠️ 历史口径变化，别再改回去：
+     · 2026-10-29 用户曾要求「不要透出背后页面」→ 当时改成纯白实底、去掉
+       backdrop-filter。
+     · 2026-10-30 用户点名「把 ai 弹窗做成磨砂玻璃」→ 回到半透明 + backdrop-filter，
+       但和 10-29 之前的旧版有两点不同：
+       ① 遮罩 .ys-ai-backdrop 自己带一层轻 blur(2px)+暗化，背后页面先被糊一道，
+          透进玻璃的是「柔光」而不是清晰内容 —— 10-29 担心的「看见后面」不会发生；
+       ② 透明度收敛到 0.80（旧版 0.72 偏透），blur 提到 42px + saturate(1.5)，
+          观感是「浓白磨砂」而不是「薄纱」。
+   外壳 .ys-ai-halo 的 isolation: isolate 必须去掉（见下），
+   否则 backdrop-filter 采样不到背后内容，磨砂直接失效（这是本次的关键坑）。 */
 .ys-ai-glass {
   position: relative;
   z-index: 2;
   min-height: 0;
-  background: #fff;
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.8);
+  background: rgba(255 255 255 / 0.80);
+  -webkit-backdrop-filter: blur(42px) saturate(1.5);
+          backdrop-filter: blur(42px) saturate(1.5);
+  /* 顶部一条高光 + 内圈 1px 白描边 = 玻璃「有厚度」的错觉 */
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.95),
+              inset 0 0 0 1px rgb(255 255 255 / 0.34);
 }
+/* ⚠️ 磨砂玻璃的关键：backdrop-filter 采样的是「当前层叠上下文之外」的画面。
+   .ys-ai-halo 原来的 isolation: isolate 会把整个弹窗圈成一个独立上下文，
+   玻璃背后只剩遮罩自己的暗色（实测：isolate 时玻璃完全不透光，像贴了张白纸）。
+   isolate 已在 .ys-ai-halo 本体上删除，玻璃可以采到遮罩后面被 blur 过的真实页面。 */
 
 /* ── 内容层压在流光之上（2026-10-29 用户第二次反馈）──────────────────────
    用户：「输入框和顶部组件还是会被渐变遮住一点，或者你有办法让这两个
@@ -1064,20 +1079,19 @@ html.ys-app-idle .ys-ai-star-sub {
   z-index: 4;
 }
 
-/* ── 全屏遮罩（2026-10-29 四次修正）──────────────────────────────────
-   第一版：Tailwind backdrop-blur-sm —— 元素进 DOM 第一帧就全额模糊，和自身
-   opacity 淡入错拍，观感"先看到清晰的页面，再啪一下糊住"。
-   第二版：遮罩进 DOM 先 blur(0)，300ms 过渡爬到 blur(10px)。观感对了，但
-   实测把入场帧率又吃掉一截（软件渲染 28.6 → 25.7fps）。
-   第三版：遮罩不模糊，只做半透明暗化；背后页面的模糊改由 html[data-ai-open='1']
-   上那条整页 `filter: blur()` 实现。
-   第四版（现行）：用户要求「不要背景透明/透视效果」—— 背后页面**不再变糊**，
-   那层整页 filter 已删除。遮罩只负责把背景压暗（暗到不动人），面板本身是纯白实底，
-   所以不存在"透过面板看见后面"的情况。 */
+/* ── 全屏遮罩（2026-10-30 五修：为磨砂玻璃服务）──────────────────────
+   现在遮罩做两件事：
+     · 轻微 blur(2px) + saturate(1.15)：把背后页面先糊一道再压暗。
+       这就是磨砂观感的另一半——玻璃自己 blur(42px) 采到的是这层「已柔化的背景」，
+       透出来的是一团柔光，不是清晰页面（回应 10-29「不要透出后面」的老口径）。
+     · rgb(15 23 42 / 0.32) 暗化：比旧版 0.45 轻，给玻璃留一点可透的亮度，
+       太暗的话磨砂会显灰、显脏。
+   ⚠️ 遮罩自己不能 blur 太狠：它在玻璃**之下**、又覆盖全屏，blur 半径大一点点
+      就是全屏整层重算（历史上第二版 blur(10px) 曾把入场帧率 28.6→25.7fps）。 */
 .ys-ai-backdrop {
-  background: rgb(15 23 42 / 0.45);
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
+  background: rgb(15 23 42 / 0.32);
+  -webkit-backdrop-filter: blur(2px) saturate(1.15);
+          backdrop-filter: blur(2px) saturate(1.15);
 }
 
 /* ── 弹窗入场/退场的时间轴（2026-10-29）──────────────────────────────
