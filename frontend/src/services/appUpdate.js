@@ -164,6 +164,11 @@ export function createAppUpdate({
   const downloadPath = ref('')
   const error = ref('')
   const phase = ref('idle') // idle | checking | available | downloading | ready | installing | installed | error
+  // 安装脚本日志尾部（排障用）。2026-11-01 用户「下载完成后刷新还是旧版本」：
+  // 界面以前只拿到 `{started:true, log:"<路径>"}`，路径对用户毫无用处 ——
+  // 既不知道装成功没有，也不知道卡在哪一步。现在把日志尾部取回来摊开显示。
+  const installLog = ref('')
+  const installLogPath = ref('')
 
   let timer = null
   let polling = false
@@ -374,6 +379,18 @@ export function createAppUpdate({
     }
   }
 
+  /** 取安装脚本日志尾部（失败静默：读不到只是「还没有日志」，不是错误）。 */
+  async function fetchInstallLog(lines = 40) {
+    try {
+      const data = await request(`/api/app/update/install/log?lines=${lines}`, { timeout: 8000 })
+      installLogPath.value = data?.path || ''
+      installLog.value = data?.ok && data?.tail ? String(data.tail) : ''
+      return installLog.value
+    } catch (_) {
+      return ''
+    }
+  }
+
   async function installUpdate() {
     if (installRequested || installed.value) return
     installRequested = true
@@ -388,6 +405,9 @@ export function createAppUpdate({
       installing.value = false
       phase.value = 'installed'
       error.value = ''
+      // 顺手取一次日志尾部：脚本已经在跑，这里能看到它到哪一步了。
+      // 不 await 会更好，但装了之后进程可能很快重启，先取到再说。
+      void fetchInstallLog()
     } catch (e) {
       installing.value = false
       installRequested = false
@@ -566,6 +586,8 @@ export function createAppUpdate({
     downloadPath.value = ''
     error.value = ''
     phase.value = 'idle'
+    installLog.value = ''
+    installLogPath.value = ''
     polling = false
     installRequested = false
     autoChecked = false
@@ -580,9 +602,10 @@ export function createAppUpdate({
     checkedAt, checkError, checkTried, checkSource,
     checking, downloading, installing, installed, progress,
     downloadPath, error, phase,
+    installLog, installLogPath,
     notice,
     check, startUpdate, pollOnce, installUpdate, stopPolling, startPolling,
-    resumeIfActive, ensureChecked, ensureNotice, ackNotice,
+    resumeIfActive, ensureChecked, ensureNotice, ackNotice, fetchInstallLog,
     startAutoCheck, stopAutoCheck, resetForTests, debugState,
   }
 }

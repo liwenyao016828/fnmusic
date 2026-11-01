@@ -661,6 +661,57 @@ func ExtractCover(w http.ResponseWriter, r *http.Request) {
 	http.NotFound(w, r)
 }
 
+// imageSignatures 是封面里**真实存在**的图片格式与它们的魔数。
+//
+// 为什么不能只认 JPEG/PNG（2026-11-01 用户报「本地曲库的封面怎么看不到了」）：
+// 现在不少音源（含本项目的下载链路）内嵌的是 **WebP** 封面。旧实现只扫
+// FF D8 FF / 89 50 4E 47 两个魔数，遇到 WebP 一律当成「没有封面」→ 接口 404，
+// 界面整列掉回 💿 占位符。GIF 同理。
+var imageSignatures = []struct {
+	magic []byte
+	mime  string
+}{
+	{[]byte{0xFF, 0xD8, 0xFF}, "image/jpeg"},
+	{[]byte{0x89, 0x50, 0x4E, 0x47}, "image/png"},
+	// RIFF....WEBP：只匹配 "RIFF" 太宽（wav/avi 也用它），这里连 WEBP 一起看
+	{[]byte("RIFF"), "image/webp"},
+	{[]byte("GIF8"), "image/gif"},
+	{[]byte{0x42, 0x4D}, "image/bmp"},
+}
+
+// sliceImage 从 APIC 帧体（含 mime 文本、描述串等前缀）里切出真正的图片字节。
+//
+// 取**最靠前**的那个魔数：帧体开头是 `image/webp\x00\x03\x00` 这类头，
+// 真正的 RIFF 紧跟其后；用「谁先出现」判断比按格式逐个试更稳，
+// 也不会因为描述里恰好含有某个字节串就切错（描述串在图片之前，切出来的第一段
+// 必然是图片本身的起点）。
+func sliceImage(frameData []byte) ([]byte, string) {
+	best := -1
+	bestMime := ""
+	for _, sig := range imageSignatures {
+		idx := bytes.Index(frameData, sig.magic)
+		if idx == -1 {
+			continue
+		}
+		// WebP 还要确认后面跟的是 "WEBP"（RIFF 容器也可能装 wav）
+		if sig.mime == "image/webp" {
+			// RIFF 头之后紧跟 4 字节文件长度，再往后才是 "WEBP"
+			at := idx + 8
+			if at+4 > len(frameData) || string(frameData[at:at+4]) != "WEBP" {
+				continue
+			}
+		}
+		if best == -1 || idx < best {
+			best = idx
+			bestMime = sig.mime
+		}
+	}
+	if best == -1 {
+		return nil, ""
+	}
+	return frameData[best:], bestMime
+}
+
 func extractCoverBytes(filePath string) ([]byte, string) {
 	// 1. Try audio file tags
 	if f, err := os.Open(filePath); err == nil {
@@ -690,12 +741,8 @@ func extractCoverBytes(filePath string) ([]byte, string) {
 								break
 							}
 							if frameID == "APIC" && len(frameData) > 10 {
-								jpegIdx := bytes.Index(frameData, []byte{0xFF, 0xD8, 0xFF})
-								pngIdx := bytes.Index(frameData, []byte{0x89, 0x50, 0x4E, 0x47})
-								if jpegIdx != -1 && (pngIdx == -1 || jpegIdx < pngIdx) {
-									return frameData[jpegIdx:], "image/jpeg"
-								} else if pngIdx != -1 {
-									return frameData[pngIdx:], "image/png"
+								if data, mime := sliceImage(frameData); len(data) > 0 {
+									return data, mime
 								}
 							}
 						}

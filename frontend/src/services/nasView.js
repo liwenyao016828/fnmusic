@@ -15,6 +15,8 @@ export const SCAN_TRUNCATED_TEXT = '· 还有没列出来的（结果被截断�
 /** 拿不到具体原因时的兜底提示 */
 export const SCAN_TRUNCATED_TITLE = '本次枚举结果不完整'
 
+import { withBase } from './basePath.js'
+
 /**
  * 路径 → 面包屑（每一段都能点）。
  *
@@ -97,6 +99,41 @@ export function scanViewOfCache(cached) {
     truncated: Boolean(cached.truncated),
     warnings: Array.isArray(cached.warnings) ? cached.warnings : [],
   }
+}
+
+/**
+ * 后端给的封面地址 → 浏览器能直接用的地址（**带网关前缀**）。
+ *
+ * 为什么必须有这一步（2026-11-01 用户：「本地曲库的封面怎么看不到了」）：
+ * 后端 `pkg/nas/scanner.go` 给的是**站内相对路径** `/api/nas/cover?path=...`。
+ * 在普通浏览器（dev 3000 / 端口直连）下它碰巧能用；但曲率以飞牛网关微应用形态
+ * 发布时页面挂在 `/app/yinshu-ai` 下，只转发 `/app/yinshu-ai/**` 这棵路径树 ——
+ * 而 `<img :src="/api/nas/cover?...">` 是不走 axios 的，于是请求打到 fnOS 门户那一层，
+ * 本地曲库每一行都只剩 💿 占位符。播放条上的封面（同一串地址）也跟着一起没了。
+ *
+ * 幂等：已经带前缀 / 已是 http(s) / data: / blob: 的地址原样返回。
+ */
+export function nasCoverSrc(raw) {
+  const p = String(raw || '').trim()
+  if (!p) return ''
+  if (/^(https?:|data:|blob:)/i.test(p)) return p
+  return withBase(p)
+}
+
+/**
+ * 给扫描结果的每一条补上可直接使用的封面地址（`cover_url` / `cover`）。
+ *
+ * 不动其它字段，也不改写后端原始值以外的语义 —— `cover_url` 就是「这张封面浏览器该怎么取」。
+ */
+export function withCoverSrc(songs) {
+  if (!Array.isArray(songs)) return []
+  return songs.map((s) => {
+    if (!s || typeof s !== 'object') return s
+    const raw = s.cover_url || s.cover || ''
+    if (!raw) return s
+    const src = nasCoverSrc(raw)
+    return { ...s, cover_url: src, cover: src }
+  })
 }
 
 /** 视图载荷 → 缓存载荷（三个字段一起存，见文件头的说明） */

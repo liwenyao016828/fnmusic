@@ -1,5 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { withBase } from './basePath.js'
 import {
   SCAN_TRUNCATED_TEXT,
   SCAN_TRUNCATED_TITLE,
@@ -8,6 +9,8 @@ import {
   scanViewOf,
   scanViewOfCache,
   scanCachePayload,
+  nasCoverSrc,
+  withCoverSrc,
   scanHintOf,
   isUnderVolume,
   volumeOf,
@@ -144,4 +147,32 @@ test('volumeOf: 落在所有根之外时返回空串（不高亮任何一块）'
 test('volumeOf: 嵌套根取最长匹配，只亮最贴近的那块', () => {
   assert.equal(volumeOf('/vol1/Music/a', ['/vol1', '/vol1/Music']), '/vol1/Music')
   assert.equal(volumeOf('/vol1/Docs/a', ['/vol1', '/vol1/Music']), '/vol1')
+})
+
+// ── 封面地址（2026-11-01 用户：「本地曲库的封面怎么看不到了」）──
+//
+// 后端给的是站内相对路径 `/api/nas/cover?path=...`；网关微应用形态下页面挂在
+// `/app/yinshu-ai`，`<img src>` 不带前缀就会打到 fnOS 门户（封面全变 💿）。
+// 前缀取决于运行环境（node --test 下没有 BASE_URL/location ⇒ ''），所以期望值用 withBase 算，
+// 断言的是「封面地址与其它站内请求走同一套拼装」，而不是写死某个前缀。
+test('nasCoverSrc：站内相对路径走 withBase，外部/内联地址原样返回', () => {
+  assert.equal(nasCoverSrc('/api/nas/cover?path=%2Fvol1%2Fa.mp3'), withBase('/api/nas/cover?path=%2Fvol1%2Fa.mp3'))
+  assert.equal(nasCoverSrc('https://x/y.jpg'), 'https://x/y.jpg')
+  assert.equal(nasCoverSrc('data:image/png;base64,AAA'), 'data:image/png;base64,AAA')
+  assert.equal(nasCoverSrc(''), '')
+  assert.equal(nasCoverSrc(null), '')
+})
+
+test('nasCoverSrc：已经带前缀的不重复拼（幂等）', () => {
+  const once = nasCoverSrc('/api/nas/cover?path=a')
+  assert.equal(nasCoverSrc(once), once)
+})
+
+test('withCoverSrc：cover_url 与 cover 一起换掉，其它字段不动，坏形状不抛', () => {
+  const out = withCoverSrc([{ path: '/vol1/a.mp3', cover_url: '/api/nas/cover?path=a', cover: '/api/nas/cover?path=a', title: 'A' }])
+  assert.equal(out[0].cover_url, withBase('/api/nas/cover?path=a'))
+  assert.equal(out[0].cover, withBase('/api/nas/cover?path=a'))
+  assert.equal(out[0].title, 'A')
+  assert.deepEqual(withCoverSrc(null), [])
+  assert.equal(withCoverSrc([{ path: '/vol1/b.mp3' }])[0].cover_url, undefined)
 })

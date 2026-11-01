@@ -62,6 +62,8 @@ var routeTable = []routeSpec{
 	{Path: "/api/app/update/download", Handler: func(s *Server) http.HandlerFunc { return s.HandleAppUpdateDownload }},
 	{Path: "/api/app/update/state", Handler: func(s *Server) http.HandlerFunc { return s.HandleAppUpdateState }},
 	{Path: "/api/app/update/install", Handler: func(s *Server) http.HandlerFunc { return s.HandleAppUpdateInstall }},
+	// 安装脚本日志（2026-11-01）：界面靠它显示「装到哪一步、为什么失败」。
+	{Path: "/api/app/update/install/log", Handler: func(s *Server) http.HandlerFunc { return s.HandleAppUpdateInstallLog }},
 	// 「更新完成后第一次进入应用，提示更新完成和版本号」（用户 2026-10-25）。
 	{Path: "/api/app/update/notice", Handler: func(s *Server) http.HandlerFunc { return s.HandleAppUpdateNotice }},
 	{Path: "/api/app/update/notice/ack", Handler: func(s *Server) http.HandlerFunc { return s.HandleAppUpdateNoticeAck }},

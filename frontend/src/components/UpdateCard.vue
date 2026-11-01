@@ -102,6 +102,33 @@
       更新已启动，应用会在几十秒内重启，稍后刷新页面。
     </p>
 
+    <!--
+      安装脚本日志（2026-11-01 用户：「在线更新有问题，下载完成后刷新页面或者等一会儿，
+      进来还是旧版本」）。
+
+      以前这块什么都没有：界面只拿到一个日志**路径**，用户既不知道装成功没有，
+      也不知道卡在哪一步。现在把脚本日志尾部摊在这里 —— 装完应用会重启，但脚本日志
+      在 /tmp 里不会跟着消失，所以「刷新还是旧版本」时正好能回看它到底做了什么。
+      只在装过/失败过之后显示，纯文本不渲染 HTML。
+    -->
+    <div v-if="installLog" class="mt-3 border-t border-[var(--ys-border)] pt-2.5">
+      <button
+        type="button"
+        class="flex w-full items-center gap-1.5 text-[11.5px] font-medium text-[var(--ys-text-muted)] transition-colors hover:text-[var(--ys-text)]"
+        :aria-expanded="installLogOpen"
+        @click="installLogOpen = !installLogOpen"
+      >
+        <ChevronDown class="h-3.5 w-3.5 shrink-0 transition-transform" :class="{ 'rotate-180': installLogOpen }" :stroke-width="1.8" />
+        安装日志
+        <span class="font-normal text-[var(--ys-text-aux)]">装完还是旧版本就看这里</span>
+      </button>
+      <pre
+        v-if="installLogOpen"
+        class="mt-2 max-h-56 overflow-auto rounded-[8px] bg-[var(--ys-surface-sunken)] p-2.5 font-mono text-[10.5px] leading-relaxed text-[var(--ys-text-muted)] whitespace-pre-wrap break-all"
+      >{{ installLog }}</pre>
+      <p v-if="installLogOpen && installLogPath" class="mt-1 font-mono text-[10px] text-[var(--ys-text-aux)] break-all">{{ installLogPath }}</p>
+    </div>
+
     <!-- 更新说明：纯文本，默认折叠。notes 来自 GitHub Release，可能是 Markdown 原文；
          这里只用 {{ }} 插值 + pre 保留换行，**不渲染 HTML**。
 
@@ -336,9 +363,11 @@ const {
   current, latest, hasUpdate, notes, publishedAt, size, checkedAt, checkError,
   checkTried, checkSource,
   checking, installed, progress, error, phase,
+  installLog, installLogPath,
 } = appUpdate
 
 const notesOpen = ref(false)
+const installLogOpen = ref(false)
 
 const active = computed(() => ['downloading', 'ready', 'installing'].includes(phase.value))
 const busy = computed(() => checking.value || active.value || installed.value)
@@ -704,6 +733,9 @@ onMounted(() => {
   appUpdate.ensureChecked()
   // 如果上一次离开时下载/安装还在跑，回来接着轮询，不把进度丢在半路。
   appUpdate.resumeIfActive()
+  // 顺手读一次安装日志尾部：用户「装完刷新还是旧版本」时，这块就是唯一线索。
+  // 读不到（还没装过）时后端回 ok=false，界面不显示，不影响任何流程。
+  void appUpdate.fetchInstallLog()
   loadSettings()
 })
 onUnmounted(() => appUpdate.stopPolling())

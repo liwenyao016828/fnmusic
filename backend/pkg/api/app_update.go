@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 
 	"fn-lx-player/pkg/applog"
@@ -247,4 +248,45 @@ func (s *Server) HandleAppUpdateNoticeAck(w http.ResponseWriter, r *http.Request
 	}
 	ok := m.AckNotice(body.Version)
 	writeJSON(w, http.StatusOK, map[string]interface{}{"code": 200, "data": map[string]interface{}{"ok": ok}})
+}
+
+// HandleAppUpdateInstallLog 读安装脚本日志的尾部。
+//
+//	GET /api/app/update/install/log[?lines=40]
+//
+// 为什么要有它（2026-11-01 用户「下载完成后刷新还是旧版本」）：安装脚本跑在
+// 独立会话里，它的失败原因只落在 /tmp/yinshu-update/install.log；界面以前只拿到
+// 一个路径字符串，用户既不知道装成功没有、也不知道卡在哪一步。装完应用会重启，
+// 但脚本日志在 /tmp 里**不会**随之消失，所以重启后仍然能读出来复盘。
+//
+// 只读接口：文件不存在时回 ok=false（不是 404），界面据此显示「还没有安装日志」。
+func (s *Server) HandleAppUpdateInstallLog(w http.ResponseWriter, r *http.Request) {
+	m := s.appUpdateManager()
+	if m == nil {
+		errJSON(w, http.StatusServiceUnavailable, "更新模块未初始化")
+		return
+	}
+	if r.Method != http.MethodGet {
+		errJSON(w, http.StatusMethodNotAllowed, "只支持 GET")
+		return
+	}
+	lines := 40
+	if v := strings.TrimSpace(r.URL.Query().Get("lines")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			if n > 200 {
+				n = 200
+			}
+			lines = n
+		}
+	}
+	tail, ok := m.InstallLogTail(lines)
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"code": 200,
+		"data": map[string]interface{}{
+			"ok":    ok,
+			"path":  m.InstallLogPath(),
+			"tail":  tail,
+			"lines": lines,
+		},
+	})
 }

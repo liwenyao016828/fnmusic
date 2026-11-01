@@ -20,6 +20,9 @@ type ScriptConfig struct {
 	EnvFile string // 安装环境变量文件
 	Stage   string // 脚本工作目录（/tmp/yinshu-update）
 	Log     string // 日志路径（脚本自身 stdout 已重定向，仅用于文本提示）
+	// Version 是这次要装成的版本号（来自 release 的 latest）。
+	// **必须有**：安装成功的判据是「装完之后的版本等于它」，不是「进程在 running」。
+	Version string
 }
 
 // BuildApplyScript 生成自安装脚本。
@@ -31,18 +34,32 @@ type ScriptConfig struct {
 //  2. 先备份 cmd/main：飞牛的 uninstall 会删掉整个应用目录，而 install-fpk
 //     需要入口脚本存在才会把应用登记为可启动；先 tar 出来覆盖回去，
 //     是「卸载后还能装回来」的保险；
-//  3. stop → uninstall → install-fpk；
-//  4. 最多 10 次 start+status 轮询：安装完成不代表进程已起，直接报成功会骗用户；
-//  5. trap 里至少 start 一次：中途任何一步失败，旧应用还能被拉起来。
+//  3. stop → uninstall → install-fpk，**每一步都要查结果**；
+//  4. 按**版本号**验收：装完之后的 /api/app/version 必须等于目标版本，
+//     并且进程真的在跑。只看 running 不算成功（见下）；
+//  5. 最多 10 次 start+status 轮询：安装完成不代表进程已起；
+//  6. trap 里至少 start 一次：中途任何一步失败，旧应用还能被拉起来。
 //
-// 为什么不直接调用飞牛的应用中心 Web API：那需要登录态与内部路由，
-// 版本一变就失效；appcenter-cli 是飞牛自己安装脚本用的稳定接口。
+// # 为什么必须按版本验收（2026-11-01 用户「下载完成后刷新还是旧版本」）
+//
+// 旧版脚本只判断 `appcenter-cli status` 里有没有 `running` 字样，而且
+// `uninstall` / `install-fpk` 的失败全被 `|| true` 吞掉。这两件事凑在一起就是
+// 一个**静默失败**的闭环：
+//
+//	uninstall 静默失败（应用其实还在）→ install-fpk 对已安装应用是空操作
+//	（HANDOVER §1.4.1 实测：只打印「is installed」然后什么都不做）
+//	→ 旧进程还在 running → 脚本看到 running 就打印「更新完成」并 exit 0。
+//
+// 用户看到的就是「下载完成了、安装也提示成功了，刷新还是旧版本」。
+// 现在改成：uninstall 失败就重试一次并如实报错；install-fpk 之后**必须**用
+// 版本号确认真的换成了新版，否则脚本 exit 1 并把原因写进 install.log。
 func BuildApplyScript(cfg ScriptConfig) string {
 	pkg := shellQuote(cfg.Pkg)
 	fpk := shellQuote(cfg.Fpk)
 	envf := shellQuote(cfg.EnvFile)
 	stage := shellQuote(cfg.Stage)
 	logPath := shellQuote(cfg.Log)
+	want := shellQuote(strings.TrimSpace(cfg.Version))
 
 	var b strings.Builder
 	b.WriteString("#!/bin/sh\n")
@@ -54,6 +71,7 @@ func BuildApplyScript(cfg ScriptConfig) string {
 	fmt.Fprintf(&b, "ENVF=%s\n", envf)
 	fmt.Fprintf(&b, "STAGE=%s\n", stage)
 	fmt.Fprintf(&b, "LOG=%s\n", logPath)
+	fmt.Fprintf(&b, "WANT_VERSION=%s\n", want)
 	b.WriteString("APP_DIR=\"/var/apps/${PKG}\"\n\n")
 	b.WriteString("log() { echo \"[$(date '+%F %T')] $*\" >&2; }\n\n")
 	b.WriteString(`# ── 1. 提权 ──────────────────────────────────────────────────────────────
@@ -106,25 +124,73 @@ VOLNUM=""
 if [ -n "$VOL" ]; then
   VOLNUM="${VOL#/vol}"
 fi
-log "安装包：$FPK（卷：${VOLNUM:-自动}）"
+log "安装包：$FPK（卷：${VOLNUM:-自动}，目标版本 ${WANT_VERSION:-未知}）"
 
-# ── 5. 卸载旧版 → 安装新版 ───────────────────────────────────────────────
+# ── 5. 卸载旧版 → 安装新版（每一步都查结果，不再 || true 吞掉） ──────────
 appcenter-cli stop "$PKG" >/dev/null 2>&1 || true
-appcenter-cli uninstall "$PKG" >/dev/null 2>&1 || true
-if [ -n "$VOLNUM" ]; then
-  appcenter-cli install-fpk "$FPK" --env "$ENVF" --volume "$VOLNUM"
-else
-  appcenter-cli install-fpk "$FPK" --env "$ENVF"
+
+# uninstall 失败会让后面 install-fpk 变成空操作（对已安装应用它是 no-op），
+# 于是「装成功了」其实是「什么都没做」。所以这里失败要重试一次，再失败就报错。
+if ! appcenter-cli uninstall "$PKG" >/dev/null 2>&1; then
+  log "uninstall 第一次失败，重试一次"
+  sleep 2
+  if ! appcenter-cli uninstall "$PKG" >/dev/null 2>&1; then
+    log "卸载旧版失败：应用可能仍处于已安装状态。请到飞牛应用中心手动卸载后再装 ${FPK}"
+    exit 1
+  fi
 fi
 
-# ── 6. 等它真的 running（最多 10 轮 × 2s） ───────────────────────────────
+if [ -n "$VOLNUM" ]; then
+  if ! out="$(appcenter-cli install-fpk "$FPK" --env "$ENVF" --volume "$VOLNUM" 2>&1)"; then
+    log "install-fpk 失败（卷 ${VOLNUM}）：$out"
+    log "请到飞牛应用中心手动安装 $FPK"
+    exit 1
+  fi
+else
+  if ! out="$(appcenter-cli install-fpk "$FPK" --env "$ENVF" 2>&1)"; then
+    log "install-fpk 失败：$out"
+    log "请到飞牛应用中心手动安装 $FPK"
+    exit 1
+  fi
+fi
+log "install-fpk 输出：$out"
+
+# ── 6. 等它真的起来，并**按版本号验收** ─────────────────────────────────
+# 光看 status 里的 running 是不够的：uninstall 没生效时旧进程照样 running，
+# 脚本会误报「更新完成」，用户刷新页面还是旧版本（2026-11-01 就是这个现象）。
+# 所以除了 running，还要求 /api/app/version 报的版本等于目标版本。
+#
+# 版本探测只用 curl（飞牛镜像里一定有）；curl 不可用时退回 status-only，
+# 并把「无法按版本验收」写进日志，不假装成功。
+running_version() {
+  if ! command -v curl >/dev/null 2>&1; then
+    echo ""
+    return 0
+  fi
+  # ⚠️ sed 用的是 **BRE**：分组括号必须写成 \( \)，写成 ( ) 会被当成字面量，
+  # 匹配不到就永远返回空 → 每一轮都判「版本不对」，脚本必然超时失败。
+  curl -fsS --max-time 3 "http://127.0.0.1:8898/api/app/version" 2>/dev/null \
+    | sed -n 's/.*"version":"\([^"]*\)".*/\1/p'
+}
+
 i=1
-while [ "$i" -le 10 ]; do
+while [ "$i" -le 15 ]; do
   st="$(appcenter-cli status "$PKG" 2>&1 || true)"
   case "$st" in
     *running*)
-      log "更新完成：$PKG 已运行"
-      exit 0
+      got="$(running_version)"
+      if [ -z "$WANT_VERSION" ]; then
+        log "警告：本次没有目标版本号，无法按版本验收；只确认了 $PKG 在 running（实报版本 ${got:-未知}）"
+        exit 0
+      fi
+      if [ "$got" = "$WANT_VERSION" ]; then
+        log "更新完成：$PKG 已运行，版本 $got"
+        exit 0
+      fi
+      log "第 $i 轮：进程在 running，但版本是 ${got:-未知}（期望 $WANT_VERSION），继续等待"
+      ;;
+    *)
+      log "第 $i 轮：状态不是 running（$st）"
       ;;
   esac
   appcenter-cli start "$PKG" >/dev/null 2>&1 || true
@@ -132,7 +198,7 @@ while [ "$i" -le 10 ]; do
   i=$((i + 1))
 done
 
-log "安装后 10 轮仍未见 running，请到飞牛应用中心检查"
+log "安装后 15 轮仍未验收通过（期望版本 $WANT_VERSION，实报 ${got:-未知}）：请到飞牛应用中心检查，或手动安装 $FPK"
 exit 1
 `)
 	return b.String()

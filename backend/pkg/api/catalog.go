@@ -231,6 +231,11 @@ func APICatalog(baseURL string) []Endpoint {
 			Notes:   "脚本写在 /tmp/yinshu-update/apply-update.sh 并脱离本进程执行（需 root 或免密 sudo），会 stop/uninstall/install 本应用，因此请求可能中断。403=没有安装权限（请到飞牛应用中心手动安装 fpk）；409=安装包未就绪；日志见 /tmp/yinshu-update/install.log。",
 		},
 		{
+			Method: http.MethodGet, Path: "/api/app/update/install/log", Summary: "读安装脚本日志尾部（排障用）", Category: catSystem,
+			Example: "curl " + baseURL + "/api/app/update/install/log?lines=40",
+			Notes:   "`ok=false` 表示还没有安装日志；`tail` 是最后 N 行（`lines` 1~200，默认 40）。日志在 /tmp 里，应用重启后仍可读。",
+		},
+		{
 			Method: http.MethodGet, Path: "/api/app/update/notice", Summary: "读取「更新完成」提示（版本号变化时提示一次）", Category: catSystem,
 			Example: "curl " + baseURL + "/api/app/update/notice",
 			Notes: "应用启动后前端调一次：返回 {show,version,from_version,direction,notes}。" +

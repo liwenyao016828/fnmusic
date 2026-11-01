@@ -105,6 +105,9 @@ type DownloadState struct {
 type InstallResult struct {
 	Started bool   `json:"started"`
 	Log     string `json:"log"`
+	// Version 是这次要装成的版本号：界面拿它显示「正在装到 X」，
+	// 也用来在脚本失败后核对「到底变了没有」。
+	Version string `json:"version,omitempty"`
 }
 
 // Options 是 Manager 的构造参数。
@@ -617,7 +620,7 @@ func (m *Manager) download(ctx context.Context, rawURL, assetName string, src so
 func (m *Manager) Install() (InstallResult, error) {
 	st := m.State()
 	if st.Status == StatusInstalling {
-		return InstallResult{Started: true, Log: m.logPath()}, nil
+		return InstallResult{Started: true, Log: m.logPath(), Version: st.Version}, nil
 	}
 	if st.Status != StatusReady || st.Path == "" {
 		return InstallResult{}, fmt.Errorf("还没有下载好的安装包，请先下载更新")
@@ -648,6 +651,9 @@ func (m *Manager) Install() (InstallResult, error) {
 		EnvFile: envPath,
 		Stage:   m.dir,
 		Log:     m.logPath(),
+		// 目标版本必须带上：脚本靠它做「装完之后版本真的变了」的验收。
+		// st.Version 来自下载时记录的目标版本（见 StartDownload 的 m.dl.Version）。
+		Version: st.Version,
 	})
 	if err := os.WriteFile(scriptPath, []byte(body), 0o755); err != nil {
 		return InstallResult{}, fmt.Errorf("写入安装脚本失败：%w", err)
@@ -670,10 +676,33 @@ func (m *Manager) Install() (InstallResult, error) {
 			m.mu.Unlock()
 		}
 	}()
-	return InstallResult{Started: true, Log: logPath}, nil
+	return InstallResult{Started: true, Log: logPath, Version: st.Version}, nil
 }
 
 func (m *Manager) logPath() string { return filepath.Join(m.dir, logName) }
+
+// InstallLogTail 返回安装日志的最后 maxLines 行，供界面展示「为什么没装上」。
+//
+// 为什么需要它（2026-11-01 用户「下载完成后刷新还是旧版本」）：安装脚本由独立
+// 会话执行，它的失败原因只写在 /tmp/yinshu-update/install.log 里。界面以前只拿到
+// `{started:true, log:"<路径>"}` —— 一个路径对用户毫无用处，他既不知道装成功没有，
+// 也不知道失败在哪一步。现在把这个文件读出来摊在更新卡片上。
+//
+// 只读、失败静默（日志读不到不该让「查状态」这个只读接口报错）。
+func (m *Manager) InstallLogTail(maxLines int) (string, bool) {
+	if maxLines <= 0 {
+		maxLines = 30
+	}
+	data, err := os.ReadFile(m.logPath())
+	if err != nil {
+		return "", false
+	}
+	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	if len(lines) > maxLines {
+		lines = lines[len(lines)-maxLines:]
+	}
+	return strings.Join(lines, "\n"), true
+}
 
 // percent 把已写字节换算成 0~100；总大小未知时返回 0（界面显示「已下载 N MB」）。
 func percent(written, total int64) float64 {
@@ -699,3 +728,6 @@ func safeAssetName(name string) string {
 	}
 	return base
 }
+
+// InstallLogPath 暴露安装日志路径（只读，给接口层回显用）。
+func (m *Manager) InstallLogPath() string { return m.logPath() }

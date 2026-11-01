@@ -290,26 +290,43 @@
             <p class="mt-2 truncate text-[11px] text-[var(--ys-text-aux)]" :title="rowSummary(row)">{{ rowSummary(row, false) }}</p>
 
             <!--
-              能力位：只读标签。开着的染强调色 + 圆点，没开的灰字划线。
-              要改就点卡片展开设置 —— 卡片上不再放一排可点的药丸。
+              能力位：**可点的开关标签**。开着的染强调色 + 圆点，没开的灰字划线。
+              2026-11-01 用户：「订阅更新里下载到本地曲库，按钮怎么划线没法点击」——
+              之前这两颗是只读标签，划线像是「坏了」而不是「关着」，点也没反应。
+              现在点一下就切这个能力位（关着 → 开启；开着 → 停止），
+              与新建订阅时那两颗药丸同一个语义：「停止」两侧一起停，见 subscribe.js setCapability。
+              `hasDownload` / `hasFnos` 为 false 表示这条订阅压根没有那一侧的任务（勾着也没用），
+              保持只读并说明原因。
             -->
             <div class="mt-2.5 flex flex-wrap items-center gap-1.5">
-              <span
-                class="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10.5px]"
-                :class="row.download ? 'bg-[var(--ys-accent-soft)] text-[var(--ys-accent)]' : 'bg-[var(--ys-surface-sunken)] text-[var(--ys-text-aux)] line-through'"
-                :title="capTitle(row, 'download')"
+              <button
+                type="button"
+                class="ys-press inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10.5px] transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                :class="row.download
+                  ? 'bg-[var(--ys-accent-soft)] text-[var(--ys-accent)] hover:brightness-95'
+                  : 'bg-[var(--ys-surface-sunken)] text-[var(--ys-text-aux)] line-through hover:no-underline hover:text-[var(--ys-text-muted)]'"
+                :disabled="!!busyKey || runAllBusy || (!row.hasDownload && !canCreateFromRow(row))"
+                :title="capToggleTitle(row, 'download')"
+                :aria-pressed="!!row.download"
+                @click.stop="toggleCapability(row, 'download')"
               >
                 <span class="h-1.5 w-1.5 rounded-full" :class="row.download ? 'bg-[var(--ys-accent)]' : 'bg-[var(--ys-line-strong)]'"></span>
                 下载到本地曲库
-              </span>
-              <span
-                class="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10.5px]"
-                :class="row.fnos ? 'bg-emerald-50 text-emerald-600' : 'bg-[var(--ys-surface-sunken)] text-[var(--ys-text-aux)] line-through'"
-                :title="capTitle(row, 'fnos')"
+              </button>
+              <button
+                type="button"
+                class="ys-press inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10.5px] transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                :class="row.fnos
+                  ? 'bg-emerald-50 text-emerald-600 hover:brightness-95'
+                  : 'bg-[var(--ys-surface-sunken)] text-[var(--ys-text-aux)] line-through hover:no-underline hover:text-[var(--ys-text-muted)]'"
+                :disabled="!!busyKey || runAllBusy || (!row.hasFnos && !canCreateFromRow(row))"
+                :title="capToggleTitle(row, 'fnos')"
+                :aria-pressed="!!row.fnos"
+                @click.stop="toggleCapability(row, 'fnos')"
               >
                 <span class="h-1.5 w-1.5 rounded-full" :class="row.fnos ? 'bg-emerald-600' : 'bg-[var(--ys-line-strong)]'"></span>
                 同步到飞牛歌单
-              </span>
+              </button>
               <span class="ml-auto flex items-center gap-2">
                 <button
                   v-if="row.fnos"
@@ -391,8 +408,49 @@
                 单选控件（音质 / 保留期 / 间隔）沿用全站设置页口径：
                 13px 字、8px 圆角、`--ys-line-control` 描边；焦点样式交给 @layer base 的统一规则。
               -->
+              <!--
+                2026-11-01：展开区以前只按 `hasDownload` / `hasFnos` 显示字段 ——
+                某一侧压根没建过任务时，这里连开关都不画，用户只能「删除 + 重建」。
+                现在这两颗是可点开关：关着点一下就保存并启用，开着点一下就停。
+              -->
+              <div class="flex flex-wrap items-center gap-1.5">
+                <span class="text-[11px] text-[var(--ys-text-muted)]">这个订阅要做什么</span>
+                <button
+                  type="button"
+                  class="inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-[11px] font-medium transition-all disabled:opacity-50"
+                  :class="editForm.wantDownload
+                    ? 'bg-emerald-600 text-white'
+                    : 'bg-[var(--ys-surface-control)] text-gray-600 hover:bg-[var(--ys-surface-hover)]'"
+                  :disabled="!row.hasDownload && !canCreateFromRow(row)"
+                  :title="!row.hasDownload && !canCreateFromRow(row)
+                    ? row.blockReason || '这个来源缺少歌单链接或 ID，暂时建不了下载任务'
+                    : '勾上并保存：每轮发现的新歌自动下到本地曲库'"
+                  @click="editForm.wantDownload = !editForm.wantDownload"
+                >
+                  <Check v-if="editForm.wantDownload" class="h-3 w-3" />
+                  下载到本地曲库
+                </button>
+                <button
+                  type="button"
+                  class="inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-[11px] font-medium transition-all disabled:opacity-50"
+                  :class="editForm.wantFnos
+                    ? 'bg-emerald-600 text-white'
+                    : 'bg-[var(--ys-surface-control)] text-gray-600 hover:bg-[var(--ys-surface-hover)]'"
+                  :disabled="(!row.hasFnos && !canCreateFromRow(row)) || !fnosConnected"
+                  :title="!fnosConnected
+                    ? '飞牛音乐未连接，先到「账号连接」登录'
+                    : (!row.hasFnos && !canCreateFromRow(row)
+                      ? row.blockReason || '这个来源缺少歌单链接或 ID，暂时建不了推送任务'
+                      : '勾上并保存：把曲库里匹配上的曲目同步进飞牛歌单')"
+                  @click="editForm.wantFnos = !editForm.wantFnos"
+                >
+                  <Check v-if="editForm.wantFnos" class="h-3 w-3" />
+                  同步到飞牛歌单
+                </button>
+              </div>
+
               <div class="grid grid-cols-1 gap-3 lg:grid-cols-2">
-                <div v-if="row.hasDownload" class="space-y-2.5 rounded-lg border border-[var(--ys-border)] bg-white p-3">
+                <div v-if="row.hasDownload || editForm.wantDownload" class="space-y-2.5 rounded-lg border border-[var(--ys-border)] bg-white p-3">
                   <p class="text-[12px] font-semibold text-[var(--ys-text)]">下载到本地曲库</p>
                   <label class="block">
                     <span class="mb-1 block text-[11px] text-[var(--ys-text-muted)]">目标音质</span>
@@ -432,7 +490,7 @@
                   </label>
                 </div>
 
-                <div v-if="row.hasFnos" class="space-y-2.5 rounded-lg border border-[var(--ys-border)] bg-white p-3">
+                <div v-if="row.hasFnos || editForm.wantFnos" class="space-y-2.5 rounded-lg border border-[var(--ys-border)] bg-white p-3">
                   <p class="text-[12px] font-semibold text-[var(--ys-text)]">同步到飞牛歌单</p>
                   <label class="block">
                     <span class="mb-1 block text-[11px] text-[var(--ys-text-muted)]">目标歌单名</span>
@@ -706,7 +764,7 @@ import { Check, Download, Send, Trash2 } from 'lucide-vue-next'
 import PageShell from './PageShell.vue'
 import InlineNotice from './InlineNotice.vue'
 import { PushAPI, MonitorAPI } from '../api/client'
-import { fail } from '../services/userMsg'
+import { fail, describeError } from '../services/userMsg'
 import { ok as flashOk, warn as flashWarn, fail as flashFail } from '../services/feedback'
 import { fail as flashErrorText } from '../services/userMsg'
 import { navigateTo } from '../services/navBus'
@@ -715,6 +773,8 @@ import {
   SUBSCRIBE_INTERVAL_MINUTES,
   pushGuideSteps as pushGuideStepsOf,
   pushGuideDoneCount,
+  setCapability,
+  subscribePlaylist,
 } from '../services/subscribe'
 import { pushEngine } from '../services/pushEngine'
 import { downloadManager } from '../services/downloadManager'
@@ -1002,20 +1062,102 @@ function rowNoteTitle(row) {
   return ''
 }
 
-/**
- * 卡片上「下载到本地曲库 / 同步到飞牛歌单」两颗只读标签的悬停说明。
- * 2026-10-30：卡片不再放可点的能力药丸（开关搬进展开设置），所以这里只说状态，
- * 不再给「点一下开 / 点一下停」的承诺。
- */
-function capTitle(row, which) {
+/** 「这个能力位**能不能**切」的悬停说明（2026-11-01：卡片标签改成可点开关） */
+function capToggleTitle(row, which) {
+  const has = which === 'download' ? row.hasDownload : row.hasFnos
   const on = which === 'download' ? row.download : row.fnos
   const label = which === 'download' ? '下载到本地曲库' : '同步到飞牛歌单'
-  if (on) {
-    return which === 'fnos'
-      ? `${label}：已开启。点卡片底部的「设置」可以一起关掉下载与推送（记录、已下载的文件、飞牛歌单都保留）`
-      : `${label}：已开启。每轮发现的新歌会自动下到本地`
+  if (!has) {
+    // 没有这一侧的任务：来源认得出就能就地补建，认不出才只能删掉重建
+    if (canCreateFromRow(row)) {
+      return which === 'download'
+        ? `点一下开启：给这条订阅补建「下载」，之后每轮发现的新歌自动下到本地曲库（立刻就能用，不用删掉重建）`
+        : `点一下开启：给这条订阅补建「同步到飞牛歌单」，之后匹配上的曲目会自动进飞牛歌单`
+    }
+    return which === 'download'
+      ? `${label}：这条订阅没有下载任务，无法在这里开启。删掉后到「新建订阅」里勾上它`
+      : `${label}：这条订阅没有推送任务，无法在这里开启。删掉后到「新建订阅」里勾上它`
   }
-  return `${label}：未开启。点卡片底部「设置」打开`
+  if (on) {
+    // 「停止」一律两侧一起停（subscribe.js setCapability 的既有语义），文案必须说实话
+    return `点一下关闭：停止这条订阅的追新（下载与推送一起停）。已下载的文件、飞牛歌单都保留`
+  }
+  return which === 'download'
+    ? `点一下开启：每轮发现的新歌自动下到本地曲库（音质与每次数量在「设置」里改）`
+    : `点一下开启：把曲库里匹配上的曲目同步进飞牛歌单`
+}
+
+/** 这条订阅还能不能「从界面上再建出缺的那一侧」（来源认得出 + 拿得到链接或 id） */
+function canCreateFromRow(row) {
+  return !!row && !!row.canCreate
+}
+
+/**
+ * 给一条已有订阅补建缺失的一侧（下载 / 推送）。
+ *
+ * 走的是与「新建订阅」完全同一条链路（subscribePlaylist：先建监控、再建推送），
+ * 只是不需要用户再填一遍来源 —— row 里已经有 link / id / source / name 了。
+ * 间隔沿用这条订阅原来的间隔，音质/上限等细节保存设置时再落。
+ *
+ * @returns {Promise<boolean>} 是否成功（失败已经在提示里说清楚了）
+ */
+async function createMissingCapability(row, which) {
+  const label = which === 'download' ? '下载到本地曲库' : '同步到飞牛歌单'
+  busyKey.value = `${row.key}:cap:create`
+  try {
+    const res = await subscribePlaylist({
+      link: row.link,
+      id: row.id,
+      source: row.source,
+      name: row.name,
+      wantDownload: which === 'download',
+      wantFnos: which === 'fnos',
+      intervalMinutes: row.intervalMinutes || SUBSCRIBE_INTERVAL_MINUTES,
+    })
+    if (!res?.ok) {
+      flashFail(res?.error || `开启「${label}」失败`)
+      return false
+    }
+    await reloadAll()
+    flashOk(`已开启「${label}」`)
+    return true
+  } catch (e) {
+    flashFail(`开启「${label}」失败`, { detail: describeError(e) })
+    return false
+  } finally {
+    busyKey.value = ''
+  }
+}
+
+/**
+ * 点卡片上的能力位标签 = 切这个能力位（2026-11-01 用户：「按钮怎么划线没法点击」）。
+ *
+ * 语义完全交给 services/subscribe.js 的 setCapability：
+ *   · 开启 → 只开点的那一侧（「只下载、不同步飞牛」是合理诉求）；
+ *   · 关闭 → 两侧一起停（否则界面看不出另一侧还在跑）。
+ * 成功后让引擎重新拉一遍，卡片上的圆点/划线立刻跟着变。
+ */
+async function toggleCapability(row, which) {
+  if (!row || busyKey.value || runAllBusy.value) return
+  const has = which === 'download' ? row.hasDownload : row.hasFnos
+  const on = which === 'download' ? row.download : row.fnos
+  // 这一侧压根没有任务：来源认得出就就地补建（不用删掉重建），认不出就只能提示
+  if (!has) {
+    if (canCreateFromRow(row)) await createMissingCapability(row, which)
+    return
+  }
+  const label = which === 'download' ? '下载到本地曲库' : '同步到飞牛歌单'
+  busyKey.value = `${row.key}:cap:${which}`
+  try {
+    await setCapability(row, which, !on)
+    await reloadAll()
+    if (!on) flashOk(`已开启「${label}」`)
+    else flashWarn(`已停止这条订阅（下载与推送一起停），记录和已下载的文件都保留`)
+  } catch (err) {
+    flashFail(`${which === 'download' ? '切换下载' : '切换推送'}失败`, { detail: describeError(err) })
+  } finally {
+    busyKey.value = ''
+  }
 }
 
 // ── 行内设置（一次只展开一行）──
@@ -1043,6 +1185,8 @@ function toggleExpand(row) {
   const mon = row.monitors[0] || {}
   const task = row.tasks[0] || {}
   editForm.value = {
+    wantDownload: !!row.download,
+    wantFnos: !!row.fnos,
     quality: mon.quality || 'lossless',
     max_downloads: mon.max_downloads ?? 30,
     exclude_kw: mon.exclude_kw || '',
@@ -1057,6 +1201,26 @@ function toggleExpand(row) {
 
 /** 引擎的 saveRowSettings 要 (row, 表单值)；保存成功后收起这一行 */
 async function onSaveSettings(row) {
+  // 先落两件事：① 新建缺失的一侧（原来没有任务时，用户在这里勾上也该能建出来）；
+  // ② 切换已有的一侧的开/关。都成功后才保存音质/间隔等字段。
+  const wantD = !!editForm.value.wantDownload
+  const wantF = !!editForm.value.wantFnos
+  if (!wantD && !wantF) {
+    flashWarn('请至少留一项：下载到本地曲库 / 同步到飞牛歌单')
+    return
+  }
+  if (!row.hasDownload && wantD) {
+    const r = await createMissingCapability(row, 'download')
+    if (!r) return
+  } else if (row.hasDownload && wantD !== !!row.download) {
+    await setCapability(row, 'download', wantD)
+  }
+  if (!row.hasFnos && wantF) {
+    const r = await createMissingCapability(row, 'fnos')
+    if (!r) return
+  } else if (row.hasFnos && wantF !== !!row.fnos) {
+    await setCapability(row, 'fnos', wantF)
+  }
   const ok = await saveRowSettings(row, editForm.value)
   if (ok) expandedKey.value = ''
 }
