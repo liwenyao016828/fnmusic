@@ -340,7 +340,7 @@ func parseProxyURL(raw string) *url.URL {
 // 访问时因 hairpin / 路由策略不通，反而必须经代理才能到达。
 // 因此提供 FN_PROXY_PRIVATE_NET=1 让内网目标也走代理，由用户按环境决定。
 func proxyFunc(opts Options) func(*http.Request) (*url.URL, error) {
-	envProxy := http.ProxyFromEnvironment
+	envProxy := envProxyFromEnvironment
 	cfgProxy := parseProxyURL(opts.ProxyURL)
 	proxyPrivate := envBool("FN_PROXY_PRIVATE_NET")
 
@@ -362,6 +362,118 @@ func proxyFunc(opts Options) func(*http.Request) (*url.URL, error) {
 		}
 		return envProxy(req)
 	}
+}
+
+// envProxyFromEnvironment 按**当前**环境变量决定这条请求走哪个代理。
+//
+// 为什么不能直接用 http.ProxyFromEnvironment：它把环境变量读进**进程级一次**
+// 的快照（内部 `envProxyOnce`），第一次调用之后改环境变量再也不生效。
+// 两个后果：
+//   - 生产：用户在设置里改完代理（写进进程环境）后，不重启就不生效 —— 与
+//     「改完立即生效」的产品口径冲突；
+//   - 测试：t.Setenv 在一次代理判定之后再也不会被读到，表现为「单独跑绿、
+//     整包跑红」（2026-11-01 CI 上就是这么红的：`TestProxyBypassedForLocalTargets`
+//     与 `TestProxyFailureCooldownSkipsProxy` 这两条必失败）。
+//
+// 这里按标准库那套规则（HTTPS_PROXY/https_proxy、HTTP_PROXY/http_proxy、
+// NO_PROXY/no_proxy）每次现读。语义刻意与 ProxyFromEnvironment 对齐：
+//   - https/wss 读 HTTPS_PROXY，其余（http/ws）读 HTTP_PROXY；
+//   - 大小写两种写法都认，小写优先（PoSIX 工具链惯例）；
+//   - NO_PROXY 命中则直连（支持逗号分隔的主机名/域名后缀/IP/CIDR/`*`）。
+func envProxyFromEnvironment(req *http.Request) (*url.URL, error) {
+	if req == nil || req.URL == nil {
+		return nil, nil
+	}
+	scheme := strings.ToLower(req.URL.Scheme)
+	raw := ""
+	if scheme == "https" || scheme == "wss" {
+		raw = firstNonEmptyEnv("https_proxy", "HTTPS_PROXY")
+		if raw == "" {
+			// 与标准库一致：只配了 HTTP_PROXY 时，https 也用它
+			//（不少用户只有一个代理入口，浏览器/curl 的行为也是这样）
+			raw = firstNonEmptyEnv("http_proxy", "HTTP_PROXY")
+		}
+	} else {
+		raw = firstNonEmptyEnv("http_proxy", "HTTP_PROXY")
+	}
+	if raw == "" {
+		return nil, nil
+	}
+	if noProxyMatch(req.URL) {
+		return nil, nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		// 环境变量写错时不要静默当「没配代理」之外还报错 —— 保持与标准库一致：
+		// 解析失败就当作没有代理，别让一个错的环境变量把整个出站打挂。
+		return nil, nil
+	}
+	if u.Scheme == "" {
+		u.Scheme = "http"
+	}
+	return u, nil
+}
+
+// firstNonEmptyEnv 按顺序取第一个非空环境变量（小写写法优先）。
+func firstNonEmptyEnv(keys ...string) string {
+	for _, k := range keys {
+		if v := strings.TrimSpace(os.Getenv(k)); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// noProxyMatch 判断目标是否命中 NO_PROXY。
+//
+// 支持标准库那几种写法：精确主机、`.example.com`/`example.com` 后缀、
+// IP 字面量、CIDR，以及 `*`（全部直连）。带端口的条目按「主机:端口」比。
+func noProxyMatch(u *url.URL) bool {
+	raw := firstNonEmptyEnv("no_proxy", "NO_PROXY")
+	if raw == "" {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	if host == "" {
+		return false
+	}
+	port := u.Port()
+	for _, entry := range strings.Split(raw, ",") {
+		e := strings.ToLower(strings.TrimSpace(entry))
+		if e == "" {
+			continue
+		}
+		if e == "*" {
+			return true
+		}
+		// 带端口的条目：只有端口也对上才算
+		if h, p, err := net.SplitHostPort(e); err == nil {
+			if p != "" && port != "" && p != port {
+				continue
+			}
+			e = h
+		}
+		e = strings.TrimPrefix(e, "[")
+		e = strings.TrimSuffix(e, "]")
+		if strings.Contains(e, "/") {
+			if _, ipnet, err := net.ParseCIDR(e); err == nil {
+				if ip := net.ParseIP(host); ip != nil && ipnet.Contains(ip) {
+					return true
+				}
+			}
+			continue
+		}
+		e = strings.TrimPrefix(e, ".")
+		if host == e || strings.HasSuffix(host, "."+e) {
+			return true
+		}
+		if ip := net.ParseIP(host); ip != nil {
+			if target := net.ParseIP(e); target != nil && target.Equal(ip) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // isLocalTarget 判断目标主机是否为内网/回环/链路本地地址（含 localhost 与裸主机名）

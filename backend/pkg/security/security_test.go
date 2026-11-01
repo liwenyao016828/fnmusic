@@ -726,3 +726,108 @@ func TestNewSafeTransportAllowsConfiguredProxyExit(t *testing.T) {
 		t.Error("代理一次都没被访问到")
 	}
 }
+
+// ── 环境变量代理必须「每次现读」（2026-11-01 CI 回归）──
+//
+// 背景：以前 proxyFunc 直接用 http.ProxyFromEnvironment，而它把环境变量读进
+// 进程级一次的快照（envProxyOnce）。只要本进程里先有过一次代理判定（例如新增的
+// pkg/security 流式用例先跑），后面的 t.Setenv 就再也不生效 —— 表现为
+// 「单独跑这条绿、整包跑红」，CI 上必现而开发机（本来就有 HTTP_PROXY）反而蒙对。
+
+// TestEnvProxyReadsEnvEachCall 每次判定都现读环境变量：先「没配代理」再 t.Setenv，
+// 结论必须跟着变。
+func TestEnvProxyReadsEnvEachCall(t *testing.T) {
+	defer resetProxyFailureState()
+	clearProxyEnv(t)
+
+	pf := proxyFunc(Options{})
+	req, _ := http.NewRequest(http.MethodGet, "https://api.deepseek.com/v1/chat/completions", nil)
+
+	if u, _ := pf(req); u != nil {
+		t.Fatalf("没配代理时应直连，实得 %v", u)
+	}
+
+	t.Setenv("HTTPS_PROXY", "http://192.168.1.3:7890")
+	u, err := pf(req)
+	if err != nil {
+		t.Fatalf("proxyFunc 报错: %v", err)
+	}
+	if u == nil || u.Host != "192.168.1.3:7890" {
+		t.Fatalf("新设的 HTTPS_PROXY 应当立即生效，实得 %v", u)
+	}
+
+	// 清掉之后也要能回到直连（不能只会「开启」不会「关闭」）
+	t.Setenv("HTTPS_PROXY", "")
+	if u, _ := pf(req); u != nil {
+		t.Fatalf("清掉 HTTPS_PROXY 后应回到直连，实得 %v", u)
+	}
+}
+
+// TestEnvProxySchemeAndCaseRules https 读 HTTPS_PROXY、只配 HTTP_PROXY 时兜底用它、
+// 大小写两种写法都认（小写优先）。
+func TestEnvProxySchemeAndCaseRules(t *testing.T) {
+	clearProxyEnv(t)
+	httpsReq, _ := http.NewRequest(http.MethodGet, "https://api.example.com/x", nil)
+	httpReq, _ := http.NewRequest(http.MethodGet, "http://api.example.com/x", nil)
+
+	t.Setenv("HTTPS_PROXY", "http://proxy-secure:8443")
+	u, _ := envProxyFromEnvironment(httpsReq)
+	if u == nil || u.Host != "proxy-secure:8443" {
+		t.Fatalf("https 目标应走 HTTPS_PROXY，实得 %v", u)
+	}
+	if u, _ := envProxyFromEnvironment(httpReq); u != nil {
+		t.Fatalf("只配 HTTPS_PROXY 时 http 目标不应走代理，实得 %v", u)
+	}
+
+	// 只配 HTTP_PROXY：https 目标也用它（与标准库/curl 行为一致）
+	clearProxyEnv(t)
+	t.Setenv("HTTP_PROXY", "http://proxy-plain:3128")
+	if u, _ := envProxyFromEnvironment(httpsReq); u == nil || u.Host != "proxy-plain:3128" {
+		t.Fatalf("只配 HTTP_PROXY 时 https 目标应兜底用它，实得 %v", u)
+	}
+
+	// 小写写法优先
+	t.Setenv("http_proxy", "http://proxy-lower:8080")
+	if u, _ := envProxyFromEnvironment(httpReq); u == nil || u.Host != "proxy-lower:8080" {
+		t.Fatalf("小写 http_proxy 应优先，实得 %v", u)
+	}
+}
+
+// TestNoProxyMatchVariants NO_PROXY 的几种写法：精确主机、域名后缀、`*`、CIDR。
+func TestNoProxyMatchVariants(t *testing.T) {
+	clearProxyEnv(t)
+	mk := func(raw string) *url.URL { u, _ := url.Parse(raw); return u }
+
+	t.Setenv("NO_PROXY", "internal.example.com,.corp.example.com,10.0.0.0/8,*")
+	for _, raw := range []string{
+		"http://internal.example.com/x",
+		"http://api.corp.example.com/x",
+		"http://10.1.2.3/x",
+		"http://anything.example.org/x", // * 命中
+	} {
+		if !noProxyMatch(mk(raw)) {
+			t.Errorf("%s 应命中 NO_PROXY", raw)
+		}
+	}
+
+	t.Setenv("NO_PROXY", "internal.example.com,.corp.example.com")
+	if noProxyMatch(mk("http://public.example.org/x")) {
+		t.Error("public.example.org 不该命中 NO_PROXY")
+	}
+	if !noProxyMatch(mk("http://internal.example.com/x")) {
+		t.Error("精确主机应命中")
+	}
+	if !noProxyMatch(mk("http://deep.corp.example.com/x")) {
+		t.Error("域名后缀应命中")
+	}
+}
+
+// TestEnvProxyBadValueIgnored 环境变量写错时不报错也不走代理（别让一个错的环境变量打挂出站）。
+func TestEnvProxyBadValueIgnored(t *testing.T) {
+	clearProxyEnv(t)
+	t.Setenv("HTTP_PROXY", "://不是个 URL")
+	req, _ := http.NewRequest(http.MethodGet, "http://api.example.com/x", nil)
+	if u, err := envProxyFromEnvironment(req); u != nil || err != nil {
+		t.Fatalf("坏的环境变量应当被忽略，实得 %v / %v", u, err)
+	}
+}
