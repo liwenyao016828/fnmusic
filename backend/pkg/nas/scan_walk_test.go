@@ -125,7 +125,9 @@ func TestScanSongsFlagsTruncationAndRemembersItInCache(t *testing.T) {
 	t.Cleanup(func() { scanSongsMaxAudio = old })
 
 	InitScanCache(t.TempDir())
-	t.Cleanup(func() { InitScanCache("") })
+	// 清缓存前先等在飞的异步落盘落地：否则 goroutine 可能在 t.TempDir()
+	// 被 RemoveAll 之后才把缓存文件写出来，清理解压报「directory not empty」→ 测试 FAIL。
+	t.Cleanup(func() { WaitScanCacheFlush(); InitScanCache("") })
 
 	fresh := scanSongs(t, root, true)
 	if len(fresh.Songs) != 3 || !fresh.Truncated {

@@ -47,7 +47,27 @@ var (
 	scanCacheMu  sync.Mutex
 	scanCache    map[string]*scanCacheEntry
 	scanCacheDir string
+	// scanCacheFlushWG 追踪在飞的异步落盘 goroutine。
+	// 测试需要在 t.TempDir() 被回收前等它们落地（否则 RemoveAll 撞上刚写出的缓存文件，
+	// t.TempDir() 清理会报「directory not empty」），生产环境不用管。
+	scanCacheFlushWG sync.WaitGroup
 )
+
+// WaitScanCacheFlush 等待所有在飞的扫描缓存落盘完成。
+// 只应在测试里调用（生产环境落盘是 fire-and-forget 的后台事）。
+func WaitScanCacheFlush() {
+	scanCacheFlushWG.Wait()
+}
+
+// flushScanCacheAsync 把落盘 goroutine 登记进 WaitGroup 后再启动，
+// 保证 WaitScanCacheFlush 能等住它。
+func flushScanCacheAsync(snapshot map[string]*scanCacheEntry) {
+	scanCacheFlushWG.Add(1)
+	go func() {
+		defer scanCacheFlushWG.Done()
+		flushScanCache(snapshot)
+	}()
+}
 
 // InitScanCache 从数据目录加载扫描缓存。应在服务启动时调用一次。
 func InitScanCache(dataDir string) {
@@ -75,6 +95,10 @@ func InitScanCache(dataDir string) {
 }
 
 func scanCachePath() string {
+	// 必须拿锁读 scanCacheDir：这个函数在异步落盘 goroutine 里跑，
+	// 会和 InitScanCache()（重置缓存目录）并发——不拿锁就是数据竞争。
+	scanCacheMu.Lock()
+	defer scanCacheMu.Unlock()
 	if scanCacheDir == "" {
 		return ""
 	}
@@ -145,7 +169,7 @@ func saveScanCache(dir string, songs []LocalSong, st dirwalk.Stats) {
 	}
 	scanCacheMu.Unlock()
 
-	go flushScanCache(snapshot)
+	flushScanCacheAsync(snapshot)
 }
 
 // InvalidateScanCache 使某个目录（含其子目录）的缓存失效。
@@ -167,7 +191,7 @@ func InvalidateScanCache(dir string) {
 		snapshot[k] = v
 	}
 	scanCacheMu.Unlock()
-	go flushScanCache(snapshot)
+	flushScanCacheAsync(snapshot)
 }
 
 // InvalidateScanCacheFile 使包含该文件路径的目录缓存失效。
