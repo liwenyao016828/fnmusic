@@ -7,6 +7,7 @@ import (
 
 	"fn-lx-player/pkg/config"
 	"fn-lx-player/pkg/online"
+	"fn-lx-player/pkg/search"
 )
 
 // 「平台没有你要的那一档」时怎么办 —— 这一组测试盯的是**降级兜底**的边界。
@@ -30,9 +31,9 @@ import (
 // `platform\x00id` —— 两条键不同，缓存不会互相污染，但测试要能看清各自
 // 被调了几次。
 type fakeTierLess struct {
-	actual   string // 裸 Resolve 时给的档位
-	atTier   *int   // ResolveAtTier 被调次数（可 nil）
-	naked    *int   // 裸 Resolve 被调次数（可 nil）
+	actual string // 裸 Resolve 时给的档位
+	atTier *int   // ResolveAtTier 被调次数（可 nil）
+	naked  *int   // 裸 Resolve 被调次数（可 nil）
 }
 
 func (f fakeTierLess) Platform() string { return "wy" }
@@ -251,7 +252,8 @@ func TestCorruptFallbackBuildsRetryAttempt(t *testing.T) {
 
 // top_only 模式下主循环不触发坏流降档（语义：给不了最高就失败）。
 // （corruptFallback 本身不查模式 —— 主循环的 cfg.modeAllowsLower() 守卫负责；
-//  这里测 corruptFallback 纯函数行为，模式语义在 TestFallbackLowerRefusesWhenTopOnly。）
+//
+//	这里测 corruptFallback 纯函数行为，模式语义在 TestFallbackLowerRefusesWhenTopOnly。）
 func TestCorruptFallbackNeedsNativeResolver(t *testing.T) {
 	cfg := fallbackCfg(config.DownloadQualityAutoLower)
 	// 洛雪伪源平台（lx: 前缀）没有原生重解析入口
@@ -259,5 +261,73 @@ func TestCorruptFallbackNeedsNativeResolver(t *testing.T) {
 	src := attempt{channel: config.DLChannelLx, tier: "flac", url: "https://bad", label: "lx"}
 	if fb := cfg.corruptFallback(context.Background(), src, it); fb != nil {
 		t.Fatalf("洛雪伪源无原生解析入口，不该生成重试，得到 %+v", fb)
+	}
+}
+
+// srcOnlyResolver 只在 good 这个平台上给档位；其它平台（如 QQ 匿名）一律不可播放。
+type srcOnlyResolver struct{ good string }
+
+func (r srcOnlyResolver) Platform() string { return r.good }
+func (r srcOnlyResolver) Resolve(ctx context.Context, id string) (*online.Resolved, error) {
+	return &online.Resolved{URL: "https://" + r.good + "/320", Tier: online.Tier320k, Format: "mp3", Bitrate: 320000}, nil
+}
+func (r srcOnlyResolver) ResolveBatch(ctx context.Context, ids []string) (map[string]*online.Resolved, error) {
+	return nil, nil
+}
+func (r srcOnlyResolver) ResolveAtTier(ctx context.Context, id, tier string) (*online.Resolved, error) {
+	if online.TierRank(tier) > online.TierRank(online.Tier320k) {
+		return nil, online.ErrTierUnavailable
+	}
+	return &online.Resolved{URL: "https://" + r.good + "/" + tier, Tier: tier, Format: "mp3", Bitrate: 320000}, nil
+}
+
+// 「坏流降档」必须能跨渠道：dl 渠道给了坏无损、原曲平台（QQ 匿名）不可播放时，
+// 要回到候选自己的 musicdl 源去问降档，而不是直接判整首失败。
+func TestCorruptFallbackReResolvesViaCandidateSource(t *testing.T) {
+	cfg := FetcherConfig{
+		Pool: online.NewPool(srcOnlyResolver{good: "bodian"}),
+		Channels: func() []string {
+			return []string{"dl"}
+		},
+		DownloadSources: func() []string { return []string{"bodian"} },
+		QualityMode:     func() string { return config.DownloadQualityAutoLower },
+		Searcher: func(keyword, platform string) []search.UnifiedSong {
+			if platform != "bodian" {
+				return nil
+			}
+			return []search.UnifiedSong{{Name: "晴天", Singer: "周杰伦", Source: "bodian", Songmid: "b1", Duration: 269}}
+		},
+	}
+	// 原曲平台 tx 不可播放；bodian 能按档给 320k
+	it := Item{Name: "晴天", Singer: "周杰伦", Platform: "tx", PlatformID: "qqid", Duration: 269, Quality: "flac"}
+	a := attempt{channel: config.DLChannelMusicDL, tier: "flac", url: "https://bad/flac", source: "bodian", label: "dl/bodian"}
+	fb := cfg.corruptFallbackTo(context.Background(), a, it, online.Tier320k)
+	if fb == nil {
+		t.Fatal("原曲平台无解时应回到候选自己的 musicdl 源重解析，而不是返回 nil")
+	}
+	if fb.tier != online.Tier320k {
+		t.Fatalf("降档目标应为 320k，得到 %q", fb.tier)
+	}
+	if strings.Contains(fb.url, "/bad/") {
+		t.Fatal("URL 必须是重解析结果")
+	}
+}
+
+// musicdl 源不按档给（要 320k 却回 flac）时，不能因为「回读档位高于目标」就放弃 ——
+// 坏的是原直链，不是音质需求；按实际档位接住继续走。
+func TestCorruptFallbackAcceptsHigherThanAsked(t *testing.T) {
+	cfg := FetcherConfig{
+		Pool:        online.NewPool(fakeTierLess{actual: "flac"}),
+		Channels:    func() []string { return []string{"native"} },
+		QualityMode: func() string { return config.DownloadQualityAutoLower },
+	}
+	it := Item{Name: "晴天", Singer: "周杰伦", Platform: "wy", PlatformID: "1", Quality: "flac"}
+	a := attempt{channel: config.DLChannelMusicDL, tier: "flac", url: "https://bad/flac", source: "bodian", label: "dl/bodian"}
+	fb := cfg.corruptFallbackTo(context.Background(), a, it, online.Tier320k)
+	if fb == nil {
+		t.Fatal("平台只给更高的档时不该放弃降档重试")
+	}
+	if fb.tier != "flac" {
+		t.Fatalf("应按平台实际档位接住，得到 %q", fb.tier)
 	}
 }

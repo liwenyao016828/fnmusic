@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"fn-lx-player/pkg/config"
 	"fn-lx-player/pkg/lxnode"
 	"fn-lx-player/pkg/match"
 	"fn-lx-player/pkg/online"
@@ -235,5 +236,140 @@ func TestPlanAttemptsRespectsLowQualityCeiling(t *testing.T) {
 		if online.TierRank(a.tier) > online.TierRank(online.Tier128k) {
 			t.Fatalf("点了 128k 却排进更高档：%+v", a)
 		}
+	}
+}
+
+// lxTierlessHost 只对 320k 给得出候选 —— 模拟「脚本下不了无损、但能下 320k」。
+// 它记录被问过的档位顺序，用来断言「最高档拿不到会继续往下问」。
+type lxTierlessHost struct {
+	asked  []string
+	native bool // 原生解析器给不出任何档
+}
+
+func (h *lxTierlessHost) Status() map[string]any { return map[string]any{"state": lxnode.StateReady} }
+func (h *lxTierlessHost) SearchAll(ctx context.Context, keyword string, limit int) ([]lxnode.Song, error) {
+	return nil, nil
+}
+func (h *lxTierlessHost) ResolveCandidates(ctx context.Context, source string, info map[string]any, quality string, scripts []string) ([]lxnode.Candidate, error) {
+	h.asked = append(h.asked, quality)
+	if quality != online.Tier320k {
+		return nil, nil // 这档拿不出来
+	}
+	// 269 秒的 320k ≈ 10.7 MB；给足字节数让 tierFromSize 推得出 320k。
+	return []lxnode.Candidate{{URL: "https://lx/320", Bytes: 11 << 20}}, nil
+}
+
+// 2026-11-01 用户：「最高音质下载失败后，应自动切换到下一个音质继续下载」。
+//
+// 洛雪渠道旧实现只问最高档，问不到就整条渠道作废 —— 而洛雪常常正是那首歌
+// 唯一能下 320k 的地方。这条测试钉住「往下问」的行为。
+func TestPlanAttemptsLxFallsBackThroughTiers(t *testing.T) {
+	host := &lxTierlessHost{}
+	cfg := FetcherConfig{
+		Lx:       host,
+		Channels: func() []string { return []string{"lx"} },
+		Scripts:  func() []string { return []string{"音源乙"} },
+	}
+	it := Item{Name: "晴天", Singer: "周杰伦", Platform: "wy", PlatformID: "123", Duration: 269, Quality: "flac"}
+	list, err := planAttempts(context.Background(), cfg, it)
+	if err != nil {
+		t.Fatalf("洛雪能给 320k 时不该整条渠道作废：%v", err)
+	}
+	if len(list) == 0 {
+		t.Fatal("没有候选：洛雪应在 320k 档给出候选")
+	}
+	if list[0].tier != online.Tier320k {
+		t.Fatalf("应拿到 320k 候选，得到 %+v", list[0])
+	}
+	if len(host.asked) < 2 || host.asked[0] != online.TierLossless || host.asked[1] != online.Tier320k {
+		t.Fatalf("应先问无损、再降问 320k，实际问过：%v", host.asked)
+	}
+}
+
+// 「仅下载最高」仍然不许降：只问一档，且低档候选不收。
+func TestPlanAttemptsLxTopOnlyDoesNotLower(t *testing.T) {
+	host := &lxTierlessHost{}
+	cfg := FetcherConfig{
+		Lx:          host,
+		Channels:    func() []string { return []string{"lx"} },
+		Scripts:     func() []string { return []string{"音源乙"} },
+		QualityMode: func() string { return config.DownloadQualityTopOnly },
+	}
+	it := Item{Name: "晴天", Singer: "周杰伦", Platform: "wy", PlatformID: "123", Duration: 269, Quality: "flac"}
+	list, _ := planAttempts(context.Background(), cfg, it)
+	if len(list) != 0 {
+		t.Fatalf("仅下载最高时不该收 320k：%+v", list)
+	}
+	if len(host.asked) != 1 {
+		t.Fatalf("仅下载最高时只该问最高档，实际问过：%v", host.asked)
+	}
+}
+
+// corruptLowerTiers：无损坏流要能逐级降到 128k，有损档不降。
+func TestCorruptLowerTiers(t *testing.T) {
+	if got := corruptLowerTiers(online.TierLossless); len(got) != 2 || got[0] != online.Tier320k || got[1] != online.Tier128k {
+		t.Fatalf("无损坏流应给 320k → 128k，得到 %v", got)
+	}
+	if got := corruptLowerTiers(online.Tier320k); got != nil {
+		t.Fatalf("320k 坏流不该再往 128k 降，得到 %v", got)
+	}
+}
+
+// probeAllChannels：一条候选都没有时的兜底重探 —— 必须能把「洛雪只给 320k」
+// 这种情况捡回来（用户口径：最高音质失败后自动切下一档）。
+func TestProbeAllChannelsFindsLowerTierAcrossChannels(t *testing.T) {
+	host := &lxTierlessHost{}
+	cfg := FetcherConfig{
+		Lx:       host,
+		Channels: func() []string { return []string{"lx"} },
+		Scripts:  func() []string { return []string{"音源乙"} },
+	}
+	it := Item{Name: "晴天", Singer: "周杰伦", Platform: "wy", PlatformID: "123", Duration: 269, Quality: "flac"}
+	list, err := probeAllChannels(context.Background(), cfg, it)
+	if err != nil {
+		t.Fatalf("重探不该报错：%v", err)
+	}
+	if len(list) == 0 {
+		t.Fatal("重探应拿到 320k 候选")
+	}
+	if list[0].tier != online.Tier320k {
+		t.Fatalf("重探应拿到 320k，得到 %q", list[0].tier)
+	}
+	// 三档都要问过：只问最高档就放弃正是要修的那个毛病。
+	if len(host.asked) < 2 {
+		t.Fatalf("重探应逐档询问，实际只问了 %v", host.asked)
+	}
+}
+
+// capItemTier：用户点 320k 时不许再往上要无损；点最高档不动。
+func TestCapItemTier(t *testing.T) {
+	cfg := FetcherConfig{}
+	if got := capItemTier(Item{Quality: "320k"}, cfg).Quality; got != "320k" {
+		t.Fatalf("320k 应保持 320k，得到 %q", got)
+	}
+	if got := capItemTier(Item{Quality: "highest"}, cfg).Quality; got != "highest" {
+		t.Fatalf("最高档不该被改写，得到 %q", got)
+	}
+	if got := capItemTier(Item{Quality: "standard"}, cfg).Quality; got != "128k" {
+		t.Fatalf("standard 应归一成 128k，得到 %q", got)
+	}
+}
+
+// EffectiveDownloadChannels：用户关掉的渠道不复活，不可用的渠道摘掉。
+func TestEffectiveDownloadChannels(t *testing.T) {
+	av := config.ChannelAvailability{LxUsable: false, MusicDLSources: []string{"mg"}, NativeOK: true}
+	got := config.EffectiveDownloadChannels([]string{"lx", "dl", "native"}, av)
+	if len(got) != 2 || got[0] != "dl" || got[1] != "native" {
+		t.Fatalf("洛雪没脚本时应只剩 dl/native，得到 %v", got)
+	}
+	// 用户只留 native：dl 可用也不该被加回来。
+	got = config.EffectiveDownloadChannels([]string{"native"}, av)
+	if len(got) != 1 || got[0] != "native" {
+		t.Fatalf("用户关掉的渠道不该复活，得到 %v", got)
+	}
+	// 用户留的那条自己不可用：保持原样交给下游如实报错，不静默改道。
+	got = config.EffectiveDownloadChannels([]string{"lx"}, config.ChannelAvailability{MusicDLSources: []string{"mg"}, NativeOK: true})
+	if len(got) != 1 || got[0] != "lx" {
+		t.Fatalf("不可用时也不该改道，得到 %v", got)
 	}
 }

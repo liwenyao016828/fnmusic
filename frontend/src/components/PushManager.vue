@@ -414,7 +414,8 @@
                 现在这两颗是可点开关：关着点一下就保存并启用，开着点一下就停。
               -->
               <div class="flex flex-wrap items-center gap-1.5">
-                <span class="text-[11px] text-[var(--ys-text-muted)]">这个订阅要做什么</span>
+                <!-- 2026-11-01（用户：绿框里那行字可以去掉）：两个开关本身已经写明
+                     「下载到本地」「同步」，再加一句「这个订阅要做什么」是多余的说明。 -->
                 <button
                   type="button"
                   class="inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-[11px] font-medium transition-all disabled:opacity-50"
@@ -694,7 +695,6 @@
               以前一律两条都建，用户会莫名其妙多出一条用不到的推送任务，还得单独去关。
             -->
             <div class="rounded-lg border border-[var(--ys-border)] px-3.5 py-3">
-              <p class="mb-2.5 text-[12px] font-medium text-gray-700">这个订阅要做什么</p>
               <div class="space-y-2.5">
                 <div class="flex items-start gap-2.5">
                   <button

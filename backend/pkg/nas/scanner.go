@@ -9,6 +9,7 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -359,7 +360,18 @@ func ScanSongs(w http.ResponseWriter, r *http.Request) {
 	for i, f := range files {
 		name := filepath.Base(f.Path)
 		title, artist, album := parseBasicMeta(f.Path, name)
-		coverURL := fmt.Sprintf("/api/nas/cover?path=%s", f.Path)
+		// 封面地址必须**转义**：路径里带空格、`#`、`?`、`&`、`+` 时，
+		// 原样拼进查询串会被截断或改写（`#` 之后整段被当锚点丢掉），
+		// 表现为「这首歌有封面但界面一直是 💿」。
+		// 2026-11-01（用户：「本地曲库还是看不到封面」）。
+		coverURL := "/api/nas/cover?path=" + url.QueryEscape(f.Path)
+		// has_cover：这一首**真的能取到图**才给地址。以前不管有没有都给，
+		// 界面上就是一批 <img> 各吃一个 404 再回落成 💿 —— 多花的请求还是次要的，
+		// 更糟的是列表里到处闪一下空盒子。这里按同一套判定先问一次（只读元数据，
+		// 不解码音频），没图的直接给空串，界面立刻画占位。
+		if !hasEmbeddedCover(f.Path) {
+			coverURL = ""
+		}
 		songs = append(songs, LocalSong{
 			ID:        fmt.Sprintf("nas_%d", i+1),
 			Path:      f.Path,
@@ -652,13 +664,32 @@ func ExtractCover(w http.ResponseWriter, r *http.Request) {
 
 	data, mimeType := extractCoverBytes(filePath)
 	if len(data) > 0 {
+		// 用内嵌字节算 ETag：文件没换就 304，换了立刻出新图。
+		// 以前固定 max-age=86400，用户补了封面后最长要等一天才看得到，
+		// 而且中间一直被旧缓存盖住（2026-11-01「看不到封面」的次因）。
+		etag := fmt.Sprintf(`W/"%x-%x"`, len(data), fnv32(data))
+		w.Header().Set("ETag", etag)
+		if match := r.Header.Get("If-None-Match"); match != "" && strings.Contains(match, etag) {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
 		w.Header().Set("Content-Type", mimeType)
-		w.Header().Set("Cache-Control", "public, max-age=86400")
+		w.Header().Set("Cache-Control", "public, max-age=3600")
 		_, _ = w.Write(data)
 		return
 	}
 
 	http.NotFound(w, r)
+}
+
+// fnv32 给封面算一个廉价的指纹（只要变一点就不同即可，不要密码学强度）。
+func fnv32(b []byte) uint32 {
+	h := uint32(2166136261)
+	for _, c := range b {
+		h ^= uint32(c)
+		h *= 16777619
+	}
+	return h
 }
 
 // imageSignatures 是封面里**真实存在**的图片格式与它们的魔数。
@@ -710,6 +741,84 @@ func sliceImage(frameData []byte) ([]byte, string) {
 		return nil, ""
 	}
 	return frameData[best:], bestMime
+}
+
+// hasEmbeddedCover 判断这一首有没有可用的封面 —— 与 extractCoverBytes 同一套
+// 候选口径（内嵌 APIC/PICTURE + 同目录同名图 / cover / folder / front），
+// 但**只读元数据不解码**，扫描一首的代价只有几个字节的头部读取。
+//
+// 用途：把「一定取不到图」的曲目提前标成没有封面，界面直接画占位，
+// 不再让列表里一排 <img> 各打一个 404（2026-11-01「本地曲库看不到封面」）。
+// 判断失败时一律返回 true —— 宁可多试一次请求，也不要漏掉本来有的图。
+func hasEmbeddedCover(filePath string) bool {
+	switch strings.ToLower(filepath.Ext(filePath)) {
+	case ".mp3":
+		f, err := os.Open(filePath)
+		if err != nil {
+			return true
+		}
+		defer f.Close()
+		header := make([]byte, 10)
+		if _, err := io.ReadFull(f, header); err != nil || string(header[:3]) != "ID3" {
+			// 无 ID3 标签：封面只可能来自同目录图，交给下面的兜底判定
+			return folderCoverExists(filePath) || fileHasTrailingCover(filePath)
+		}
+		tagSize := synchsafeInt(header[6:10])
+		if tagSize <= 0 || tagSize > 25*1024*1024 {
+			return folderCoverExists(filePath)
+		}
+		body := make([]byte, tagSize)
+		if _, err := io.ReadFull(f, body); err != nil {
+			return true
+		}
+		return bytes.Contains(body, []byte("APIC")) || folderCoverExists(filePath)
+	case ".flac":
+		if meta, err := tags.Read(filePath); err == nil && len(meta.Cover) > 0 {
+			return true
+		}
+		return folderCoverExists(filePath)
+	}
+	// 其它格式（wav/m4a/aac/ogg…）没有内嵌封面解析，只有同目录图这一条路
+	return folderCoverExists(filePath)
+}
+
+// 同目录同名图 / cover / folder / front（与 extractCoverBytes 的候选保持一份口径）
+func folderCoverExists(filePath string) bool {
+	dir := filepath.Dir(filePath)
+	base := strings.TrimSuffix(filepath.Base(filePath), filepath.Ext(filePath))
+	for _, name := range []string{
+		base + ".jpg", base + ".jpeg", base + ".png",
+		"cover.jpg", "cover.png", "folder.jpg", "folder.png", "front.jpg",
+	} {
+		cp := filepath.Join(dir, name)
+		if _, gerr := ResolveSafePath(cp); gerr != nil {
+			continue
+		}
+		if st, err := os.Stat(cp); err == nil && st.Size() > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// 有些 mp3 把图片追加在音频尾部（非标准但常见）：看到图片魔数就当有封面。
+func fileHasTrailingCover(filePath string) bool {
+	f, err := os.Open(filePath)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	buf := make([]byte, 64*1024)
+	n, _ := f.Read(buf)
+	for _, sig := range [][]byte{
+		{0xFF, 0xD8, 0xFF},    // JPEG
+		{0x89, 'P', 'N', 'G'}, // PNG
+	} {
+		if bytes.Contains(buf[:n], sig) {
+			return true
+		}
+	}
+	return false
 }
 
 func extractCoverBytes(filePath string) ([]byte, string) {

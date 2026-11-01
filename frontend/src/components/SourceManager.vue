@@ -217,10 +217,12 @@
             服务端 Node 子进程（POST /api/lx/host），不用重启应用。
           -->
           <div
-            class="rounded-xl border p-3.5 transition-all hover:shadow-[0_2px_8px_rgba(0,0,0,0.05)]"
+            class="cursor-pointer rounded-xl border p-3.5 transition-all hover:shadow-[0_2px_8px_rgba(0,0,0,0.05)]"
             :class="lxHostReady ? 'border-[var(--ys-border)] bg-white' : 'border-[var(--ys-border)] bg-[var(--ys-surface-sunken)]'"
+            @click="lxHostExpanded = !lxHostExpanded"
+            :title="lxHostExpanded ? '点击收起' : '点击展开全部信息'"
           >
-            <!-- 名称 + 就绪徽标 + 开关（与官方协议卡同构，右边换成开关按钮） -->
+            <!-- 名称 + 就绪徽标（开关挪到卡片最下方，与官方协议那排按钮对齐） -->
             <div class="flex items-center gap-1.5">
               <b class="min-w-0 flex-1 truncate text-sm font-medium text-[var(--ys-text)]">服务端洛雪宿主</b>
               <span
@@ -229,16 +231,10 @@
                   ? 'bg-[var(--ys-accent-soft)] text-[var(--ys-accent)]'
                   : 'bg-black/[0.05] text-[var(--ys-text-aux)]'"
               >{{ lxHostLabel }}</span>
-              <button
-                @click="toggleLxHost"
-                :disabled="lxHostSwitching"
-                title="开启 / 关闭服务端洛雪宿主，立即生效"
-                class="shrink-0 flex items-center gap-1 rounded-lg border border-[var(--ys-border)] bg-white px-2 py-1 text-[11px] font-medium text-[var(--ys-text-muted)] transition-colors hover:bg-black/[0.04] hover:text-[var(--ys-text)] disabled:opacity-50"
-              >
-                <Loader2 v-if="lxHostSwitching" class="w-3 h-3 animate-spin" />
-                <Power v-else class="w-3 h-3" />
-                <span>{{ lxHostSwitching ? '请稍候' : (lxHostOn ? '关闭宿主' : '开启宿主') }}</span>
-              </button>
+              <ChevronDown
+                class="h-3.5 w-3.5 shrink-0 text-gray-500 transition-transform"
+                :class="lxHostExpanded ? 'rotate-180' : ''"
+              />
             </div>
 
             <!-- id + 执行位置徽标行（与官方协议卡同一排版） -->
@@ -277,16 +273,27 @@
               </p>
             </template>
 
-            <!-- 点击展开/收起（与协议卡同一个手势） -->
-            <div
-              class="mt-2 flex items-center gap-1 text-[10px] text-gray-500"
-              @click="lxHostExpanded = !lxHostExpanded"
-            >
-              <ChevronDown
-                class="h-3.5 w-3.5 shrink-0 text-gray-500 transition-transform"
-                :class="lxHostExpanded ? 'rotate-180' : ''"
-              />
-              <span>{{ lxHostExpanded ? '收起' : '展开说明' }}</span>
+            <!-- 2026-11-01（用户）：这里显示「下面列表里已开启多少个」，开关也挪到最下方，
+                 与官方协议卡那排按钮同尺寸、同一行对齐。
+                 `@click.stop`：整张卡是「点击展开/收起」，点开关不该顺手把卡片折叠掉。 -->
+            <div class="mt-2 flex flex-wrap items-center gap-1.5" @click.stop>
+              <span class="text-[10px] text-gray-500">
+                下方列表已开启 <b class="text-[var(--ys-text)]">{{ activeSourceIds.length }}</b> 个
+              </span>
+              <button
+                @click="toggleLxHost"
+                :disabled="lxHostSwitching"
+                :aria-pressed="lxHostOn"
+                title="开启 / 关闭服务端洛雪宿主，立即生效"
+                class="ys-press flex items-center gap-1.5 rounded-[8px] px-2.5 py-1.5 text-[12px] font-medium transition-colors disabled:opacity-50"
+                :class="lxHostOn
+                  ? 'bg-[var(--ys-text)] text-white'
+                  : 'border border-[var(--ys-border)] bg-white text-[var(--ys-text-muted)] hover:bg-black/[0.04] hover:text-[var(--ys-text)]'"
+              >
+                <Loader2 v-if="lxHostSwitching" class="h-3.5 w-3.5 animate-spin" />
+                <Power v-else class="h-3.5 w-3.5" />
+                <span>{{ lxHostSwitching ? '请稍候' : (lxHostOn ? '已开启 · 点此关闭' : '开启宿主') }}</span>
+              </button>
             </div>
           </div>
         </div>

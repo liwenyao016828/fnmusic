@@ -219,11 +219,29 @@ func nextFrame(br *bitReader, si streamInfo) (bool, error) {
 	// 同步码 14 位 = 0b11111111111110
 	sync, err := br.readBits(14)
 	if err != nil {
+		if br.committed {
+			// 已经进到帧里却读不到内容：这一帧被截断了（文件不完整）。
+			return false, fmt.Errorf("%w：帧内数据被截断", ErrFrameCorrupt)
+		}
 		return false, nil // 流在帧边界处结束（正常）
 	}
 	if sync != 0x3FFE {
+		// 剩下的字节连一个最短帧头都放不下 → 是收尾的补齐位，正常结束。
+		if br.atTailPadding() {
+			return false, nil
+		}
 		return false, fmt.Errorf("%w：同步码丢失（0x%04X）", ErrFrameCorrupt, sync)
 	}
+	// 到这里已经确认「这是一帧的开头」。此后任何一次读失败都意味着**这一帧**
+	// 没走完 —— 文件被截断了，不是「流干净地结束」。
+	//
+	// 修的是 2026-11-01 的误判：库里一首 55MB 的 flac 逐帧全过、末尾只剩
+	// 「55 ff f0」三个字节。nextFrame 读帧头要 14 位同步码，读出来是 0x3C00
+	// （补齐位），旧代码直接报「同步码丢失」把整首好文件判成坏流；而如果把
+	// 判断顺序反过来（先看剩余字节够不够一帧）就会把**残缺帧**当成完整帧
+	// 放过去 —— 同一个位置能同时坑两种文件，所以判据必须是「这一帧有没有
+	// 走完」，而只有真正进到帧里之后才谈得上「走完」。
+	br.markInFrame()
 	if err := br.wantZeroBit("帧头保留位"); err != nil {
 		return false, fmt.Errorf("%w：帧头被截断或保留位非 0", ErrFrameCorrupt)
 	}

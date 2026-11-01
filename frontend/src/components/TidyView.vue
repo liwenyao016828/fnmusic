@@ -3060,15 +3060,13 @@ function init() {
   loadPreferred()
   // 补全任务是后端在跑的，刷新页面不该让进度凭空消失
   loadCompleteStatus()
-  // 替换记录同理：上次替换过什么，进页就该看得到
-  // ⚠️ 只有音质段（质量段）自己那份实例需要它；其他实例跑这一趟纯属重复请求
-  if (sub.value === 'quality') loadQualityStatus()
+  // 「替换音质」段已拆成独立组件 QualityView.vue（2026-10-29），它自己的状态
+  // 与轮询都在组件内 —— 这里不再调用 loadQualityStatus / stopQualityPolling。
 }
 
 onUnmounted(() => {
   if (!inited) return
   stopCompletePolling()
-  stopQualityPolling()
   if (stopHealthNav) stopHealthNav()
   if (onDirChanged) window.removeEventListener('ys:dir-changed', onDirChanged)
   if (onBeforeUnload) window.removeEventListener('beforeunload', onBeforeUnload)

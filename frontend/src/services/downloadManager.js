@@ -44,6 +44,9 @@ const SETTINGS_STORAGE_KEY = 'fn_download_settings_v1'
 const ROW_KEY_STORAGE_KEY = 'fn_download_row_keys_v1'
 // 提交中断/失败但后端未确认的占位。只存这些，不存后端已确认的任务。
 const UNSENT_STORAGE_KEY = 'fn_download_unsent_v1'
+// 「这条任务的终态已经记过日志」——**必须落盘**，见 noteFinalState 的说明。
+const FINAL_LOG_STORAGE_KEY = 'fn_download_final_logged_v1'
+const FINAL_LOG_MAX = 800
 
 // ── 状态 ──
 
@@ -136,13 +139,59 @@ function songKeyOf(song) {
 
 // 任务日志（前端侧）：后端队列是「查询出来的当前状态」，同一个任务每次刷新都会重放一遍，
 // 所以终态只在**首次看到**时记一条 —— 否则一首歌下载完会在日志里刷出几十行。
+//
+// ⚠️ 2026-11-01（用户：「日志里一直在报下载失败，可我根本没在下歌」）：
+// 以前这个集合只活在内存里，**刷新一次页面就清空**，而 syncTasks() 是
+// `watch(…, { immediate: true })` —— 每次打开/刷新页面，后端队列里全部历史终态
+// 任务都会被当成「刚看到」重记一遍并上报到 /api/logs。实测 11:52 一次刷新就把
+// 10 条一模一样的旧失败（Lemon / 晨钟暮鼓…）重新刷了出来。
+// 现在：① 落盘，跨刷新/跨重载有效；② 记住 key 时顺带记住任务完成时刻，
+// 本页打开**之前**就已终态的历史任务一律不记（它们该在当初那一刻记过）。
 const finalizedLog = new Set()
+
+function loadFinalLog() {
+  let rows = []
+  try {
+    const raw = localStorage.getItem(FINAL_LOG_STORAGE_KEY)
+    const parsed = raw ? JSON.parse(raw) : []
+    if (Array.isArray(parsed)) rows = parsed
+  } catch (_) { rows = [] }
+  for (const k of rows) {
+    if (typeof k === 'string' && k) finalizedLog.add(k)
+  }
+}
+
+function persistFinalLog() {
+  try {
+    // Set 保留插入顺序：超限就丢最早的（FIFO 足够，队列本身也留不住那么久）
+    const rows = [...finalizedLog]
+    const kept = rows.length > FINAL_LOG_MAX ? rows.slice(rows.length - FINAL_LOG_MAX) : rows
+    if (kept.length !== rows.length) {
+      finalizedLog.clear()
+      for (const k of kept) finalizedLog.add(k)
+    }
+    localStorage.setItem(FINAL_LOG_STORAGE_KEY, JSON.stringify(kept))
+  } catch (_) {}
+}
+
+// 这个页面实例是什么时候打开的：早于它结束的任务属于「历史」，不再记账。
+const PAGE_OPENED_AT = Date.now()
+
+loadFinalLog()
 
 function noteFinalState(t) {
   if (!t || (t.status !== 'success' && t.status !== 'failed')) return
   const key = `${t.clientId || t.id}:${t.status}`
   if (finalizedLog.has(key)) return
+  const endedAt = toMillis(t.completedAt) || toMillis(t.addedAt) || 0
+  if (endedAt && endedAt < PAGE_OPENED_AT) {
+    // 打开页面前就结束了：当初结束那一刻已经记过（或被用户清理过），不再补记。
+    finalizedLog.add(key)
+    persistFinalLog()
+    return
+  }
   finalizedLog.add(key)
+  persistFinalLog()
   const title = t.song?.name || '未知曲目'
   const singer = t.song?.singer ? ' — ' + t.song.singer : ''
   if (t.status === 'success') {

@@ -69,6 +69,11 @@ function summaryOf(res, { moved, deleted, failed, errors }) {
  *
  * 与 `nasView.js` 的 `scanViewOf` 分工：那边管「载荷形状」，这边管
  * 「每一条是不是能安全当对象用」—— 后端字段缺失/类型漂移时不炸，只补默认值。
+ *
+ * ⚠️ 这里**不改写** `cover_url` / `cover`：补网关前缀由 `nasView.js` 的
+ * `withCoverSrc()` 统一负责，两个模块都改同一字段会互相覆盖（2026-11-01
+ * 「本地曲库看不到封面」踩的就是这条：调用方忘了套 `withCoverSrc`，
+ * 曲库列表只剩 💿 占位）。
  */
 export function normalizeScanSongs(songs) {
   if (!Array.isArray(songs)) return []

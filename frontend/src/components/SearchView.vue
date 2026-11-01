@@ -792,7 +792,7 @@
         </p>
 
         <div class="rounded-lg border border-[var(--ys-border)] px-3.5 py-3 mb-3">
-          <p class="mb-2.5 text-[12px] font-medium text-gray-700">这个订阅要做什么</p>
+          <!-- 2026-11-01：删掉「这个订阅要做什么」标题 —— 下面两个按钮自己说清楚了。 -->
           <div class="space-y-2.5">
             <div class="flex items-start gap-2.5">
               <button

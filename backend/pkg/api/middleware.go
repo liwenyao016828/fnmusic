@@ -275,12 +275,11 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 
 		peer := clientIP(r)
 		if mode == AuthModeLAN && isTrustedPeer(peer, extra) {
-			// 内网来源免校验，但第一次见到某个地址时记一条：谁在直连这台机器。
-			// 历史行为是完全静默的，要收紧时至少得有据可查。
-			if peer != "" && !isLoopbackIP(peer) && notify.shouldLog(peer) {
-				applog.Default().AddFrom("api", "info", fmt.Sprintf(
-					"内网来源 %s 免 Token 访问（本机/内网/容器地址）。收紧请设 FN_API_TOKEN，或 FN_AUTH_MODE=none 完全放开。", peer))
-			}
+			// 内网来源免校验，**不记日志**。
+			// 2026-11-01（用户）：这条 info 每次都把「内网来源 x 免 Token 访问…
+			// 收紧请设 FN_API_TOKEN」写进日志页，家里几台设备轮着访问时一直在刷，
+			// 而他并没有要收紧鉴权 —— 纯噪音，删掉。真正被拒绝的请求仍然会记
+			// warn（见下面 token 校验失败的分支），出问题时有据可查。
 			next.ServeHTTP(w, r)
 			return
 		}

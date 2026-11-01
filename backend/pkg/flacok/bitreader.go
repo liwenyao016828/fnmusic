@@ -28,7 +28,16 @@ type bitReader struct {
 
 	// mode 决定下一个从底层读进来的字节参与哪份 CRC
 	mode byte
+
+	// committed 表示「当前这一帧的同步码已经读到了」：从这一刻起，读失败
+	// 不再是「流在帧边界处结束」，而是「这一帧没走完（文件被截断）」。
+	// 两者必须分开 —— 末尾是补齐位（0x3C00 之类）时 readBits 读得到、值不对，
+	// 旧逻辑会判成坏帧；而若反过来只看「剩余字节够不够」又会把残缺帧放过。
+	committed bool
 }
+
+// markInFrame 在同步码校验通过后调用：把这一帧标记为「已经开始」。
+func (b *bitReader) markInFrame() { b.committed = true }
 
 const (
 	modeBoth  byte = iota // 帧头字节：crc8 + crc16
@@ -48,6 +57,7 @@ func newBitReader(r io.Reader) *bitReader {
 
 // startFrame 开始一帧：复位两份 CRC，后面读进来的字节都算进去。
 func (b *bitReader) startFrame() {
+	b.committed = false
 	b.inFrame = true
 	b.inHeader = true
 	b.crc8 = 0
@@ -191,6 +201,22 @@ func (b *bitReader) peekTag() bool {
 		}
 	}
 	return false
+}
+
+// atTailPadding 判断「剩下的这点字节是不是收尾的补齐位，而不是一帧的开头」。
+//
+// 有的编码器会在最后一帧后面补几个 0xFF/0x00，或者最后一帧的 CRC 之后还剩不
+// 满一字节的补齐位（真机案例：55MB 的 flac，逐帧校验全过，末尾只剩 55 ff f0）。
+// 剩下的字节如果连一个最短帧头都放不下（FLAC 帧头至少 6 字节：14 位同步码 +
+// 阻塞/采样率/声道/位宽/保留 + UTF-8 帧号 + CRC-8），就不可能再起一帧 —— 这是
+// 干净的结束，不是坏流。剩下的字节够一帧开头而同步码不对，那才是真损坏。
+//
+// 注意：readBits 会提前读进 4 个字节做位缓冲（b.n 位里可能还压着没用的补齐位），
+// 所以要按「位缓冲剩余 + 底层剩余」算总剩余位数，不能只看 b.n。
+func (b *bitReader) atTailPadding() bool {
+	rest, _ := b.r.Peek(6)
+	totalBits := uint64(b.n) + uint64(len(rest))*8
+	return totalBits < 6*8
 }
 
 // ── CRC ──

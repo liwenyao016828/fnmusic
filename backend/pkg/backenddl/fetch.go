@@ -11,6 +11,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"fn-lx-player/pkg/applog"
@@ -125,10 +126,34 @@ type Availability struct {
 
 // channelsOf 返回清洗后的渠道顺序（与自动下载共用同一套配置语义）。
 func (cfg FetcherConfig) channelsOf() []string {
+	var out []string
 	if cfg.Channels == nil {
-		return append([]string(nil), config.DefaultDownloadChannels...)
+		out = append([]string(nil), config.DefaultDownloadChannels...)
+	} else {
+		out = config.NormalizeDownloadChannels(cfg.Channels())
 	}
-	return config.NormalizeDownloadChannels(cfg.Channels())
+	// 再按「此刻真的能用」摘一遍：用户关掉的不复活，但洛雪没脚本 / 外挂池没源 /
+	// 原生没解析器时把那条摘掉，免得每条任务先白等一轮必然失败的解析。
+	if cap := cfg.channelAvailability(); cap != nil {
+		return config.EffectiveDownloadChannels(out, *cap)
+	}
+	return out
+}
+
+// channelAvailability 汇总三条渠道此刻的可执行性（nil = 不做这一层裁剪）。
+//
+// ⚠️ 判 LxUsable 时**必须**看脚本名单，不能只看宿主状态：宿主 ready 但用户一个
+// 脚本都没勾选时，ResolveCandidates 拿到的 scripts 是空 -> 宿主内部按「全部脚本」
+// 走（老口径），而我们这边一旦脚本清单为空就该自己知道这条路是空的。
+func (cfg FetcherConfig) channelAvailability() *config.ChannelAvailability {
+	if cfg.Channels == nil && cfg.Lx == nil && cfg.DownloadSources == nil {
+		return nil // 裸配置（单测/兜底路径）：不做裁剪
+	}
+	return &config.ChannelAvailability{
+		LxUsable:       cfg.Lx != nil && cfg.lxState() == "ready" && len(cfg.scripts()) > 0,
+		MusicDLSources: cfg.dlSources(),
+		NativeOK:       cfg.Pool != nil,
+	}
 }
 
 // savedDir 安全读 SavedDir（nil 时返回空串，接口里字段即省略）。
@@ -311,6 +336,52 @@ func (cfg FetcherConfig) CanDownload(it Item) bool {
 	return false
 }
 
+// capItemTier 把任务的点播档位钉在「用户允许的上限」上：点 320k 就永远不下无损，
+// 点 128k 就永远不下 320k。用户直接点「最高音质」（quality=highest / 空）时不设上限。
+//
+// 为什么要钉：tiersFor 会按「点名档 + 更低档」生成阶梯，本身不会往上问；但候选源
+// （尤其是 musicdl / 洛雪的搜索结果）经常**声明**一个更高的档 —— 那些源会按声明值
+// 插队，最后下回来一个比用户要的还大的文件。用户的选择是硬约束，不是建议。
+// 只降不升：声明档低于上限时保留声明档（别把 128k 的源抬成 320k 去要）。
+//
+// 「仅下载最高」模式（top_only）不在此列：那种模式本来就只认点名那一档。
+func capItemTier(it Item, cfg FetcherConfig) Item {
+	want := normalizeTier(it.Quality)
+	if want == "" || cfg.modeIsTopOnly() {
+		return it
+	}
+	// 无损上限：质量上等同 highest，不动。
+	if online.TierRank(want) >= online.TierRank(online.TierLossless) {
+		return it
+	}
+	// strict 语义：用户点的是「就要这一档」，`it.Quality` 保持点名值即可，
+	// tiersFor 会据此只问这一档及更低档。
+	it.Quality = want
+	return it
+}
+
+// coverFromSearch 用平台搜索给这首歌找回封面地址（找不到返回空串）。
+//
+// 判据与取音一致：歌名/歌手/时长都要对得上，宁可返回空也不要把别的版本的
+// 封面写进这首歌 —— 封面错了比没封面更难发现。
+func coverFromSearch(cfg FetcherConfig, it Item) string {
+	plat := strings.TrimSpace(it.Platform)
+	if plat == "" {
+		return ""
+	}
+	keyword := strings.TrimSpace(it.Name + " " + it.Singer)
+	if keyword == "" {
+		return ""
+	}
+	songs := cfg.searcher()(keyword, plat)
+	if best := pickUnifiedSong(songs, it, plat); best != nil {
+		if u := strings.TrimSpace(best.Cover); u != "" {
+			return u
+		}
+	}
+	return ""
+}
+
 // NewFetcher 返回可直接交给 Queue 的取音函数。
 func NewFetcher(cfg FetcherConfig) Fetcher {
 	logf := cfg.Logf
@@ -330,7 +401,36 @@ func NewFetcher(cfg FetcherConfig) Fetcher {
 		if strings.TrimSpace(it.Name) == "" {
 			return Result{}, fmt.Errorf("缺少歌名")
 		}
+		// 封面兜底：界面提交时没带封面（歌单导入 / 订阅发现都有这种情况）就跑一次
+		// 平台搜索把图补上。缺了它，落盘的文件没有内嵌封面，本地曲库那一列
+		// 就只剩 💿（2026-11-01 用户：「本地曲库还是看不到封面」）。
+		// 只补一次、只认同名同版那一首的结果，拿不到就算了，绝不阻塞下载。
+		if strings.TrimSpace(it.Cover) == "" {
+			it.Cover = coverFromSearch(cfg, it)
+		}
+		// 候选档位设上限：用户点了 128k / 320k 就不该再问无损流水（既要不到、白等
+		// 超时，还会把「声明无损实际 128k」的源排到前面）。点 highest 时不动。
+		it = capItemTier(it, cfg)
 		attempts, err := planAttempts(ctx, cfg, it)
+		if err != nil && cfg.modeAllowsLower() {
+			// 「逐渠道探测、挑音质最好的那条下」的第二腿（2026-11-01 用户口径：
+			// 多条后台服务分别探，最后按音质挑）。
+			//
+			// 为什么要兜这一层：`planAttempts` 是「先按用户渠道顺序问，问到顶就收工」，
+			// 各渠道的候选仍会统一按档位排序 —— 但它有一个硬限制：**某个渠道连一条
+			// 都没给出来**时（典型：用户只勾了 native，而 native 对 QQ 匿名点不出无损），
+			// 整首歌就当场失败，明明另外两条路能拿到 320k 也没机会。
+			//
+			// 所以「一条候选都没有」时再跑一轮全渠道探测：不受渠道顺序影响、不问顶就收、
+			// 把能拿到的档位全收进表里再挑最高的那条。用户关掉的渠道不复活
+			// （探测范围与 channelsOf 同一口径）。
+			if alt, aerr := probeAllChannels(ctx, cfg, it); len(alt) > 0 {
+				logf("[BACKEND-DL] 取音计划重探：%d 条候选（%s）", len(alt), planSummary(alt))
+				attempts, err = alt, nil
+			} else if aerr != nil {
+				logf("[BACKEND-DL] 取音计划重探失败：%v", aerr)
+			}
+		}
 		if err != nil {
 			return Result{}, err
 		}
@@ -359,19 +459,55 @@ func NewFetcher(cfg FetcherConfig) Fetcher {
 			failures = append(failures, fmt.Sprintf("%s/%s：%v", a.channel, firstNonEmpty(a.tier, "?"), derr))
 			// 无损坏流（帧 CRC 不过）→ 直链本身是坏的，重试同档没意义；
 			// 320K 是另一条编码链路，通常完好 —— 允许降档时降到 320k 再试一次。
+			// 坏流降档要能**逐级**走完 320k → 128k：只降一次时，若 320k 那条
+			// 恰好也是同一批转码产物（同样损坏）就整首失败，而 128k 往往是
+			// 另一条编码链路、完好可用。
 			if isCorruptFLAC(derr) && !downgraded && cfg.modeAllowsLower() {
-				logf("[BACKEND-DL] 无损流损坏，尝试降档到 320k 再下一次：%s（域名 %s）",
-					orDash(a.label), applog.HostOf(a.url))
-				if fb := cfg.corruptFallback(ctx, a, it); fb != nil {
-					downgraded = true
-					if res2, derr2 := downloadOne(ctx, client, cfg, it, *fb); derr2 == nil {
+				// 先看计划里有没有**已经探好的**低档候选（通常有：计划在探测阶段
+				// 就把 320k/128k 都收进来了）。有就直接用它，不必再解析一次 ——
+				// 这也是「最高音质失败 → 自动切下一档」最省事的执行面。
+				//
+				// 注意「改试计划内的候选」只能当**降级的立刻兑现**，不能替整体排序：
+				// 计划里排在后面的候选档位可能比眼前这条高（例如前面是 flac 坏流，
+				// 后面还有 320k、再后面才是更低的 128k）。所以这里只在「按原顺序
+				// 继续往下试」已经不可能拿到更高档时才提前跳过去 —— 否则会把本该
+				// 拿到的 320k 让给 128k。
+				// 计划里排在后面的候选按原顺序本来就会轮到，这里插进来只为
+				// 「尽快兑现一次降级」，避免沿用坏直链重试。挑的时候必须挑
+				// **档位最高的那条低档候选**，而不是第一条 —— 否则会拿 128k
+				// 顶掉本来能拿到的 320k（2026-11-01 实测：稻香 flac 坏流后
+				// 直接用了 128k，明明计划里还有 320k）。
+				if next := bestLowerRemaining(attempts[i+1:], a.tier); next != nil {
+					logf("[BACKEND-DL] 无损流损坏，改试计划内的 %s 候选：%s（域名 %s）",
+						orDash(next.tier), orDash(next.label), applog.HostOf(next.url))
+					res2, derr2 := downloadOne(ctx, client, cfg, it, *next)
+					if derr2 == nil {
+						logf("[BACKEND-DL] 降档取音成功：%s 档位 %s（域名 %s）→ %s",
+							orDash(next.label), orDash(res2.Quality), applog.HostOf(next.url), res2.Path)
+						return res2, nil
+					}
+					failures = append(failures, fmt.Sprintf("%s/%s：%v", next.channel, firstNonEmpty(next.tier, "?"), derr2))
+				}
+				for _, lower := range corruptLowerTiers(a.tier) {
+					fb := cfg.corruptFallbackTo(ctx, a, it, lower)
+					if fb == nil {
+						continue
+					}
+					logf("[BACKEND-DL] 无损流损坏，尝试降档到 %s 再下一次：%s（域名 %s）",
+						lower, orDash(a.label), applog.HostOf(a.url))
+					res2, derr2 := downloadOne(ctx, client, cfg, it, *fb)
+					if derr2 == nil {
 						logf("[BACKEND-DL] 降档取音成功：%s 档位 %s（域名 %s）→ %s",
 							orDash(fb.label), orDash(res2.Quality), applog.HostOf(fb.url), res2.Path)
 						return res2, nil
-					} else {
-						failures = append(failures, fmt.Sprintf("%s/%s：%v", fb.channel, firstNonEmpty(fb.tier, "?"), derr2))
+					}
+					failures = append(failures, fmt.Sprintf("%s/%s：%v", fb.channel, firstNonEmpty(fb.tier, "?"), derr2))
+					if !isCorruptFLAC(derr2) {
+						// 降档后已不是坏流（403/限流之类）：再降档也没用，收手。
+						break
 					}
 				}
+				downgraded = true // 一轮只降一遍，不许反复
 			}
 			if ctx.Err() != nil {
 				return Result{}, ctx.Err()
@@ -496,26 +632,62 @@ func planAttempts(ctx context.Context, cfg FetcherConfig, it Item) ([]attempt, e
 			takeLx := func(a attempt) bool {
 				return !strict || a.tier == "" || a.tier == want
 			}
+			// 洛雪要按**整套阶梯**逐档问，不能只问最高档。
+			//
+			// 2026-11-01（用户报「最高音质下载失败后应该自动切下一个音质」）：
+			// 旧实现只把 tiers[0] 交给脚本 —— 脚本对无损答不出来（冷门歌、或
+			// 脚本只支持有损）时这个渠道当场放弃，而洛雪往往正是那首曲子唯一
+			// 能下 320k 的地方。「仅下载最高」仍然只问一档。
+			lxTiers := tiers
+			if strict && len(lxTiers) > 1 {
+				lxTiers = lxTiers[:1]
+			}
+			// 非「仅下载最高」时放宽：只要不高于用户点名的那一档都收
+			//（更低档是降级结果，正是我们要的）。
+			looseTakeLx := func(a attempt) bool {
+				if strict {
+					return takeLx(a)
+				}
+				return a.tier == "" || online.TierRank(a.tier) <= online.TierRank(want)
+			}
+			// collectLx 把一个来源在整个阶梯上的候选收进来：哪一档拿到就停，
+			// 因为候选随后会按实际档位统一排序，更低档不会更好，只会白占名额。
+			collectLx := func(source string, info map[string]any) bool {
+				got := false
+				for _, tier := range lxTiers {
+					if len(attempts) >= maxAttempts {
+						break
+					}
+					cands, err := cfg.Lx.ResolveCandidates(ctx, source, info, tier, scripts)
+					if err != nil {
+						// 只记最高档的失败：低档问不到是常态，每档都记会刷成噪音。
+						if tier == want {
+							notes = append(notes, fmt.Sprintf("洛雪(%s)：%v", source, err))
+						}
+						continue
+					}
+					for _, a := range lxAttempts(cands, tier, it.Duration, source, cfg) {
+						if len(attempts) >= maxAttempts {
+							break
+						}
+						if !looseTakeLx(a) {
+							continue
+						}
+						add(a)
+						got = true
+					}
+					if got {
+						break
+					}
+				}
+				return got
+			}
 			found := false
 			// 路径 A：用任务自己的平台 id 让脚本取链（脚本只要一个 id）。
 			if strings.TrimSpace(it.Platform) != "" && strings.TrimSpace(it.PlatformID) != "" {
 				plat := strings.ToLower(strings.TrimSpace(it.Platform))
 				if !strings.HasPrefix(plat, "lx:") {
-					cands, err := cfg.Lx.ResolveCandidates(ctx, plat, lxInfoFromItem(it), want, scripts)
-					if err != nil {
-						notes = append(notes, fmt.Sprintf("洛雪(按 id)：%v", err))
-					} else {
-						for _, a := range lxAttempts(cands, want, it.Duration, plat, cfg) {
-							if len(attempts) >= maxAttempts {
-								break
-							}
-							if !takeLx(a) {
-								continue
-							}
-							add(a)
-							found = true
-						}
-					}
+					found = collectLx(plat, lxInfoFromItem(it))
 				}
 			}
 			// 路径 B：按歌名搜（洛雪自己搜得出候选时才能用这条）。
@@ -537,20 +709,7 @@ func planAttempts(ctx context.Context, cfg FetcherConfig, it Item) ([]attempt, e
 					if info == nil {
 						notes = append(notes, "洛雪搜索：候选缺少平台 id")
 					} else {
-						cands, cerr := cfg.Lx.ResolveCandidates(ctx, best.Source, info, want, scripts)
-						if cerr != nil {
-							notes = append(notes, fmt.Sprintf("洛雪(搜索取链)：%v", cerr))
-						} else {
-							for _, a := range lxAttempts(cands, want, it.Duration, best.Source, cfg) {
-								if len(attempts) >= maxAttempts {
-									break
-								}
-								if !takeLx(a) {
-									continue
-								}
-								add(a)
-							}
-						}
+						collectLx(best.Source, info)
 					}
 				}
 			}
@@ -563,53 +722,37 @@ func planAttempts(ctx context.Context, cfg FetcherConfig, it Item) ([]attempt, e
 				}
 				break
 			}
-			searchFn := cfg.searcher()
-			for _, p := range srcs {
-				if len(attempts) >= maxAttempts {
-					break
-				}
-				songs := searchFn(strings.TrimSpace(it.Name+" "+it.Singer), p)
-				best := pickUnifiedSong(songs, it, p)
-				if best == nil {
-					notes = append(notes, fmt.Sprintf("外挂池(%s)：没有同名同版录音", p))
+			// 逐源**并发**探测。
+			//
+			// 以前是串行的：20 个源 × 每个一次回搜（慢源 5–8s）＝ 提交后要等两分钟
+			// 才出取音计划（2026-11-01 实测 15:01:08 提交 → 15:03:06 出计划，2m11s）。
+			// 这些源彼此完全独立、谁先好谁就能用，串行只是在排队等最慢的那个。
+			// 并发后整体耗时≈最慢的单个源，用户点完立刻就能看到「尝试 1/N」。
+			dlRes := make([]dlProbeResult, len(srcs))
+			var wg sync.WaitGroup
+			for i, p := range srcs {
+				wg.Add(1)
+				go func(i int, p string) {
+					defer wg.Done()
+					dlRes[i] = probeOneMusicDLSource(ctx, cfg, it, p, tiers)
+				}(i, p)
+			}
+			wg.Wait()
+			// 按用户排的源顺序收结果（不乱序，同分支下排障日志才对得上）。
+			for _, r := range dlRes {
+				if r.err != "" {
+					notes = append(notes, r.err)
 					continue
 				}
-				id := unifiedPlatformID(*best)
-				if id == "" {
-					notes = append(notes, fmt.Sprintf("外挂池(%s)：候选缺少平台 id", p))
+				if len(r.attempts) == 0 {
 					continue
 				}
-				res, err := cfg.Pool.ResolveLadder(ctx, p, id, tiers)
-				if err != nil || res == nil || strings.TrimSpace(res.URL) == "" {
-					// 同 native：平台没有这一档时，退一步用它实际有的档。
-					if fb, _ := cfg.fallbackLower(ctx, p, id, it, err); fb != nil {
-						add(attempt{
-							channel: config.DLChannelMusicDL,
-							url:     fb.URL,
-							tier:    fb.Tier,
-							source:  p,
-							label:   "dl/" + p + "(降级)",
-							size:    fb.Size,
-							score:   scoreOf(fb.Tier, best.Quality),
-						})
-						continue
+				for _, a := range r.attempts {
+					add(a)
+					if len(attempts) >= maxAttempts {
+						break
 					}
-					notes = append(notes, fmt.Sprintf("外挂池(%s)：%v", p, firstErr(err)))
-					continue
 				}
-				tier := res.Tier
-				if strings.TrimSpace(tier) == "" {
-					tier = tierFromFormat(res.Format, res.Bitrate)
-				}
-				add(attempt{
-					channel: config.DLChannelMusicDL,
-					url:     res.URL,
-					tier:    tier,
-					source:  p,
-					label:   "dl/" + p,
-					size:    res.Size,
-					score:   scoreOf(tier, best.Quality),
-				})
 			}
 		}
 
@@ -675,6 +818,58 @@ type fallbackResult struct {
 // **实际**拿到的档位打分。⚠️ 与上面 ResolveLadder 的注释配套看：裸 Resolve
 // 对网易那条免登录接口固定 br=320000 → 只能拿 320k mp3，所以它的档位要
 // **重新推**（tierFromFormat），不能直接信平台给的声明。
+// dlProbeResult 是「某一个 musicdl 源」的探测结果（并发探测用）。
+type dlProbeResult struct {
+	attempts []attempt
+	err      string // 非空 = 备注（进 notes），不影响别的源
+}
+
+// probeOneMusicDLSource 探一个 musicdl 源：回搜 → 挑同名同版 → 按档阶梯解析。
+//
+// 抽出来是为了能并发跑（见 planAttempts 的 dl 分支）。每个源独立、互不依赖，
+// 任何一个源失败只记一条备注，不影响其它源。
+func probeOneMusicDLSource(ctx context.Context, cfg FetcherConfig, it Item, p string, tiers []string) dlProbeResult {
+	keyword := strings.TrimSpace(it.Name + " " + it.Singer)
+	songs := cfg.searcher()(keyword, p)
+	best := pickUnifiedSong(songs, it, p)
+	if best == nil {
+		return dlProbeResult{err: fmt.Sprintf("外挂池(%s)：没有同名同版录音", p)}
+	}
+	id := unifiedPlatformID(*best)
+	if id == "" {
+		return dlProbeResult{err: fmt.Sprintf("外挂池(%s)：候选缺少平台 id", p)}
+	}
+	res, err := cfg.Pool.ResolveLadder(ctx, p, id, tiers)
+	if err != nil || res == nil || strings.TrimSpace(res.URL) == "" {
+		// 同 native：平台没有这一档时，退一步用它实际有的档。
+		if fb, _ := cfg.fallbackLower(ctx, p, id, it, err); fb != nil {
+			return dlProbeResult{attempts: []attempt{{
+				channel: config.DLChannelMusicDL,
+				url:     fb.URL,
+				tier:    fb.Tier,
+				source:  p,
+				label:   "dl/" + p + "(降级)",
+				size:    fb.Size,
+				score:   scoreOf(fb.Tier, best.Quality),
+			}}}
+		}
+		return dlProbeResult{err: fmt.Sprintf("外挂池(%s)：%v", p, firstErr(err))}
+	}
+	tier := res.Tier
+	if strings.TrimSpace(tier) == "" {
+		tier = tierFromFormat(res.Format, res.Bitrate)
+	}
+	return dlProbeResult{attempts: []attempt{{
+		channel: config.DLChannelMusicDL,
+		url:     res.URL,
+		tier:    tier,
+		source:  p,
+		label:   "dl/" + p,
+		size:    res.Size,
+		score:   scoreOf(tier, best.Quality),
+	}}}
+}
+
 func (cfg FetcherConfig) fallbackLower(ctx context.Context, plat, platformID string, it Item, ladderErr error) (*fallbackResult, error) {
 	if !cfg.modeAllowsLower() {
 		return nil, ladderErr
@@ -724,6 +919,166 @@ func (cfg FetcherConfig) fallbackLower(ctx context.Context, plat, platformID str
 
 // planSummary 把候选列表压成「原生/flac(域名)·洛雪/flac(域名)」，最多 4 条 ——
 // 只在日志里出现，不参与任何决策。
+// probeAllChannels 是 planAttempts 的「兜底重探」：**不受渠道顺序影响**地把每条
+// 可用渠道都问一遍，能给出什么档位就收什么档位（不高于用户允许的顶），
+// 最后统一排序返回。
+//
+// 与 planAttempts 的差别（都是故意的）：
+//
+//	· 不「问到顶就收工」：用户的问题是「哪条路音质最好」，要在全部结果里挑，
+//	  而不是撞上第一条够用的就停。
+//	· 三档都问（无损 → 320k → 128k），让「最高档拿不到但次高档能拿」的源也能进表 ——
+//	  这正是「最高音质失败后自动切下一档」的执行面。
+//	· 只在 planAttempts 一条候选都没给出来时调用（见 NewFetcher），正常路径不变，
+//	  不给每条任务都叠一轮全渠道外呼。
+func probeAllChannels(ctx context.Context, cfg FetcherConfig, it Item) ([]attempt, error) {
+	tiers := tiersFor(it.Quality)
+	if cfg.modeIsTopOnly() && len(tiers) > 1 {
+		tiers = tiers[:1] // 「仅下载最高」不降：只问点名那一档
+	}
+	want := tiers[0]
+	channels := cfg.channelsOf()
+	if len(channels) == 0 {
+		return nil, fmt.Errorf("没有启用任何取音渠道")
+	}
+	var out []attempt
+	var notes []string
+	add := func(a attempt) {
+		a.pos = len(out)
+		if a.score < 0 {
+			a.score = 0
+		}
+		out = append(out, a)
+	}
+	for _, ch := range channels {
+		if ctx.Err() != nil {
+			break
+		}
+		switch ch {
+		case config.DLChannelNative:
+			if cfg.Pool == nil || strings.TrimSpace(it.Platform) == "" ||
+				strings.TrimSpace(it.PlatformID) == "" || strings.HasPrefix(strings.ToLower(it.Platform), "lx:") {
+				continue
+			}
+			plat := strings.ToLower(strings.TrimSpace(it.Platform))
+			res, err := cfg.Pool.ResolveLadder(ctx, plat, it.PlatformID, tiers)
+			if err != nil || res == nil || strings.TrimSpace(res.URL) == "" {
+				if fb, _ := cfg.fallbackLower(ctx, plat, it.PlatformID, it, err); fb != nil {
+					add(attempt{channel: config.DLChannelNative, url: fb.URL, tier: fb.Tier, source: plat,
+						label: "native/" + plat + "(降级)", size: fb.Size, score: scoreOf(fb.Tier, "")})
+				} else {
+					notes = append(notes, fmt.Sprintf("原生：%v", firstErr(err)))
+				}
+				continue
+			}
+			tier := res.Tier
+			if strings.TrimSpace(tier) == "" {
+				tier = tierFromFormat(res.Format, res.Bitrate)
+			}
+			add(attempt{channel: config.DLChannelNative, url: res.URL, tier: tier, source: plat,
+				label: "native/" + plat, size: res.Size, score: scoreOf(tier, "")})
+
+		case config.DLChannelLx:
+			if cfg.Lx == nil || cfg.lxState() != "ready" || len(cfg.scripts()) == 0 {
+				notes = append(notes, "洛雪："+lxReason(cfg.lxState()))
+				continue
+			}
+			scripts := cfg.scripts()
+			// 三条路都问（脚本可能只对某一档答得出来），全部候选进表再统一排序。
+			var ok bool
+			try := func(source string, info map[string]any) {
+				for _, tier := range tiers {
+					cands, err := cfg.Lx.ResolveCandidates(ctx, source, info, tier, scripts)
+					if err != nil {
+						continue
+					}
+					for _, a := range lxAttempts(cands, tier, it.Duration, source, cfg) {
+						if a.tier != "" && online.TierRank(a.tier) > online.TierRank(want) {
+							continue // 不高于用户允许的顶
+						}
+						add(a)
+						ok = true
+					}
+				}
+			}
+			if strings.TrimSpace(it.Platform) != "" && strings.TrimSpace(it.PlatformID) != "" &&
+				!strings.HasPrefix(strings.ToLower(it.Platform), "lx:") {
+				try(strings.ToLower(strings.TrimSpace(it.Platform)), lxInfoFromItem(it))
+			}
+			if !ok {
+				if songs, err := cfg.Lx.SearchAll(ctx, strings.TrimSpace(it.Name+" "+it.Singer), 12); err == nil {
+					if best := pickLxSong(songs, it); best != nil {
+						info := best.Raw
+						if len(info) == 0 {
+							info = lxInfoFromSong(*best)
+						}
+						if info != nil {
+							try(best.Source, info)
+						}
+					}
+				}
+			}
+
+		case config.DLChannelMusicDL:
+			srcs := cfg.dlSources()
+			if cfg.Pool == nil || len(srcs) == 0 {
+				notes = append(notes, "外挂池：musicdl 未启用")
+				continue
+			}
+			searchFn := cfg.searcher()
+			for _, p := range srcs {
+				if ctx.Err() != nil {
+					break
+				}
+				songs := searchFn(strings.TrimSpace(it.Name+" "+it.Singer), p)
+				best := pickUnifiedSong(songs, it, p)
+				if best == nil {
+					continue
+				}
+				id := unifiedPlatformID(*best)
+				if id == "" {
+					continue
+				}
+				res, err := cfg.Pool.ResolveLadder(ctx, p, id, tiers)
+				if err != nil || res == nil || strings.TrimSpace(res.URL) == "" {
+					if fb, _ := cfg.fallbackLower(ctx, p, id, it, err); fb != nil {
+						add(attempt{channel: config.DLChannelMusicDL, url: fb.URL, tier: fb.Tier, source: p,
+							label: "dl/" + p + "(降级)", size: fb.Size, score: scoreOf(fb.Tier, best.Quality)})
+					}
+					continue
+				}
+				tier := res.Tier
+				if strings.TrimSpace(tier) == "" {
+					tier = tierFromFormat(res.Format, res.Bitrate)
+				}
+				add(attempt{channel: config.DLChannelMusicDL, url: res.URL, tier: tier, source: p,
+					label: "dl/" + p, size: res.Size, score: scoreOf(tier, best.Quality)})
+			}
+		}
+	}
+	if len(out) == 0 {
+		if len(notes) > 0 {
+			return nil, fmt.Errorf("%s", strings.Join(notes, "；"))
+		}
+		return nil, nil
+	}
+	sortAttempts(out)
+	if len(out) > maxAttempts {
+		out = out[:maxAttempts]
+	}
+	// 同一个 URL 只留一次（不同渠道可能指向同一条 CDN 链接）。
+	seen := make(map[string]bool, len(out))
+	uniq := out[:0]
+	for _, a := range out {
+		if seen[a.url] {
+			continue
+		}
+		seen[a.url] = true
+		uniq = append(uniq, a)
+	}
+	return uniq, nil
+}
+
 func planSummary(attempts []attempt) string {
 	var parts []string
 	for i, a := range attempts {
@@ -759,9 +1114,49 @@ func logOrNoop(cfg FetcherConfig, format string, args ...any) {
 // 渠道无关：无论坏的那条来自洛雪、musicdl 还是原生，重解析都走
 // 原生解析器（it.Platform + it.PlatformID 按 320k 问一次）——
 // 坏的是直链，不是渠道；能按档拿新直链的入口只有原生解析器。
+//
+// bestLowerRemaining 在计划剩余部分里找「档位严格低于 tier」的候选，取其中档位最高的。
+//
+// 为什么要挑最高而不是第一条：计划是按实际档位从高到低排序的，但同一首歌
+// 在不同渠道可能给出 320k / 128k / 档位不明三种候选，第一条低档未必是最好的
+// 那条。挑错就等于把 320k 让给 128k。
+func bestLowerRemaining(rest []attempt, tier string) *attempt {
+	var best *attempt
+	for i := range rest {
+		a := &rest[i]
+		if strings.TrimSpace(a.url) == "" || a.tier == "" {
+			continue
+		}
+		if online.TierRank(a.tier) >= online.TierRank(tier) {
+			continue
+		}
+		if best == nil || online.TierRank(a.tier) > online.TierRank(best.tier) {
+			best = a
+		}
+	}
+	return best
+}
+
+// corruptLowerTiers 给出「坏流之后值得再试的档位」，从高到低。
+//
+// 只对无损档有意义：320k 坏流不再往 128k 降（音质落差太大，用户宁可不下载）。
+func corruptLowerTiers(tier string) []string {
+	t := strings.ToLower(strings.TrimSpace(tier))
+	if t != "" && !strings.HasPrefix(t, "flac") && t != "lossless" && t != "hires" && t != "ape" && t != "wav" {
+		return nil
+	}
+	return []string{online.Tier320k, online.Tier128k}
+}
+
+// corruptFallback 是「坏流降 320k」的便捷包装（保留给测试与旧调用方）。
 func (cfg FetcherConfig) corruptFallback(ctx context.Context, a attempt, it Item) *attempt {
+	return cfg.corruptFallbackTo(ctx, a, it, online.Tier320k)
+}
+
+// corruptFallbackTo 在坏流后按**指定**档位重解析一次。
+func (cfg FetcherConfig) corruptFallbackTo(ctx context.Context, a attempt, it Item, lower string) *attempt {
 	tier := strings.ToLower(strings.TrimSpace(a.tier))
-	if tier != "" && !strings.HasPrefix(tier, "flac") && tier != "lossless" && tier != "hires" {
+	if tier != "" && !strings.HasPrefix(tier, "flac") && tier != "lossless" && tier != "hires" && tier != "ape" && tier != "wav" {
 		if cfg.Logf != nil {
 			cfg.Logf("[BACKEND-DL] 坏流降档放弃：源尝试档位 %q 不是无损", tier)
 		}
@@ -774,10 +1169,18 @@ func (cfg FetcherConfig) corruptFallback(ctx context.Context, a attempt, it Item
 		}
 		return nil // 没有原生解析入口（洛雪伪源/缺平台 id）就无处重解析
 	}
-	res, err := cfg.resolveBypassingLadderCache(ctx, plat, it.PlatformID, online.Tier320k)
+	if lower == "" {
+		lower = online.Tier320k
+	}
+	// 渠道无关重解析：坏的是**直链**，不是渠道。优先按原曲平台问（命中率最高），
+	// 问不到再退回这条候选自己的渠道（musicdl 源 bobian/kw/mg…）——
+	// 只按原曲平台问时，「dl 渠道给的坏无损 + 原曲平台不可播放」必然死路，
+	// 而同一首在 musicdl 的 mp3 链路往往是好的（2026-11-01 晴天/bodian 实测）。
+	res, usedSrc, err := cfg.reResolveForLower(ctx, plat, it, a, lower)
 	if err != nil || res == nil || strings.TrimSpace(res.URL) == "" {
 		if cfg.Logf != nil {
-			cfg.Logf("[BACKEND-DL] 坏流降档失败：%s/%s 重解析 %s 失败：%v", a.channel, firstNonEmpty(a.tier, "?"), plat, err)
+			cfg.Logf("[BACKEND-DL] 坏流降档失败：%s/%s 按 %s 重解析 %s 失败：%v",
+				a.channel, firstNonEmpty(a.tier, "?"), lower, plat, err)
 		}
 		return nil
 	}
@@ -785,11 +1188,18 @@ func (cfg FetcherConfig) corruptFallback(ctx context.Context, a attempt, it Item
 	if t == "" {
 		t = tierFromFormat(res.Format, res.Bitrate)
 	}
-	if t == "" || online.TierRank(t) > online.TierRank(online.Tier320k) {
-		// 拿不到明确的 ≤320k 档位就不重试：坏流场景下「不知道是什么」
-		// 的重试大概率又是一条坏的无损。
+	if t != "" && online.TierRank(t) > online.TierRank(lower) {
+		// 平台不按档给（musicdl 源常见：要 320k 却回一份 flac）。这不是错误，
+		// 只是「它只能给更高的档」—— 用**实际**档位，别丢掉这条能下的直链：
+		// 坏的是原来那条直链，不是音质需求。调用方随后接住它继续验坏流。
 		if cfg.Logf != nil {
-			cfg.Logf("[BACKEND-DL] 坏流降档放弃：重解析回读档位 %q 不明确或高于 320k", t)
+			cfg.Logf("[BACKEND-DL] 坏流降档：%s 只给 %s（高于目标 %s），按实际档位继续", plat, t, lower)
+		}
+		lower = t
+	}
+	if t == "" {
+		if cfg.Logf != nil {
+			cfg.Logf("[BACKEND-DL] 坏流降档放弃：重解析回读档位不明（%q）", res.Format)
 		}
 		return nil
 	}
@@ -797,11 +1207,60 @@ func (cfg FetcherConfig) corruptFallback(ctx context.Context, a attempt, it Item
 	na.url = res.URL
 	na.tier = t
 	na.size = res.Size
+	// 降档重解析走的是**原生解析器**那条路（按平台 id 问档），所以渠道如实
+	// 标成 native；来源保留「谁给的这条链路」由 label 说明。
 	na.channel = config.DLChannelNative
-	na.source = plat
-	na.label = a.label + "(坏流降320k)"
+	na.source = firstNonEmpty(usedSrc, plat)
+	na.label = a.label + "(坏流降" + t + ")"
 	na.score = scoreOf(t, "")
 	return &na
+}
+
+// reResolveForLower 为「坏流降档」找一个能给出 ≤lower 档的**新直链**。
+//
+// 为什么要多渠道：坏流是直链层面的问题。原实现只按 it.Platform/it.PlatformID
+// 问一次，遇到「musicdl 渠道给了坏无损、而原曲平台对匿名不可播放」（QQ 未登录
+// 恒 104003）就必然失败 —— 用户看到的就是「无损坏了 → 降 320k 失败 → 降 128k
+// 失败 → 整首失败」。正确做法是把同一首歌在**别的渠道**再问一遍。
+//
+// 顺序：①原曲平台（最贴近用户点的那首）②这条候选自己的来源平台
+// （musicdl：bodian/kw/mg…；洛雪伪源则跳过）③都没问到就返回 nil。
+//
+// 返回值里的 src 是**这条直链实际来自哪个平台**：先按原曲平台问，问不到才退回
+// 候选自己的音乐源。落盘登记要用它 —— 以前一律记成原曲平台，于是「mitu 给的
+// 128k mp3」在队列里显示成「来源 tx」，排障时把人带偏（2026-11-01 稻香实测）。
+func (cfg FetcherConfig) reResolveForLower(ctx context.Context, plat string, it Item, a attempt, lower string) (*online.Resolved, string, error) {
+	res, err := cfg.resolveBypassingLadderCache(ctx, plat, it.PlatformID, lower)
+	if err == nil && res != nil && strings.TrimSpace(res.URL) != "" {
+		return res, plat, nil
+	}
+	first := err
+	// ②这条候选自己的来源（音乐平台 id 与它自报的 id 往往不同，重新搜一次最稳）
+	src := strings.ToLower(strings.TrimSpace(a.source))
+	if src == "" || src == plat || strings.HasPrefix(src, "lx:") {
+		return nil, "", first
+	}
+	searchFn := cfg.searcher()
+	songs := searchFn(strings.TrimSpace(it.Name+" "+it.Singer), src)
+	best := pickUnifiedSong(songs, it, src)
+	if best == nil {
+		return nil, "", first
+	}
+	id := unifiedPlatformID(*best)
+	if id == "" {
+		return nil, "", first
+	}
+	if cfg.Logf != nil {
+		cfg.Logf("[BACKEND-DL] 坏流降档改问 %s：%s（原曲平台 %s 无解）", src, it.Name, plat)
+	}
+	res2, err2 := cfg.resolveBypassingLadderCache(ctx, src, id, lower)
+	if err2 == nil && res2 != nil && strings.TrimSpace(res2.URL) != "" {
+		return res2, src, nil
+	}
+	if first == nil {
+		first = err2
+	}
+	return nil, "", first
 }
 
 // resolveBypassingLadderCache 是 fallbackLower 的取音入口：绕开 Pool 的

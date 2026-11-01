@@ -354,13 +354,18 @@
               <td class="py-3 px-2 sm:px-3 text-center text-gray-500 font-mono">{{ (page - 1) * PAGE_SIZE + idx + 1 }}</td>
               <td class="py-3 px-3 sm:px-4 flex items-center gap-2.5 sm:gap-3 min-w-0">
                 <div class="w-8 h-8 sm:w-9 sm:h-9 rounded-lg overflow-hidden bg-[var(--ys-surface-sunken)] border border-[var(--ys-border)] shrink-0 flex items-center justify-center">
+                  <!-- 2026-11-01：封面地址**按 path 现算**，不再只信后端那份相对地址。
+                       旧版扫描缓存 / 旧后端返回的 `cover_url` 没转义也没带网关前缀，
+                       直接拿来当 src 会 404 → 整列只剩 💿（用户「看不到封面」）。
+                       rowCoverSrc 内部对两者都做了兜底，坏地址也会回落到按 path 取。 -->
                   <img 
-                    v-if="song.cover_url" 
-                    :src="song.cover_url" 
+                    v-if="rowCoverSrc(song)" 
+                    :src="rowCoverSrc(song)" 
                     alt="cover" 
+                    loading="lazy"
                     referrerpolicy="no-referrer"
                     class="w-full h-full object-cover"
-                    @error="song.cover_url = ''"
+                    @error="markCoverBroken(song.path)"
                   />
                   <span v-else class="text-sm sm:text-base">💿</span>
                 </div>
@@ -767,7 +772,6 @@ import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import { markLoaded, isStale } from '../services/viewCache'
 import { currentView } from '../services/navBus'
 import { NasAPI, TagsAPI, FnosAPI } from '../api/client'
-import { withBase } from '../services/basePath.js'
 import { loadPref, savePref, loadBool, memGet, memSet } from '../services/prefs'
 import { sortSongs, parseSortPref, sortPrefOf, nextSortDir } from '../services/librarySort'
 import {
@@ -777,6 +781,7 @@ import {
   scanViewOf,
   scanViewOfCache,
   scanHintOf,
+  withCoverSrc,
 } from '../services/nasView'
 import {
   RotateCw, Folder, FolderOpen, Play, X, Search, Check,
@@ -1004,6 +1009,30 @@ function showEmbedNotice(text, ok = true) {
 // 为什么要有它：飞牛**只认内嵌封面**，而「曲库补全」是「搜到哪首就用哪首的图」，
 // 用户没得挑（2026-09-22 反馈：「手动获取音源的封面或者搜索歌曲封面」）。
 // 这里把候选图列出来让人自己选，选定后走 POST /api/nas/tags 内嵌进文件。
+// 取图失败的 path 记在这里：这一次访问内不再反复请求（省两次 404 + 闪动），
+// 但**不写进 songs 本身** —— 曲库重扫/切目录后自然重试。
+const brokenCovers = ref(new Set())
+function markCoverBroken(path) {
+  const s = new Set(brokenCovers.value)
+  s.add(String(path || ''))
+  brokenCovers.value = s
+}
+
+/**
+ * 这一行的封面地址。
+ *
+ * 优先级：后端已给且是绝对地址（data:/blob:/http(s)）→ 后端原样；
+ * 否则按 path 现算 —— `NasAPI.coverUrl(path)` 会做 URL 转义并补上网关前缀，
+ * 这既是「旧缓存里那份没转义的地址」的兜底，也是「后端没给 cover_url」的兜底。
+ */
+function rowCoverSrc(song) {
+  if (!song || !song.path) return ''
+  if (brokenCovers.value.has(String(song.path))) return ''
+  const raw = String(song.cover_url || song.cover || '')
+  if (/^(https?:|data:|blob:)/i.test(raw)) return raw
+  return NasAPI.coverUrl(song.path)
+}
+
 const coverPicker = ref({
   show: false, song: null, query: '', candidates: [], loading: false, applying: false, error: '',
 })
@@ -1068,7 +1097,11 @@ async function applyCover(url) {
     }
     // 成功：立刻换掉这一行的缩略图。后端已让扫描缓存失效，
     // 再加个时间戳参数强制浏览器重新取图（否则会拿缓存的旧图）。
-    st.song.cover_url = withBase(`/api/nas/cover?path=${encodeURIComponent(st.song.path)}&v=${Date.now()}`)
+    st.song.cover_url = NasAPI.coverUrl(st.song.path) + `&v=${Date.now()}`
+    // 换过封面后这行要重新允许取图（之前可能已因 404 被标记过）
+    const nb = new Set(brokenCovers.value)
+    nb.delete(String(st.song.path || ''))
+    brokenCovers.value = nb
     st.show = false
     // 飞牛按 mtime/size 决定要不要重读，排一次重扫让它尽快看到新封面
     try { await FnosAPI.rescan() } catch (_) {}
@@ -1136,7 +1169,9 @@ function applyScanView(view) {
   // ⚠️ 2026-10-29：扫描回来的每首歌**没有 `name` 字段**（后端 Song 只给 title），
   //    而排序/过滤/模板都假设它在 —— 这里统一补齐成字符串，别让下游猜。
   //    normalizeScanSongs 无论如何都返回数组，坏形状也不会变成「s is not iterable」。
-  songs.value = normalizeScanSongs(view.songs)
+  //    ⚠️ 2026-11-01：补齐 name 之后**必须**再套 withCoverSrc —— 后端给的是站内
+  //    相对地址，飞牛网关形态下 `<img src>` 不走 axios，不补前缀就只显示 💿。
+  songs.value = withCoverSrc(normalizeScanSongs(view.songs))
   scanTruncated.value = view.truncated
   scanWarnings.value = view.warnings
 }
@@ -1236,7 +1271,8 @@ function mapNasSong(song) {
     singer: song.artist || '本地音乐',
     artist: song.artist || '本地音乐',
     album: song.album || '飞牛 NAS 本地音乐',
-    cover: song.cover_url || '',
+    // 播放条用的封面：与列表同一套取法（见 rowCoverSrc），别在这里另写一遍
+    cover: rowCoverSrc(song),
     streamUrl: NasAPI.streamUrl(song.path),
     source: 'nas',
     format: song.format,

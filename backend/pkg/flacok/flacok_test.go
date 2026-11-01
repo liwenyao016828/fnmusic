@@ -245,6 +245,38 @@ func TestCorruptFrameHeaderCRCIsCaught(t *testing.T) {
 	}
 }
 
+// TestTailPaddingIsCleanEnd 文件尾只有「补齐位」时不算坏流。
+//
+// 2026-11-01 的真实案例：一首 55MB 的 flac 逐帧校验全过，末尾只剩 3 个字节
+// 「55 ff f0」。读下一帧的 14 位同步码读出 0x3C00（补齐位），旧逻辑直接报
+// 「同步码丢失」，把好文件判成坏流；而如果先看「剩余字节够不够一帧」，又会
+// 把**残缺帧**（CRC 恰好对上前半段）当成完整帧放过。判据只能是「有没有真正
+// 进到这一帧里」——进不去就是流结束了，进去了却没走完就是被截断。
+func TestTailPaddingIsCleanEnd(t *testing.T) {
+	data := fixtureFile(defaultFrames()...)
+	for _, pad := range [][]byte{
+		{0x55, 0xFF, 0xF0},
+		{0x00},
+		{0xFF, 0xFF, 0xFF, 0xFF},
+	} {
+		if err := ValidateFile(writeTemp(t, append(append([]byte{}, data...), pad...))); err != nil {
+			t.Fatalf("尾部补齐位 % x 被判坏：%v", pad, err)
+		}
+	}
+}
+
+// TestTruncatedInsideLastFrameIsCaught 最后一帧只写了一半（含帧头、无帧尾 CRC）
+// 必须算坏流，不能因为「剩余字节不足一帧」就当成正常结束。
+func TestTruncatedInsideLastFrameIsCaught(t *testing.T) {
+	frames := defaultFrames()
+	data := fixtureFile(frames...)
+	// 最后一帧留下前半段，帧头完整、帧尾 CRC 缺失
+	cut := len(data) - len(frames[len(frames)-1])/2
+	if err := ValidateFile(writeTemp(t, data[:cut])); !errors.Is(err, ErrFrameCorrupt) {
+		t.Fatalf("半截帧没被抓住：err = %v", err)
+	}
+}
+
 func TestTruncatedFile(t *testing.T) {
 	data := fixtureFile(defaultFrames()...)
 	cases := map[string]int{

@@ -15,10 +15,16 @@
     aria-atomic="false"
   >
     <TransitionGroup name="ys-feedback">
+      <!--
+        2026-11-01（用户：点「下载到本地」「同步」后弹出来的提示框里看不到字）：
+        --ys-toast-bg 早在「瞬时提示改白底」那一轮就变成了 #ffffff，但文字色一直
+        是 text-white —— 白底白字，整条提示等于隐形。文字/边框改跟随主题色，
+        白底深字、深色底浅字都对。
+      -->
       <button
         v-for="item in visible"
         :key="item.id"
-        class="pointer-events-auto flex max-w-full items-center gap-2.5 rounded-full border border-white/10 bg-[var(--ys-toast-bg)] px-4 py-2.5 text-left leading-relaxed text-white shadow-[0_10px_30px_rgba(0,0,0,0.22)] backdrop-blur-xl"
+        class="pointer-events-auto flex max-w-full items-center gap-2.5 rounded-full border border-[var(--ys-border)] bg-[var(--ys-toast-bg)] px-4 py-2.5 text-left leading-relaxed text-[var(--ys-text)] shadow-[0_10px_30px_rgba(0,0,0,0.18)] backdrop-blur-xl"
         :class="item.goLogs
           ? 'cursor-pointer transition-transform duration-200 [transition-timing-function:var(--ys-ease)] hover:scale-[1.02] active:scale-[0.99]'
           : 'cursor-default'"
@@ -52,7 +58,7 @@ import { Info, CheckCircle2, AlertTriangle, XCircle } from 'lucide-vue-next'
 
 const visible = computed(() => feedbackItems.value.slice(-FEEDBACK_MAX_VISIBLE))
 
-/** 颜色只上图标：底统一是深色玻璃（--ys-toast-bg），不再四色铺满整条。 */
+/** 颜色只上图标：底色跟主题走（--ys-toast-bg），文字色跟 --ys-text 走，不再四色铺满整条。 */
 const TINT = {
   info: 'text-[var(--ys-toast-info)]',
   ok: 'text-[var(--ys-toast-ok)]',
