@@ -1,0 +1,71 @@
+#!/bin/bash
+# ==============================================================================
+#  曲率（yinshu-ai）—— 把「安装向导 / 配置向导」填的内容落进应用环境
+#
+#  由 cmd/main 在 start 时 source（见那边的 qulv_apply_wizard）：
+#    · 安装向导 wizard/install —— 只在安装时问一次
+#    · 配置向导 wizard/config  —— 用户每次在「应用中心 → 曲率 → 设置」里改
+#
+#  官方机制：向导里的 `field` 名就是环境变量名，系统在跑生命周期脚本时把它们
+#  注入进来（https://developer.fnnas.com/docs/core-concepts/wizard/）。但这两个
+#  变量只对这一批脚本的进程有效 —— 我们的后端是 nohup 起的常驻进程，重启之后就
+#  再也拿不到了。
+#
+#  落点为什么是 ${VAR_DIR}/env.d（目录 + 独立小文件）而不是往 .env 里追加：
+#    · .env 是用户手工维护的文件（QULV_TAKEOVER 之类），追加需要逐行改写，
+#      写坏一次就是「应用起不来」；
+#    · 只写我们自己的文件，用户哪天手工删掉整个 .env 也不会连带删掉向导值；
+#    · 文件名用大写键名，一眼能看出是哪个变量。
+#  cmd/main 在 source .env 之后 source 这个目录里的所有文件，语义等价。
+#
+#  ⚠️ 只写用户真的填过的字段；空值一律跳过（否则用户清空某个向导字段会被当成
+#     「把曲库目录设成空串」写进去，覆盖掉已有的有效配置）。
+# ==============================================================================
+
+# qulv_wizard_value <变量名> —— 打印该向导变量的值，未设置/为空则打印空串
+qulv_wizard_value() {
+    local name="$1"
+    eval "printf '%s' \"\${${name}:-}\""
+}
+
+# qulv_put_wizard_env <VAR_DIR> <KEY> <VALUE> —— 在 env.d/<KEY> 写入一行 KEY=VALUE
+qulv_put_wizard_env() {
+    local var_dir="$1" key="$2" val="$3"
+    local dir="${var_dir}/env.d"
+    mkdir -p "$dir" 2>/dev/null || return 0
+    printf '%s=%s\n' "$key" "$val" > "${dir}/${key}.tmp.$$" 2>/dev/null &&
+        mv -f "${dir}/${key}.tmp.$$" "${dir}/${key}" 2>/dev/null
+    return 0
+}
+
+# qulv_apply_wizard <VAR_DIR>
+#
+# 「留空 = 不改动」是向导文案对用户的承诺，靠的就是下面 if [ -n ] 的判断：
+# 空值不落盘，env.d 里原有的有效值保持不动，后端继续用它。所以这两个字段在
+# wizard 里**不能**标 required —— 一标必填，用户就没法「只改别的、不动目录」。
+qulv_apply_wizard() {
+    local var_dir="$1"
+    local music watch
+
+    music="$(qulv_wizard_value wizard_music_dir)"
+    watch="$(qulv_wizard_value wizard_watch_dirs)"
+
+    # 曲库目录：写 QULV_MUSIC_DIR（后端启动时用它把曲库目录并进配置）。
+    #
+    # 为什么不同时写 FN_ALLOWED_ROOTS：那个变量在 pkg/nas 里会**完全覆盖**允许根目录
+    # 列表，等于绕过用户授权。曲库目录「能不能访问」交给官方授权模型
+    # （config/resource 的 api-scope + 页面上的「授权目录」按钮），这里只记录「去哪找歌」。
+    if [ -n "$music" ]; then
+        case "$music" in
+            /*) qulv_put_wizard_env "$var_dir" QULV_MUSIC_DIR "$music" ;;
+            *)  echo "警告: 向导里的曲库目录不是绝对路径（$music），已忽略" ;;
+        esac
+    fi
+    if [ -n "$watch" ]; then
+        case "$watch" in
+            /*) qulv_put_wizard_env "$var_dir" QULV_WATCH_DIRS "$watch" ;;
+            *)  echo "警告: 向导里的额外曲库目录不是绝对路径（$watch），已忽略" ;;
+        esac
+    fi
+    return 0
+}

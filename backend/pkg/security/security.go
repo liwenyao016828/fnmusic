@@ -20,6 +20,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -390,8 +391,29 @@ func NewSafeClient(opts Options, timeout time.Duration) *http.Client {
 	if timeout <= 0 {
 		timeout = 20 * time.Second
 	}
+	return newSafeHTTPClient(opts, timeout, NewSafeRoundTripper(opts))
+}
+
+// NewSafeStreamClient 返回带 SSRF 防护的「长连接」客户端，用于下载大文件。
+//
+// 与 NewSafeClient 的差别只有一处：超时的含义。
+// http.Client.Timeout 覆盖的是**整个响应体读取**（不是只管等响应头），
+// 所以拿它去下几十 MB 的音频，45 秒就够掐断一次正常下载。
+//
+// 这里把超时给足（默认 10 分钟），同时保留「等响应头」的代理尝试上限：
+// 代理不通时仍然 5 秒掉头直连；响应头到手后上限即解除，响应体可以慢慢读完。
+func NewSafeStreamClient(opts Options, timeout time.Duration) *http.Client {
+	if timeout <= 0 {
+		timeout = 10 * time.Minute
+	}
+	return newSafeHTTPClient(opts, timeout, NewSafeRoundTripper(opts))
+}
+
+// newSafeHTTPClient 是 NewSafeClient / NewSafeStreamClient 的共同骨架：
+// 同一个 SSRF 校验的重定向策略，只是 transport 与超时预算不同。
+func newSafeHTTPClient(opts Options, timeout time.Duration, transport http.RoundTripper) *http.Client {
 	return &http.Client{
-		Transport: NewSafeRoundTripper(opts),
+		Transport: transport,
 		Timeout:   timeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 10 {
@@ -485,16 +507,48 @@ func (t *proxyFallbackTransport) RoundTrip(req *http.Request) (*http.Response, e
 		return t.proxied.RoundTrip(req)
 	}
 
+	// 「经代理的那一次尝试」单独用一个 ctx，好让上限只约束它自己。
+	//
+	// ⚠️ 这里必须用 WithCancel + AfterFunc，**不能**用 WithTimeout：
+	// WithTimeout 给 ctx 留的是一个** Deadline**，而 net/http 的读循环在
+	// ctx 到期（或被 cancel）时会掐掉**正在读的响应体**。于是「代理已经返回
+	// 响应头、音频还没读完」就会变成 context canceled —— 表现为下载单曲时
+	// 「写入文件失败: context canceled」（2026-10-30 实测，代理环境下必现）。
+	// WithCancel 没有 Deadline，只有我们主动 cancel 时才断，响应体可以一直读。
 	tryReq := req
 	var cancel context.CancelFunc
+	var stopCap func() bool
 	if t.attemptTimeout > 0 {
 		var ctx context.Context
-		ctx, cancel = context.WithTimeout(req.Context(), t.attemptTimeout)
+		ctx, cancel = context.WithCancel(req.Context())
+		timer := time.AfterFunc(t.attemptTimeout, cancel)
+		stopCap = func() bool { return timer.Stop() }
 		tryReq = req.Clone(ctx)
 	}
 
 	resp, err := t.proxied.RoundTrip(tryReq)
-	hitCap := err != nil && cancel != nil && tryReq.Context().Err() == context.DeadlineExceeded && req.Context().Err() == nil
+	// 快照「这次尝试的 ctx 是不是已经出问题了」：必须**立刻**取。
+	// 上限是定时器，可能在 RoundTrip 返回之后才到点；事后读 ctx.Err() 会把
+	// 「代理真的连不上」误判成「撞了上限」，把业务错误也拖去直连重试。
+	attemptCtxErr := tryReq.Context().Err()
+	hitCap := err != nil && cancel != nil && attemptCtxErr != nil && req.Context().Err() == nil
+
+	if err == nil && cancel != nil {
+		if !stopCap() {
+			// 上限刚好在同一刻到点（定时器已触发，cancel 迟早会跑）：
+			// 这个响应体已经是废的 → 判定代理这条路不通，改走直连。
+			_ = resp.Body.Close()
+			resp = nil
+			err = context.Canceled
+			hitCap = true
+		} else {
+			// 响应头到手：上限只管「等响应头」这一段，响应体交给调用方的 ctx 管。
+			// 绝不能在这里 cancel —— 那个 ctx 是响应体的生命线。
+			// cancel 改由 Body.Close 释放（CancelFunc 幂等，Close 调多次也安全）。
+			resp.Body = &cancelOnCloseBody{ReadCloser: resp.Body, cancel: cancel}
+			cancel = nil
+		}
+	}
 	if cancel != nil {
 		cancel()
 	}
@@ -528,12 +582,35 @@ func (t *proxyFallbackTransport) RoundTrip(req *http.Request) (*http.Response, e
 	return out, nil
 }
 
+// cancelOnCloseBody 把「一次代理尝试」的 cancel 句柄绑到响应体上：
+// 响应体被读完或被关闭时，才真正释放这次尝试的 ctx。
+//
+// 为什么需要它：net/http 在请求 ctx 被 cancel 时会掐掉正在读的响应体。
+// 代理尝试的 ctx 必须活到**响应体读完**，否则长音频流会被中途掐断
+// （表现为「写入文件失败: context canceled」）。而 ctx 又不能泄漏 ——
+// 每次尝试都 new 一个 WithCancel，不释放就是内存/协程泄漏。
+type cancelOnCloseBody struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+	once   sync.Once
+}
+
+// Close 关闭底层响应体并释放这次尝试的 ctx（幂等：多次 Close 只取消一次）。
+func (b *cancelOnCloseBody) Close() error {
+	err := b.ReadCloser.Close()
+	b.once.Do(b.cancel)
+	return err
+}
+
 // NewSafeRoundTripper 返回带 SSRF 防护 + 「代理不通自动直连」降级的 RoundTripper，
 // 供自己管理超时/重定向的调用方使用。
 //
 // 会给「走代理的那一次尝试」加一个短上限（proxyAttemptTimeout）：代理卡住时不能
-// 把调用方的整个超时预算耗光，得留出直连的时间。因此**返回流式响应体**的场景要用
-// NewSafeStreamRoundTripper（那里不能有上限，否则长音频流会被掐断）。
+// 把调用方的整个超时预算耗光，得留出直连的时间。
+//
+// ⚠️ 这个上限**只约束「等响应头」那一段**：响应头到手后，上限即解除，
+// 响应体可以一直读到完（由调用方自己的 ctx / Timeout 兜底）。
+// 需要「连响应头也不要上限」时用 NewSafeStreamRoundTripper。
 func NewSafeRoundTripper(opts Options) http.RoundTripper {
 	return newFallbackTransport(opts, proxyAttemptTimeout)
 }

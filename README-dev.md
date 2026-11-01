@@ -51,6 +51,10 @@ bash .dev/wsl-run.sh fpk
 
 Windows 下也能跑（`bash scripts/dev.sh`），但**必须设 `FN_ALLOWED_ROOTS`**，否则路径守卫 fail closed。
 
+> ⚠️ `FN_ALLOWED_ROOTS` 只该用于**开发机**：在飞牛上它一旦设置就**完全覆盖**内置根目录，
+> 等于绕过「用户授权目录」这套官方权限模型（v2.24.4 起 `AllowedRoots()` 是三路授权的并集，
+> 见 HANDOVER §2 规则三）。生产上要让曲率多看一个目录，请走应用设置里的「授权目录」，别改这个变量。
+
 > 详见 [`HANDOVER.md`](HANDOVER.md) §1。
 
 ## 目录结构

@@ -1,2 +1,34 @@
 #!/bin/bash
+# ==============================================================================
+#  config_callback —— 用户在「应用中心 → 曲率 → 设置 → 配置向导」里点了保存
+#
+#  system 的调用顺序是 config_init（校验前）→ 用户看到表单 → config_callback（保存后），
+#  向导字段作为环境变量注入，官方文档：
+#  https://developer.fnnas.com/docs/core-concepts/wizard/
+#
+#  我们要做的只有一件事：把向导值落进 ${VAR_DIR}/env.d/，然后重启应用让后端读到。
+#  落盘逻辑与 cmd/main 共用同一份实现（cmd/_wizard），避免两处规则漂移。
+# ==============================================================================
+set -u
+
+APP_DIR="${TRIM_APPDEST:-/var/apps/${TRIM_APPNAME:-yinshu-ai}}"
+APP_NAME="${TRIM_APPNAME:-yinshu-ai}"
+VAR_DIR="${TRIM_PKGVAR:-${APP_DIR}/var}"
+
+SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [ -f "${SELF_DIR}/_wizard" ]; then
+    # shellcheck source=/dev/null
+    . "${SELF_DIR}/_wizard"
+    qulv_apply_wizard "${VAR_DIR}"
+else
+    echo "警告: 缺少向导脚本 ${SELF_DIR}/_wizard，本次配置未能生效"
+    exit 1
+fi
+
+# 让后端重启以加载新配置。用 cfg 的子命令重启自己，而不是裸 kill：
+# 走 main 的 restart 分支能保证 PID 文件、日志、端口都按同一套逻辑处理。
+if [ -x "${SELF_DIR}/main" ]; then
+    "${SELF_DIR}/main" restart >/dev/null 2>&1 || echo "警告: 自动重启失败，请在应用中心手动停止再启动"
+fi
+
 exit 0

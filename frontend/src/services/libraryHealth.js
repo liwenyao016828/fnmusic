@@ -8,6 +8,8 @@
 // 新增两个小接口不值得在那里制造冲突；路径与超时在这里写死反而更好审查。
 
 import { apiError } from './userMsg.js'
+// 网关前缀：微应用形态下页面挂在 /app/yinshu-ai 下，写死 /api 会打到 fnOS 门户。
+import { withBase } from './basePath.js'
 
 const SCAN_TIMEOUT = 120000 // 全盘扫一遍很慢，别用默认 30s 把用户逼成重试
 const FIX_TIMEOUT = 120000
@@ -74,7 +76,7 @@ async function postJSON(url, body, timeout) {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeout)
   try {
-    const res = await fetch(url, {
+    const res = await fetch(withBase(url), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body || {}),

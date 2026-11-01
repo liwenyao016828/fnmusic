@@ -27,6 +27,22 @@ fi
 PID_FILE="${VAR_DIR}/${APP_NAME}.pid"
 DATA_DIR="${VAR_DIR}/data"
 
+# ── 统一网关（微应用）的 socket ────────────────────────────────────────────
+#
+# 飞牛桌面不再直连 8898 端口，而是走官方「统一网关」：app/ui/config 里声明
+# gatewayPrefix=/app/yinshu-ai + gatewaySocket=app.sock，网关（trim_http_cgi）
+# 把 /app/yinshu-ai/** 的请求转发到**这个 socket**。
+#
+# 两条硬约束（官方文档 + 真机实测）：
+#   1. socket 文件必须落在 target 目录（TRIM_APPDEST），网关只认那儿；
+#   2. gatewayPrefix 必须与 app/ui/config 一致，否则页面打开一片 404。
+#
+# TCP 端口（8898）**保留**：manifest 的 service_port 是它，应用中心探活、
+# 「边听边下」落盘回调（进程内打 127.0.0.1:8898）都还依赖它。所以这里是并行，
+# 不是替换。
+GATEWAY_PREFIX="/app/yinshu-ai"
+GATEWAY_SOCKET="${APP_DIR}/app.sock"
+
 # 日志写到内存文件系统 /tmp，避免写到机械硬盘触发唤醒
 LOG_FILE="/tmp/${APP_NAME}.log"
 
@@ -51,6 +67,20 @@ log_error() {
 #
 # set -a 让 source 进来的变量自动 export；文件不存在就静默跳过，
 # 写坏了也只警告不拦启动 —— 这个文件的权限只属于 root，不是攻击面。
+#
+# ── 先落盘「安装向导 / 配置向导」填的内容 ──────────────────────────────────
+#
+# wizard/install、wizard/config 里的字段（wizard_music_dir 等）只存在于跑生命
+# 周期脚本的那一次进程环境里，而后端是常驻进程 —— 重启之后就再也拿不到了。
+# _wizard 负责把它们写进 ${VAR_DIR}/env.d/，**必须在下面 source 环境之前跑**，
+# 否则这一次启动仍然读不到用户刚填的值。
+SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [ -f "${SELF_DIR}/_wizard" ]; then
+    # shellcheck source=/dev/null
+    . "${SELF_DIR}/_wizard"
+    qulv_apply_wizard "${VAR_DIR}"
+fi
+
 ENV_FILE="${VAR_DIR}/.env"
 if [ -f "$ENV_FILE" ]; then
     set -a
@@ -59,6 +89,18 @@ if [ -f "$ENV_FILE" ]; then
         echo "警告: ${ENV_FILE} 解析失败，本次启动忽略其中的设置"
     fi
     set +a
+fi
+
+# 向导值放在 env.d/ 里，一个变量一个文件；目录不存在就跳过。
+if [ -d "${VAR_DIR}/env.d" ]; then
+    set -a
+    for _wf in "${VAR_DIR}"/env.d/*; do
+        [ -f "$_wf" ] || continue
+        # shellcheck disable=SC1090
+        . "$_wf" 2>/dev/null || echo "警告: 向导设置 ${_wf} 解析失败，已忽略"
+    done
+    set +a
+    unset _wf
 fi
 
 case "$1" in
@@ -78,8 +120,13 @@ case "$1" in
       exit 1
     fi
 
+    # 残留 socket 先清掉：上一次被 kill -9 时文件会留在盘上，而 bind 已存在的
+    # unix socket 会直接失败（后端也有同样的清理，这里是双保险 —— 后端若因权限
+    # 删不掉，脚本以 root 跑总删得掉）。
+    rm -f "${GATEWAY_SOCKET}"
+
     # 启动后台守护进程，日志写入 /tmp
-    nohup "${BIN_PATH}" --port ${APP_PORT} --data "${DATA_DIR}" > "${LOG_FILE}" 2>&1 &
+    nohup "${BIN_PATH}" --port ${APP_PORT} --data "${DATA_DIR}" --socket "${GATEWAY_SOCKET}" > "${LOG_FILE}" 2>&1 &
     DAEMON_PID=$!
     echo "$DAEMON_PID" > "$PID_FILE"
 
@@ -117,6 +164,9 @@ case "$1" in
       # 否则会把并存的旧「极光音乐」一起杀掉
       pkill -f "${BIN_NAME}" 2>/dev/null || true
     fi
+    # 进程没了 socket 文件还在的话，网关会一直往一个没人接的 socket 转发，
+    # 表现是「应用页打开一片空白但进程状态正常」。停服务时顺手清掉。
+    rm -f "${GATEWAY_SOCKET}"
     echo "${APP_NAME} 已停止."
     exit 0
     ;;
@@ -136,8 +186,14 @@ case "$1" in
     exit 3 # 3 表示未运行 (fnOS 规范)
     ;;
 
+  restart)
+    # 「配置向导」保存后由 config_callback 调过来：光写配置不重启，用户是看不到变化的。
+    "$0" stop
+    exec "$0" start
+    ;;
+
   *)
-    echo "使用方法: $0 {start|stop|status}"
+    echo "使用方法: $0 {start|stop|restart|status}"
     exit 1
     ;;
 esac

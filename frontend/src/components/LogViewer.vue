@@ -100,8 +100,10 @@
         </div>
         <p class="border-t border-[var(--ys-border)] px-4 py-2 text-[11px] text-gray-500">
           共 {{ serverTotal }} 条 ·
-          <span v-if="serverLogFile" class="text-gray-500">内存副本重启即清空，同时落盘到 {{ serverLogFile }}</span>
-          <span v-else>只保留在内存里，重启应用即清空</span>
+          <span v-if="serverLogFile" class="break-all text-gray-500">
+            这里只显示最近 500 条；全部记录已落盘到 {{ serverLogFile }}（按 20MB 轮转，重启不清空）
+          </span>
+          <span v-else>未开启落盘：只保留在内存里，重启应用即清空（可在设置里打开）</span>
           · <span class="text-gray-500">「前端」= 网页端上报的操作报错</span>
         </p>
       </template>

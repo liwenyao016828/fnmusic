@@ -28,18 +28,20 @@
         :title="`当前共 ${total} 行，输入 100 = 前 100 首，11-200 = 第 11 到 200 首`"
         @click="apply"
       >选择</button>
-      <button
-        v-if="hasSelection"
-        type="button"
-        class="ys-press rounded-lg border border-[var(--ys-border)] bg-white px-2.5 py-1 text-[11.5px] font-medium text-[var(--ys-text-muted)] transition-colors hover:bg-black/[0.04] hover:text-[var(--ys-text)]"
-        title="清空已勾选的行"
-        @click="emit('clear')"
-      >清空选择</button>
+      <!--
+        2026-10-30：原来这里还有一颗「清空选择」，它与右侧 #extra 里的「取消全选（N）」
+        是同一件事（都只是把勾选清空），同一行并排两个按钮更容易让人犹豫点哪个。
+        本组件的唯一使用者（下载队列页）右侧一定带「取消全选」，所以这里保留输入 + 选择即可；
+        `hasSelection` prop 与 `clear` emit 继续保留，供将来的使用者自行决定要不要入口。
+      -->
     </div>
 
-    <span class="text-[10.5px] text-[var(--ys-text-aux)]">
-      共 {{ total }} 行 · 例 100 / 11-200 / 1-10,80
-    </span>
+    <!--
+      2026-10-30 用户：「移除文字,共202行....80」——
+      这行辅助说明（共 N 行 · 例 100 / 11-200 / 1-10,80）已移除：
+      行数在左侧标签「按序号选（共 N 行可勾）」里已经有了，示例格式写在
+      输入框的 placeholder（如 100 或 11-200）里，不需要再说一遍。
+    -->
 
     <!-- 右侧追加区（2026-10-29 用户：「下载页面,全选当前的功能,移到下方,替换按序号选的文字」）：
          「全选当前」原来在顶部工具栏那一行，用户希望它落到下方、和按序号选摆在一起。

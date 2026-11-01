@@ -4,9 +4,10 @@
       "title": "曲率",
       "icon": "images/icon_{0}.png",
       "type": "iframe",
-      "protocol": "http",
-      "port": 8898,
-      "url": "/",
+      "protocol": "",
+      "gatewayPrefix": "/app/yinshu-ai",
+      "gatewaySocket": "app.sock",
+      "url": "/app/yinshu-ai",
       "allUsers": true
     }
   }

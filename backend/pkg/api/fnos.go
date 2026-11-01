@@ -99,7 +99,7 @@ func (s *Server) HandleFnosStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// isLocalRequest 报告请求是否来自本机回环。
+// isLocalRequest 报告请求是否来自本机（回环 TCP 或本机 Unix socket，见 isLocalPeer）。
 //
 // 用途：决定「这条应答能不能带内容」。它只认 TCP 对端地址（RemoteAddr），
 // 不看任何请求头 —— X-Forwarded-For / X-Real-IP 是客户端随便写的，拿它做判断
@@ -109,7 +109,7 @@ func (s *Server) HandleFnosStatus(w http.ResponseWriter, r *http.Request) {
 // 与后端同机；而「同网段某台设备」恰恰是这次要防的那一方。语义收紧的方向是安全的
 // （最多是外部来源少看到几个字段），反过来放宽才是风险。
 func isLocalRequest(r *http.Request) bool {
-	return isLoopbackIP(clientIP(r))
+	return isLocalPeer(r)
 }
 
 // HandleFnosFolders 查询管理员授权给本应用的目录（官方开放 API）

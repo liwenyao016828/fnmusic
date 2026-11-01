@@ -149,6 +149,7 @@
 
 <script setup>
 import { computed, ref } from 'vue'
+import { logError, logInfo } from '../services/appLog'
 import { ShieldAlert } from 'lucide-vue-next'
 import SectionCard from './SectionCard.vue'
 import InlineNotice from './InlineNotice.vue'
@@ -199,10 +200,18 @@ async function runScan() {
   armed.value = '' // 3.6：重扫后旧报告的「确认」状态必须失效，否则会拿着新报告执行旧意图
   try {
     report.value = await scanHealth(targetDir.value)
+    // 扫描只读、可重跑，但用户要能从日志页看出「什么时候扫过、扫出多少问题」
+    const r = report.value || {}
+    logInfo(
+      '曲库扫描',
+      `扫描完成：${r.scanned ?? 0} 个文件，发现 ${r.issues?.length ?? r.issueCount ?? 0} 个问题（${r.elapsedMs ?? 0}ms）`,
+      r.dir || targetDir.value || '',
+    )
   } catch (e) {
     report.value = null
     fixTone.value = 'error'
     fixMsg.value = fail('扫描曲库文件名', e)
+    logError('曲库扫描', fixMsg.value, targetDir.value || '')
   } finally {
     scanning.value = false
   }
@@ -228,6 +237,7 @@ async function runFix(mode) {
       if (res.failed.length) parts.push(`${res.failed.length} 条没成功`)
       if (res.missed) parts.push(`${res.missed} 条已过期（重新扫描后再试）`)
       fixMsg.value = parts.join('，') + '；刷新一次飞牛页面就能看到效果'
+      logInfo('曲库修复', parts.join('，'), `mode=${mode} dir=${targetDir.value || ''}`)
     } else if (res.missed && !res.failed.length) {
       // 报告是上一次扫描的，应用重启过 —— 这不是失败，是让用户再扫一次
       fixTone.value = 'error'
@@ -235,6 +245,7 @@ async function runFix(mode) {
     } else {
       fixTone.value = 'error'
       fixMsg.value = res.failed.length ? `一条都没修成功：${res.failed[0].error || '原因未知'}` : '没有可修的东西'
+      logError('曲库修复', fixMsg.value, `mode=${mode} failed=${res.failed?.length || 0} missed=${res.missed || 0}`)
     }
     // 修完立刻重扫：让用户看到数字变化，而不是自己去点第二次
     report.value = await scanHealth(targetDir.value)

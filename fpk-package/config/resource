@@ -7,7 +7,6 @@
     ]
   },
   "api-scope": [
-    "trim.file.sharedAccess",
-    "trim.system.getPlatformConfig"
+    "trim.file.sharedAccess"
   ]
 }

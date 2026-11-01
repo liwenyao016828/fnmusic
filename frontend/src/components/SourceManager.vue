@@ -109,7 +109,7 @@
         它只剩「页面内把歌解析成可播放直链」这件事。文案口径见 pkg/protocol。
         数据来自 GET /api/protocols（后端 pkg/protocol），此处只做展示。
       -->
-      <SectionCard v-if="protocols.length" :icon="Layers" title="音源协议" :sub="protocolSummary" compact>
+      <SectionCard v-if="visibleProtocols.length" :icon="Layers" title="音源协议" :sub="protocolSummary" compact>
 
         <!--
           音源协议卡片：**手机也一行两个**（用户 2026-09-30）。
@@ -120,7 +120,7 @@
         -->
         <div class="grid grid-cols-2 gap-3">
           <div
-            v-for="p in protocols" :key="p.id"
+            v-for="p in visibleProtocols" :key="p.id"
             class="cursor-pointer rounded-xl border p-3.5 transition-all hover:shadow-[0_2px_8px_rgba(0,0,0,0.05)]"
             :class="p.ready ? 'border-[var(--ys-border)] bg-white' : 'border-[var(--ys-border)] bg-[var(--ys-surface-sunken)]'"
             @click="toggleProtocol(p.id)"
@@ -158,7 +158,7 @@
             <div class="mt-2 flex flex-wrap items-center gap-1 text-[10px] text-gray-500">
               <span>平台：</span>
               <span v-for="pf in p.platforms" :key="pf" class="font-mono">{{ pf }}</span>
-              <span v-if="p.id === 'lx' && p.source_count !== undefined" class="ml-1">· 已导入 {{ p.source_count }} 个</span>
+              <span v-if="typeof p.source_count === 'number'" class="ml-1">· 已导入 {{ p.source_count }} 个</span>
             </div>
 
             <!--
@@ -207,23 +207,88 @@
               <p v-if="p.notes" class="mt-2 text-[10px] leading-relaxed text-gray-500">{{ p.notes }}</p>
             </template>
           </div>
-        </div>
 
-        <!--
-          服务端洛雪宿主（可选取音路径）——**放在音源管理里，不放在下载页**。
-          用户 2026-10-25 原话：「下载界面显示落雪宿主未开启……如果后台下载需要设置，
-          可以放在音源管理中修改。」后台下载本身不需要它（平台直链就能下主流曲目），
-          它只是在「冷门/无版权歌取不到源」时多一条路，属于音源能力，不是下载状态。
-        -->
-        <div class="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg bg-black/[0.02] px-2.5 py-2">
-          <span class="text-[11px] text-[var(--ys-text-muted)]">服务端洛雪宿主</span>
-          <span
-            class="rounded-full px-1.5 py-0.5 text-[10px] font-medium"
-            :class="lxHostReady ? 'bg-emerald-50 text-emerald-600' : 'bg-[var(--ys-surface-sunken)] text-gray-500'"
-          >{{ lxHostLabel }}</span>
-          <span class="text-[10px] leading-relaxed text-gray-500">
-            可选。平台直链取不到音源时用它再兜一层；在服务端启动洛雪宿主后这里会显示「已就绪」。
-          </span>
+          <!--
+            ══ 服务端洛雪宿主卡（原 lx 卡的格子）══
+            2026-11-01（用户）：「原 lx 自定义的卡片挺好的，内容就替换为落雪宿主就可以了，
+            包括开关。整体和旁边的官方协议一样。」—— 不再单独在页面底部放一块，而是**同位置
+            换内容**，样式与左边官方协议卡完全一致（圆角边卡、名称 + 就绪徽标、id 徽标行、
+            能力标签、平台行、展开说明）。卡片右上角是「开启 / 关闭宿主」开关，当场起停
+            服务端 Node 子进程（POST /api/lx/host），不用重启应用。
+          -->
+          <div
+            class="rounded-xl border p-3.5 transition-all hover:shadow-[0_2px_8px_rgba(0,0,0,0.05)]"
+            :class="lxHostReady ? 'border-[var(--ys-border)] bg-white' : 'border-[var(--ys-border)] bg-[var(--ys-surface-sunken)]'"
+          >
+            <!-- 名称 + 就绪徽标 + 开关（与官方协议卡同构，右边换成开关按钮） -->
+            <div class="flex items-center gap-1.5">
+              <b class="min-w-0 flex-1 truncate text-sm font-medium text-[var(--ys-text)]">服务端洛雪宿主</b>
+              <span
+                class="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium"
+                :class="lxHostReady
+                  ? 'bg-[var(--ys-accent-soft)] text-[var(--ys-accent)]'
+                  : 'bg-black/[0.05] text-[var(--ys-text-aux)]'"
+              >{{ lxHostLabel }}</span>
+              <button
+                @click="toggleLxHost"
+                :disabled="lxHostSwitching"
+                title="开启 / 关闭服务端洛雪宿主，立即生效"
+                class="shrink-0 flex items-center gap-1 rounded-lg border border-[var(--ys-border)] bg-white px-2 py-1 text-[11px] font-medium text-[var(--ys-text-muted)] transition-colors hover:bg-black/[0.04] hover:text-[var(--ys-text)] disabled:opacity-50"
+              >
+                <Loader2 v-if="lxHostSwitching" class="w-3 h-3 animate-spin" />
+                <Power v-else class="w-3 h-3" />
+                <span>{{ lxHostSwitching ? '请稍候' : (lxHostOn ? '关闭宿主' : '开启宿主') }}</span>
+              </button>
+            </div>
+
+            <!-- id + 执行位置徽标行（与官方协议卡同一排版） -->
+            <div class="mt-1.5 flex flex-wrap items-center gap-1.5">
+              <span class="rounded bg-white px-1.5 py-0.5 font-mono text-[10px] text-gray-500 border border-[var(--ys-border)]">lx-host</span>
+              <span class="rounded bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-600">服务端子进程</span>
+            </div>
+
+            <!-- 能力标签（与官方协议卡同一排版） -->
+            <div class="mt-2 flex flex-wrap gap-1">
+              <span class="rounded-md bg-white px-1.5 py-0.5 font-mono text-[10px] text-gray-500 border border-[var(--ys-border)]">取直链</span>
+              <span class="rounded-md bg-white px-1.5 py-0.5 font-mono text-[10px] text-gray-500 border border-[var(--ys-border)]">歌词</span>
+            </div>
+
+            <!-- 平台 / 脚本行（与官方协议卡同一排版） -->
+            <div class="mt-2 flex flex-wrap items-center gap-1 text-[10px] text-gray-500">
+              <span>平台：</span>
+              <span class="font-mono">wy</span>
+              <span class="font-mono">tx</span>
+              <span class="font-mono">kg</span>
+              <span class="font-mono">kw</span>
+              <span class="font-mono">mg</span>
+              <span v-if="typeof lxHostScriptCount === 'number'" class="ml-1">· 已导入 {{ lxHostScriptCount }} 个</span>
+            </div>
+
+            <!-- 展开后的说明（跟协议卡一致：折叠只藏这两段文字） -->
+            <template v-if="lxHostExpanded">
+              <p class="mt-2 text-[11px] leading-relaxed text-gray-500">
+                可选。平台直链取不到音源时用它再兜一层：跑在服务端的 Node 子进程里，
+                用你自己的洛雪音源脚本取链。开启后这里显示「已就绪」。
+              </p>
+              <p v-if="lxHostDetail" class="mt-2 text-[10px] leading-relaxed" :class="lxHostReady ? 'text-gray-500' : 'text-rose-500'">{{ lxHostDetail }}</p>
+              <p v-if="lxHostFailed" class="mt-2 text-[10px] leading-relaxed text-gray-500">
+                脚本目录：{{ lxHostDir || '未知' }}
+                <button @click.stop="toggleLxHost" class="ml-1 text-[var(--ys-accent)] hover:opacity-70">再试一次</button>
+              </p>
+            </template>
+
+            <!-- 点击展开/收起（与协议卡同一个手势） -->
+            <div
+              class="mt-2 flex items-center gap-1 text-[10px] text-gray-500"
+              @click="lxHostExpanded = !lxHostExpanded"
+            >
+              <ChevronDown
+                class="h-3.5 w-3.5 shrink-0 text-gray-500 transition-transform"
+                :class="lxHostExpanded ? 'rotate-180' : ''"
+              />
+              <span>{{ lxHostExpanded ? '收起' : '展开说明' }}</span>
+            </div>
+          </div>
         </div>
       </SectionCard>
 
@@ -358,10 +423,10 @@
               class="flex h-7 min-w-[34px] items-center justify-center rounded-lg px-1.5 font-mono text-[11px] transition-colors disabled:opacity-50"
               :class="probeFailed(s.id)
                 ? 'bg-rose-50 text-rose-600 hover:bg-rose-100'
-                : (measuredLatency(s.id) ? 'bg-emerald-50 text-emerald-600 hover:bg-emerald-50' : 'text-gray-300 hover:bg-emerald-50 hover:text-emerald-600')"
+                : (measuredLatency(s.id) ? 'bg-[#22c55e]/10 text-[#22c55e] hover:bg-[#22c55e]/20' : 'text-gray-300 hover:bg-[#22c55e]/10 hover:text-[#22c55e]')"
               :title="'真实取链测速（' + s.name + '）'"
             >
-              <Loader2 v-if="probingIds.includes(s.id)" class="w-3.5 h-3.5 animate-spin text-emerald-600" />
+              <Loader2 v-if="probingIds.includes(s.id)" class="w-3.5 h-3.5 animate-spin text-[#22c55e]" />
               <span v-else-if="measuredLatency(s.id)">{{ measuredLatency(s.id) }}</span>
               <Gauge v-else class="w-3.5 h-3.5" />
             </button>
@@ -648,11 +713,14 @@
             </button>
           </div>
 
-          <!-- 磁盘 / 根目录切换（v2.1.57）——
+          <!-- 已授权目录切换（v2.1.57）——
                后端 /api/nas/browse 一直在返回 volumes（= AllowedRoots()），之前前端把它丢掉了，
-               于是选择器只能看到默认打开的那一个根，其它硬盘进不去。 -->
+               于是选择器只能看到默认打开的那一个根，其它硬盘进不去。
+               2026-10-31：飞牛环境下 AllowedRoots() 只含官方授权目录（不再含 /vol1、/media
+               这类存储卷），所以标签从「磁盘」改成「已授权目录」——叫「磁盘」会让人以为
+               曲率能看见整块盘。 -->
           <div v-if="nasPicker.volumes.length" class="mt-3 flex shrink-0 flex-wrap items-center gap-1.5">
-            <span class="shrink-0 text-[11px] text-gray-500">磁盘</span>
+            <span class="shrink-0 text-[11px] text-gray-500">已授权目录</span>
             <button
               v-for="v in nasPicker.volumes" :key="v"
               @click="loadNasDir(v)"
@@ -713,13 +781,14 @@
 <script setup>
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { currentView } from '../services/navBus'
-import { SourcesAPI, ProtocolAPI, NasAPI, ConfigAPI, BackendDownloadAPI } from '../api/client'
+import { SourcesAPI, ProtocolAPI, NasAPI, ConfigAPI, BackendDownloadAPI, LxHostAPI } from '../api/client'
+import { withBase } from '../services/basePath.js'
 import { lxRuntime } from '../engine/lx-runtime'
 import { sourceHealth } from '../services/sourceHealth'
 import {
   Plus, Trash2, X, PlayCircle, ChevronDown, Folder, FileCode,
   Gauge, ShieldOff, Loader2, Layers, Server, RotateCw,
-  Headphones, Music2, ArrowLeft, Settings2, Puzzle
+  Headphones, Music2, ArrowLeft, Settings2, Puzzle, Power
 } from 'lucide-vue-next'
 import { loadPref, savePref } from '../services/prefs'
 import { volumeOf } from '../services/nasView'
@@ -782,6 +851,12 @@ function recordProbe(id, ok, latencyMs) {
  * ⚠️ 只有**两种颜色**：成功=绿、失败=红（用户 2026-09-30 明确要求）。
  * 之前按延迟分三档（<400 绿 / <1200 琥珀 / 更高红），结果是"慢但成功"也显示成红色，
  * 用户看到的就是「全是红的」—— 那是把"慢"和"失败"混成了一个颜色。
+ *
+ * ⚠️ 颜色必须是**写死的**绿/红，不能用 `bg-emerald-*`（用户 2026-10-30：
+ * 「音源测试条不要根据全局色彩改变，正常就是绿色，失败就是红色」）。
+ * tailwind.config.js 把 `emerald` 整族映射到了主题强调色 CSS 变量（四套主题色），
+ * 所以 `bg-emerald-400` 会随主题变蓝/粉/灰。`rose` 是写死的危险红，正好是"失败=红"
+ * 要的语义，保留。空位是中性灰（`--ys-surface-sunken`），不参与语义。
  */
 function probeDots(id) {
   const list = probeHistory.value[id] || []
@@ -790,7 +865,7 @@ function probeDots(id) {
     if (!rec) return { key: 'e' + i, cls: 'bg-[var(--ys-surface-sunken)]', title: '暂无记录' }
     const when = new Date(rec.t).toLocaleTimeString('zh-CN', { hour12: false })
     if (!rec.ok) return { key: rec.t, cls: 'bg-rose-400', title: `${when} · 取链失败` }
-    return { key: rec.t, cls: 'bg-emerald-400', title: `${when} · ${rec.ms}ms` }
+    return { key: rec.t, cls: 'bg-[#22c55e]', title: `${when} · ${rec.ms}ms` }
   })
 }
 
@@ -922,6 +997,19 @@ const protocols = ref([])
 const protocolSummary = ref('')
 
 /**
+ * 音源协议卡片列表里，**LX 卡位换成了「服务端洛雪宿主」**。
+ *
+ * 2026-11-01（用户）：「原 lx 自定义的卡片挺好的，内容就替换为落雪宿主就可以了，
+ * 包括开关。整体和旁边的官方协议一样。」——所以不是删掉那张卡，而是**同位置换内容**：
+ * 一张与官方协议并排的卡，讲「取直链」这件事，但主语从「浏览器沙箱跑用户脚本」
+ * 换成「服务端洛雪宿主」（同一批脚本、同一个开关）。
+ *
+ * 这里滤掉 lx 卡（它由模板里的宿主卡顶上），后端 /api/protocols 仍返回 lx，
+ * 后端语义不变，只是界面不再单列两遍同一件事。
+ */
+const visibleProtocols = computed(() => protocols.value.filter(p => p.id !== 'lx'))
+
+/**
  * 音源协议卡片的展开状态。
  * 用户 2026-09-30 定了两次口径，最终是：**折叠只藏「文字解释」**（说明段 + 备注段），
  * 其余（协议 id / 内置还是沙箱 / 能力标签 / 平台列表）折叠时也一直显示 ——
@@ -947,21 +1035,89 @@ function capabilityLabel(c) {
 }
 
 /**
- * 服务端洛雪宿主状态（取自后端 GET /api/download/backend/status 的 lx_host）：
- * off / starting / ready / failed。只做展示，开关在服务端，前端不提供按钮。
+ * 服务端洛雪宿主状态（GET /api/lx/host）：off / starting / ready / failed / stopped。
+ *
+ * 2026-10-30（用户）：这一块要**能开关**（「没看到……开启宿主」），不能只做展示 ——
+ * 所以开关走 POST /api/lx/host，当场起停子进程，不用重启应用。
+ * 状态字段来自后端 /api/lx/host 的 data（state / enabled / base / error / scripts…），
+ * 兼容旧后端（没有这个接口）：降级只读 GET /api/download/backend/status 的 lx_host。
  */
-const lxHost = ref('')
+const lxHost = ref('')          // 只保留状态码，给 lxHostReady / lxHostLabel 用
+const lxHostDetail = ref('')    // 就绪/失败时的补充说明（base / error）
+const lxHostDir = ref('')       // 脚本目录（失败时给用户看「去哪里找」）
+const lxHostOn = ref(false)     // 当前配置里是否开启（=开关当前态）
+const lxHostSwitching = ref(false)
+/** 落雪宿主卡的展开状态（与协议卡同语义：折叠只藏两段文字解释） */
+const lxHostExpanded = ref(false)
+/** 已导入脚本数（取 /api/protocols 里 lx 协议的 source_count，与旧 LX 卡同口径） */
+const lxHostScriptCount = computed(() => {
+  const lx = (protocols.value || []).find(p => p && p.id === 'lx')
+  return lx && typeof lx.source_count === 'number' ? lx.source_count : 0
+})
+
 const lxHostReady = computed(() => lxHost.value === 'ready')
-const lxHostLabel = computed(() => ({ off: '未开启', starting: '启动中', ready: '已就绪', failed: '启动失败' })[lxHost.value] || '未知')
+const lxHostFailed = computed(() => lxHost.value === 'failed')
+const lxHostLabel = computed(() => ({
+  off: '未开启', starting: '启动中', ready: '已就绪', failed: '启动失败', stopped: '已停止',
+})[lxHost.value] || '未知')
+const lxHostCardSub = computed(() => {
+  if (lxHost.value === 'ready') return '服务端已启动，平台直链取不到时会走它兜底'
+  if (lxHost.value === 'failed') return '启动失败，看下面的原因'
+  return '平台直链取不到音源时用它再兜一层（可选）'
+})
 
 async function loadLxHost() {
   try {
+    const res = await LxHostAPI.get()
+    const st = res?.data || res || {}
+    if (st.available === false) {
+      // 旧后端没这个接口：退回只读 /api/download/backend/status 的 lx_host，
+      // 状态码能看，但没有开关（lxHostOn 保持 false，按钮会引导用户去更新后端）。
+      await loadLxHostFallback()
+      return
+    }
+    lxHost.value = String(st.state || '')
+    lxHostOn.value = !!st.enabled
+    lxHostDir.value = st.dir || ''
+    lxHostDetail.value = st.state === 'ready'
+      ? (st.base ? `已就绪：${st.base}` : '')
+      : (st.error ? `启动失败：${st.error}` : '')
+  } catch (e) {
+    await loadLxHostFallback(e)
+  }
+}
+
+async function loadLxHostFallback(err) {
+  try {
     const res = await BackendDownloadAPI.status()
     const st = res?.data || res || {}
-    lxHost.value = String(st.lx_host ?? st.lxHost ?? '')
+    const code = String(st.lx_host ?? st.lxHost ?? '')
+    lxHost.value = code === 'off' ? 'off' : (code || '')
+    // 旧后端没给 enabled，按状态猜：ready/starting/failed 都说明配置开着
+    lxHostOn.value = ['ready', 'starting', 'failed'].includes(code)
+  } catch (e2) {
+    console.warn('[lxhost] status failed:', err || e2)
+  }
+}
+
+/**
+ * 开关宿主。**成功后立刻重读状态** —— 起停是异步的（Apply 是同步调用，
+ * 但进程起来是另一回事），先按后端回的 data 填，再拉一次拿最新。
+ */
+async function toggleLxHost() {
+  if (lxHostSwitching.value) return
+  lxHostSwitching.value = true
+  try {
+    const res = await LxHostAPI.set({ enabled: !lxHostOn.value })
+    if (res?.code !== 200) {
+      // 后端没接线（旧后端）：说清楚只能改配置后重启，不要假装成功
+      pageError.value = res?.message || '开关失败：当前后端不支持运行时开关服务端洛雪宿主'
+    }
   } catch (e) {
-    // 纯展示用，拿不到就保持「未知」，不影响主流程
-    console.warn('[lxhost] status failed:', e)
+    pageError.value = `开关失败：${describeError(e)}`
+  } finally {
+    lxHostSwitching.value = false
+    await loadLxHost()
   }
 }
 
@@ -1006,8 +1162,9 @@ function healthOf(id) {
   } else {
     const st = sourceHealth.statusOf(id)
     if (st === 'healthy') {
-      badgeClass = 'bg-emerald-50 text-emerald-600'
-      dotClass = 'bg-emerald-400'
+      // 写死绿/红（用户 2026-10-30：测试条不跟全局主题色）—— emerald 会随主题变
+      badgeClass = 'bg-[#22c55e]/10 text-[#22c55e]'
+      dotClass = 'bg-[#22c55e]'
     } else if (st === 'warning') {
       badgeClass = 'bg-amber-50 text-amber-600'
       dotClass = 'bg-amber-400'
@@ -1089,6 +1246,7 @@ async function toggleSource(id) {
     else activeSourceIds.value = activeSourceIds.value.filter(x => x !== id)
     if (turningOn) await loadScriptIntoRuntime(id)
     emitPool()
+    logInfo('切换音源', `${sourceName(id)} ${turningOn ? '已启用' : '已停用'}`, `pool=${activeSourceIds.value.join(',')}`)
   } catch (e) {
     pageError.value = fail('切换音源', e)
   }
@@ -1438,6 +1596,12 @@ async function submitBatchImport() {
       failed: data.failed ?? items.filter(r => r.status === 'failed').length,
       items,
     }
+    const rep = importReport.value
+    logInfo(
+      '导入音源',
+      `导入完成：成功 ${rep.imported}，跳过 ${rep.skipped}，失败 ${rep.failed}`,
+      `urls=${urls.length} files=${(pickedFiles.value || []).length}`,
+    )
     // 逐条失败原因太长，界面只留前 8 条摘要，完整明细进日志
     const badItems = items.filter(r => r.status === 'failed')
     if (badItems.length) {
@@ -1616,6 +1780,7 @@ async function removeApiSource(item) {
     await SourcesAPI.apiDelete(item.id)
     await loadApiSources()
     emit('source-changed')
+    logInfo('移除服务型音源', `已移除「${item.name || item.id}」`)
   } catch (e) {
     pageError.value = fail('移除服务型音源', e)
   }
@@ -1623,6 +1788,7 @@ async function removeApiSource(item) {
 
 async function deleteSource(id) {
   if (!confirm('确定要删除此音源吗？')) return
+  const delName = sourceName(id)
   pageError.value = ''
   try {
     const res = await SourcesAPI.delete(id)
@@ -1634,6 +1800,7 @@ async function deleteSource(id) {
     }
     sourceHealth.reset(id)
     await loadSources()
+    logInfo('删除音源', `已删除「${delName}」`)
   } catch (err) {
     pageError.value = fail('删除音源', err)
   }
@@ -1766,7 +1933,7 @@ async function loadMusicDL() {
     musicdlSources.value = Array.isArray(c.musicdl_sources) && c.musicdl_sources.length
       ? c.musicdl_sources
       : ['mg'] // 后端空名单 = 默认（只剩咪咕：千千/B站实测不可用）
-    const st = await fetch('/api/musicdl/status', { headers: { Accept: 'application/json' } })
+    const st = await fetch(withBase('/api/musicdl/status'), { headers: { Accept: 'application/json' } })
     if (st.ok) musicdlStatus.value = (await st.json())?.data || null
   } catch (e) {
     musicdlErr.value = describeError(e)

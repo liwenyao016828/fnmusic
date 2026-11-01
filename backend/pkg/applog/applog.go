@@ -165,17 +165,58 @@ func (b *Buffer) Clear() {
 	b.entries = b.entries[:0]
 }
 
+// hasWord 判断 l 里是否出现**独立单词** word（前后不能紧贴字母/下划线/汉字）。
+//
+// 直接 strings.Contains 会把 `retry_failed`、`push_failed_count` 这类**动作名**
+// 也当成失败结论 —— `[BACKEND-DL] 操作 retry_failed（整队）：影响 10 条` 明明
+// 是一次成功的操作记录，却因为名字里带 failed 被判成 error（红字），
+// 与旁边真正失败的绿字正好拧了（2026-11-01 实测发现）。
+func hasWord(l, word string) bool {
+	for from := 0; ; {
+		i := strings.Index(l[from:], word)
+		if i < 0 {
+			return false
+		}
+		at := from + i
+		beforeOK := at == 0 || !isWordByte(l[at-1])
+		afterIdx := at + len(word)
+		afterOK := afterIdx >= len(l) || !isWordByte(l[afterIdx])
+		if beforeOK && afterOK {
+			return true
+		}
+		from = at + 1
+	}
+}
+
+func isWordByte(b byte) bool {
+	return b == '_' || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
+}
+
 // levelOf 从文本里粗判级别。
 //
 // 标准库 log 没有级别概念，这里按关键词判 —— 够前端做颜色区分就行，
 // 不追求精确。真正的级别应该在写日志时就带上，那是更大的改动。
+//
+// ⚠️ 中文关键词也必须认（2026-11-01）。本应用的日志正文是中文，
+// `[BACKEND-DL] 失败：…` 这种真失败以前被判成 info（正文里的「失败」不在英文
+// 判据里），而 `[BACKEND-DL] 操作 retry_failed（整队）：影响 10 条` 这种
+// **操作记录**反倒因为 `retry_failed` 含 `failed` 被判成 error —— 正好拧了，
+// 用户翻日志时看到的就是「失败是绿的、操作是红的」。
+//
+// 中文这边刻意只认**带标点的那几种形状**（`失败：` / `失败（` / `失败，`）：
+// 汇总行写的是「…失败 %d」（数字前带空格），那是统计不是结论，不能标红。
 func levelOf(msg string) string {
 	l := strings.ToLower(msg)
 	switch {
 	case strings.Contains(l, "[error]") || strings.Contains(l, "[fatal]") ||
-		strings.Contains(l, "failed") || strings.Contains(l, "error:"):
+		hasWord(l, "failed") || strings.Contains(l, "error:"):
 		return "error"
-	case strings.Contains(l, "[warn]") || strings.Contains(l, "warning"):
+	case strings.Contains(msg, "失败：") || strings.Contains(msg, "失败（") ||
+		strings.Contains(msg, "失败，") || strings.Contains(msg, "错误") ||
+		strings.Contains(msg, "异常"):
+		return "error"
+	case strings.Contains(l, "[warn]") || strings.Contains(l, "warning") ||
+		strings.Contains(msg, "警告"):
 		return "warn"
 	}
 	return "info"

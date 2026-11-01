@@ -18,6 +18,12 @@ import (
 // withFakeFnos 把 fnos 的两个数据源换成固定值，返回恢复函数。
 func withFakeFnos(t *testing.T) {
 	t.Helper()
+	// 「是不是飞牛环境」与「开放 API 能不能调」是两件事：
+	//   · Detected() —— 看部署特征（socket / /var/apps/<appname>），决定前端要不要提示授权；
+	//   · Available() —— 看 TRIM_API_TOKEN + socket，决定后端能不能自动读到授权目录。
+	// 测试里两者都置真，等于「一台正常的飞牛机器」。
+	oldDetected := fnos.SetDetectedForTest(true)
+	t.Cleanup(func() { fnos.SetDetectedForTest(oldDetected) })
 	// 开放 API 的 Available() 认「环境变量 TRIM_API_TOKEN + socket 存在」。
 	// 测试里把 socket 指到一个临时文件，就能让 Available() 为真而不碰真机。
 	oldAvail := fnos.SetAvailableForTest(true)
@@ -120,4 +126,28 @@ func TestFnosStatusTokenSourceAlwaysVisible(t *testing.T) {
 			t.Fatalf("来源 %s 也该看到 token_source（枚举，不含令牌）：%+v", addr, data)
 		}
 	}
+}
+
+// swapFakeSharedFolders 改写「管理员授权目录」数据源（在 withFakeFnos 之后调用）。
+func swapFakeSharedFolders(t *testing.T, folders []string) {
+	t.Helper()
+	old := fnos.SetSharedFoldersSourceForTest(func() ([]string, error) { return folders, nil })
+	t.Cleanup(func() { fnos.SetSharedFoldersSourceForTest(old) })
+}
+
+// swapFakeAvailable 改写「开放 API 现在能不能调」（要 token + socket）。
+func swapFakeAvailable(t *testing.T, ok bool) {
+	t.Helper()
+	old := fnos.SetAvailableForTest(ok)
+	t.Cleanup(func() { fnos.SetAvailableForTest(old) })
+}
+
+// swapFakeDetected 改写「是不是飞牛环境」（判据与 token 无关）。
+//
+// 它和 swapFakeAvailable 是**两件事**：真机上完全可能「在飞牛里但没拿到 token」，
+// 此时 Detected()=true、Available()=false。前端要不要显示授权提示条看的是 Detected。
+func swapFakeDetected(t *testing.T, ok bool) {
+	t.Helper()
+	old := fnos.SetDetectedForTest(ok)
+	t.Cleanup(func() { fnos.SetDetectedForTest(old) })
 }

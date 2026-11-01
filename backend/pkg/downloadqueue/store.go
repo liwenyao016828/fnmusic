@@ -12,6 +12,7 @@ package downloadqueue
 
 import (
 	"encoding/json"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -41,13 +42,23 @@ type persisted struct {
 func (s *Store) load() {
 	data, err := os.ReadFile(s.path)
 	if err != nil {
+		// 文件不存在是首次启动的正常情况，不吵；其它读取错误要留痕，
+		// 否则「队列列表空了」会被当成「用户自己清空的」。
+		if !os.IsNotExist(err) {
+			log.Printf("[DOWNLOADQ] 旧队列文件读不了，按空队列启动：%v", err)
+		}
 		return
 	}
 	var p persisted
 	if json.Unmarshal(data, &p) != nil {
+		// 解析失败是**真**数据丢失风险（用户攒的下载记录），必须记下来。
+		log.Printf("[DOWNLOADQ] 旧队列文件解析失败，按空队列启动（文件 %s，%d 字节）", s.path, len(data))
 		return
 	}
 	s.tasks = p.Tasks
+	if n := len(s.tasks); n > 0 {
+		log.Printf("[DOWNLOADQ] 已载入网页端旧下载队列：%d 条", n)
+	}
 }
 
 // All 返回全部任务（原样，不做任何解释）。返回的切片是副本，调用方可安全持有。
@@ -71,7 +82,12 @@ func (s *Store) Replace(tasks []json.RawMessage) error {
 		tasks = []json.RawMessage{}
 	}
 	s.tasks = tasks
-	return s.persistLocked()
+	if err := s.persistLocked(); err != nil {
+		// 落盘失败时队列只存在于内存：重启就没了，用户看到的是「记录又丢了」。
+		log.Printf("[DOWNLOADQ] 队列写盘失败（本次改动重启后会丢）：%v", err)
+		return err
+	}
+	return nil
 }
 
 // persistLocked 原子落盘（先写 .tmp 再 rename，避免写一半断电留下半个文件）。

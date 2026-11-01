@@ -20,8 +20,9 @@
 import { ref, computed } from 'vue'
 import { MonitorAPI, PushAPI, SearchAPI, FnosAPI, DownloadAPI, SourcesAPI } from '../api/client.js'
 import { fail as failText, apiError } from './userMsg.js'
-import { logError } from './appLog.js'
+import { logError, logInfo } from './appLog.js'
 import { pickAlreadyLocal } from './downloadDedup.js'
+import { fillPlatformOrder, pickSearchHit, nameOnlyFallbackAllowed } from './fillSource.js'
 import { downloadManager } from './downloadManager.js'
 import { backendDownload } from './backendDownload.js'
 import { markLoaded } from './viewCache.js'
@@ -220,6 +221,10 @@ async function enqueueSongs(items, platform, rowKey = '') {
   let added = 0
   let missed = 0
   let already = 0
+  // 搜不到任何平台、但后台有「按歌名搜」的渠道（洛雪宿主 / musicdl）时，
+  // 可以把这首**不带平台 id** 地交上去让后台自己搜 —— issue #11 里
+  // 「11 个洛雪源全绿却下不动」那批歌就靠这条活下来。
+  const nameOnlyOK = nameOnlyFallbackAllowed(backendDownload.channels.value)
 
   // ① 批量判重：一次请求问清「这批里哪些本地已经有了」
   //    判据与边界情况在 `services/downloadDedup.js`，有单测守着。
@@ -255,12 +260,45 @@ async function enqueueSongs(items, platform, rowKey = '') {
 
     fillProgress.value = `${i + 1}/${items.length}`
     try {
-      const keyword = [t.name, t.artist].filter(Boolean).join(' ')
+      const keyword = [t.name, t.artist || t.singer].filter(Boolean).join(' ')
       if (!keyword) { missed++; continue }
-      const res = await SearchAPI.search(keyword, platform, 1)
-      const list = res?.data?.list || []
-      const hit = list.find((s) => s.source === platform) || list[0]
-      if (!hit) { missed++; continue }
+
+      // 问哪些平台：曲目自己的平台优先，其次订阅行/推送任务声明的那个。
+      // 两者都没有时退回「聚合搜一次」（source=all），让四家一起答。
+      const order = fillPlatformOrder(t, platform)
+      const platforms = order.length ? order : ['all']
+      let hit = null
+      for (const p of platforms) {
+        // 「停止」要能中止正在入队的这一批：逐首多平台搜索更慢，更不能漏查
+        if (isRowStopped(rowKey)) break
+        const res = await SearchAPI.search(keyword, p, 1)
+        const list = res?.data?.list || []
+        // 必须**确实是同一首**才入队（歌名归一后完全相同 + 歌手沾边 + 时长接近）。
+        // 以前是 `find(source===platform) || list[0]`，连歌名都不比，会下错歌。
+        hit = pickSearchHit(list, t, p === 'all' ? '' : p)
+        if (hit) break
+      }
+
+      if (!hit) {
+        // 一个平台都没搜到：后台若能用歌名搜（洛雪 / musicdl），交上去还有救；
+        // 只有原生渠道时交上去必失败，不如如实记「没搜到」。
+        if (nameOnlyOK) {
+          const task = downloadManager.addSong(
+            { name: t.name, singer: t.artist || t.singer, album: t.album, duration: t.duration },
+            '',
+            false,
+          )
+          if (task) {
+            watching.push({ task, track: t })
+            added++
+          } else {
+            missed++
+          }
+        } else {
+          missed++
+        }
+        continue
+      }
       const task = downloadManager.addSong(hit, '', false)
       if (task) watching.push({ task, track: t })
       added++
@@ -306,7 +344,9 @@ async function fillRow(row, { auto = false, limit = 0 } = {}) {
       // 「每次下载数量」：这一批只入队这么多，下完下一轮再接着下
       if (limit > 0) tracks = tracks.slice(0, limit)
       if (tracks.length) {
-        const r = await enqueueSongs(tracks, row.source === 'tx' ? 'tx' : 'wy', row.key)
+        // 不再写死 tx/wy：平台交给 enqueueSongs 按「曲目自己的平台 → 这一行的平台」
+        // 逐个问（写死会把洛雪/酷狗/酷我的歌单全当网易搜，搜不到就记「没搜到」）
+        const r = await enqueueSongs(tracks, row.source || '', row.key)
         added += r.added
         missed += r.missed
         already += r.already
@@ -320,7 +360,12 @@ async function fillRow(row, { auto = false, limit = 0 } = {}) {
     if (task && row.missingCount) {
       const items = task.last_result?.missing || []
       if (items.length) {
-        const r = await enqueueSongs(items, task.provider === 'qq' ? 'tx' : 'wy', row.key)
+        // 推送任务只说明「歌单在哪个账号上」，曲目自己的平台更准；两个都试
+        const r = await enqueueSongs(
+          items,
+          task.provider === 'qq' ? 'tx' : task.provider === 'netease' ? 'wy' : '',
+          row.key,
+        )
         added += r.added
         missed += r.missed
         already += r.already
@@ -355,6 +400,7 @@ async function fillRow(row, { auto = false, limit = 0 } = {}) {
           (willSync ? '；下完会自动同步到飞牛歌单' : '；下载完成后自动标记'),
       )
     }
+    if (added) logInfo('补下载', `已加入下载队列 ${added} 首${already ? '，' + already + ' 首本地已有' : ''}`)
     if (missed) logError('补下载', `${missed} 首未能加入下载队列`, '搜索无结果或接口报错')
 
     // ⭐ 队列一空就自动推一次 —— 用户不该为了「歌出现在飞牛歌单里」再点一次「立即执行」
@@ -694,6 +740,8 @@ async function stopPushOnly(row) {
  */
 async function runRow(row) {
   if (!row) return { ok: false, error: '订阅已不存在' }
+  // 手动「立即执行」是一类关键操作：先记触发，成败由后续补下载/推送各自记录
+  logInfo('推送触发', `手动执行：${row.name || '未命名订阅'}`)
   if (busyKey.value) return { ok: false, error: '这条订阅正在执行别的动作，已跳过' }
   const jobs = []
   if (row.download) for (const m of row.monitors) jobs.push(MonitorAPI.run(m.id))
@@ -847,6 +895,7 @@ async function createLinkSubscriptions({ name, links, wantDownload, wantFnos, in
 
   await Promise.all([loadMonitors(), loadPushTasks()])
 
+  if (okList.length) logInfo('创建订阅', `${okList.length} 条链接已订阅`)
   if (failList.length) {
     logError('创建订阅', `${failList.length} 条链接失败`, failList.join('；'))
     if (okList.length) notify(`部分成功：${okList.length} 条已订阅，${failList.length} 条失败`)

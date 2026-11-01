@@ -1019,3 +1019,139 @@ func TestShouldRetryUpgrade(t *testing.T) {
 		t.Fatal("用户点名 320k 时不该去要无损")
 	}
 }
+
+// ── 「仅下载最高」不降档 + 平台兜底（2026-11-01 用户报的 issue #10）──────────
+
+// onlyBareResolver 模拟「按档点名问什么都说没有，但让我自己挑就能给一条」的平台。
+//
+// 这就是 QQ 匿名账号的真实形状：`ResolveAtTier` 恒回 ErrTierUnavailable，
+// 裸 `Resolve` 却拿得到 320k。阶梯问完必然全灭 —— 不多问一次「你能给哪档」
+// 就只能报失败（用户看到的就是「个别任务成功、其余全失败」）。
+type onlyBareResolver struct {
+	platform string
+	bare     *online.Resolved
+	// bareErr 非空时连裸 Resolve 也失败（= 曲目真的下不了）。
+	bareErr  error
+	tierAsks []string
+}
+
+func (s *onlyBareResolver) Platform() string { return s.platform }
+
+func (s *onlyBareResolver) Resolve(context.Context, string) (*online.Resolved, error) {
+	if s.bareErr != nil {
+		return nil, s.bareErr
+	}
+	return s.bare, nil
+}
+
+func (s *onlyBareResolver) ResolveBatch(context.Context, []string) (map[string]*online.Resolved, error) {
+	return nil, online.ErrNotPlayable
+}
+
+func (s *onlyBareResolver) ResolveAtTier(_ context.Context, _, tier string) (*online.Resolved, error) {
+	s.tierAsks = append(s.tierAsks, tier)
+	return nil, online.ErrTierUnavailable
+}
+
+// 「仅下载最高」时自动下载的阶梯必须砍到只剩第一档。
+//
+// 不砍的话：`QualityModeTarget` 给 top_only 和 auto_lower 都是 flac，这一层
+// 光看档位分不出两种意图，「宁缺毋滥」的用户照样收到降档文件。
+func TestDownloadTiersHonoursTopOnly(t *testing.T) {
+	h := newHarness(t)
+	h.it.cfg.AutoDownloadQuality = func() string { return qualityHighest }
+	h.it.cfg.QualityMode = func() string { return "top_only" }
+	if got := h.it.downloadTiers(); len(got) != 1 || got[0] != online.TierLossless {
+		t.Fatalf("仅下载最高的阶梯该只剩无损一档，得到 %v", got)
+	}
+
+	// 「自动降档」/「跟随页面」照旧走完整阶梯。
+	h.it.cfg.QualityMode = func() string { return "auto_lower" }
+	if got := h.it.downloadTiers(); len(got) != len(online.PlaybackLadder) {
+		t.Fatalf("自动降档的阶梯该是完整阶梯，得到 %v", got)
+	}
+	h.it.cfg.QualityMode = nil // 没注入钩子 = 老构造，按允许降档处理
+	if got := h.it.downloadTiers(); len(got) != len(online.PlaybackLadder) {
+		t.Fatalf("没注入模式钩子时该走完整阶梯，得到 %v", got)
+	}
+}
+
+// 阶梯全灭但平台其实能给一档时，必须用它 —— 而不是报「这首下不了」。
+func TestDownloadToLibraryFallsBackToPlatformTier(t *testing.T) {
+	h := newHarness(t)
+	srv, seen, _ := fakeDownloadBackend(t)
+	h.it.localAPI = srv.URL
+	h.it.cfg.AutoDownloadQuality = func() string { return qualityHighest }
+
+	// ⚠️ 平台要跟 registerOnline 登记的那个一致（wy）：池是按**曲目自己的平台**
+	// 找解析器的，注册成 tx 就变成 ErrNoResolver，测的就不是兜底这条路径了。
+	res := &onlyBareResolver{
+		platform: "wy",
+		bare:     &online.Resolved{URL: "https://cdn.invalid/t700.mp3", Format: "mp3", Size: 9 << 20, Bitrate: 320_000},
+	}
+	fake := registerOnline(h, "t700", "甲", "乙")
+	h.it.pool = online.NewPool(res) // ⚠️ 必须在 registerOnline 之后
+
+	item, err := h.it.downloadToLibrary(context.Background(), fake, onlineTrackForTest("t700", "甲", "乙"))
+	if err != nil {
+		t.Fatalf("阶梯全灭但平台能给 320k，该下载成功：%v", err)
+	}
+	if len(*seen) != 1 {
+		t.Fatalf("该只调一次下载接口，实际 %d 次", len(*seen))
+	}
+	if u, _ := (*seen)[0]["url"].(string); !strings.Contains(u, "t700.mp3") {
+		t.Fatalf("该用兜底那条直链，实际是 %q", u)
+	}
+	// 档位来自**码率推断**（平台没回读 Tier）：320k 而不是空、也不是声称的无损。
+	if item.Quality != online.Tier320k {
+		t.Fatalf("兜底拿到的实际档位该是 320k，登记成 %q", item.Quality)
+	}
+}
+
+// 「仅下载最高」时兜底必须**不做**：平台给不了无损就该失败，别偷偷塞个 mp3。
+func TestDownloadToLibraryTopOnlyDoesNotFallBack(t *testing.T) {
+	h := newHarness(t)
+	srv, seen, _ := fakeDownloadBackend(t)
+	h.it.localAPI = srv.URL
+	h.it.cfg.AutoDownloadQuality = func() string { return qualityHighest }
+	h.it.cfg.QualityMode = func() string { return "top_only" }
+
+	res := &onlyBareResolver{
+		platform: "wy",
+		bare:     &online.Resolved{URL: "https://cdn.invalid/t701.mp3", Format: "mp3", Size: 9 << 20, Bitrate: 320_000},
+	}
+	fake := registerOnline(h, "t701", "甲", "乙")
+	h.it.pool = online.NewPool(res)
+
+	if _, err := h.it.downloadToLibrary(context.Background(), fake, onlineTrackForTest("t701", "甲", "乙")); err == nil {
+		t.Fatal("仅下载最高 + 平台没有无损 → 该失败，不该降档")
+	}
+	if len(*seen) != 0 {
+		t.Fatalf("仅下载最高时不该落盘任何文件，实际调了 %d 次下载接口", len(*seen))
+	}
+	for _, tier := range res.tierAsks {
+		if tier != online.TierLossless {
+			t.Fatalf("仅下载最高只该问无损档，实际问了 %q", tier)
+		}
+	}
+}
+
+// 曲目本身不可播放（收费 / 无版权）时不该走兜底：换个问法也问不出来。
+func TestDownloadToLibraryDoesNotFallBackOnNotPlayable(t *testing.T) {
+	h := newHarness(t)
+	srv, seen, _ := fakeDownloadBackend(t)
+	h.it.localAPI = srv.URL
+
+	res := &onlyBareResolver{platform: "wy", bareErr: online.ErrNotPlayable}
+	res.bare = nil
+	fake := registerOnline(h, "w702", "甲", "乙")
+	h.it.pool = online.NewPool(res)
+
+	// tierStubResolver 的 ResolveAtTier 回 ErrTierUnavailable，但裸 Resolve 回 NotPlayable。
+	if _, err := h.it.downloadToLibrary(context.Background(), fake, onlineTrackForTest("w702", "甲", "乙")); err == nil {
+		t.Fatal("不可播放的曲目该失败")
+	}
+	if len(*seen) != 0 {
+		t.Fatalf("不可播放时不该落盘，实际调了 %d 次", len(*seen))
+	}
+}

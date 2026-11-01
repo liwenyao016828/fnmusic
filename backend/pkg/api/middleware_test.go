@@ -91,6 +91,32 @@ func TestIsLoopbackIP(t *testing.T) {
 	}
 }
 
+func TestIsLocalPeer(t *testing.T) {
+	cases := []struct {
+		name       string
+		remoteAddr string
+		want       bool
+	}{
+		{"回环 IPv4", "127.0.0.1:8898", true},
+		{"回环 IPv6", "[::1]:8898", true},
+		{"同网段设备", "192.168.1.66:50000", false},
+		{"公网", "203.0.113.9:50000", false},
+		// 飞牛统一网关：请求经 target/app.sock 转发进来，RemoteAddr 是 socket 路径。
+		// 这种来源算本机 —— 否则网关形态下「仅本机可见」的字段会全部消失。
+		{"unix socket 路径", "/var/apps/yinshu-ai/target/app.sock", true},
+		{"unix socket 抽象地址", "@app", true},
+		// 没有对端信息 = 进程内调用。
+		{"空地址", "", true},
+	}
+	for _, c := range cases {
+		r := httptest.NewRequest(http.MethodGet, "/api/fnos/auth-status", nil)
+		r.RemoteAddr = c.remoteAddr
+		if got := isLocalPeer(r); got != c.want {
+			t.Errorf("%s：isLocalPeer(RemoteAddr=%q) = %v，期望 %v", c.name, c.remoteAddr, got, c.want)
+		}
+	}
+}
+
 // ── 中间件行为 ──
 
 func authTestHandler(mode, token, cidrs string) http.Handler {

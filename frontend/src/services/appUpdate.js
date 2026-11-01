@@ -22,6 +22,8 @@
  */
 
 import { ref } from 'vue'
+// 网关前缀：微应用形态下页面挂在 /app/yinshu-ai 下，请求必须带前缀。
+import { withBase } from './basePath.js'
 
 export const UPDATE_POLL_MS = 1000
 
@@ -189,7 +191,9 @@ export function createAppUpdate({
     try {
       let res
       try {
-        res = await fetchImpl(path, {
+        // withBase：微应用形态下（页面挂在 /app/yinshu-ai 下）请求要带网关前缀；
+        // 普通浏览器直连端口时它是恒等变换，测试里的 '/api/...' 断言因此不受影响。
+        res = await fetchImpl(withBase(path), {
           method,
           headers: body ? { 'Content-Type': 'application/json' } : undefined,
           body: body ? JSON.stringify(body) : undefined,

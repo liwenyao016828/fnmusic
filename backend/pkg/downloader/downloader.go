@@ -173,8 +173,12 @@ type Downloader struct {
 func NewDownloader(cfgMgr *config.ConfigManager) *Downloader {
 	opts := security.DefaultOptions()
 	return &Downloader{
-		cfgMgr:     cfgMgr,
-		httpClient: security.NewSafeClient(opts, 45*time.Second),
+		cfgMgr: cfgMgr,
+		// 下载是「长时间读一个响应体」的场景：超时必须按**整条响应体**算，
+		// 不是按「等响应头」算。原来用 45s 的 NewSafeClient，http.Client.Timeout
+		// 会把整个下载掐在 45 秒内 → 大文件必挂（实测「写入文件失败: context canceled」）。
+		// 这里给 10 分钟，并保留代理尝试上限（代理不通仍 5 秒掉头直连）。
+		httpClient: security.NewSafeStreamClient(opts, 10*time.Minute),
 		secOpts:    opts,
 		batchTasks: make(map[string]*BatchTask),
 	}
@@ -211,21 +215,19 @@ func ValidateNasDir(dir, label string) error {
 	}
 
 	if _, err := nas.ResolveSafePath(target); err != nil {
-		return fmt.Errorf("%s必须位于 NAS 存储卷内（如 /vol1/Music）: %v", label, err)
+		return fmt.Errorf("%s必须位于已授权的音乐目录内: %v", label, err)
 	}
 	return nil
 }
 
+// getDownloadDir 返回生效的落盘目录。
+//
+// 2026-10-31：兜底逻辑收敛到 config.AppConfig.LibraryDir()，不再在这里
+// 各写一份 —— 那份写死 "/vol1/Music" 的兜底会让「用户还没授权任何目录」时
+// 下载任务直接往一个无权访问的路径写。空串 = 还没授权，调用方必须据此报错/引导。
 func (d *Downloader) getDownloadDir() string {
 	cfg := d.cfgMgr.Get()
-	dir := cfg.DownloadDir
-	if dir == "" {
-		dir = cfg.DefaultNasDir
-	}
-	if dir == "" {
-		dir = "/vol1/Music"
-	}
-	return filepath.Clean(dir)
+	return cfg.LibraryDir() // Get 返回的是值拷贝，取地址后再调指针方法
 }
 
 func (d *Downloader) HandleGetConfig(w http.ResponseWriter, r *http.Request) {
@@ -380,8 +382,95 @@ func (d *Downloader) GetDownloadDir() string {
 	return d.getDownloadDir()
 }
 
+// ErrNoDownloadDir 表示「还没被授权任何目录」—— getDownloadDir 现在会回空串。
+//
+// 这不是内部错误，是用户可见的状态：界面要提示去「应用设置 → 授权目录」授权，
+// 而不是把空路径当成「写到根目录」或凭空造一个 /vol1/Music。
+var ErrNoDownloadDir = errors.New("还没有被授权访问任何目录，请先在「应用设置 → 授权目录」里授权一个音乐目录")
+
+// downloadSingleSong 是落盘主流程的**带日志外壳**：真正干活的是 downloadInner。
+//
+// 为什么要包一层而不是在内部每个 return 前手动打日志：这条流程有十几条退出路径
+// （无目录 / 目录建不出来 / 地址无效 / SSRF 拒绝 / HTTP 非 2xx / 体积超限 / 嗅探
+// 不是音频 / 无损校验不过 / rename 失败…），逐条手打必漏；漏掉的那条恰好就是
+// 用户来问的那条。外壳只在一个地方收口，起手记「要下什么」，收手记「结果如何」。
 func (d *Downloader) downloadSingleSong(song SongPayload) (*SongResult, error) {
+	startedAt := time.Now()
+	// 直链只记域名：音源直链带 token/签名，整条写进日志等于把下载凭据落到 qulv.log
+	//（2026-11-01 用户口径）。域名够用来分辨「是哪家 CDN 在 403」。
+	url := song.URL
+	if url == "" || strings.Contains(url, "notice") || strings.Contains(url, "panspace") {
+		url = song.StreamURL
+	}
+	log.Printf("[DOWNLOAD] 开始：%s - %s（目标档位 %s，来源 %s，域名 %s）",
+		song.Singer, song.Name, dashIfEmpty(song.Quality), dashIfEmpty(song.Source), applog.HostOf(url))
+
+	res, err := d.downloadInner(song)
+
+	elapsed := time.Since(startedAt)
+	switch {
+	case err != nil:
+		// 失败必须带原因：err 里的人话已经写清是卡在哪一步（见 downloadInner 的
+		// 各处 fmt.Errorf），这里补上曲目身份与耗时，便于「是这首还是整批都慢」。
+		log.Printf("[DOWNLOAD] 失败：%s - %s（耗时 %s）：%v", song.Singer, song.Name, briefElapsed(elapsed), err)
+	case res != nil && res.Status == "success":
+		// 成功日志要能回答三件事：文件落在哪、实际是什么档位、多大。
+		// 「下到的怎么是 mp3」「文件到底在不在」都靠这一行，不再需要翻盘。
+		size := int64(0)
+		if fi, statErr := os.Stat(res.Path); statErr == nil {
+			size = fi.Size()
+		}
+		log.Printf("[DOWNLOAD] 完成：%s - %s → %s（实际档位 %s，格式 %s，%s，来源 %s，域名 %s，耗时 %s）",
+			song.Singer, song.Name, res.Path, dashIfEmpty(res.Quality), dashIfEmpty(res.ActualFormat),
+			briefBytes(size), dashIfEmpty(song.Source), applog.HostOf(url), briefElapsed(elapsed))
+	case res != nil && res.Status == "already_exists":
+		// 复用已有文件是「成功但没干活」，必须与真下载区分开：否则用户看到
+		// 「下载很快完成」会以为是网络变好了，其实是文件早就在盘上。
+		log.Printf("[DOWNLOAD] 已存在，跳过下载：%s - %s → %s（%s，耗时 %s）",
+			song.Singer, song.Name, res.Path, dashIfEmpty(res.ActualFormat), briefElapsed(elapsed))
+	}
+	return res, err
+}
+
+// dashIfEmpty 日志里的空值统一显示「未指定」。
+func dashIfEmpty(v string) string {
+	if strings.TrimSpace(v) == "" {
+		return "未指定"
+	}
+	return v
+}
+
+// briefElapsed 把耗时压成「12s」「1m23s」。
+func briefElapsed(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%.1fs", d.Seconds())
+	}
+	return fmt.Sprintf("%dm%02ds", int(d.Minutes()), int(d.Seconds())%60)
+}
+
+// briefBytes 把字节数写成日志易读形式。
+func briefBytes(n int64) string {
+	switch {
+	case n <= 0:
+		return "大小未知"
+	case n >= 1<<20:
+		return fmt.Sprintf("%.1fMB", float64(n)/(1<<20))
+	default:
+		return fmt.Sprintf("%dKB", n/1024)
+	}
+}
+
+// downloadInner 是实际落盘流程（见上面的 downloadSingleSong 注释）。
+func (d *Downloader) downloadInner(song SongPayload) (*SongResult, error) {
 	destDir := d.getDownloadDir()
+	if destDir == "" {
+		return &SongResult{
+			SongName: song.Name,
+			Singer:   song.Singer,
+			Status:   "failed",
+			Error:    ErrNoDownloadDir.Error(),
+		}, ErrNoDownloadDir
+	}
 	if err := os.MkdirAll(destDir, 0755); err != nil {
 		return &SongResult{
 			SongName: song.Name,
@@ -1121,6 +1210,9 @@ func (d *Downloader) HandleCheckDownloaded(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// 没授权目录（destDir 为空）时不可能有任何「已下载」文件：下面按 destDir 拼
+	// 路径会得到相对路径，命中不了任何条目，自然全部回 exists=false —— 这正是
+	// 期望结果，界面照常能画，引导提示交给 /api/fnos/auth-status 的 hint。
 	destDir := d.getDownloadDir()
 	existsMap := make(map[string]bool)
 	// paths / upgradable 是**新增**的附加字段（老前端只读 exists，不受影响）：
@@ -1314,6 +1406,12 @@ func (d *Downloader) EnrichExisting(song SongPayload, path string) (bool, error)
 	}
 	// ⚠️ 这个接口会**写盘**，而路径来自调用方 —— 只允许改下载目录里的文件。
 	// 不做这个检查的话它就是一个「往任意路径写标签」的入口。
+	//
+	// 没有下载目录（= 还没授权任何目录）时直接拒绝：filepath.Abs("") 会返回
+	// **当前工作目录**，那样这道检查就形同虚设。
+	if d.getDownloadDir() == "" {
+		return false, ErrNoDownloadDir
+	}
 	dir, err := filepath.Abs(d.getDownloadDir())
 	if err != nil {
 		return false, err

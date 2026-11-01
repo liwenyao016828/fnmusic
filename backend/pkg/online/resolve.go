@@ -159,12 +159,63 @@ func (p *Pool) Platforms() []string {
 	return out
 }
 
+// Resolver 返回某个平台的解析器本人（没有则 nil）。
+//
+// 给需要**绕开缓存**的调用方用：比如下载队列的降级兜底 —— 阶梯刚把
+// ErrTierUnavailable 负缓存进键里，任何走缓存的问法都会直接吃到那份
+// 「判死」，兜底就永远问不出「平台其实还有一档」这个事实。
+func (p *Pool) Resolver(platform string) Resolver {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.resolvers[platform]
+}
+
 // Supports 报告该平台是否有解析器。
 func (p *Pool) Supports(platform string) bool {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	_, ok := p.resolvers[platform]
 	return ok
+}
+
+// ResolveBypassingLadderCache 绕开缓存，直接问解析器本人「平台实际能给哪一档」。
+//
+// # 为什么必须绕开缓存
+//
+// `ResolveLadder` 问完一档没拿到就把 `ErrTierUnavailable` **负缓存**进
+// `platform\x00id\x00<tier>`。之后任何走缓存的问法都会直接吃到那份「判死」，
+// 于是「降级兜底」永远问不出「平台其实还有一档」这个事实 —— 下载队列那边
+// 2026-10-30 的两条失败任务就是这么来的。
+//
+// 裸 `Resolve` 的键（`platform\x00id`）也不干净：它会被别的入口（试听、
+// 搜索批解）写上无关结论。所以这里直接拿 `Resolver(platform)` 问本人，
+// 一个缓存都不碰。
+//
+// 语义是 `Pool.Resolve` 的：**让平台自己挑**它能给的那一档 —— 有 TierResolver
+// 时先按 `want` 点名问一次（平台静默降级也算成功），不行再裸问一次。
+// 返回的 `Resolved.Tier` 是平台**实际**回读的档位，调用方据此判断降了多少。
+func (p *Pool) ResolveBypassingLadderCache(ctx context.Context, platform, platformID, want string) (*Resolved, error) {
+	if p == nil {
+		return nil, ErrNoResolver
+	}
+	if platformID == "" {
+		return nil, fmt.Errorf("空的平台内 id")
+	}
+	r := p.Resolver(platform)
+	if r == nil {
+		return nil, ErrNoResolver
+	}
+	if tr, ok := r.(TierResolver); ok && strings.TrimSpace(want) != "" {
+		if res, err := tr.ResolveAtTier(ctx, platformID, want); err == nil && res != nil && strings.TrimSpace(res.URL) != "" {
+			return res, nil
+		}
+	}
+	if res, err := r.Resolve(ctx, platformID); err == nil && res != nil && strings.TrimSpace(res.URL) != "" {
+		return res, nil
+	} else if err != nil {
+		return nil, err
+	}
+	return nil, ErrTierUnavailable
 }
 
 // Resolve 解析一条曲目，带缓存。

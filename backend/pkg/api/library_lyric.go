@@ -92,7 +92,7 @@ func (s *Server) HandleLibraryLyricGaps(w http.ResponseWriter, r *http.Request) 
 	}
 	dir := s.libraryDirOrDefault(req.Dir)
 	if dir == "" {
-		errJSON(w, http.StatusBadRequest, "请提供 dir（当前没有配置曲库目录）")
+		errJSON(w, http.StatusBadRequest, "还没有被授权访问任何目录，请先在「应用设置 → 授权目录」里授权一个音乐目录")
 		return
 	}
 	resolved, err := resolveLibraryPath(dir)

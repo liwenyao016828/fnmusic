@@ -292,8 +292,9 @@ func APICatalog(baseURL string) []Endpoint {
 				{Name: "format", In: "query", Desc: "传 zip 时改为**打包下载**（日志 + 环境信息 + 脱敏配置），用于反馈问题"},
 			},
 			Example: "curl '" + baseURL + "/api/logs?limit=100'",
-			Notes: "只存**内存**（最多 2000 条），**重启即清空**，默认不落盘（免得路径与令牌留在 NAS 上；" +
-				"设置过「日志存储位置」的另有一份落盘副本）。`source` 区分 `backend` / `frontend`。" +
+			Notes: "内存里留最近 2000 条，**默认同时落盘**到 `<数据目录>/logs/qulv.log`（可在设置里换目录或关掉）。" +
+				"关掉落盘时只留内存、重启即清空。`log_file` 字段回当前落盘路径，空 = 未落盘。" +
+				"`source` 区分 `backend` / `frontend`。" +
 				"`?format=zip` 打包下载日志+环境信息+脱敏配置，可安全外发。",
 		},
 		{
@@ -309,16 +310,18 @@ func APICatalog(baseURL string) []Endpoint {
 				"`message` 必填、超 2000 字符截断，`source` 省略时按 `frontend` 记。",
 		},
 		{
-			Method: http.MethodGet, Path: "/api/logs/config", Summary: "读取日志存储位置设置", Category: catSystem,
+			Method: http.MethodGet, Path: "/api/logs/config", Summary: "读取日志落盘设置", Category: catSystem,
 			Example: "curl '" + baseURL + "/api/logs/config'",
-			Notes:   "返回 `{log_dir, log_file}`：`log_dir` 为设置页里配的目录（空串 = 默认不落盘），`log_file` 为当前实际写入的文件路径（未启用为空）。",
+			Notes: "返回 `{enabled, log_dir, effective_dir, log_file}`：`enabled` 落盘开没开（默认开）；" +
+				"`log_dir` 为用户自定义目录（空串 = 用默认位置）；`effective_dir` 实际生效目录（关闭时为空）；" +
+				"`log_file` 当前实际写入的文件路径（关闭时为空）。",
 		},
 		{
-			Method: http.MethodPost, Path: "/api/logs/config", Summary: "设置日志存储位置（留空关闭落盘）", Category: catSystem,
-			Example: "curl -X POST '" + baseURL + "/api/logs/config' -H 'Content-Type: application/json' -d '{\"log_dir\":\"/vol1/Logs\"}'",
-			Notes: "body 为 `{log_dir}`：空串 = 关闭落盘（默认：日志只在内存里，重启即清空）；" +
-				"传路径 = 每条运行日志（含前端上报）同时写进 `<目录>/qulv.log`，即时生效、跨重启保留。" +
-				"目录与下载/缓存目录同一条红线：绝对路径且位于 NAS 存储卷内。",
+			Method: http.MethodPost, Path: "/api/logs/config", Summary: "设置日志落盘（开关 / 目录）", Category: catSystem,
+			Example: "curl -X POST '" + baseURL + "/api/logs/config' -H 'Content-Type: application/json' -d '{\"enabled\":true,\"log_dir\":\"/vol1/Logs\"}'",
+			Notes: "body `{enabled?, log_dir?}`：`enabled` 开/关落盘（默认开，落盘到 `<数据目录>/logs`）；" +
+				"`log_dir` 传路径 = 换目录，空串 = 回默认位置。即时生效、跨重启保留。" +
+				"自定义目录须为绝对路径且在 NAS 存储卷内。文件按 20MB 轮转，只留两代。",
 		},
 		{
 			Method: http.MethodGet, Path: "/api/diagnostics/platforms", Summary: "查看各平台请求健康度（失败计数与最近明细）", Category: catSystem,
@@ -484,6 +487,25 @@ func APICatalog(baseURL string) []Endpoint {
 				"LX 协议是浏览器沙箱执行的用户脚本，负责取直链。二者互补，不是替代关系。",
 			Example:  "curl " + baseURL + "/api/protocols",
 			Requires: "none",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/lx/host", Summary: "服务端洛雪宿主状态（是否开启 / 启动中 / 已就绪 / 失败原因）", Category: catSources,
+			Example: "curl " + baseURL + "/api/lx/host",
+			Notes: "state：off（没开，默认）/ starting / ready（base 是它的本地地址）/ " +
+				"failed（error 写原因）/ stopped。宿主是 Node 子进程，跑用户自己的洛雪音源脚本，" +
+				"给后端下载队列提供一条「平台直链取不到时再兜一层」的取音渠道。",
+			Requires: "none",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/lx/host", Summary: "开启 / 关闭服务端洛雪宿主（当场起停，不用重启应用）", Category: catSources,
+			Params: []Param{
+				{Name: "enabled", In: "body", Required: true, Desc: "true=开启宿主，false=关闭"},
+				{Name: "port", In: "body", Desc: "宿主本地端口，0 或不传 = 默认 8920"},
+			},
+			Example: "curl -X POST " + baseURL + "/api/lx/host -H 'Content-Type: application/json' -d '{\"enabled\":true}'",
+			Notes: "会同时把启用中音源的脚本正文重新落盘并起停子进程，" +
+				"所以返回的 data 是**切换之后**的新状态（可能还是 starting，刷新 GET 看最终结果）。" +
+				"它跟在配置里的 lx_server_enabled 是同一个开关，改配置后不重启也能用这条接口生效。",
 		},
 		{
 			Method: http.MethodGet, Path: "/api/sources", Summary: "列出已导入音源与当前激活音源", Category: catSources,
@@ -1327,6 +1349,18 @@ func APICatalog(baseURL string) []Endpoint {
 			Method: http.MethodGet, Path: "/api/fnos/status", Summary: "飞牛集成状态（开放 API / 音乐接口可用性）", Category: catFnos,
 			Example: "curl " + baseURL + "/api/fnos/status",
 			Notes:   "非飞牛环境（如本地开发）两个 available 均为 false，属正常，其余功能不受影响。",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/fnos/auth-status", Summary: "文件访问授权状态（未授权时界面显示提示条）", Category: catFnos,
+			Example: "curl " + baseURL + "/api/fnos/auth-status",
+			Notes: "飞牛要求用户显式授权目录，应用才看得到文件；未授权时 authorized=false，" +
+				"并带一句可直接展示的 hint 与 hint_action=grant。" +
+				"路径字段（roots / fnos_roots）只对回环来源返回，其它来源只给布尔与计数。",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/fnos/auth-refresh", Summary: "让后端立刻重新读取飞牛授权目录", Category: catFnos,
+			Example: "curl -X POST " + baseURL + "/api/fnos/auth-refresh",
+			Notes:   "用户在页面上完成授权后调用，跳过 30 秒授权目录缓存，避免界面看起来「授权没生效」。",
 		},
 		{
 			Method: http.MethodGet, Path: "/api/fnos/folders", Summary: "管理员授权给本应用的目录（官方开放 API）", Category: catFnos,

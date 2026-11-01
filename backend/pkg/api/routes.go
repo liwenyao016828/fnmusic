@@ -94,6 +94,9 @@ var routeTable = []routeSpec{
 
 	// 2.4 音源协议：官方协议（后端内置）与 LX 协议（浏览器脚本）的能力边界
 	{Path: "/api/protocols", Handler: func(s *Server) http.HandlerFunc { return s.HandleProtocols }},
+	// 服务端洛雪宿主：看状态（GET）与运行时开关（POST）。
+	// 开关必须当场起停子进程 —— 只写配置不会让它动起来，见 pkg/api/lxhost.go。
+	{Path: "/api/lx/host", Handler: func(s *Server) http.HandlerFunc { return s.handleLxHost }},
 
 	// 2.5 Charts & Playlists
 	{Path: "/api/charts/toplists", Handler: func(s *Server) http.HandlerFunc { return s.chartMgr.HandleToplists }},
@@ -235,6 +238,10 @@ var routeTable = []routeSpec{
 	{Path: "/api/fnos/folders", Handler: func(s *Server) http.HandlerFunc { return s.HandleFnosFolders }},
 	{Path: "/api/fnos/playlists", Handler: func(s *Server) http.HandlerFunc { return s.HandleFnosPlaylists }},
 	{Path: "/api/fnos/push", Handler: func(s *Server) http.HandlerFunc { return s.HandleFnosPush }},
+	// 文件访问授权状态（飞牛官方权限模型）：未授权时页面要显示提示条，
+	// 授权完要能立刻让后端重新取目录，见 fnos_auth.go
+	{Path: "/api/fnos/auth-status", Handler: func(s *Server) http.HandlerFunc { return s.HandleFnosAuthStatus }},
+	{Path: "/api/fnos/auth-refresh", Handler: func(s *Server) http.HandlerFunc { return s.HandleFnosAuthRefresh }},
 
 	// 2.12 第三方平台账号（扫码登录）
 	{Path: "/api/accounts", Handler: func(s *Server) http.HandlerFunc { return s.HandleAccounts }},

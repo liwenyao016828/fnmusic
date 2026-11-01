@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -501,9 +502,24 @@ func (h *Handler) release(id string) {
 func (h *Handler) RunOnce(mon *Monitor) *Run {
 	run := h.store.StartRun(mon.ID, !mon.BaselineDone)
 	baseline := !mon.BaselineDone
+	startedAt := time.Now()
+
+	// 任务日志：订阅每轮的「开始」与「汇总」都进运行日志。
+	// 以前 monitor 包一条 log 都没有 —— 于是「订阅到底跑没跑」「跑了几轮」
+	// 「为什么这次一首都没下」全都只存在于界面那一份 run.Log 里（刷新就换一轮，
+	// 事后无从对账）。这里记的是同一件事的后端版本：轮次、发现数、结果。
+	log.Printf("[MONITOR] 订阅 %s（%s）本轮开始（%s，基线 %v）",
+		mon.Name, mon.ID, mon.IntervalMinutesString(), baseline)
 
 	defer func() {
 		h.store.FinishRun(run)
+		// 一轮的汇总必须落到运行日志：Found/New/Downloaded/Skipped/Failed/
+		// ResolveFailed 五个计数就是「这轮到底干了什么」的完整答案，缺一个都会
+		// 让用户只能拿界面上的数字反推。
+		log.Printf("[MONITOR] 订阅 %s（%s）本轮结束：状态 %s，发现 %d，新增 %d，已下载 %d，跳过 %d，失败 %d，取链失败 %d，耗时 %s%s",
+			mon.Name, mon.ID, run.Status, run.Found, run.NewItems, run.Downloaded,
+			run.Skipped, run.Failed, run.ResolveFailed, briefDuration(time.Since(startedAt)),
+			monitorMessageSuffix(run.Message))
 		// 基线轮完成后置位，下一轮才开始真正下载
 		if baseline && run.Status != "error" {
 			_, _ = h.store.UpdateMonitor(mon.ID, func(m *Monitor) { m.BaselineDone = true })
@@ -519,6 +535,9 @@ func (h *Handler) RunOnce(mon *Monitor) *Run {
 		run.Message = msg
 		logLines = append(logLines, "× "+msg)
 		run.Log = strings.Join(logLines, "\n")
+		// 失败必须能在后端日志里单独 grep 到，不能只藏在 run.Message 里
+		//（界面刷新后那一轮的 message 就不再显示了）。
+		log.Printf("[MONITOR] 订阅 %s（%s）本轮失败：%s", mon.Name, mon.ID, msg)
 		return run
 	}
 
@@ -651,6 +670,7 @@ func (h *Handler) RunOnce(mon *Monitor) *Run {
 				return
 			}
 			lastErr = dlErr
+			log.Printf("[MONITOR] %s - %s 第 %d 个候选直链下载失败：%v", item.Song.Name, item.Song.Artist, i+1, dlErr)
 			if i < len(urls)-1 {
 				logLines = append(logLines, "  ↻ "+item.Song.Name+" - "+item.Song.Artist+"："+
 					dlErr.Error()+" → 换下一个音源重试")
@@ -869,3 +889,28 @@ func min(a, b int) int {
 }
 
 var errNoDispatcher = errors.New("no dispatcher")
+
+// IntervalMinutesString 日志里要能看出「这轮是哪个间隔触发的」，但 0 值会让
+// 日志写成「0 分钟」。给个默认值，纯粹为了可读。
+func (m *Monitor) IntervalMinutesString() string {
+	if m.IntervalMinutes <= 0 {
+		return strconv.Itoa(DefaultIntervalMinutes) + " 分钟"
+	}
+	return strconv.Itoa(m.IntervalMinutes) + " 分钟"
+}
+
+// briefDuration 把耗时压成「12s」「1m23s」。
+func briefDuration(d time.Duration) string {
+	if d < time.Minute {
+		return strconv.Itoa(int(d.Seconds())) + "s"
+	}
+	return strconv.Itoa(int(d.Minutes())) + "m" + strconv.Itoa(int(d.Seconds())%60) + "s"
+}
+
+// monitorMessageSuffix 有额外说明时补一句（如「订阅已停止，本轮中止」）。
+func monitorMessageSuffix(msg string) string {
+	if strings.TrimSpace(msg) == "" {
+		return ""
+	}
+	return "，说明：" + msg
+}

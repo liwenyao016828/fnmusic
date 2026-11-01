@@ -7,6 +7,9 @@ data/
 *.log
 *.pid
 
+# 开发用后端二进制（backend/.dev 是本地编译产物目录，别提交 22MB 的可执行文件）
+backend/.dev/
+
 # Local toolchain / package cache (not part of the project)
 .tools/
 .npm-cache/

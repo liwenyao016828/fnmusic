@@ -247,7 +247,7 @@ func (s *Server) HandleCoverCandidates(w http.ResponseWriter, r *http.Request) {
 func (s *Server) HandleLibraryAudit(w http.ResponseWriter, r *http.Request) {
 	dir := s.libraryDirOrDefault(r.URL.Query().Get("dir"))
 	if dir == "" {
-		errJSON(w, http.StatusBadRequest, "请提供 dir（当前没有配置曲库目录）")
+		errJSON(w, http.StatusBadRequest, "还没有被授权访问任何目录，请先在「应用设置 → 授权目录」里授权一个音乐目录")
 		return
 	}
 	resolved, err := resolveLibraryPath(dir)
@@ -294,7 +294,7 @@ func (s *Server) HandleLibraryAudit(w http.ResponseWriter, r *http.Request) {
 func (s *Server) HandleLibraryIndex(w http.ResponseWriter, r *http.Request) {
 	dir := s.libraryDirOrDefault(r.URL.Query().Get("dir"))
 	if dir == "" {
-		errJSON(w, http.StatusBadRequest, "请提供 dir（当前没有配置曲库目录）")
+		errJSON(w, http.StatusBadRequest, "还没有被授权访问任何目录，请先在「应用设置 → 授权目录」里授权一个音乐目录")
 		return
 	}
 	resolved, err := resolveLibraryPath(dir)
@@ -404,7 +404,7 @@ func enrichIndexTags(index *library.Index, dir string, limit int) int {
 func (s *Server) HandleLibraryIndexStats(w http.ResponseWriter, r *http.Request) {
 	dir := s.libraryDirOrDefault(r.URL.Query().Get("dir"))
 	if dir == "" {
-		errJSON(w, http.StatusBadRequest, "请提供 dir（当前没有配置曲库目录）")
+		errJSON(w, http.StatusBadRequest, "还没有被授权访问任何目录，请先在「应用设置 → 授权目录」里授权一个音乐目录")
 		return
 	}
 	resolved, err := resolveLibraryPath(dir)
@@ -430,7 +430,7 @@ func (s *Server) HandleLibraryIndexStats(w http.ResponseWriter, r *http.Request)
 func (s *Server) HandleLibraryGaps(w http.ResponseWriter, r *http.Request) {
 	dir := s.libraryDirOrDefault(r.URL.Query().Get("dir"))
 	if dir == "" {
-		errJSON(w, http.StatusBadRequest, "请提供 dir（当前没有配置曲库目录）")
+		errJSON(w, http.StatusBadRequest, "还没有被授权访问任何目录，请先在「应用设置 → 授权目录」里授权一个音乐目录")
 		return
 	}
 	resolved, err := resolveLibraryPath(dir)
@@ -573,7 +573,7 @@ func entryMatches(e library.Entry, lowerQ string) bool {
 func (s *Server) HandleDuplicates(w http.ResponseWriter, r *http.Request) {
 	dir := s.libraryDirOrDefault(r.URL.Query().Get("dir"))
 	if dir == "" {
-		errJSON(w, http.StatusBadRequest, "请提供 dir（当前没有配置曲库目录）")
+		errJSON(w, http.StatusBadRequest, "还没有被授权访问任何目录，请先在「应用设置 → 授权目录」里授权一个音乐目录")
 		return
 	}
 	resolved, err := resolveLibraryPath(dir)
@@ -1010,8 +1010,9 @@ func (s *Server) libraryIndex() *library.Index {
 // 现在的口径：
 //   - 传了 dir → 原样返回（调用方明确指定优先，行为不变）；
 //   - 没传 → 回退到配置里生效的曲库目录；
-//   - 只有配置也空（理论上不会，LibraryDir 有 /vol1/Music 兜底）才回 ""，
-//     由调用方决定报什么错。
+//   - 只有配置也空（= 用户还没在「应用设置 → 授权目录」授权任何目录，见
+//     config.DefaultLibraryDir）才回 ""，由调用方决定报什么错 —— 调用方的
+//     报错文案要引导去授权，而不是让用户猜「dir 该填什么」。
 //
 // 注意：这里只**补默认值**，不加宽权限 —— resolveLibraryPath 的路径守卫照旧。
 func (s *Server) libraryDirOrDefault(raw string) string {

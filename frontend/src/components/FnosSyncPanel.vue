@@ -121,7 +121,7 @@ import { ref, computed, onMounted } from 'vue'
 import { KeyRound, Eraser, RefreshCw } from 'lucide-vue-next'
 import { FnosAPI } from '../api/client'
 import { fail, apiError } from '../services/userMsg'
-import { logError } from '../services/appLog'
+import { logError, logInfo } from '../services/appLog'
 
 const status = ref(null)
 const checking = ref(false)
@@ -223,6 +223,8 @@ async function rescan() {
       return
     }
     // 成功不写字：按钮的「已排队…」+ 转圈图标就是反馈，1.5 秒后自己复位。
+    // 但日志页得能查到「谁在什么时候触发了重扫」。
+    logInfo('触发曲库重扫', '已提交飞牛曲库重扫')
     setTimeout(() => { rescanning.value = false }, 1500)
   } catch (e) {
     rescanMsg.value = fail('触发曲库重扫', e)

@@ -87,6 +87,16 @@ type TierResolver interface {
 	ResolveAtTier(ctx context.Context, platformID string, tier string) (*Resolved, error)
 }
 
+// TierOfResolved 导出一次解析实际拿到的档位（tierFromResolved 的公开版）。
+//
+// 给包外的调用方用：`pkg/intercept` 的收藏自动下载 / 音质补强拿到的 Resolved
+// 也要按**实际**档位打分（老的 musicdl / 洛雪解析器不回读档位，只能按码率、
+// 容器推）。这些判据只该有一份实现 —— 两套标度各算各的正是 v2.13.0 那批
+// 「声明无损、实际 128k」的来源。
+//
+// 认不出返回空串（= 不知道），调用方不要当成最差档。
+func TierOfResolved(res *Resolved) string { return tierFromResolved(res) }
+
 // tierFromResolved 推断一次解析实际拿到的档位。
 //
 // 优先用平台自己回读出来的（`Resolved.Tier`），没有就按码率推，再没有就按容器推。

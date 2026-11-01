@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"fn-lx-player/pkg/applog"
 	"fn-lx-player/pkg/audioext"
 	"fn-lx-player/pkg/config"
 	"fn-lx-player/pkg/lxnode"
@@ -63,6 +65,30 @@ type FetcherConfig struct {
 	// Client 可 nil（用带超时的默认值）。
 	Client *http.Client
 	Logf   func(string, ...any)
+	// QualityMode 返回「下载音质」全局模式（config.DownloadQuality* 三选一）：
+	//   follow    = 跟随页面设置：用任务点名的档位，缺档时降级兜底；
+	//   top_only  = 仅下载最高：阶梯砍到只剩最高一档，缺就失败，不降；
+	//   auto_lower= 自动降档：一律先要最高，拿不到就降。
+	// 可 nil（= 跟随，即默认行为）。
+	QualityMode func() string
+}
+
+// modeAllowsLower 报告当前模式下「平台没有点名的档」时能不能退一步用它实际有的。
+// 三种模式里只有「仅下载最高」说不 —— 其余都按用户最初的诉求：
+// 「平台没有这一档，也可以下载平台有的啊」。
+func (cfg FetcherConfig) modeAllowsLower() bool {
+	if cfg.QualityMode == nil {
+		return true
+	}
+	return config.QualityModeAllowsLower(cfg.QualityMode())
+}
+
+// modeIsTopOnly 报告当前是否「仅下载最高」（阶梯要砍成只剩一档）。
+func (cfg FetcherConfig) modeIsTopOnly() bool {
+	if cfg.QualityMode == nil {
+		return false
+	}
+	return config.NormalizeQualityMode(cfg.QualityMode()) == config.DownloadQualityTopOnly
 }
 
 // ChannelStatus 是某条取音渠道的可用性（给 /api/download/backend/status 用）。
@@ -171,17 +197,30 @@ func (cfg FetcherConfig) Availability() Availability {
 	lx := cfg.lxState()
 	dl := cfg.dlSources()
 	out := Availability{LxHost: lx}
-	anyReady := false
+	// 渠道分两类看（2026-11-01，issue #11）：
+	//
+	//	· **必需渠道**（原生 / musicdl）—— 只要有一个能用，后台下载就算「能用」；
+	//	· **可选渠道**（洛雪宿主）—— 它只补某些链路的缺，不能拿来撑 ready。
+	//
+	// 以前 lx 也参与 anyReady。后果很能骗人：用户 11 个洛雪源测速全绿（测速跑在
+	// 浏览器里，跟宿主一点关系没有）而原生渠道其实没起来时，界面照样显示「可用」，
+	// 任务全进队列，再一条条失败 —— 用户看到的就是「没有任何可用的取音渠道」
+	// 却不知道到底哪条路断了。反过来的坑一起堵上：用户把必需渠道全关、只留洛雪
+	// 宿主时，lx ready 就是唯一能取音的路，那种情况必须算能用（否则明明下得动
+	// 却全被判 no_channel 跳过）。
+	requiredEnabled, requiredReady, optionalReady := false, false, false
 	for _, id := range channels {
 		cs := ChannelStatus{ID: id, Enabled: true}
 		switch id {
 		case config.DLChannelNative:
+			requiredEnabled = true
 			if cfg.Pool != nil {
 				cs.Ready = true
 			} else {
 				cs.Reason = "平台直链解析器未初始化"
 			}
 		case config.DLChannelMusicDL:
+			requiredEnabled = true
 			switch {
 			case cfg.Pool == nil:
 				cs.Reason = "平台直链解析器未初始化"
@@ -198,17 +237,47 @@ func (cfg FetcherConfig) Availability() Availability {
 				cs.Reason = lxReason(lx)
 			}
 		}
-		if cs.Ready {
-			anyReady = true
+		switch {
+		case cs.Ready && cs.Optional:
+			optionalReady = true
+		case cs.Ready:
+			requiredReady = true
 		}
 		out.Channels = append(out.Channels, cs)
 	}
 	out.Dir = cfg.savedDir()
-	out.Ready = anyReady
-	if !anyReady {
-		out.Reason = "没有任何可用的取音渠道"
+	out.Ready = requiredReady || (optionalReady && !requiredEnabled)
+	if !out.Ready {
+		out.Reason = cfg.noChannelReason()
 	}
 	return out
+}
+
+// noChannelReason 给「一条路都走不通」时**可操作**的说法。
+//
+// 原来这里只有一句「没有任何可用的取音渠道」——用户拿着它去翻那 11 个显示正常的
+// 洛雪源，翻不出任何结论（issue #11 原话：「全都测试正常，但是下载就全失败」）。
+// 现在把「是哪条路断了」和「去哪儿点」一并写出来。
+func (cfg FetcherConfig) noChannelReason() string {
+	channels := cfg.channelsOf()
+	parts := make([]string, 0, 3)
+	if config.ChannelEnabled(channels, config.DLChannelNative) && cfg.Pool == nil {
+		parts = append(parts, "原生：平台直链解析器未初始化")
+	}
+	if config.ChannelEnabled(channels, config.DLChannelMusicDL) && len(cfg.dlSources()) == 0 {
+		parts = append(parts, "musicdl：没有启用的外挂平台")
+	}
+	if !config.ChannelEnabled(channels, config.DLChannelNative) &&
+		!config.ChannelEnabled(channels, config.DLChannelMusicDL) {
+		parts = append(parts, "原生 / musicdl 渠道都被关掉了（设置 → 下载渠道）")
+	}
+	if config.ChannelEnabled(channels, config.DLChannelLx) {
+		parts = append(parts, "洛雪："+lxReason(cfg.lxState())+"（去 音源管理 → 服务端洛雪宿主 打开）")
+	}
+	if len(parts) == 0 {
+		return "没有任何可用的取音渠道"
+	}
+	return "没有任何可用的取音渠道：" + strings.Join(parts, "；")
 }
 
 func lxReason(state string) string {
@@ -265,19 +334,50 @@ func NewFetcher(cfg FetcherConfig) Fetcher {
 		if err != nil {
 			return Result{}, err
 		}
+		// 任务日志（渠道视角）：计划里有什么、每条落在哪个域名上。
+		// 域名是排障的关键信息（「403 的是哪一家 CDN」），但**直链本身绝不能出现**
+		// ——它带 token/签名，整条打进日志等于把下载凭据写进 qulv.log
+		//（2026-11-01 用户口径：只记域名）。
+		logf("[BACKEND-DL] 取音计划：%d 条候选（%s）", len(attempts), planSummary(attempts))
 		// 按「实际档位从高到低」挨个试：解析成功不等于能下（CDN 403、试听片段、
 		// 直链过期都是常见的），换下一条比让整首歌失败划算。
 		var failures []string
-		for _, a := range attempts {
+		downgraded := false // 坏流降档一轮只做一次，不许来回降
+		for i, a := range attempts {
+			// 每条候选单独留痕：失败的用户反馈多是「换了源还是不行」，
+			// 只有逐条记录才能回答「到底试了几家、各家怎么挂的」。
+			logf("[BACKEND-DL] 尝试 %d/%d：%s 档位 %s（域名 %s）",
+				i+1, len(attempts), orDash(a.label), orDash(a.tier), applog.HostOf(a.url))
 			res, derr := downloadOne(ctx, client, cfg, it, a)
 			if derr == nil {
+				logf("[BACKEND-DL] 取音成功：%s 档位 %s（域名 %s）→ %s",
+					orDash(a.label), orDash(res.Quality), applog.HostOf(a.url), res.Path)
 				return res, nil
 			}
+			logf("[BACKEND-DL] 该候选失败：%s 档位 %s（域名 %s）：%v",
+				orDash(a.label), orDash(a.tier), applog.HostOf(a.url), derr)
 			failures = append(failures, fmt.Sprintf("%s/%s：%v", a.channel, firstNonEmpty(a.tier, "?"), derr))
+			// 无损坏流（帧 CRC 不过）→ 直链本身是坏的，重试同档没意义；
+			// 320K 是另一条编码链路，通常完好 —— 允许降档时降到 320k 再试一次。
+			if isCorruptFLAC(derr) && !downgraded && cfg.modeAllowsLower() {
+				logf("[BACKEND-DL] 无损流损坏，尝试降档到 320k 再下一次：%s（域名 %s）",
+					orDash(a.label), applog.HostOf(a.url))
+				if fb := cfg.corruptFallback(ctx, a, it); fb != nil {
+					downgraded = true
+					if res2, derr2 := downloadOne(ctx, client, cfg, it, *fb); derr2 == nil {
+						logf("[BACKEND-DL] 降档取音成功：%s 档位 %s（域名 %s）→ %s",
+							orDash(fb.label), orDash(res2.Quality), applog.HostOf(fb.url), res2.Path)
+						return res2, nil
+					} else {
+						failures = append(failures, fmt.Sprintf("%s/%s：%v", fb.channel, firstNonEmpty(fb.tier, "?"), derr2))
+					}
+				}
+			}
 			if ctx.Err() != nil {
 				return Result{}, ctx.Err()
 			}
 		}
+		logf("[BACKEND-DL] 全部候选失败（共 %d 条）：%s", len(failures), strings.Join(failures, "；"))
 		return Result{}, fmt.Errorf("所有取音尝试都失败：%s", strings.Join(failures, "；"))
 	}
 }
@@ -306,6 +406,12 @@ type attempt struct {
 // planAttempts 按用户排的渠道逐条探测，返回排序后的计划（最好的在前）。
 func planAttempts(ctx context.Context, cfg FetcherConfig, it Item) ([]attempt, error) {
 	tiers := tiersFor(it.Quality)
+	// 「仅下载最高」把阶梯砍到只剩点名的那一档：默认阶梯是会逐档往下问的
+	//（flac 不行问 320k、再不行问 128k），那正是「自动降档」的语义；
+	// top_only 要的是「给不了最高就失败」，所以只留第一档。
+	if cfg.modeIsTopOnly() && len(tiers) > 1 {
+		tiers = tiers[:1]
+	}
 	ceil := ceilingRank(tiers)
 	channels := cfg.channelsOf()
 	if len(channels) == 0 {
@@ -344,6 +450,21 @@ func planAttempts(ctx context.Context, cfg FetcherConfig, it Item) ([]attempt, e
 			// ⚠️ 只用 ResolveLadder，绝不用 Pool.Resolve：后者档位由平台决定，
 			// 网易那条免登录接口固定 br=320000 → 永远只能拿 320k mp3。
 			if err != nil || res == nil || strings.TrimSpace(res.URL) == "" {
+				// 阶梯问完了还是拿不到 —— 但「平台没有这一档」≠「这首歌下不了」。
+				// 用户点的是无损，平台只有 320k 时，那就用 320k 把它下下来
+				//（模式说了算：仅下载最高不降，其余都降 —— 见 fallbackLower）。
+				if fb, _ := cfg.fallbackLower(ctx, plat, it.PlatformID, it, err); fb != nil {
+					add(attempt{
+						channel: config.DLChannelNative,
+						url:     fb.URL,
+						tier:    fb.Tier,
+						source:  plat,
+						label:   "native/" + plat + "(降级)",
+						size:    fb.Size,
+						score:   scoreOf(fb.Tier, ""),
+					})
+					break
+				}
 				notes = append(notes, fmt.Sprintf("原生：%v", firstErr(err)))
 				break
 			}
@@ -368,6 +489,13 @@ func planAttempts(ctx context.Context, cfg FetcherConfig, it Item) ([]attempt, e
 			}
 			scripts := cfg.scripts()
 			want := tiers[0]
+			// 「仅下载最高」对洛雪候选同样成立：script 声明或字节数推出来
+			// 是低档的（tier != want）直接不要；unproven（探测没结论）保留 ——
+			// 全砍会把洛雪渠道整个废掉。
+			strict := cfg.modeIsTopOnly()
+			takeLx := func(a attempt) bool {
+				return !strict || a.tier == "" || a.tier == want
+			}
 			found := false
 			// 路径 A：用任务自己的平台 id 让脚本取链（脚本只要一个 id）。
 			if strings.TrimSpace(it.Platform) != "" && strings.TrimSpace(it.PlatformID) != "" {
@@ -380,6 +508,9 @@ func planAttempts(ctx context.Context, cfg FetcherConfig, it Item) ([]attempt, e
 						for _, a := range lxAttempts(cands, want, it.Duration, plat, cfg) {
 							if len(attempts) >= maxAttempts {
 								break
+							}
+							if !takeLx(a) {
+								continue
 							}
 							add(a)
 							found = true
@@ -414,6 +545,9 @@ func planAttempts(ctx context.Context, cfg FetcherConfig, it Item) ([]attempt, e
 								if len(attempts) >= maxAttempts {
 									break
 								}
+								if !takeLx(a) {
+									continue
+								}
 								add(a)
 							}
 						}
@@ -447,6 +581,19 @@ func planAttempts(ctx context.Context, cfg FetcherConfig, it Item) ([]attempt, e
 				}
 				res, err := cfg.Pool.ResolveLadder(ctx, p, id, tiers)
 				if err != nil || res == nil || strings.TrimSpace(res.URL) == "" {
+					// 同 native：平台没有这一档时，退一步用它实际有的档。
+					if fb, _ := cfg.fallbackLower(ctx, p, id, it, err); fb != nil {
+						add(attempt{
+							channel: config.DLChannelMusicDL,
+							url:     fb.URL,
+							tier:    fb.Tier,
+							source:  p,
+							label:   "dl/" + p + "(降级)",
+							size:    fb.Size,
+							score:   scoreOf(fb.Tier, best.Quality),
+						})
+						continue
+					}
 					notes = append(notes, fmt.Sprintf("外挂池(%s)：%v", p, firstErr(err)))
 					continue
 				}
@@ -498,6 +645,181 @@ func planAttempts(ctx context.Context, cfg FetcherConfig, it Item) ([]attempt, e
 		out = append(out, a)
 	}
 	return out, nil
+}
+
+// ── 降级兜底（平台没有那一档时用它实际有的） ──────────────────────────
+
+// fallbackResult 是一次「降级兜底」的解析结果。
+type fallbackResult struct {
+	URL  string
+	Tier string // 平台实际给出的档位
+	Size int64
+}
+
+// fallbackLower 在「阶梯问完仍拿不到」时，试一次「平台实际有的那一档」。
+//
+// 为什么需要：ResolveLadder 只会问「用户点名的那一档 + 预设阶梯里更低的档」，
+// 而平台**实际**能给的档可能根本不在被问的集合里 —— 最典型的是 QQ：
+// 按档点名去问（ResolveAtTier）时匿名账号经常全档返回「没有这一档」，
+// 但让平台自己挑（Resolve）就能拿到 320k。2026-10-30 用户看到的两条失败
+// 任务（「晨钟暮鼓」「一鱼」，quality=highest）正是这个坑：阶梯全灭 +
+// 兜底又被「自动档不降级」的老判断挡住 → 直接报失败。
+//
+// 降不降由**模式**决定（config.QualityModeAllowsLower）：「跟随页面」和
+// 「自动降档」都降 —— 用户最初的诉求就是「平台没有这一档，也可以下载平台
+// 有的」；「仅下载最高」不降，宁可失败。**自动档（highest）也走这里**：
+// 它不是「随便什么都行」，而是「要不到就退」—— 阶梯全灭时阶梯本身已经
+// 兜不住了，不能再把这条路也堵上。
+//
+// 这里的做法是退到 `Pool.Resolve`（让平台自己挑它能给的那一档），再按
+// **实际**拿到的档位打分。⚠️ 与上面 ResolveLadder 的注释配套看：裸 Resolve
+// 对网易那条免登录接口固定 br=320000 → 只能拿 320k mp3，所以它的档位要
+// **重新推**（tierFromFormat），不能直接信平台给的声明。
+func (cfg FetcherConfig) fallbackLower(ctx context.Context, plat, platformID string, it Item, ladderErr error) (*fallbackResult, error) {
+	if !cfg.modeAllowsLower() {
+		return nil, ladderErr
+	}
+	// 只在「平台明确没有这一档」时才降级：曲目本身不可播放（收费/无版权）
+	// 或平台根本没有解析器时，换个问法也问不出来。
+	if ladderErr != nil && !errors.Is(ladderErr, online.ErrTierUnavailable) {
+		return nil, ladderErr
+	}
+	// ⚠️ 绝不能走 ResolveTier/Resolve（缓存键判死）：ResolveLadder 刚刚把
+	// ErrTierUnavailable 负缓存进了 `platform\x00id\x00<tier>`（fakeTierLess
+	// 测试里表现为「兜底一次都没问」）。但裸 Resolve 的键 `platform\x00id`
+	// 又会被**别的入口**（试听、搜索批解）写上无关结论 —— 也不干净。
+	//
+	// 干净做法是绕开 Pool 缓存，直接问解析器本人：Pool 支持 TierResolver 时
+	// 调 ResolveAtTier(点名的最高档)再取其**实际**回读档位；这里唯一目的是
+	// 「让平台自己挑一档」—— 正是 Pool.Resolve 的语义，所以先试缓存键不同的
+	// 裸解析，只有键撞了才认（见 fetch_fallback_test 的机制断言）。
+	want := normalizeTier(it.Quality)
+	res, err := cfg.resolveBypassingLadderCache(ctx, plat, platformID, want)
+	if err != nil || res == nil || strings.TrimSpace(res.URL) == "" {
+		return nil, firstErr(err)
+	}
+	tier := strings.ToLower(strings.TrimSpace(res.Tier))
+	if tier == "" {
+		tier = tierFromFormat(res.Format, res.Bitrate)
+	}
+	if tier == "" {
+		// 平台没给档位也推不出来（老解析器给 mp3 却不给码率）：不知道是
+		// 什么档就别声称是「有音源」，老实失败。
+		return nil, online.ErrTierUnavailable
+	}
+	// 绝不升档：用户点名 128k（为了省空间），平台「实际有的」若是 320k，
+	// 那是**比用户要的更好**，但也不是他要的 —— 降级只往低走，不往高走。
+	// 自动档（highest）点名的是「要不到就退」，没有上限，不受这条约束。
+	if want != "" && online.TierRank(tier) > online.TierRank(want) {
+		return nil, online.ErrTierUnavailable
+	}
+	// 降级必须留痕：用户点名 flac、实际落 320k 时，界面只会显示「下到了」，
+	// 而「为什么不是无损」的答案就在这一行（平台没有这一档）。
+	if !strings.EqualFold(strings.TrimSpace(it.Quality), tier) && strings.TrimSpace(it.Quality) != "" {
+		logOrNoop(cfg, "[BACKEND-DL] 平台无 %s 档，按降档模式改用 %s（%s/%s，域名 %s）",
+			normalizeTier(it.Quality), tier, plat, platformID, applog.HostOf(res.URL))
+	}
+	return &fallbackResult{URL: res.URL, Tier: tier, Size: res.Size}, nil
+}
+
+// planSummary 把候选列表压成「原生/flac(域名)·洛雪/flac(域名)」，最多 4 条 ——
+// 只在日志里出现，不参与任何决策。
+func planSummary(attempts []attempt) string {
+	var parts []string
+	for i, a := range attempts {
+		if i >= 4 {
+			parts = append(parts, fmt.Sprintf("…共 %d 条", len(attempts)))
+			break
+		}
+		parts = append(parts, fmt.Sprintf("%s/%s(%s)", orDash(a.channel), orDash(a.tier), applog.HostOf(a.url)))
+	}
+	if len(parts) == 0 {
+		return "无"
+	}
+	return strings.Join(parts, "；")
+}
+
+// logOrNoop 在没有注入 logf 时静默（包内多数函数是纯函数，不该强行要求 logger）。
+func logOrNoop(cfg FetcherConfig, format string, args ...any) {
+	if cfg.Logf != nil {
+		cfg.Logf(format, args...)
+	}
+}
+
+// corruptFallback 在「无损坏流」失败后生成一条降到 320k 的重试尝试。
+//
+// 与 fallbackLower 的分工：fallbackLower 处理**解析阶段**的缺档
+// （平台没有这一档）；corruptFallback 处理**下载阶段**的坏流
+// （解析成功、文件也下回来了，但逐帧 CRC 校验拒绝）—— 后者换条
+// 无损直链没意义（同一首的无损都是坏的），换档才有救。
+//
+// 只在源尝试本身就是无损档（flac 系列）时降 320k；有损档坏流
+// 没有更低的目标（128k 音源场景极少，先不做）。
+//
+// 渠道无关：无论坏的那条来自洛雪、musicdl 还是原生，重解析都走
+// 原生解析器（it.Platform + it.PlatformID 按 320k 问一次）——
+// 坏的是直链，不是渠道；能按档拿新直链的入口只有原生解析器。
+func (cfg FetcherConfig) corruptFallback(ctx context.Context, a attempt, it Item) *attempt {
+	tier := strings.ToLower(strings.TrimSpace(a.tier))
+	if tier != "" && !strings.HasPrefix(tier, "flac") && tier != "lossless" && tier != "hires" {
+		if cfg.Logf != nil {
+			cfg.Logf("[BACKEND-DL] 坏流降档放弃：源尝试档位 %q 不是无损", tier)
+		}
+		return nil // 有损档（320k/128k…）：无更低目标
+	}
+	plat := strings.ToLower(strings.TrimSpace(it.Platform))
+	if cfg.Pool == nil || plat == "" || strings.HasPrefix(plat, "lx:") || strings.TrimSpace(it.PlatformID) == "" {
+		if cfg.Logf != nil {
+			cfg.Logf("[BACKEND-DL] 坏流降档放弃：无原生解析入口（pool=%v plat=%q id=%q）", cfg.Pool != nil, plat, it.PlatformID)
+		}
+		return nil // 没有原生解析入口（洛雪伪源/缺平台 id）就无处重解析
+	}
+	res, err := cfg.resolveBypassingLadderCache(ctx, plat, it.PlatformID, online.Tier320k)
+	if err != nil || res == nil || strings.TrimSpace(res.URL) == "" {
+		if cfg.Logf != nil {
+			cfg.Logf("[BACKEND-DL] 坏流降档失败：%s/%s 重解析 %s 失败：%v", a.channel, firstNonEmpty(a.tier, "?"), plat, err)
+		}
+		return nil
+	}
+	t := strings.ToLower(strings.TrimSpace(res.Tier))
+	if t == "" {
+		t = tierFromFormat(res.Format, res.Bitrate)
+	}
+	if t == "" || online.TierRank(t) > online.TierRank(online.Tier320k) {
+		// 拿不到明确的 ≤320k 档位就不重试：坏流场景下「不知道是什么」
+		// 的重试大概率又是一条坏的无损。
+		if cfg.Logf != nil {
+			cfg.Logf("[BACKEND-DL] 坏流降档放弃：重解析回读档位 %q 不明确或高于 320k", t)
+		}
+		return nil
+	}
+	na := a
+	na.url = res.URL
+	na.tier = t
+	na.size = res.Size
+	na.channel = config.DLChannelNative
+	na.source = plat
+	na.label = a.label + "(坏流降320k)"
+	na.score = scoreOf(t, "")
+	return &na
+}
+
+// resolveBypassingLadderCache 是 fallbackLower 的取音入口：绕开 Pool 的
+// 「按档负缓存」，直接调解析器的裸 Resolve（语义：平台自己挑一档）。
+//
+// 为什么绕：Pool.ResolveTier 的缓存键 `platform\x00id\x00tier` 与
+// Pool.Resolve 的 `platform\x00id` 不同，但两条键都存在被其它入口写脏的
+// 可能（试听走 TierResolver、搜索批解走 Resolve）。fallbackLower 关心的是
+// 「阶梯判死之后，平台**现在**能不能给点别的」—— 那就用**当下的**解析结果，
+// 别吃任何缓存结论。
+func (cfg FetcherConfig) resolveBypassingLadderCache(ctx context.Context, plat, platformID, want string) (*online.Resolved, error) {
+	if cfg.Pool == nil {
+		return nil, online.ErrNoResolver
+	}
+	// 实现搬到了 online.Pool：那边还有别的调用方（`pkg/intercept` 的收藏自动下载 /
+	// 音质补强），两份实现迟早分叉 —— 而这里的细节（点名的档位问一次再裸问一次、
+	// 一个缓存都不碰）正是它们也需要的。见 Pool.ResolveBypassingLadderCache。
+	return cfg.Pool.ResolveBypassingLadderCache(ctx, plat, platformID, want)
 }
 
 // maxAttempts 是「一次任务最多试几条直链」。
@@ -914,7 +1236,9 @@ func downloadOne(ctx context.Context, client *http.Client, cfg FetcherConfig, it
 		return Result{}, fmt.Errorf("下载接口 HTTP %d：%s", resp.StatusCode, snippet(raw))
 	}
 
-	// 响应形状（pkg/downloader.HandleDownloadSong）：`{code,message,data:{path,…}}`。
+	// 响应形状（pkg/downloader.HandleDownloadSong）：
+	//   成功 `{code:200,data:{path,…},result:{…}}`；
+	//   失败 `{code:500,message:"…",result:{error_code:"flac_corrupt",…}}`。
 	// ⚠️ 只有 code == 200 且有 path 才算成功 —— `already_exists` 也算成功
 	// （文件本来就在），所以不按 status 字符串判，只按「有没有 path」判。
 	var out struct {
@@ -924,27 +1248,37 @@ func downloadOne(ctx context.Context, client *http.Client, cfg FetcherConfig, it
 			Path   string `json:"path"`
 			Error  string `json:"error"`
 		} `json:"data"`
+		Result struct {
+			Status  string `json:"status"`
+			Path    string `json:"path"`
+			Error   string `json:"error"`
+			ErrCode string `json:"error_code"`
+		} `json:"result"`
 	}
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return Result{}, fmt.Errorf("下载接口返回的不是 JSON（HTTP %d）：%s", resp.StatusCode, snippet(raw))
 	}
-	if out.Code != 200 || strings.TrimSpace(out.Data.Path) == "" {
-		msg := strings.TrimSpace(out.Data.Error)
+	if out.Code != 200 || (strings.TrimSpace(out.Data.Path) == "" && strings.TrimSpace(out.Result.Path) == "") {
+		msg := strings.TrimSpace(out.Result.Error)
+		if msg == "" {
+			msg = strings.TrimSpace(out.Data.Error)
+		}
 		if msg == "" {
 			msg = snippet(raw)
 		}
-		return Result{}, fmt.Errorf("下载失败：%s", msg)
+		return Result{}, &downloadFailure{msg: fmt.Sprintf("下载失败：%s", msg), errCode: out.Result.ErrCode}
 	}
+	path := firstNonEmpty(out.Data.Path, out.Result.Path)
 
 	var size int64
-	if fi, serr := os.Stat(out.Data.Path); serr == nil {
+	if fi, serr := os.Stat(path); serr == nil {
 		size = fi.Size()
 	}
 	// 档位用**落盘文件的扩展名**校正一次 —— 扩展名是魔数嗅探出来的，
 	// 比任何声明都硬。
 	return Result{
-		Path:    out.Data.Path,
-		Quality: firstNonEmpty(audioext.TierOfFile(out.Data.Path), a.tier, it.Quality),
+		Path:    path,
+		Quality: firstNonEmpty(audioext.TierOfFile(path), a.tier, it.Quality),
 		Source:  firstNonEmpty(a.source, it.Platform),
 		Size:    size,
 	}, nil
@@ -955,6 +1289,30 @@ func absInt(v int) int {
 		return -v
 	}
 	return v
+}
+
+// downloadFailure 带机器可读的 error_code（downloader.SongResult.ErrorCode）。
+// 目前唯一会出现的码是 "flac_corrupt"（下载到的 FLAC 帧 CRC 校验不过）——
+// 这种失败换条直链重试没意义（同一首的无损直链是坏的），但**换档**有救：
+// 同一首歌的 320K 是另一条编码链路，通常完好。
+type downloadFailure struct {
+	msg     string
+	errCode string
+}
+
+func (e *downloadFailure) Error() string { return e.msg }
+
+// isCorruptFLAC 判断一次下载失败是不是「无损坏流」。
+func isCorruptFLAC(err error) bool {
+	if err == nil {
+		return false
+	}
+	var df *downloadFailure
+	if errors.As(err, &df) {
+		return df.errCode == "flac_corrupt"
+	}
+	// 兜底：老版本下载接口只回文本。字符串匹配保持向后兼容。
+	return strings.Contains(err.Error(), "无损文件是坏流")
 }
 
 // normalizeTier 把前端的音质档位翻成取链层认识的档位。

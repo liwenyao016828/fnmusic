@@ -17,6 +17,7 @@ import (
 
 	"fn-lx-player/pkg/audioext"
 	"fn-lx-player/pkg/dirwalk"
+	"fn-lx-player/pkg/fnos"
 	"fn-lx-player/pkg/tags"
 )
 
@@ -227,6 +228,22 @@ func BrowseDirectory(w http.ResponseWriter, r *http.Request) {
 
 func ListFolders(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+
+	// 飞牛环境：直接回**已授权目录**（AllowedRoots() 在飞牛里只含官方授权目录）。
+	// 以前这里先试一堆预设路径（/vol1/Music、/vol1、/vol2…），在飞牛里虽然会被
+	// ResolveSafePath 过滤掉未授权项，但一旦管理员恰好授权了 /vol1，预设里的
+	// `/vol1` 就会被当成「快速切换」显示出来 —— 用户以为曲率能看见整块盘。
+	// 官方模型是「没授权 = 看不见」，所以这里干脆不做猜测，只回真实授权列表。
+	if fnos.Detected() {
+		folders := AllowedRoots()
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"code":    200,
+			"message": "ok",
+			"data":    folders,
+			"folders": folders,
+		})
+		return
+	}
 
 	presetPaths := []string{
 		"/vol1/Music",

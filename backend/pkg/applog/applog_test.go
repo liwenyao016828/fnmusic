@@ -56,6 +56,17 @@ func TestLevelOf(t *testing.T) {
 		{"download failed", "error"},
 		{"[WARN] slow", "warn"},
 		{"[INIT] starting", "info"},
+		// 中文正文（2026-11-01）：真失败要判红，统计行不能标红。
+		{"[BACKEND-DL] 失败：一鱼 - 晨钟暮鼓（第 7 次尝试）：\"没有拿到任何可用直链\"", "error"},
+		{"[MONITOR] 订阅 A（s1）本轮失败：上游 502", "error"},
+		{"[DOWNLOAD] 失败：甲 - 乙（耗时 1s）：写入文件失败", "error"},
+		{"[COMPLETE] 任务结束：共 10，匹配 9，未匹配 1，失败 0，耗时 3s", "info"},
+		{"[MONITOR] 订阅 A 本轮结束：发现 5，新增 2，失败 0，耗时 3s", "info"},
+		{"[NAS] 扫描告警：权限 000", "info"},
+		// 动作名里带 failed 不算失败结论（2026-11-01 实测：这行曾判成 error）
+		{"[BACKEND-DL] 操作 retry_failed（整队）：影响 10 条", "info"},
+		{"[BACKEND-DL] 操作 retry_failed：影响 3 条", "info"},
+		{"push failed: upstream 502", "error"},
 	}
 	for _, c := range cases {
 		if got := levelOf(c.in); got != c.want {

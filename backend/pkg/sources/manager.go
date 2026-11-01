@@ -3,10 +3,12 @@ package sources
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
 
+	"fn-lx-player/pkg/applog"
 	"fn-lx-player/pkg/config"
 	"fn-lx-player/pkg/security"
 )
@@ -237,9 +239,15 @@ func (m *Manager) HandleSetActive(w http.ResponseWriter, r *http.Request) {
 		}
 		cfg.SetActiveIDs(next)
 	}
-	_ = m.cfgMgr.Update(cfg)
+	if err := m.cfgMgr.Update(cfg); err != nil {
+		log.Printf("[SOURCES] 启用池写盘失败（本次改动未生效）：%v", err)
+	}
 
 	activeIDs := cfg.ActiveIDs()
+	// 音源启用池的顺序就是取链优先级 —— 用户「为什么先问了这家」的答案在这里。
+	// 只记 id 列表，不记脚本体（脚本可能有用户自己的授权信息）。
+	log.Printf("[SOURCES] 启用池变更：%s，当前 %d 个（顺序即优先级）：%s",
+		activeChangeDesc(req.Active, targetID), len(activeIDs), strings.Join(activeIDs, " > "))
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"code":              200,
 		"status":            "ok",
@@ -304,7 +312,13 @@ func (m *Manager) HandleAddCustom(w http.ResponseWriter, r *http.Request) {
 
 	cfg := m.cfgMgr.Get()
 	cfg.CustomSources = append(cfg.CustomSources, cs)
-	_ = m.cfgMgr.Update(cfg)
+	if err := m.cfgMgr.Update(cfg); err != nil {
+		log.Printf("[SOURCES] 新增自定义音源 %s（%s）写盘失败：%v", csName, csID, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"code": 500, "message": "保存音源失败：" + err.Error()})
+		return
+	}
+	log.Printf("[SOURCES] 新增自定义音源：%s（%s，%d 字节）", csName, csID, len(cs.Script))
 
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"code":    200,
@@ -342,6 +356,9 @@ func (m *Manager) HandleImportURL(w http.ResponseWriter, r *http.Request) {
 	client := security.NewSafeClient(opts, 15*time.Second)
 	resp, err := client.Get(req.URL)
 	if err != nil {
+		// 只记域名：用户给的导入地址可能带 token（私有仓库 raw 链接常见），
+		// 完整 URL 进日志等于泄露他的访问凭据。
+		log.Printf("[SOURCES] 导入音源失败：拉取 %s 出错：%v", applog.HostOf(req.URL), err)
 		w.WriteHeader(http.StatusBadGateway)
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{"code": 502, "message": "Failed to fetch source script: " + err.Error()})
 		return
@@ -381,7 +398,14 @@ func (m *Manager) HandleImportURL(w http.ResponseWriter, r *http.Request) {
 
 	cfg := m.cfgMgr.Get()
 	cfg.CustomSources = append(cfg.CustomSources, cs)
-	_ = m.cfgMgr.Update(cfg)
+	if err := m.cfgMgr.Update(cfg); err != nil {
+		log.Printf("[SOURCES] 导入音源 %s（%s）写盘失败：%v", csName, csID, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"code": 500, "message": "保存音源失败：" + err.Error()})
+		return
+	}
+	// 导入地址只留域名（同上面的理由）。字节数用于分辨「没下到东西」和「下错了」。
+	log.Printf("[SOURCES] 导入音源成功：%s（%s，来自 %s，%d 字节）", csName, csID, applog.HostOf(req.URL), len(body))
 
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"code":    200,
@@ -440,8 +464,21 @@ func (m *Manager) HandleDeleteCustom(w http.ResponseWriter, r *http.Request) {
 	if len(filtered) > 0 {
 		fallback = filtered[0].ID
 	}
+	removedName := ""
+	for _, cs := range cfg.CustomSources {
+		if cs.ID == targetID {
+			removedName = cs.Name
+		}
+	}
 	removeFromPool(&cfg, targetID, fallback)
-	_ = m.cfgMgr.Update(cfg)
+	if err := m.cfgMgr.Update(cfg); err != nil {
+		log.Printf("[SOURCES] 删除音源 %s（%s）写盘失败：%v", removedName, targetID, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"code": 500, "message": "保存失败：" + err.Error()})
+		return
+	}
+	log.Printf("[SOURCES] 删除自定义音源：%s（%s），剩余 %d 个源，启用池兜底 %s",
+		removedName, targetID, len(filtered), orNone(fallback))
 
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"code":    200,
@@ -480,4 +517,24 @@ func (m *Manager) HandleSourcesRest(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	m.HandleGetScript(w, r)
+}
+
+// activeChangeDesc 把「旧单值语义 / 启用 / 停用」三种情况写成一句人话。
+func activeChangeDesc(active *bool, id string) string {
+	switch {
+	case active == nil:
+		return "只启用 " + id + "（单值语义）"
+	case *active:
+		return "启用 " + id + "（追加到池尾）"
+	default:
+		return "停用 " + id
+	}
+}
+
+// orNone 空串在日志里显示「（无）」——「兜底 空」这种断句很难读。
+func orNone(v string) string {
+	if strings.TrimSpace(v) == "" {
+		return "（无）"
+	}
+	return v
 }

@@ -91,6 +91,9 @@ type Item struct {
 	Platform   string `json:"platform,omitempty"`
 	PlatformID string `json:"platform_id,omitempty"`
 	// Quality 是用户点的目标档位（highest / flac / 320k / 128k…）。
+	// 「平台没有这一档时降不降」不再逐条指定 —— 由全局「下载音质」模式
+	//（跟随页面 / 仅下载最高 / 自动降档，config.DownloadQualitySetting）
+	// 统一决定；单项意愿就是 Quality 本身。
 	Quality string `json:"quality,omitempty"`
 
 	Status string `json:"status"`
@@ -436,6 +439,11 @@ func (q *Queue) claimNext() (Item, bool) {
 		}
 		// 返回的是副本：worker 拿着它去取音，不持有锁。
 		it := q.items[i]
+		// 任务日志：出队开跑这一刻必须留痕。以前只有「完成」「失败」两条，
+		// 于是「一直卡在排队」和「已经在取音但很慢」在日志里长得一模一样；
+		// 带上「第几次尝试」还能区分「自动重排后重跑」和「用户点了重试」。
+		q.logf("[BACKEND-DL] 开始下载：%s - %s（第 %d 次尝试，目标档位 %s，平台 %s）",
+			it.Singer, it.Name, it.Tries, orDash(it.Quality), orDash(it.Platform))
 		return it, true
 	}
 	return Item{}, false
@@ -445,6 +453,9 @@ func (q *Queue) claimNext() (Item, bool) {
 func (q *Queue) runOne(it Item) {
 	ctx, cancel := context.WithTimeout(q.runCtx, 5*time.Minute)
 	defer cancel()
+	// 计时用于结果日志：失败时「试了 5 秒就放弃」和「卡满 5 分钟超时」是两种
+	// 完全不同的病（前者多为无渠道/无直链，后者是上游不响应）。
+	startedAt := time.Now()
 
 	// 登记取消句柄：暂停/停止某一条时靠它把连接收掉。登记在取音之前，
 	// 保证「刚领取就被暂停」也能取消。
@@ -484,7 +495,12 @@ func (q *Queue) runOne(it Item) {
 		q.items[idx].Status = StatusFailed
 		q.items[idx].Error = err.Error()
 		q.items[idx].UpdatedAt = now
-		q.logf("[BACKEND-DL] 失败：%s - %s：%v", it.Singer, it.Name, err)
+		// 失败日志必须带原因链（err 里已经是「各渠道/各档位：具体原因」的拼接，
+		// 见 pkg/backenddl/fetch.go 的 failures 累积）与耗时、尝试次数。
+		// 用 %q 而不是裸 %v：原因链里带空格与冒号（「没有拿到任何可用直链：原生：…」），
+		// 不加引号时整条会被当成「消息正文」，日志级别也跟着变灰，看起来像成功。
+		q.logf("[BACKEND-DL] 失败：%s - %s（第 %d 次尝试，耗时 %s）：%q",
+			it.Singer, it.Name, it.Tries, briefDur(time.Since(startedAt)), err.Error())
 	} else {
 		q.items[idx].Status = StatusSuccess
 		q.items[idx].Path = res.Path
@@ -493,7 +509,12 @@ func (q *Queue) runOne(it Item) {
 		q.items[idx].Size = res.Size
 		q.items[idx].Error = ""
 		q.items[idx].UpdatedAt = now
-		q.logf("[BACKEND-DL] 完成：%s - %s → %s（%s）", it.Singer, it.Name, res.Path, res.Quality)
+		// 成功日志要能回答「这条是怎么来的」：渠道来源、实际落盘档位、
+		// 文件大小、耗时、写到哪。少了任何一项，「下到的怎么是 mp3」
+		// 「文件到底在不在」都只能靠翻盘。
+		q.logf("[BACKEND-DL] 完成：%s - %s → %s（实际档位 %s，来源 %s，%s，耗时 %s）",
+			it.Singer, it.Name, res.Path, orDash(res.Quality), orDash(res.Source),
+			briefSize(res.Size), briefDur(time.Since(startedAt)))
 	}
 	q.trimLocked()
 	if err := q.saveLocked(); err != nil {
@@ -724,7 +745,56 @@ func (q *Queue) Submit(items []Item, force, migrate bool) (added []Submitted, sk
 	if hasPending && !paused {
 		q.wakeup()
 	}
+
+	// 提交是「任务日志」的起点：入队、跳过、幂等确认都发生在这里，但以前一条
+	// 日志都没有 —— 用户报「点了下载 50 首，后台只跑了 3 首」时，成因（重复提交
+	// 被确认 / 缺歌名 / 没有可用渠道）全在 skipped 里，日志里却什么都看不到。
+	if len(added) > 0 || len(skipped) > 0 {
+		fresh, existing := 0, 0
+		for _, a := range added {
+			if a.Existing {
+				existing++
+			} else {
+				fresh++
+			}
+		}
+		q.logf("[BACKEND-DL] 提交 %d 条：新入队 %d，已在队列 %d，跳过 %d%s%s",
+			len(items), fresh, existing, len(skipped), pausedNote(paused), skipSummary(skipped))
+	}
 	return added, skipped, nil
+}
+
+// pausedNote 整队暂停时给提交日志补一句，否则「入队了却一直不动」看不出原因。
+func pausedNote(paused bool) string {
+	if paused {
+		return "（队列处于暂停状态，点继续才开始跑）"
+	}
+	return ""
+}
+
+// skipSummary 把跳过项按原因聚成「no_channel×3；invalid×1」，最多列 3 类 ——
+// 日志是给人扫一眼的，不是把 skipped 数组抄一遍。
+func skipSummary(skipped []Skipped) string {
+	if len(skipped) == 0 {
+		return ""
+	}
+	order := make([]string, 0, len(skipped))
+	count := map[string]int{}
+	for _, sk := range skipped {
+		if _, ok := count[sk.Reason]; !ok {
+			order = append(order, sk.Reason)
+		}
+		count[sk.Reason]++
+	}
+	var parts []string
+	for i, reason := range order {
+		if i >= 3 {
+			parts = append(parts, "…")
+			break
+		}
+		parts = append(parts, fmt.Sprintf("%s×%d", orDash(reason), count[reason]))
+	}
+	return "：" + strings.Join(parts, "；")
 }
 
 // migrateStatus 把前端旧队列里的状态映射成本包的稳定枚举。
@@ -947,6 +1017,15 @@ func (q *Queue) Apply(action string, ids []string) (int, error) {
 	if !paused {
 		q.wakeup()
 	}
+
+	// 用户操作留痕：暂停/继续/停止/重试/删除/清空改的都是持久化状态，
+	// 「我点了重试没反应」必须先能回答「到底命中了几条」（0 条 = 该状态本就不
+	// 在候选里，N 条 = 接下去看 runOne 的失败原因）。
+	scope := "整队"
+	if len(ids) > 0 {
+		scope = fmt.Sprintf("指定 %d 条", len(ids))
+	}
+	q.logf("[BACKEND-DL] 操作 %s（%s）：影响 %d 条%s", action, scope, hit, pausedNote(paused))
 	return hit, nil
 }
 
@@ -1063,4 +1142,32 @@ func rankStatus(status string) int {
 
 func trackKey(it Item) string {
 	return strings.TrimSpace(it.Name) + "\x00" + strings.TrimSpace(it.Singer)
+}
+
+// orDash 日志里的空值统一显示为「未指定」，避免出现「档位 ，平台 ）」这种断句。
+func orDash(v string) string {
+	if strings.TrimSpace(v) == "" {
+		return "未指定"
+	}
+	return v
+}
+
+// briefSize 把字节数写成日志易读的形式（<1MB 用 KB）。
+func briefSize(n int64) string {
+	switch {
+	case n <= 0:
+		return "大小未知"
+	case n >= 1<<20:
+		return fmt.Sprintf("%.1fMB", float64(n)/(1<<20))
+	default:
+		return fmt.Sprintf("%dKB", n/1024)
+	}
+}
+
+// briefDur 把耗时压成「12s」「1m23s」这种一眼能读的形式。
+func briefDur(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%.0fs", d.Seconds())
+	}
+	return fmt.Sprintf("%dm%02ds", int(d.Minutes()), int(d.Seconds())%60)
 }

@@ -328,6 +328,28 @@ html[data-theme='gray'] {
    元素已从 App.vue 摘掉，样式一并删除（别留一段没有使用者的 CSS，下次排查会误导）。 */
 
 
+/* ── 内容大卡片（飞牛口径，2026-10-30 用户要求）──────────────────────────
+   飞牛管理台：灰底画布（#F3F3F3）+ 中间一块**带弧度的白色大卡片**，
+   卡片四周露一圈灰，弧度就出现在这块白卡的四角上。
+   这里给「导航右侧的内容列」套上同一张卡：
+     · 桌面（sm+）：四周留 8px 灰底 + 12px 圆角；
+     · 手机：满屏贴边，不留白不圆角（窄屏留白等于白白吃掉内容宽度）。
+   2026-10-30 用户：「大卡片和侧边导航没有线条吧」——
+   **不描边**：卡片与灰底、卡片与侧栏之间都不画 1px 结构线，
+   弧度靠「灰底 vs 纯白」的色差和这圈 8px 留白自己显出来（飞牛就是这么做的）。
+   overflow:hidden 是必须的 —— 否则内部卡片的白底会盖住外层弧度。 */
+.ys-content-card {
+  background: var(--ys-canvas);
+}
+@media (min-width: 640px) {
+  .ys-content-card {
+    margin: 8px;
+    border-radius: var(--ys-radius-block);
+    overflow: hidden;
+  }
+}
+
+
 @layer base {
   /* 动态视口：先写 vh（老 WebView 兜底），再写 dvh（支持的浏览器覆盖） */
   .app-viewport {

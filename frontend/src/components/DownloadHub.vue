@@ -8,28 +8,16 @@
 
     改之后：
       · 说明胶囊删掉（分段控件自己会说），
-      · 四张指标大卡压成一行 StatLine（数字是背景信息，不该占版面），
-      · 刷新留在外面（高频、单动作），清除类动作按 Apple 的模式分两层：
-        勾选了就浮出底部操作条，没勾选时「一键清除」在右上角 ⋯ 里。
+      · 四张指标大卡压成一行 StatLine（数字是背景信息，不该占版面）。
+
+    第二轮（2026-10-30，用户口径「刷新和清除完全可以放到下载记录那行」「队列和歌单导入
+    顶部的四个彩色点和文字可以去除，下面有相同并且更好的」）：
+      · 顶部那行指标整段删掉 —— 队列卡片里本来就有「全部/下载中/已暂停/已完成/失败」
+        一排带数字的筛选标签，同一份数字在这里再说一遍只是重复；歌单那边下面也有自己的计数。
+      · 刷新 / 清空从页首动作区挪到「自动下载记录」卡片头上（就是它所作用的那个列表的标题行）：
+        动作应该长在它作用的对象旁边，页首那排离得太远。
   -->
   <PageShell>
-    <template v-if="sub === 'autodl'" #actions>
-      <button
-        @click="loadAutoDownload"
-        :disabled="autoDownloadLoading"
-        class="ys-press grid h-8 w-8 place-items-center rounded-full text-[var(--ys-text-muted)] transition-colors hover:bg-black/[0.05] hover:text-[var(--ys-text)] disabled:opacity-40"
-        title="刷新记录"
-      >
-        <RefreshCw class="h-4 w-4" :class="autoDownloadLoading ? 'animate-spin' : ''" :stroke-width="1.8" />
-      </button>
-      <OverflowMenu :items="autoMenu" @select="onAutoMenu" />
-    </template>
-
-    <!-- 指标：一行，不占版面；自动记录段不摆（表里都有） -->
-    <div v-if="metrics.length" class="mb-3 flex flex-wrap items-center gap-x-5 gap-y-1.5">
-      <StatLine :items="metrics" />
-    </div>
-
     <!-- 队列 / 歌单：两个子视图组件本身没动（v2.1.26 起就是同一队列的两个入口） -->
     <DownloadQueueView v-if="sub === 'queue'" embedded :active-source="activeSource" />
     <PlaylistDownload v-else-if="sub === 'playlist'" embedded />
@@ -42,6 +30,28 @@
         title-title="飞牛页面里收藏 / 加歌单 / 点下载触发的那批。成功与失败都记。"
         compact
       >
+        <!-- 动作就长在它作用的列表标题行上：刷新（高频、单动作）+ 清空全部（不可撤销，
+             点前问一句）。「清除选中」仍走勾选后浮出的底部操作条（SelectionBar）。 -->
+        <template #actions>
+          <button
+            type="button"
+            @click="loadAutoDownload"
+            :disabled="autoDownloadLoading"
+            class="ys-press grid h-7 w-7 place-items-center rounded-[var(--ys-radius-control)] border border-[var(--ys-border)] text-[var(--ys-text-muted)] transition-colors hover:border-[var(--ys-border-strong)] hover:text-[var(--ys-text)] disabled:pointer-events-none disabled:opacity-30"
+            title="刷新记录"
+          >
+            <RefreshCw class="h-3.5 w-3.5" :class="autoDownloadLoading ? 'animate-spin' : ''" :stroke-width="1.9" />
+          </button>
+          <button
+            type="button"
+            @click="clearAutoDownload([])"
+            :disabled="!autoDownloadRecords.length"
+            class="ys-press grid h-7 w-7 place-items-center rounded-[var(--ys-radius-control)] border border-[var(--ys-border)] text-[var(--ys-text-muted)] transition-colors hover:border-rose-200 hover:bg-[#fff1f0] hover:text-[var(--ys-danger)] disabled:pointer-events-none disabled:opacity-30"
+            title="清空全部记录"
+          >
+            <Eraser class="h-3.5 w-3.5" :stroke-width="1.9" />
+          </button>
+        </template>
         <!-- 「没有记录」与「功能没起来」必须分开说：界面上长得一样会让人以为功能坏了 -->
         <p v-if="autoDownloadAvailable === false" class="rounded-[8px] bg-amber-50/70 px-3 py-2 text-[11px] text-amber-700">
           记录功能本次没起来（数据目录不可写）—— 下面是空的，但不代表你没下过歌。
@@ -129,14 +139,11 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import PageShell from './PageShell.vue'
 import SectionCard from './SectionCard.vue'
-import OverflowMenu from './OverflowMenu.vue'
 import SelectionBar from './SelectionBar.vue'
-import StatLine from './StatLine.vue'
 import { History, RefreshCw, Trash2, Eraser } from 'lucide-vue-next'
 import DownloadQueueView from './DownloadQueueView.vue'
 import PlaylistDownload from './PlaylistDownload.vue'
 import { segmentOf } from '../services/navBus'
-import { downloadManager } from '../services/downloadManager'
 import { AutoDownloadAPI } from '../api/client'
 import { platformName } from '../services/libraryFields'
 import { fail as failText } from '../services/userMsg'
@@ -157,29 +164,6 @@ const props = defineProps({
 
 const sub = computed(() => props.segment || segmentOf('download'))
 
-// ── 指标行：队列 / 歌单各看各的口径（并成一页了，数字别混在一排）──
-const metrics = computed(() => {
-  if (sub.value === 'playlist') {
-    const rate = downloadManager.recentSuccessRate.value
-    return [
-      { label: '下载中', value: downloadManager.downloadingCount.value, dot: 'bg-blue-500' },
-      { label: '等待中', value: downloadManager.pendingCount.value, dot: 'bg-[var(--ys-text-faint)]' },
-      { label: '失败待处理', value: downloadManager.failedCount.value, dot: 'bg-rose-500' },
-      // 没有样本时显示「—」而不是 0%，否则会让人以为全失败了
-      { label: '近 24h 成功率', value: rate == null ? '—' : `${rate}%`, dot: 'bg-emerald-600' },
-    ]
-  }
-  if (sub.value === 'queue') {
-    return [
-      { label: '全部任务', value: downloadManager.totalCount.value, dot: 'bg-[var(--ys-text-faint)]' },
-      { label: '进行中', value: downloadManager.activeCount.value, dot: 'bg-emerald-600' },
-      { label: '已暂停', value: downloadManager.pausedCount.value, dot: 'bg-amber-500' },
-      { label: '失败', value: downloadManager.failedCount.value, dot: 'bg-rose-500' },
-    ]
-  }
-  return []
-})
-
 // ── 自动下载记录（见 api/client.js 的 AutoDownloadAPI）──
 //
 // 这些下载发生在飞牛官方页面上（收藏 / 加歌单 / 点「下载到曲率」），
@@ -192,17 +176,10 @@ const autoDownloadLoading = ref(false)
 const autoDownloadSelected = ref(new Set())
 
 /**
- * 右上角 ⋯ 菜单（自动记录段）。
+ * 清空全部：卡片头上那枚橡皮（`clearAutoDownload([])`）。
  * 「清除选中」不在这里 —— 勾选了就浮出底部操作条（SelectionBar），
- * 没勾选时按了也没有意义；这里只留「全部清空」这个真正的批量动作。
+ * 没勾选时按了也没有意义。
  */
-const autoMenu = computed(() => [
-  { key: 'clearAll', label: '清空全部记录', icon: Eraser, danger: true, disabled: !autoDownloadRecords.value.length },
-])
-
-function onAutoMenu(key) {
-  if (key === 'clearAll') clearAutoDownload([])
-}
 
 const selectedAutoIds = computed(() => Array.from(autoDownloadSelected.value))
 const allAutoSelected = computed(() =>

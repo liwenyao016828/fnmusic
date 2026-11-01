@@ -431,6 +431,7 @@ import {
   Heart, Maximize2, Minimize2, ChevronsLeft, ChevronsRight,
   ListMusic, Trash2, X
 } from 'lucide-vue-next'
+import { withBase } from '../services/basePath.js'
 import { loadPref, savePref } from '../services/prefs'
 import { describeError } from '../services/userMsg'
 import { logError } from '../services/appLog'
@@ -762,7 +763,7 @@ async function sampleAmbient(url) {
   if (direct && commit(pickPixels(direct))) return
 
   if (!isSameOrigin(url)) {
-    const viaProxy = await loadForSample('/api/player/stream?url=' + encodeURIComponent(url), false)
+    const viaProxy = await loadForSample(withBase('/api/player/stream?url=' + encodeURIComponent(url)), false)
     if (token !== sampleToken) return
     if (viaProxy && commit(pickPixels(viaProxy))) return
   }

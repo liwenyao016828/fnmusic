@@ -5,8 +5,10 @@
 
     设计要点：
     - **只选目录**，不选文件；按钮圆角与全站一致（rounded-xl）。
-    - 顶部是磁盘切换（后端 `/api/nas/browse` 每次返回 volumes = AllowedRoots()），
-      中间是层级面包屑（可以点任意一级跳回去），底部是「用当前目录」。
+    - 顶部是**已授权目录**切换（后端 `/api/nas/browse` 每次返回 volumes = AllowedRoots()，
+      飞牛环境下这份列表只含官方授权目录，不再含 /vol1、/media 这类存储卷）。
+    - 一个授权目录都没有时不给空列表，而是显示「先授权」的引导行。
+    - 中间是层级面包屑（可以点任意一级跳回去），底部是「用当前目录」。
     - 每行同时支持**单击进入 / 双击选中并确认** —— 目录多的时候双击少一次点击，
       单击进目录则是大多数人第一反应，两种都留着。
     - 只依赖 `NasAPI.browse`，不新增后端接口。
@@ -33,8 +35,15 @@
           </button>
         </div>
 
-        <!-- 磁盘切换 -->
-        <div v-if="volumes.length" class="flex flex-wrap gap-1.5 border-b border-[var(--ys-border)] px-4 py-2">
+        <!--
+          已授权目录切换。
+          ⚠️ 2026-10-31 之前这里叫「磁盘切换」，并直接展示 /vol1、/vol2、/media 这些**存储卷**——
+          用户因此以为「曲率能看到整块盘」，而飞牛的权限模型是「没授权 = 看不见」。
+          现在后端在飞牛环境里只返回**已授权目录**（见 nas.AllowedRoots），这里也就跟着
+          改名成「已授权目录」；一个都没有时不渲染这一行，改由下面的空状态引导授权。
+        -->
+        <div v-if="volumes.length" class="flex flex-wrap items-center gap-1.5 border-b border-[var(--ys-border)] px-4 py-2">
+          <span class="shrink-0 text-[10px] text-[var(--ys-text-aux)]">已授权目录</span>
           <button
             v-for="v in volumes"
             :key="v"
@@ -45,11 +54,41 @@
                 ? 'border-emerald-200 bg-emerald-50 text-emerald-600'
                 : 'border-[var(--ys-border)] text-[var(--ys-text-muted)] hover:border-emerald-200 hover:text-[var(--ys-text)]',
             ]"
+            :title="v"
             @click="load(v)"
           >{{ v }}</button>
         </div>
 
-        <!-- 飞牛宿主目录选择器（仅在宿主环境里出现；普通浏览器/开发机热更新时自动隐藏） -->
+        <!-- 一个授权目录都没有：飞牛里这是「还没授权」，不是「没有文件」。
+             直接给授权入口，省得用户去猜为什么目录树是空的。 -->
+        <div
+          v-if="!volumes.length && !loading"
+          class="flex flex-wrap items-center gap-2 border-b border-[var(--ys-border)] bg-amber-50/60 px-4 py-2.5"
+        >
+          <span class="min-w-0 flex-1 text-[11px] leading-snug text-amber-800">
+            曲率还没有被授权访问任何目录，所以这里没有可浏览的位置。先授权一个音乐文件夹：
+          </span>
+          <!--
+            ⚠️ 2026-10-31 真机返工：这两个按钮以前用 `v-if="hostAvailable"` 门控，而
+            hostAvailable 依赖「宿主能力探测拿到 runtime !== unknown」—— 飞牛桌面里
+            那个探测**恒为 unknown**（父窗口不注入 config.host），于是按钮根本不渲染，
+            用户看到的就是「点了没反应」。现在按钮始终在，能不能弹选择器由点击时的
+            桥接探测决定，弹不出来会给一句能照做的说明（不是「失败了」三个字）。
+          -->
+          <button
+            type="button"
+            class="shrink-0 rounded-xl border border-emerald-200 bg-white px-3 py-1.5 text-[12px] font-medium text-emerald-600 hover:bg-emerald-50 disabled:opacity-50"
+            :disabled="hostPicking"
+            @click="pickViaHost()"
+          >{{ hostPicking ? '等待飞牛选择…' : '授权目录' }}</button>
+          <button
+            type="button"
+            class="shrink-0 rounded-xl border border-[var(--ys-border)] bg-white px-3 py-1.5 text-[12px] font-medium text-[var(--ys-text-muted)]"
+            @click="openSettingPage()"
+          >打开应用设置</button>
+        </div>
+
+        <!-- 飞牛宿主目录选择器（桥接真的可用时额外给一条更显眼的入口） -->
         <div
           v-if="hostAvailable"
           class="flex flex-wrap items-center gap-2 border-b border-[var(--ys-border)] bg-emerald-50/50 px-4 py-2"
@@ -206,7 +245,7 @@ import { Folder, FolderOpen, X, ArrowUp, Sparkles } from 'lucide-vue-next'
 import InlineNotice from './InlineNotice.vue'
 import { fail } from '../services/userMsg'
 import { loadBool, savePref } from '../services/prefs'
-import { detectTrimHost, hasTrimPicker, trimProbed, trimForced, pickDirectory } from '../services/trimHost'
+import { detectTrimHost, hasTrimPicker, trimProbed, trimForced, pickSharedDirectory, openAppSetting } from '../services/trimHost'
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -242,7 +281,12 @@ function setShowHidden(v) {
   load(current.value || props.start || '')
 }
 
-/** 宿主目录选择器是否可用（探测完成后才会有真值，未探完时按钮不出现） */
+/**
+ * 宿主桥接是否真的可用（探到 pickSharedFile 才有真值）。
+ *
+ * 只用来决定「是否多给一条更显眼的绿色入口」，**绝不能**用来藏按钮 ——
+ * 2026-10-31 就是因为藏了按钮，飞牛桌面里点了没反应。
+ */
 const hostAvailable = computed(() => trimProbed.value && hasTrimPicker())
 
 /** 当前目录落在哪个盘上（用于高亮磁盘按钮；取最长前缀，避免 /vol10 也亮 /vol1） */
@@ -301,16 +345,19 @@ function retry() {
 /**
  * 用飞牛宿主的目录选择器挑一个目录。
  *
- * 和上面自己画的目录树是**两条并存的路**：这里选中的路径会被宿主授权给曲率，
+ * 和上面自己画的目录树是**两条并存的路**：这里选中的路径会被宿主**共享授权**给曲率，
  * 适合「曲库在别的盘/别人的共享里，自己一层层点太慢」的场景。
- * 宿主不可用时按钮根本不会渲染，所以这里不用再判环境。
+ *
+ * ⚠️ 不要再加「宿主不可用就藏按钮」的门控（2026-10-31 真机返工）：探测在飞牛桌面里
+ * 拿不到 runtime，藏了按钮用户就彻底没有入口。现在按钮常驻，失败时把
+ * 「不在飞牛桌面 / 该去哪一页」的原话显示在下面那行 hostError 里。
  */
 async function pickViaHost() {
   if (hostPicking.value) return
   hostPicking.value = true
   hostError.value = ''
   try {
-    const r = await pickDirectory({ title: props.title })
+    const r = await pickSharedDirectory({ title: props.title })
     if (r.ok) {
       choose(r.path)
     } else if (!r.cancelled) {
@@ -319,6 +366,13 @@ async function pickViaHost() {
   } finally {
     hostPicking.value = false
   }
+}
+
+/** 打开「应用中心 → 曲率 → 设置」页（官方 openAppSetting，授权目录就在那一页）。 */
+async function openSettingPage() {
+  const r = await openAppSetting()
+  if (!r.ok) hostError.value = fail('打开应用设置', r.error || '没能打开设置页', '打开应用设置失败')
+  else hostError.value = ''
 }
 
 function choose(path) {

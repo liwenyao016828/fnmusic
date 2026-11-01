@@ -7,4 +7,15 @@ chmod +x "${APP_DIR}/yinshu-ai" 2>/dev/null || true
 chmod +x "${APP_DIR}/app/yinshu-ai" 2>/dev/null || true
 chmod +x "${APP_DIR}/cmd/"* 2>/dev/null || true
 find "${APP_DIR}" -name "yinshu-ai" -exec chmod +x {} + 2>/dev/null || true
+
+# ── 把「安装向导」里填的曲库目录落盘 ────────────────────────────────────────
+# 向导字段（wizard_music_dir / wizard_watch_dirs）只在安装流程这一次的进程环境里
+# 存在；第一次 start 时 cmd/main 也会再 apply 一遍，这里做一次是为了让「装完直接
+# 看配置文件」也能看到用户填的值，且避免首次 start 前就被 upgrade 覆盖。
+SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [ -f "${SELF_DIR}/_wizard" ]; then
+    # shellcheck source=/dev/null
+    . "${SELF_DIR}/_wizard"
+    qulv_apply_wizard "${TRIM_PKGVAR:-${APP_DIR}/var}"
+fi
 exit 0

@@ -145,68 +145,76 @@
         </button>
       </div>
 
-      <!-- ── 源列表 ── -->
+      <!-- ── 源列表 ──
+           2026-10-30 用户两条口径：
+             a. 「musicdl 列表增加适配屏幕的高度，超出部分由该列表滚动」——
+                外层容器用 calc(100vh - 头部开销) 封顶，列表自己滚，
+                不再把整页撑到 56 行那么长；
+             b. 「列表修改为一行多个的卡片，并根据屏幕适配每行数量」——
+                grid-cols-2 → sm:3 → lg:4 → xl:5，一行多卡。 -->
       <div class="rounded-xl border border-[var(--ys-border)] bg-white overflow-hidden">
-        <div
-          v-for="s in visibleSources"
-          :key="s.id"
-          class="flex items-center gap-3 px-4 py-2.5 border-b border-[var(--ys-border)] last:border-b-0 hover:bg-[var(--ys-surface-hover)]">
-          <button
-            role="switch"
-            :aria-checked="isOn(s.id) ? 'true' : 'false'"
-            :disabled="busy"
-            @click="toggle(s.id)"
-            :class="['relative w-9 h-5 rounded-full transition-colors shrink-0 disabled:opacity-50',
-                     isOn(s.id) ? 'bg-emerald-600' : 'bg-[var(--ys-line-control)]']">
-            <span :class="['absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform',
-                           isOn(s.id) ? 'translate-x-4' : '']" />
-          </button>
-
-          <div class="min-w-0 flex-1">
-            <div class="flex items-center gap-2">
-              <span class="text-[13px] text-gray-800 truncate">{{ s.label }}</span>
-              <span class="text-[10px] font-mono text-gray-500">{{ s.id }}</span>
-              <span
-                v-if="s.native"
-                class="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-600 border border-amber-200"
-                title="这个源与曲率原生平台重叠：启用它会把该平台的搜索与解析都换成 musicdl（一个平台只能有一个 id 空间）">
-                会换掉原生
-              </span>
+        <div class="overflow-y-auto" :style="{ maxHeight: listMaxHeight }">
+          <div class="grid grid-cols-2 gap-2 p-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+            <div
+              v-for="s in visibleSources"
+              :key="s.id"
+              :class="['rounded-xl border p-2.5 flex flex-col gap-2 transition',
+                       isOn(s.id)
+                         ? 'border-emerald-500/40 bg-[var(--ys-accent-soft)]'
+                         : 'border-[var(--ys-border)] bg-white hover:border-[var(--ys-border-strong)]']">
+              <!-- 卡片头：开关 + 名称 -->
+              <div class="flex items-center gap-2">
+                <button
+                  role="switch"
+                  :aria-checked="isOn(s.id) ? 'true' : 'false'"
+                  :disabled="busy"
+                  @click="toggle(s.id)"
+                  :class="['relative w-9 h-5 rounded-full transition-colors shrink-0 disabled:opacity-50',
+                           isOn(s.id) ? 'bg-emerald-600' : 'bg-[var(--ys-line-control)]']">
+                  <span :class="['absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform',
+                                 isOn(s.id) ? 'translate-x-4' : '']" />
+                </button>
+                <span class="text-[12.5px] text-gray-800 truncate min-w-0 flex-1" :title="s.label">{{ s.label }}</span>
+              </div>
+              <!-- 身份行：短码 / 客户端 / 重叠标记 -->
+              <div class="flex items-center gap-1.5 min-w-0">
+                <span class="text-[10px] font-mono text-gray-500">{{ s.id }}</span>
+                <span
+                  v-if="s.native"
+                  class="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-600 border border-amber-200 shrink-0"
+                  title="这个源与曲率原生平台重叠：启用它会把该平台的搜索与解析都换成 musicdl（一个平台只能有一个 id 空间）">
+                  会换掉原生
+                </span>
+              </div>
+              <div class="text-[10px] font-mono text-gray-300 truncate" :title="s.client">{{ s.client }}</div>
+              <!-- 检测结果 / 试运行 -->
+              <div class="mt-auto flex items-center gap-1.5 min-w-0">
+                <span
+                  v-if="probeOf(s.id)"
+                  :class="['text-[10px] font-mono shrink-0 px-1.5 py-0.5 rounded',
+                           probeOf(s.id).ok ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-500']"
+                  :title="probeTitle(probeOf(s.id))">
+                  {{ probeOf(s.id).ok ? `${probeOf(s.id).ms}ms · ${probeOf(s.id).items} 条` : `失败 ${probeOf(s.id).ms}ms` }}
+                </span>
+                <span v-else-if="probing" class="text-[10px] text-gray-300 shrink-0 font-mono">待测</span>
+                <span v-if="preview && preview.source === s.id" class="shrink-0 flex items-center gap-1.5">
+                  <span class="text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-50 text-amber-600 border border-amber-200">
+                    试运行 {{ previewLeft }}
+                  </span>
+                </span>
+                <button
+                  v-if="!(preview && preview.source === s.id) && !isOn(s.id)"
+                  :disabled="previewBusy"
+                  @click="startPreview(s.id)"
+                  class="ml-auto shrink-0 rounded-lg border border-[var(--ys-border)] px-2 py-0.5 text-[11px] text-gray-500 hover:border-amber-300 hover:text-amber-600 disabled:opacity-50"
+                  title="临时拉起这个源看看能不能用：不写进配置、不进搜索结果，5 分钟不保存自动回收">
+                  试运行
+                </button>
+              </div>
             </div>
-            <div class="text-[10px] font-mono text-gray-300 truncate">{{ s.client }}</div>
           </div>
-
-          <span
-            v-if="probeOf(s.id)"
-            :class="['text-[10px] font-mono shrink-0 px-1.5 py-0.5 rounded',
-                     probeOf(s.id).ok ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-500']"
-            :title="probeTitle(probeOf(s.id))">
-            {{ probeOf(s.id).ok ? `${probeOf(s.id).ms}ms · 返回 ${probeOf(s.id).items} 条结果` : `失败 ${probeOf(s.id).ms}ms` }}
-          </span>
-          <span v-else-if="probing" class="text-[10px] text-gray-300 shrink-0 font-mono">待测</span>
-
-          <!-- 试运行：未启用的源可以先试，不用真的启用它（见下方 startPreview） -->
-          <span v-if="preview && preview.source === s.id" class="shrink-0 flex items-center gap-1.5">
-            <span class="text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-50 text-amber-600 border border-amber-200">
-              试运行中 {{ previewLeft }}
-            </span>
-            <button
-              :disabled="previewBusy"
-              @click="stopPreview"
-              class="rounded-lg border border-[var(--ys-border)] px-2 py-1 text-[11px] text-gray-600 hover:border-rose-300 hover:text-rose-600 disabled:opacity-50">
-              停止
-            </button>
-          </span>
-          <button
-            v-else-if="!isOn(s.id)"
-            :disabled="previewBusy"
-            @click="startPreview(s.id)"
-            class="shrink-0 rounded-lg border border-[var(--ys-border)] px-2 py-1 text-[11px] text-gray-500 hover:border-amber-300 hover:text-amber-600 disabled:opacity-50"
-            title="临时拉起这个源看看能不能用：不写进配置、不进搜索结果，5 分钟不保存自动回收">
-            试运行
-          </button>
+          <div v-if="!visibleSources.length" class="px-4 py-6 text-center text-xs text-gray-500">没有匹配的源</div>
         </div>
-        <div v-if="!visibleSources.length" class="px-4 py-6 text-center text-xs text-gray-500">没有匹配的源</div>
       </div>
     </template>
   </div>
@@ -238,6 +246,12 @@ const probeDone = ref(0)
 const probeTotal = ref(0)
 const probed = ref([])            // 检测结果
 const filter = ref('')
+
+// 列表高度：适配屏幕（用户 2026-10-30 口径「列表增加适配屏幕的高度，超出部分
+// 由该列表滚动」）。视口高的 60% 封顶、至少 240px —— 56 个源全展开会把整页
+// 撑出好几屏，卡片化之后一行 5 列也还有 12 行，仍然需要内部滚动。
+const listMaxHeight = 'max(240px, 60vh)'
+
 const pageError = ref('')
 
 // ── 试运行（预览一个未启用的源）─────────────────────────────────────────

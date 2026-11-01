@@ -22,7 +22,7 @@
 | **后端依赖** | **已引入第三方依赖**（`modernc.org/sqlite v1.36.1`，纯 Go）。旧版「零依赖」规则已作废，见 §2 规则二 |
 | **前端依赖** | vue / vite / tailwindcss / axios / lucide-vue-next / crypto-js / buffer / qrcode |
 | **打包** | `bash scripts/build.sh`，**不需要 fnpack** |
-| **当前版本** | `2.24.3`（代码与 manifest 已同步，见 §7） |
+| **当前版本** | `2.24.17`（代码与 manifest 已同步，见 §7） |
 | **应用内更新** | `backend/pkg/appupdate` + `frontend/src/components/UpdateCard.vue`：查 GitHub Release → 流式下载到 `<数据目录>/updates/` → 执行 `/tmp/yinshu-update/apply-update.sh`（`appcenter-cli stop/uninstall/install-fpk` 再 `start`）。**安装这一跳在开发机上无法验证**（没有 `appcenter-cli`、没有 `/var/apps/`），真机第一次用要盯着 log。 |
 | **文件名体检** | `backend/pkg/nas/health.go`：扫出非法 UTF-8 / 控制字符 / 首尾空格 / 0 字节音频 / `.part` 残留 / 权限 000 等条目（它们会让 fnOS 整层目录报「未知错误」）。修复接口**只收 `id`（路径字节的 base64url）不收 path** —— 非法 UTF-8 的名字过一次 JSON 就变成 U+FFFD，传 path 必然找不到文件；服务端在最近 8 次扫描缓存里回查。 |
 | **自动发布** | 功能完成并验证后由 DSH 提交、推送 main；GitHub Actions 校验四处版本 → 前端构建 → 后端/前端/洛雪测试 → FPK 自检 → 新版本 Release + SHA256。已有版本不覆盖；不自动部署 NAS。不用 git hook 自动暂存工作区。 |
@@ -336,8 +336,11 @@ ResolveSafePath(raw string) (string, error)  // 校验并解析真实路径
 ```
 
 - 所有 NAS 处理器（browse / scan / stream / cover / lyric / tags）**必须先调用它**
-- `AllowedRoots()` 优先级：**飞牛授权目录** → `FN_ALLOWED_ROOTS` → 卷探测（见 §3.1 `pkg/fnos`）
-- 环境变量 `FN_ALLOWED_ROOTS`（冒号分隔）一旦设置就完全覆盖内置根目录；设空串 = 拒绝一切
+- `AllowedRoots()` 是**并集**（v2.24.4 起，见下）：`fnosAuthorizedRoots()`（飞牛三路授权）+ 若 `FN_ALLOWED_ROOTS` 已设置则用它、否则卷探测
+- ⚠️ **`FN_ALLOWED_ROOTS` 是个「全有或全无」的开关，别往它里面塞应用自己的路径**（v2.24.4 踩过）：
+  它一旦设置就**完全覆盖**内置根目录。想让曲率多认一个目录，要加进飞牛授权（用户/管理员授权目录）
+  或者走 `TRIM_DATA_ACCESSIBLE_PATHS`，**不是**改这个变量 —— 改了等于绕过用户的授权意图。
+  生命周期脚本 `cmd/_wizard` 里的注释已经写死这条，别改回去。
 - ⚠️ `ResolveSafePath` **要求路径已存在**（内部用 `EvalSymlinks`）。
   校验「待创建的下载目录」时要先自底向上找到最近的**已存在祖先**再校验
 - ⚠️ **`GET /api/nas/read`（读文本文件）有三道约束，别把任意一条删掉**（v2.1.56 加）：
@@ -456,10 +459,20 @@ ResolveSafePath(raw string) (string, error)  // 校验并解析真实路径
 | 响应 | `{reqId, code, msg, data}` | `{code, msg/message, data}` |
 
 - `openapi.go`：`Available()` / `Call()` / `SharedFolders()` / `DelSharedFolder()` / `PlatformConfig()`
+- `authpaths.go`（v2.24.4 新增）：**文件访问授权**的一组薄封装 —— `UserAccessibleFolders(uid)`（`trim.file.getUserAccessibleFolders`）、`DelUserAccessibleFolder`、`CheckUserACL(uid, paths)`（`trim.file.checkUserACL` → `[{path,readable,writable,deletable}]`）、`ConvertPath(paths)`（`trim.file.convertPath`，把 `/vol1/...` 变成用户看得懂的语义路径，`language` 取系统语言）、`DataAccessiblePaths()` / `DataSharePaths()`（读 `TRIM_DATA_ACCESSIBLE_PATHS` / `TRIM_DATA_SHARE_PATHS`）、`EnvUID()`（`TRIM_UID` / `TRIM_RUN_UID`）
+  - ⚠️ 官方文档要求「先通过网关确认当前用户，再用该用户的 uid 查授权目录」，而**前端 SDK 拿不到 uid**（`HostSnapshot` 只有 `username`）—— 所以「当前用户」这一路只能靠生命周期脚本里的 `TRIM_UID`，拿不到就跳过（不报错），不能瞎猜 uid
 - `music.go`：`Music` 客户端 —— `Me` / `Playlists` / `SearchTracks` / `PlaylistTracks` / `CreatePlaylist` / `FindOrCreatePlaylist` / `AddTracks` / `SetPlaylistCover` / `ScanLibrary`
 - `token.go`：`MusicToken()` —— 环境变量 `FNOS_TOKEN` 优先，否则**只读**打开 `/var/lib/fnos-music-db/music.db` 取 `user_token` 表最新非空令牌（用 `modernc.org/sqlite`）
 
 **关键设计**：
+- **`AllowedRoots()` 是三路授权的并集**（v2.24.4 改造，以前是「有共享授权就整体覆盖、没有就退回卷探测」）：
+  ① 管理员共享授权（`trim.file.getSharedAccessibleFolders`）
+  ② 当前用户个人授权（`trim.file.getUserAccessibleFolders`，需 uid）
+  ③ 环境变量 `TRIM_DATA_ACCESSIBLE_PATHS`
+  三路各自失败互不影响（一路挂了不会把其它两路清空），再与 `FN_ALLOWED_ROOTS`（设了就用）或卷探测合并后统一 `normalizeRoots`。
+  缓存 30 秒、用户点完授权可调 `POST /api/fnos/auth-refresh` 立刻失效（否则界面会显示「还是没授权」，最招人烦的假故障）。
+- 状态出口：`GET /api/fnos/auth-status`（`available` / `authorized` / `shared_count` / `user_count` / `hint` / `hint_action`；
+  **路径字段只对回环来源返回**，局域网其它机器只给布尔与计数）
 - `FindOrCreatePlaylist` 遇同名多个歌单**直接报错**，不随便挑一个（防误推）
 - `AddTracks` 自动分批，每批 50
 - 所有读库/连接失败路径**优雅降级**，非飞牛环境下不影响任何其他功能

@@ -15,9 +15,9 @@ fnpack 工具。但仓库内的 `fn-lx-player.fpk` 已确认就是**标准 gzip 
   tar 格式为 **POSIX ustar**（magic `ustar\\0` + 版本 `00`），无 PAX/GNU 扩展头，
   结尾仅 1024 字节零块（不做 10240 字节记录对齐）。
 * 成员顺序：
-    外层 : app.tgz, cmd/(+10 个：9 个钩子 + 被 source 的 _backup),
+    外层 : app.tgz, cmd/(+11 个：9 个钩子 + 被 source 的 _backup / _wizard),
            config/(privilege, resource),
-           ICON.PNG, ICON_256.PNG, manifest, wizard/(空目录)
+           ICON.PNG, ICON_256.PNG, manifest, wizard/（install, config …）
     app.tgz: <appname>, ui/, ui/config, ui/images/(+PNG), config/(privilege, resource)
       ↑ 主程序与图标名都取自 `fpk-package/manifest` 的 `appname`（见 read_manifest_appname）
 * 所有成员 uid=gid=0、uname=gname 为空、mtime 统一为同一打包时间戳。
@@ -51,6 +51,7 @@ import argparse
 import gzip
 import hashlib
 import io
+import json
 import os
 import shutil
 import struct
@@ -96,6 +97,9 @@ def read_manifest_appname(manifest_path: Path) -> str:
 
 
 APP_NAME = read_manifest_appname(FPK_DIR / "manifest")
+
+# 用户向导文件名（官方只认这四个，见 docs/core-concepts/wizard/）。
+WIZARD_FILES = ("install", "upgrade", "config", "uninstall")
 DEFAULT_OUTPUT = ROOT / f"{APP_NAME}.fpk"
 
 # 规范权限（--legacy-modes 时改为 0666 / 0777，与原 fpk 一致）
@@ -116,6 +120,7 @@ MANIFEST_KEY_WIDTH = 21  # 原 fpk manifest 的 key 左对齐宽度（= 最长 k
 # 那正是这个功能唯一要防的事故。
 CMD_FILES = [
     "_backup",
+    "_wizard",
     "config_callback",
     "config_init",
     "install_callback",
@@ -132,11 +137,14 @@ CMD_FILES = [
 # 比对重新回到「一致」——否则每次打包都会报一条「多出：['cmd/_backup']」噪声，
 # 噪声一多，真正漂移时就没人看了。
 REF_OUTER = [
-    "app.tgz", "cmd", "cmd/_backup", "cmd/config_callback", "cmd/config_init",
-    "cmd/install_callback", "cmd/install_init", "cmd/main",
+    "app.tgz", "cmd", "cmd/_backup", "cmd/_wizard", "cmd/config_callback",
+    "cmd/config_init", "cmd/install_callback", "cmd/install_init", "cmd/main",
     "cmd/uninstall_callback", "cmd/uninstall_init", "cmd/upgrade_callback",
     "cmd/upgrade_init", "config", "config/privilege", "config/resource",
     "ICON.PNG", "ICON_256.PNG", "manifest", "wizard",
+    # v2.25 起 wizard/ 里真的有文件：安装界面的主页面（install）与
+    # 「应用设置 → 配置向导」（config）都靠它引导用户设置曲库目录和文件权限。
+    *(f"wizard/{n}" for n in WIZARD_FILES if (FPK_DIR / "wizard" / n).is_file()),
 ]
 REF_INNER = [
     APP_NAME, "ui", "ui/config", "ui/images",
@@ -414,6 +422,40 @@ def gz_bytes(data: bytes) -> bytes:
     return out.getvalue()
 
 
+def assert_wizard_json(path: Path) -> None:
+    """校验 wizard/<name> 是官方规定的「步骤数组」结构。
+
+    飞牛把 wizard 文件当作 JSON 直接渲染，格式不对时真机上表现为向导空白页，
+    而且不会给出任何错误信息 —— 所以在打包阶段就拦下来。
+    结构见 https://developer.fnnas.com/docs/core-concepts/wizard/：
+        [{ "stepTitle": "...", "items": [{ "type": ..., "field"/"helpText": ... }] }]
+    字段名会原样变成环境变量名，因此必须 wizard_ 前缀（TRIM_ 前缀被系统占用）。
+    """
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        die(f"wizard/{path.name} 不是合法 JSON：{e}")
+        return
+    if not isinstance(data, list) or not data:
+        die(f"wizard/{path.name} 必须是「步骤数组」，当前是 {type(data).__name__}")
+    for i, step in enumerate(data):
+        if not isinstance(step, dict) or "stepTitle" not in step or "items" not in step:
+            die(f"wizard/{path.name} 第 {i + 1} 步缺 stepTitle/items")
+        if not isinstance(step["items"], list) or not step["items"]:
+            die(f"wizard/{path.name} 第 {i + 1} 步的 items 必须是非空数组")
+        for item in step["items"]:
+            if not isinstance(item, dict) or "type" not in item:
+                die(f"wizard/{path.name} 第 {i + 1} 步有 item 缺少 type")
+            field = item.get("field")
+            if field is None:
+                continue  # tips 之类没有 field
+            if not isinstance(field, str) or not field.startswith("wizard_"):
+                die(f"wizard/{path.name} 第 {i + 1} 步的字段名 {field!r} 必须以 wizard_ 开头"
+                    "（它会被当成环境变量名注入生命周期脚本）")
+            if field.startswith("TRIM_"):
+                die(f"wizard/{path.name} 字段名 {field!r} 不得使用 TRIM_ 前缀（系统保留）")
+
+
 def build_manifest_bytes(source: Path, version: str | None, app_tgz: bytes) -> bytes:
     """复刻 fnpack 的 manifest 重写规则：key 补到 20 列 + ' = ' + 值，CRLF，追加 checksum。"""
     items: list[tuple[str, str]] = []
@@ -524,7 +566,13 @@ def build_fpk_bytes(app_tgz: bytes, mtime: int, legacy: bool, version: str | Non
 
     tb.add_bytes("manifest", build_manifest_bytes(FPK_DIR / "manifest", version, app_tgz), file_mode)
 
-    # wizard/ 空目录（打包材料里没有，必须显式创建）
+    # wizard/：安装向导与「应用设置」里的配置向导。
+    #
+    # v2.25 起这里**真的有文件**了（install / config）：
+    # 用户向导是官方文档里唯一能在「安装界面的主页面」引导用户设置曲库目录与
+    # 文件权限的位置（https://developer.fnnas.com/docs/core-concepts/wizard/）。
+    # 目录本身无论有没有文件都必须存在（自检要求），文件按 JSON 校验 —— 一个写坏的
+    # JSON 在真机上表现为「向导整页空白」，而那是最难排查的一种。
     wizard = FPK_DIR / "wizard"
     tb.add_dir("wizard")
     if wizard.is_dir():
@@ -532,8 +580,10 @@ def build_fpk_bytes(app_tgz: bytes, mtime: int, legacy: bool, version: str | Non
             rel = sub.relative_to(FPK_DIR).as_posix()
             if sub.is_dir():
                 tb.add_dir(rel)
-            else:
-                tb.add_file(rel, sub)
+                continue
+            if sub.name in WIZARD_FILES:
+                assert_wizard_json(sub)
+            tb.add_file(rel, sub)
 
     tar_bytes = tb.finish()
     fpk = gz_bytes(tar_bytes)
@@ -612,6 +662,20 @@ def self_check(fpk_path: Path, legacy: bool = False) -> None:
             errors.append("外层缺少 wizard/ 空目录")
         elif not t.getmember("wizard").isdir():
             errors.append("wizard 不是目录")
+        # 装到真机上的向导文件必须能被系统解析；这里再验一次（打包时已验过，
+        # 但归档读回来的那一份才是真正会生效的那一份）。
+        want_wizard = [n for n in WIZARD_FILES if (FPK_DIR / "wizard" / n).is_file()]
+        if "install" not in want_wizard:
+            errors.append("缺少 wizard/install —— 安装界面的主页面就没有引导设置文件权限的内容了")
+        for name in want_wizard:
+            member = f"wizard/{name}"
+            if member not in names:
+                errors.append(f"外层缺少 {member}")
+                continue
+            try:
+                json.loads(t.extractfile(member).read().decode("utf-8"))
+            except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                errors.append(f"{member} 不是合法 JSON：{e}")
 
     inner_names = [m.name for m in list_members(app_tgz)]
     inner_set = set(inner_names)

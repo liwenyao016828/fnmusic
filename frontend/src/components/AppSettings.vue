@@ -52,8 +52,13 @@
         :summary="qualitySummary"
         :icon="AudioLines"
         title="下载音质"
-        hint="这个开关盖住下面两个入口各自的音质设置，不是改掉它们：改回「跟随」就能复原。本应用不做转码（NAS 上没有 ffmpeg），所以是「点名要某一档」，拿不到会按原顺序兜底，不会变成下载失败。"
+        hint="三选一：跟随页面 = 下载时页面选哪档就要哪档（缺档自动降级）；仅下载最高 = 只要无损，拿不到就报缺档；自动降档 = 一律先要无损，拿不到就用平台实际有的那一档。"
       >
+        <!--
+          2026-10-30 重构：用户口径「下载音质中，只需要三个选择，一个是跟随
+          页面设置，一个是仅下载最高，一个是自动降档」—— 原来的「跟随/无损/
+          320K + 拿不到目标音质时」两个控件合并成一个三选一。
+        -->
         <div class="grid gap-2 sm:grid-cols-3">
           <button
             v-for="o in qualityOptions"
@@ -188,6 +193,42 @@
         title="存储目录"
         hint="缓存目录放的是「边听边存」的暂存档与试听滚动缓存，可以单独放一块盘。两个目录不得相同、也不得互为父子（清理缓存会连成品一起删掉）。"
       >
+        <!--
+          授权提示条（2026-10-31 用户原话）：「飞牛桌面点开曲率 → 顶部应出现琥珀提示条 →
+          点『授权目录』→ 应弹出飞牛文件选择器。」
+
+          为什么这里还要一条（App.vue 顶部已经有一条 FnosAuthNotice）：
+          顶部那条是「全应用级」的引导，用户进了设置页往往已经把它滑出视野；而
+          「目录」这一块正是他要配的东西 —— 就在输入框上方说一句「还没有授权任何目录，
+          点这里选一个」，比让他回头找顶部那条有效得多。
+
+          显隐口径：只在「确实没有授权目录」时出现（shouldPrompt），授权成功后**静默**
+          （用户偏好：成功态不打扰）。这条不做可关闭 —— 关掉以后用户就再也找不到入口。
+        -->
+        <div
+          v-if="showAuthBar"
+          class="mb-3 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-800"
+        >
+          <span class="min-w-0 flex-1 leading-relaxed">
+            曲率还没有被授权访问任何音乐目录。点「授权目录」用飞牛的文件选择器选一个文件夹，选完就能直接用。
+          </span>
+          <button
+            type="button"
+            class="shrink-0 rounded-lg bg-amber-600 px-2.5 py-1 text-[12px] font-medium text-white hover:bg-amber-700 disabled:opacity-60"
+            :disabled="grantingDir"
+            @click="grantDirFromBar"
+          >{{ grantingDir ? '等待选择…' : '授权目录' }}</button>
+          <!-- 兜底口子：宿主选择器在部分版本/窗口里弹不出来时，官方「本应用设置页」是
+               唯一能手动加授权目录的地方（见 services/trimHost.openAppSetting）。 -->
+          <button
+            type="button"
+            class="shrink-0 rounded-lg border border-amber-300 bg-white/70 px-2.5 py-1 text-[12px] font-medium text-amber-800 hover:bg-white disabled:opacity-60"
+            :disabled="grantingDir"
+            @click="openAppSettingPage"
+          >打开应用设置</button>
+          <span v-if="authBarMsg" class="basis-full text-[11px] leading-relaxed text-amber-700/90">{{ authBarMsg }}</span>
+        </div>
+
         <div class="grid gap-3 sm:grid-cols-2">
           <label class="block">
             <span class="text-[12px] font-medium text-gray-700">下载目录（曲库）</span>
@@ -199,12 +240,15 @@
                 placeholder="/vol1/Music"
                 class="w-full rounded-xl border border-[var(--ys-line-control)] px-3 py-2 text-[13px] focus:border-emerald-500 focus:outline-none"
               />
-              <!-- 用户 2026-10-25：不要「必须手输」，点一下就从目录树里选 -->
+              <!-- 用户 2026-10-25：不要「必须手输」，点一下就能选。
+                   2026-10-31 起点这里**先弹飞牛的文件选择器**，宿主不在（普通浏览器）
+                   才退回曲率自绘的目录树 —— 见 chooseDirFor 的注释。 -->
               <button
                 type="button"
-                class="shrink-0 rounded-xl border border-emerald-200 bg-emerald-50 px-3 text-[12px] font-medium text-emerald-600 hover:bg-emerald-50"
-                @click="dirPicker = { open: true, field: 'download', start: downloadDir }"
-              >选择</button>
+                class="shrink-0 rounded-xl border border-emerald-200 bg-emerald-50 px-3 text-[12px] font-medium text-emerald-600 hover:bg-emerald-50 disabled:opacity-60"
+                :disabled="pickingDir === 'download'"
+                @click="chooseDirFor('download')"
+              >{{ pickingDir === 'download' ? '等待选择…' : '选择' }}</button>
             </div>
           </label>
           <label class="block">
@@ -219,8 +263,9 @@
               />
               <button
                 type="button"
-                class="shrink-0 rounded-xl border border-emerald-200 bg-emerald-50 px-3 text-[12px] font-medium text-emerald-600 hover:bg-emerald-50"
-                @click="dirPicker = { open: true, field: 'cache', start: cacheDir || downloadDir }"
+                class="shrink-0 rounded-xl border border-emerald-200 bg-emerald-50 px-3 text-[12px] font-medium text-emerald-600 hover:bg-emerald-50 disabled:opacity-60"
+                :disabled="pickingDir === 'cache'"
+                @click="chooseDirFor('cache')"
               >选择</button>
               <button
                 type="button"
@@ -230,38 +275,72 @@
               >恢复默认</button>
             </div>
           </label>
-          <!-- 日志存储位置（2026-10-26 用户口径：「设置增加日志存储位置」）。
-               留空 = 默认不落盘（重启即清空）；填路径 = 每条运行日志（含前端上报）同时写进 <目录>/qulv.log。 -->
-          <label class="block sm:col-span-2">
-            <span class="text-[12px] font-medium text-gray-700">日志存储位置（留空 = 不落盘，重启即清空）</span>
-            <div class="mt-1 flex flex-wrap gap-2">
-              <input
-                v-model.trim="logDir"
-                type="text"
-                spellcheck="false"
-                placeholder="/vol1/Logs"
-                class="w-full min-w-0 flex-1 rounded-xl border border-[var(--ys-line-control)] px-3 py-2 text-[13px] focus:border-emerald-500 focus:outline-none"
-              />
+          <!-- 日志落盘（2026-11-01 用户 m00938：「出了问题必须能追查」）。
+               旧版是「留空 = 不落盘，重启即清空」——默认关，等于出事时现场已经没了。
+               现在默认开、写到 <数据目录>/logs，这里只做三件事：开关、换目录、看实际写到哪。 -->
+          <div class="block sm:col-span-2 rounded-xl border border-[var(--ys-border)] px-3 py-2.5">
+            <div class="flex items-start justify-between gap-3">
+              <div class="min-w-0">
+                <div class="flex items-center gap-2">
+                  <span class="text-[13px] font-medium text-[var(--ys-text)]">运行日志落盘</span>
+                  <span :class="['text-[10px] px-1.5 py-0.5 rounded-full border font-mono',
+                                 logDiskOn ? 'border-emerald-200 bg-emerald-50 text-emerald-600' : 'border-[var(--ys-border)] text-gray-500']">
+                    {{ logDiskOn ? '已开启' : '已关闭' }}
+                  </span>
+                </div>
+                <p class="mt-0.5 text-[11px] leading-relaxed text-[var(--ys-text-muted)]">
+                  播放取链、下载成败、任务起止等都会追加写进日志文件，重启不丢，出问题能回查。
+                  <span class="text-gray-500">按 20MB 自动轮转，只留最近两代。直链只记域名，不记签名。</span>
+                </p>
+              </div>
               <button
-                type="button"
-                class="shrink-0 rounded-xl border border-emerald-200 bg-emerald-50 px-3 text-[12px] font-medium text-emerald-600 hover:bg-emerald-50"
-                @click="dirPicker = { open: true, field: 'log', start: logDir || downloadDir }"
-              >选择</button>
-              <button
-                type="button"
-                class="shrink-0 rounded-xl border border-[var(--ys-border)] px-3 text-[12px] text-gray-600 hover:border-[var(--ys-line-control)]"
-                title="关闭落盘：日志只在内存里保留，重启即清空（默认行为）"
-                @click="logDir = ''"
-              >恢复默认</button>
-              <button
-                type="button"
-                class="shrink-0 rounded-xl bg-emerald-600 px-3 text-[12px] font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
-                :disabled="savingLogDir"
-                @click="saveLogDir"
-              >{{ savingLogDir ? '保存中…' : '保存日志位置' }}</button>
+                role="switch"
+                :aria-checked="logDiskOn ? 'true' : 'false'"
+                :disabled="savingLogCfg"
+                @click="toggleLogDisk"
+                :class="['relative w-11 h-6 rounded-full transition-colors shrink-0 disabled:opacity-50',
+                         logDiskOn ? 'bg-emerald-600' : 'bg-black/[0.12]']">
+                <span :class="['absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform',
+                               logDiskOn ? 'translate-x-5' : '']" />
+              </button>
+            </div>
+            <div v-if="logDiskOn" class="mt-2">
+              <span class="text-[12px] font-medium text-gray-700">日志目录（留空 = 默认位置）</span>
+              <div class="mt-1 flex flex-wrap gap-2">
+                <input
+                  v-model.trim="logDir"
+                  type="text"
+                  spellcheck="false"
+                  placeholder="默认：应用数据目录下的 logs"
+                  class="w-full min-w-0 flex-1 rounded-xl border border-[var(--ys-line-control)] px-3 py-2 text-[13px] focus:border-emerald-500 focus:outline-none"
+                />
+                <button
+                  type="button"
+                  class="shrink-0 rounded-xl border border-emerald-200 bg-emerald-50 px-3 text-[12px] font-medium text-emerald-600 hover:bg-emerald-50 disabled:opacity-60"
+                  :disabled="pickingDir === 'log'"
+                  @click="chooseDirFor('log')"
+                >选择</button>
+                <button
+                  type="button"
+                  class="shrink-0 rounded-xl border border-[var(--ys-border)] px-3 text-[12px] text-gray-600 hover:border-[var(--ys-line-control)]"
+                  title="回到默认位置（应用数据目录下的 logs）"
+                  @click="logDir = ''"
+                >恢复默认</button>
+                <button
+                  type="button"
+                  class="shrink-0 rounded-xl bg-emerald-600 px-3 text-[12px] font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
+                  :disabled="savingLogCfg"
+                  @click="saveLogDir"
+                >{{ savingLogCfg ? '保存中…' : '保存目录' }}</button>
+              </div>
+              <!-- 实际写到哪：以服务端回的路径为准，不猜。用户换过目录、或写不进去回落时，
+                   这里是他唯一能确认「我的日志到底在哪」的地方。 -->
+              <span v-if="logEffective" class="mt-1 block break-all font-mono text-[11px] text-[var(--ys-text-muted)]">
+                实际写入：{{ logEffective }}
+              </span>
             </div>
             <span v-if="logError" class="mt-1 block text-[12px] text-red-500">{{ logError }}</span>
-          </label>
+          </div>
         </div>
         <div class="mt-3 flex flex-wrap items-center gap-3">
           <button
@@ -272,6 +351,15 @@
           >{{ savingDirs ? '保存中…' : '保存目录' }}</button>
           <span v-if="dirError" class="text-[12px] text-red-500">{{ dirError }}</span>
         </div>
+        <!-- 2026-10-31 收敛：这里原来是一整块绿色的「用飞牛的文件选择器选曲库目录」，
+             和上面三个「选择」按钮做的是同一件事，只是绕了一层。用户原话是
+             「用和点击选择后可以不需要出我自己的目录选择器了，直接用飞牛的文件选择器」，
+             所以现在「选择」按钮直接弹飞牛选择器（见 chooseDirFor），这块不再需要按钮，
+             只留一句说明 —— 否则用户面对两组入口，会以为其中一组是「高级」用法。
+             下面这行 trimPickMsg 是三个按钮共用的结果/失败说明。 -->
+        <p v-if="trimPickMsg" class="mt-2 text-[11px] leading-relaxed" :class="trimPickBad ? 'text-red-500' : 'text-emerald-700'">
+          {{ trimPickMsg }}
+        </p>
         <NasDirPicker
           v-model:open="dirPicker.open"
           :title="dirPicker.field === 'log' ? '选择日志存储目录' : dirPicker.field === 'cache' ? '选择缓存目录' : '选择下载目录（曲库）'"
@@ -555,7 +643,7 @@ import DisclosureSection from './DisclosureSection.vue'
 import NameRulesPanel from './NameRulesPanel.vue'
 import { AudioLines, ChevronDown, ChevronUp, Download, FileAudio, FileSearch, FolderCog, Info, Palette, Route } from 'lucide-vue-next'
 import { ConfigAPI, DownloadAPI, LogsAPI, AppAPI, ChartInjectAPI, SourcesAPI, QualityAPI, DEFAULT_AUTO_DOWNLOAD_CHANNELS } from '../api/client'
-import { QUALITY_OVERRIDE_OPTIONS } from '../services/qualityOverride'
+import { QUALITY_MODE_OPTIONS, normalizeQualityMode } from '../services/qualityOverride'
 import { THEMES, loadTheme, setTheme } from '../services/theme'
 import { fail, apiError } from '../services/userMsg'
 import { logInfo } from '../services/appLog'
@@ -563,6 +651,8 @@ import InlineNotice from './InlineNotice.vue'
 import NasDirPicker from './NasDirPicker.vue'
 import UpdateCard from './UpdateCard.vue'
 import ApiModal from './ApiModal.vue'
+import { chooseDirectory, detectTrimHost, openAppSetting } from '../services/trimHost'
+import { lastPick, loadAuthStatus, refreshAuthStatus, shouldPrompt } from '../services/fnosAuth'
 
 /** 条款弹窗由 App.vue 持有（openDisclaimer），这里只负责把「想看条款」这件事报上去。 */
 const emit = defineEmits(['open-disclaimer'])
@@ -601,7 +691,7 @@ function jumpSection(k) {
 
 const qualitySummary = computed(() => {
   const o = qualityOptions.find((x) => x.value === qualityValue.value)
-  return o ? o.label : '跟随各处设置'
+  return o ? o.label : '跟随页面设置'
 })
 
 const namingSummary = computed(() => {
@@ -636,7 +726,7 @@ function flash(msg, isError = false) {
 // 但只发一个键就等于把「其它字段」交给后端的合并规则（见 LibraryManager 同款做法）。
 const cfgRaw = ref(null)
 
-const qualityOptions = QUALITY_OVERRIDE_OPTIONS
+const qualityOptions = QUALITY_MODE_OPTIONS
 const qualityValue = ref('')
 
 const namingOptions = [
@@ -657,18 +747,154 @@ const downloadDir = ref('')
 /** 目录选择弹窗：{ open, field: 'download'|'cache'|'log', start } */
 const dirPicker = ref({ open: false, field: 'download', start: '' })
 
-function onPickDir(p) {
-  if (!p) return
-  if (dirPicker.value.field === 'cache') cacheDir.value = p
-  else if (dirPicker.value.field === 'log') logDir.value = p
-  else downloadDir.value = p
+/**
+ * 收下一颗目录（来自宿主选择器，或回退时的自绘目录树）。
+ *
+ * st 只在宿主路径上有值：它带「这个目录现在能不能读」的结论。不能读时**不拦**，
+ * 仍然把路径填进输入框 —— 用户至少能看清自己选了什么，点保存时后端会给出
+ * 可操作的错误；完全不填反而像「我点的那一下丢了」。
+ */
+function applyDir(field, path, st) {
+  if (!path) return
+  if (field === 'cache') cacheDir.value = path
+  else if (field === 'log') logDir.value = path
+  else downloadDir.value = path
+  if (st && st.path && !st.readable) {
+    // 选完但还没生效：宿主侧授权可能是异步落库的。给一句能照着做的话。
+    trimPickBad.value = true
+    trimPickMsg.value = st.hint || '这个目录还没进入授权范围，稍等几秒后重新点一次「选择」。'
+  }
 }
+
+function onPickDir(p) {
+  applyDir(dirPicker.value.field, p, null)
+}
+
+/* ── 统一「选目录」入口（2026-10-31）────────────────────────────────────
+   用户口径：「用和点击选择后可以不需要出我自己的目录选择器了，直接用飞牛的文件选择器。」
+
+   所以三个「选择」按钮不再直接打开自绘的 NasDirPicker，改走 services/trimHost.js 的
+   chooseDirectory()：
+     · 宿主桥接可用 → 直接弹**飞牛的**文件选择器（选完即共享授权给曲率，不用再去
+       应用设置加一遍）；
+     · 宿主不在（普通浏览器 / 开发机 / 飞牛里 SDK 没握上手）→ 再打开自绘目录树，
+       保证「浏览器里也能选目录」这条路不丢；
+     · 宿主报错（非管理员等）→ 把宿主原话挂到下面那行提示上，同时给自绘目录树兜底。
+
+   为什么不做成「先猜宿主在不在、再决定点哪个按钮」：探测是异步的（要和父窗口握手），
+   拿它当门控就等于给按钮加了一颗定时炸弹 —— 2026-10-31 真机上就是这么「点了没反应」的。
+*/
+const pickingDir = ref('')
+
+async function chooseDirFor(field) {
+  if (pickingDir.value) return
+  pickingDir.value = field
+  trimPickMsg.value = ''
+  trimPickBad.value = false
+  try {
+    const start = field === 'cache' ? cacheDir.value || downloadDir.value
+      : field === 'log' ? logDir.value || downloadDir.value
+      : downloadDir.value
+    const title = field === 'log' ? '选择日志存储目录'
+      : field === 'cache' ? '选择缓存目录' : '选择下载目录（曲库）'
+    const res = await chooseDirectory({ title, okText: '用这个目录' })
+    if (res.ok) {
+      // 走宿主路径：顺手让后端认一下这个路径（授权缓存立刻失效 + 回答能不能读）。
+      const st = await refreshAuthStatus(res.path).then(() => lastPick.value).catch(() => null)
+      applyDir(field, res.path, st)
+      if (!trimPickMsg.value) trimPickMsg.value = `已选中 ${res.path}。点「保存目录」生效。`
+      return
+    }
+    if (res.cancelled) return
+    // 回退到自绘目录树：宿主不在，或者宿主拒绝弹（文案留在下面一行，别弹红字打断）。
+    if (res.error) {
+      trimPickBad.value = true
+      trimPickMsg.value = fail('选择目录', res.error, '飞牛选择器没能打开，改用曲率自己的目录树')
+    }
+    dirPicker.value = { open: true, field, start }
+  } finally {
+    pickingDir.value = ''
+  }
+}
+
+/* ── 飞牛官方目录选择器（2026-10-31）──────────────────────────────────
+   和上面 NasDirPicker 的分工：那个在**已授权**范围内挑目录，这个直接调宿主的
+   文件选择器 —— 能看全部盘位、能新建文件夹，选完由系统把该目录**共享授权**给曲率。
+   所以它是「第一次配曲库」的正确入口，NasDirPicker 是「已配好、只换个子目录」的
+   轻量入口。
+   拿到路径后只填进输入框并提示用户点「保存目录」：静默改配置会让「我明明没点保存」
+   变成既成事实，而且下载目录和曲库目录是同一个字段，还是要让用户看一眼再落盘。 */
+const trimPickMsg = ref('')
+const trimPickBad = ref(false)
+
+/* ── 授权提示条（2026-10-31）────────────────────────────────────────────
+   数据来自 services/fnosAuth.js（后端 /api/fnos/auth-status 的归一化结果），
+   而不是直接读 FnosAPI.status()：那一份回答的是「飞牛音乐服务是否就绪」，
+   「有没有授权目录」是另一件事（见 fnosAuth.js 文件头）。
+   显隐只认 shouldPrompt()：不在飞牛环境 / 已授权 → 整条不渲染，不留占位。
+*/
+const showAuthBar = computed(() => shouldPrompt())
+const authBarMsg = ref('')
+const grantingDir = ref(false)
+
+/** 提示条上的「授权目录」：直接弹飞牛宿主选择器，选完即视为授权完成。 */
+async function grantDirFromBar() {
+  if (grantingDir.value) return
+  grantingDir.value = true
+  authBarMsg.value = ''
+  try {
+    const res = await chooseDirectory({
+      title: '选择要授权给曲率的目录',
+      okText: '授权这个目录',
+    })
+    if (res.cancelled) return
+    if (!res.ok) {
+      // 自己的按钮点了却没弹出来 —— 这句必须说清「为什么 + 还能怎么办」，
+      // 否则用户看到的就是「点了没反应」。
+      authBarMsg.value = res.fallback
+        ? fail('授权目录', res.error, '飞牛的文件选择器没打开（当前可能不在飞牛桌面里），可以到「应用中心 → 曲率 → 设置 → 授权目录」手动添加')
+        : fail('授权目录', res.error, '授权没有完成，请重试')
+      return
+    }
+    // 选完立刻让后端丢掉授权缓存并回答「这个路径现在读得到吗」。
+    // 用户口径是「选完直接可用」，所以这里不要求他再去点一次「我已授权，刷新」。
+    const st = await refreshAuthStatus(res.path)
+    const pick = lastPick.value
+    const usable = pick ? pick.readable : !!st?.authorized
+    if (usable) {
+      authBarMsg.value = ''
+      // 曲库目录还是空的就顺手填上 —— 用户刚授权的目录八成就是要用的那个。
+      if (!downloadDir.value.trim()) downloadDir.value = res.path
+    } else {
+      authBarMsg.value = pick?.hint || `已选择 ${res.path}，但系统还没确认授权。稍等几秒后再点一次「授权目录」，或到「应用设置 → 授权目录」里添加。`
+    }
+  } finally {
+    grantingDir.value = false
+  }
+}
+
+/** 打开飞牛官方的「本应用设置页」（唯一能手动管授权目录的那一页）。 */
+async function openAppSettingPage() {
+  const r = await openAppSetting()
+  authBarMsg.value = r.ok
+    ? '设置页已打开：在「授权目录」里添加曲库目录后回来，这里会自动刷新。'
+    : `${r.error}。也可以手动到「应用中心 → 曲率 → 设置 → 授权目录」。`
+}
+
 const cacheDir = ref('')
 const savingDirs = ref(false)
 const dirError = ref('')
-// 日志存储位置（2026-10-26 用户口径）：留空 = 不落盘；保存走独立的 LogsAPI.saveConfig，与下载/缓存目录分开报错
+// 运行日志落盘（2026-10-26 起有「位置」设置；2026-11-01 用户 m00938「必须能追查」
+// → 改成默认开、可关、可换目录）。
+//
+// 三个 ref 各管一件事，别合并：
+//   logDiskOn    开关状态（服务端 enabled，默认 true）
+//   logDir       用户自定义目录（空串 = 用服务端默认位置，界面上和「没配」是同一件事）
+//   logEffective 服务端回的实际写入文件路径 —— 唯一可信的来源，界面上照它显示
+const logDiskOn = ref(true)
 const logDir = ref('')
-const savingLogDir = ref(false)
+const logEffective = ref('')
+const savingLogCfg = ref(false)
 const logError = ref('')
 
 // ── 下载行为四开关（v2.5.0 从旧 LibraryManager 搬来，逻辑原样）──
@@ -815,6 +1041,12 @@ onMounted(() => {
   load()
   // 主题可能在别的设备上改过（服务端偏好优先），进设置页时同步一次显示。
   themeId.value = loadTheme()
+  // 2026-10-31：预探一次宿主桥接，点「浏览盘位选择」时就不用现等握手。
+  // 探测结果不影响按钮显隐（以前拿它当显隐条件，飞牛桌面里整块入口都不渲染）。
+  detectTrimHost()
+  // 授权状态决定「目录」一节里的琥珀提示条要不要出现（见 showAuthBar）。
+  // 只查一次、失败静默：查不到只是「不知道」，不该让设置页报错。
+  loadAuthStatus()
 })
 
 async function load() {
@@ -823,13 +1055,16 @@ async function load() {
     const cfg = res?.data || res?.config
     if (cfg) {
       cfgRaw.value = cfg
-      // download_quality_override 是三态：缺省（跟随）就是空串
-      qualityValue.value = String(cfg.download_quality_override || '')
+      // download_quality_override 是三态：缺省（跟随）就是空串。
+      // 旧值（lossless/mp3_320）读到的瞬间归一到新三选一（normalizeQualityMode
+      // 与后端 NormalizeQualityMode 同口径），存的时候自然就写回新值。
+      qualityValue.value = normalizeQualityMode(cfg.download_quality_override)
       namingValue.value = cfg.filename_format || 'artist-title'
       downloadDir.value = cfg.download_dir || ''
       // 空串 = 默认位置，与「没配」在界面上是同一件事
       cacheDir.value = cfg.cache_dir || ''
-      // 日志存储位置（2026-10-26）同口径：空串 = 不落盘（默认）
+      // 日志落盘（2026-11-01）：目录空串 = 用默认位置（与「没配」同一件事）；
+      // 开关与「实际写到哪」走下面的 loadLogCfg，那边读的是服务端算出来的生效值。
       logDir.value = cfg.log_dir || ''
       // 下载行为四开关：歌词/封面缺省开，另两个缺省关
       favAutoDownload.value = !!cfg.fav_auto_download
@@ -877,13 +1112,30 @@ async function load() {
   } catch (_) {
     // 版本号读不到不该挡住整页设置
   }
+  // 日志落盘状态单独读一次：enabled / log_file 只有 /logs/config 有，
+  // 配置接口里的 log_dir 只是用户自定义值，不足以判断「到底写不写、写到哪」。
+  await loadLogCfg()
+}
+
+// 读日志落盘状态（enabled / 实际目录 / 实际文件）。
+// 失败静默按「开着」的默认态显示 —— 读不到只是「不知道」，不该让设置页报错。
+async function loadLogCfg() {
+  try {
+    const res = await LogsAPI.config()
+    const d = res?.data || res
+    if (d && typeof d === 'object') {
+      if (typeof d.enabled === 'boolean') logDiskOn.value = d.enabled
+      logEffective.value = d.log_file || ''
+      if (typeof d.log_dir === 'string') logDir.value = d.log_dir
+    }
+  } catch (_) { /* 同上：静默 */ }
 }
 
 async function saveQuality(v) {
   const prev = qualityValue.value
-  qualityValue.value = v
+  qualityValue.value = normalizeQualityMode(v)
   try {
-    const res = await ConfigAPI.save({ ...(cfgRaw.value || {}), download_quality_override: v })
+    const res = await ConfigAPI.save({ ...(cfgRaw.value || {}), download_quality_override: qualityValue.value })
     const bad = apiError(res)
     if (bad) {
       qualityValue.value = prev
@@ -893,7 +1145,7 @@ async function saveQuality(v) {
     // 让下载队列立刻按新档位走（不用等下次刷新）
     try {
       const { downloadManager } = await import('../services/downloadManager')
-      downloadManager.setQualityOverride(v)
+      downloadManager.setQualityMode(qualityValue.value)
     } catch (_) {}
     flash('下载音质已更新')
   } catch (e) {
@@ -1041,27 +1293,64 @@ async function saveDirs() {
   }
 }
 
-// 保存日志存储位置（2026-10-26 用户口径：「设置增加日志存储位置」）。
-// 留空 = 关闭落盘恢复默认；传路径 = 启用并立即切换（后端切文件句柄，无需重启）。
+// 保存日志目录（2026-11-01 改：只改目录，不动开关）。
+// 空串 = 回到默认位置（应用数据目录下的 logs），不是「关闭落盘」了 ——
+// 关闭是上面那个开关的事，两件事分两个动作，别让「清空输入框」顺手把日志关了。
 async function saveLogDir() {
-  savingLogDir.value = true
+  savingLogCfg.value = true
   logError.value = ''
   try {
-    const res = await LogsAPI.saveConfig(logDir.value)
+    const res = await LogsAPI.saveConfig({ logDir: logDir.value })
     const bad = apiError(res)
     if (bad) {
       logError.value = bad
       return
     }
-    logDir.value = res?.log_dir ?? logDir.value
-    // 操作日志：设置变更也留痕（2026-10-26 用户口径）——写清开了还是关了、写到哪。
-    logInfo('设置', `日志存储位置 → ${logDir.value || '不落盘（默认）'}`)
-    flash(logDir.value ? `日志位置已保存：${logDir.value}` : '已关闭日志落盘（默认行为）')
+    applyLogCfg(res)
+    // 操作日志：设置变更也留痕 —— 写清落到哪，出问题时能对上时间点。
+    logInfo('设置', `日志目录 → ${logEffective.value || '默认位置'}`)
+    flash(logDir.value ? `日志目录已保存：${logEffective.value || logDir.value}` : '日志目录已恢复默认位置')
   } catch (e) {
-    logError.value = fail('保存日志位置', e)
+    logError.value = fail('保存日志目录', e)
   } finally {
-    savingLogDir.value = false
+    savingLogCfg.value = false
   }
+}
+
+// 开 / 关落盘。乐观更新：先翻 UI，失败再翻回来并报错。
+// 关掉时明确告诉用户后果（日志退回只留内存、重启即清空），别让人以为还在记。
+async function toggleLogDisk() {
+  const next = !logDiskOn.value
+  const prev = logDiskOn.value
+  logDiskOn.value = next
+  savingLogCfg.value = true
+  logError.value = ''
+  try {
+    const res = await LogsAPI.saveConfig({ enabled: next })
+    const bad = apiError(res)
+    if (bad) {
+      logDiskOn.value = prev
+      logError.value = bad
+      return
+    }
+    applyLogCfg(res)
+    logInfo('设置', next ? `运行日志落盘已开启 → ${logEffective.value || ''}` : '运行日志落盘已关闭（只留内存，重启即清空）')
+    flash(next ? '已开启日志落盘' : '已关闭日志落盘')
+  } catch (e) {
+    logDiskOn.value = prev
+    logError.value = fail('切换日志落盘', e)
+  } finally {
+    savingLogCfg.value = false
+  }
+}
+
+// 把服务端返回值同步到界面。以服务端为准（它会算出生效目录与真实文件路径），
+// 前端不自己拼路径 —— 拼错了用户照着去找，找不到更糟。
+function applyLogCfg(res) {
+  if (!res || typeof res !== 'object') return
+  if (typeof res.enabled === 'boolean') logDiskOn.value = res.enabled
+  logEffective.value = res.log_file || ''
+  if (typeof res.log_dir === 'string') logDir.value = res.log_dir
 }
 
 async function exportLogs() {

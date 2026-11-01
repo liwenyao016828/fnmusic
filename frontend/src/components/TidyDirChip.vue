@@ -13,9 +13,10 @@
   -->
   <button
     type="button"
-    class="ys-press flex min-w-0 max-w-[38vw] items-center gap-1.5 rounded-full border border-[var(--ys-border)] bg-[var(--ys-surface)] px-2.5 py-1 text-[11px] text-[var(--ys-text-muted)] transition-colors hover:border-emerald-500/40 hover:text-[var(--ys-text)] sm:max-w-[260px]"
+    class="ys-press flex min-w-0 max-w-[38vw] items-center gap-1.5 rounded-full border border-[var(--ys-border)] bg-[var(--ys-surface)] px-2.5 py-1 text-[11px] text-[var(--ys-text-muted)] transition-colors hover:border-emerald-500/40 hover:text-[var(--ys-text)] disabled:opacity-60 sm:max-w-[260px]"
     :title="`曲库目录：${shown}（点击选择）`"
-    @click="open = true"
+    :disabled="busy"
+    @click="pick"
   >
     <FolderOpen class="h-3.5 w-3.5 shrink-0 text-[var(--ys-accent)]" :stroke-width="1.9" />
     <!--
@@ -23,9 +24,11 @@
       而 `truncate` 会把 `/vol1/Music` 截成 `/vol1/M…` —— 用户看不出选的是哪个目录。
       窄屏改成只显示最后一段（目录名），宽屏才显示全路径。
     -->
-    <span class="hidden truncate font-mono sm:inline">{{ shown }}</span>
-    <span class="truncate font-mono sm:hidden">{{ shownTail }}</span>
+    <span class="hidden truncate font-mono sm:inline">{{ shown || '选择曲库目录' }}</span>
+    <span class="truncate font-mono sm:hidden">{{ shown ? shownTail : '选择目录' }}</span>
   </button>
+  <!-- 选择失败的说明：只在出错时出现一行，成功后清空（成功态静默）。 -->
+  <span v-if="chipMsg" class="ml-1.5 truncate text-[11px] text-amber-700" :title="chipMsg">{{ chipMsg }}</span>
   <NasDirPicker v-model:open="open" title="选择曲库目录" :start="shown" @pick="onPick" />
 </template>
 
@@ -34,12 +37,15 @@ import { computed, ref } from 'vue'
 import { FolderOpen } from 'lucide-vue-next'
 import NasDirPicker from './NasDirPicker.vue'
 import { loadPref, savePref } from '../services/prefs'
+import { chooseDirectory } from '../services/trimHost'
+import { lastPick, refreshAuthStatus } from '../services/fnosAuth'
+import { fail } from '../services/userMsg'
 
 defineProps({})
 
-const DEFAULT_DIR = '/vol1/Music'
+const DEFAULT_DIR = ''
 const prefDir = ref(loadPref('nas_dir', '') || '')
-/** 让 TidyView 的 NAS 目录 prop 的默认值也能落一条记录：用户没设过就用 '/vol1/Music' */
+/** 用户没设过目录时显示占位文案，不再凭空写死 '/vol1/Music'（飞牛里那个位置多半没授权） */
 /** 选完目录会写 prefs 的 nas_dir；TidyView 从同一处读，改完两处一起变 */
 const open = ref(false)
 const shown = computed(() => prefDir.value || DEFAULT_DIR)
@@ -51,6 +57,44 @@ const shownTail = computed(() => {
   const parts = String(shown.value).split('/').filter(Boolean)
   return parts.length ? parts[parts.length - 1] : shown.value
 })
+
+/**
+ * 点 chip：**先弹飞牛的文件选择器**，宿主不在才退回收自绘目录树。
+ *
+ * 为什么改（2026-10-31 用户原话）：「我觉得用和点击选择后可以不需要出我自己的
+ * 目录选择器了，直接用飞牛的文件选择器。」整理页换曲库目录原来是直接开自绘弹窗，
+ * 用户得在里面再找一次「用飞牛的文件选择器」—— 多一层，而且未授权时那层树是空的。
+ */
+const busy = ref(false)
+/** 失败时的一句人话（显示在 chip 下面那条小字里；成功静默，不打扰）。 */
+const chipMsg = ref('')
+
+async function pick() {
+  if (busy.value) return
+  busy.value = true
+  chipMsg.value = ''
+  try {
+    const res = await chooseDirectory({ title: '选择曲库目录', okText: '用这个目录' })
+    if (res.ok) {
+      // 选完即授权：让后端刷新授权缓存，再按「刚选的目录读不读得到」给结论。
+      const st = await refreshAuthStatus(res.path).then(() => lastPick.value).catch(() => null)
+      if (!st || st.readable) {
+        onPick(res.path)
+      } else {
+        // 还没生效别急着把曲库目录改成一个读不了的路径（改了下次扫描会直接 403）：
+        // 走统一的「一句人话 + 进日志」，让用户稍等再点一次。
+        chipMsg.value = fail('选择曲库目录', st.hint || '目录还没进入授权范围', '目录还没进入授权范围')
+        // 已经在用自绘树选好目录的情况下才真的写入 —— 这里不改，等用户重试。
+      }
+      return
+    }
+    if (res.cancelled) return
+    // 宿主不在 / 宿主拒绝：退回自绘目录树（浏览器里也能选目录）。
+    open.value = true
+  } finally {
+    busy.value = false
+  }
+}
 
 function onPick(path) {
   if (!path) return

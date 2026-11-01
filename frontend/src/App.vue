@@ -17,7 +17,7 @@
         各页底部留白全部叠加它避让，不再各写各的魔数。
       · 原「导航密度三档」机制（fitNavDensity）删除：侧栏放得下全名，不再需要实测降档。
   -->
-  <div class="app-viewport flex w-full flex-col overflow-hidden bg-[var(--ys-canvas)] font-sans text-[var(--ys-text)] select-none">
+  <div class="app-viewport flex w-full flex-col overflow-hidden bg-[var(--ys-chrome)] font-sans text-[var(--ys-text)] select-none">
 
     <!-- ── Immersive Player (shown when playing) ── -->
     <ImmersivePlayer
@@ -162,7 +162,7 @@
            侧栏底部新增：AI 图标、音源胶囊、版本号 + 项目地址、收缩按钮。
            收缩后宽度 216px → 56px，导航只留图标。 -->
     <aside
-      class="z-20 hidden shrink-0 flex-col border-r border-[var(--ys-border)] bg-[var(--ys-chrome)] sm:flex transition-[width] duration-200 ease-out"
+      class="z-20 hidden shrink-0 flex-col bg-[var(--ys-chrome)] sm:flex transition-[width] duration-200 ease-out"
       :class="[sidebarCollapsed ? 'w-[56px] sb-collapsed' : 'w-[216px]']"
     >
       <!--
@@ -329,8 +329,28 @@
       </div>
     </aside>
 
-    <!-- ════════════ 内容列（主内容；品牌 + 页面名 + 音源已提到最上面那条栏） ════════════ -->
-    <div class="flex min-w-0 flex-1 flex-col">
+    <!-- ════════════ 内容列（主内容；品牌 + 页面名 + 音源已提到最上面那条栏） ════════════
+         2026-10-30 用户口径：「飞牛原本 ui 中，导航中的页面的整个最外层的大卡片是有弧度的」——
+         飞牛的做法是：**画布灰、内容区是一整块白卡**，白卡有弧度（12px 左右），
+         卡片四周露出一点灰底，卡片与灰底之间那圈留白就是弧度看得见的地方。
+         所以这里把「内容列」整体变成那张大卡片：
+           · 桌面（sm+）：内容列四周留 8px 灰底，白卡 rounded-[var(--ys-radius-block)]，
+             上下左右各留 8px，卡片本身 overflow-hidden（内部圆角被裁在弧度里）。
+           · 手机：屏幕窄，留白会挤掉内容宽度 → 保持贴边、无弧度（飞牛手机端同样是满屏）。
+         注意 PlayerBar 是 fixed 定位，不受这张卡的裁剪影响。 -->
+    <div class="ys-content-card relative flex min-w-0 flex-1 flex-col">
+
+      <!--
+        飞牛「文件访问授权」引导条（2026-10-31 用户要求：「用户没有设置，在应用页面也要有提示」）。
+
+        为什么放在这里，而不是塞进某个具体页面：授权是**全应用级**的前置条件 ——
+        没授权时曲库、播放、下载、整理全都不正常，提示只挂在「本地曲库」页的话，
+        用户从首页进来就永远看不到它。挂在内容区最上方，切哪一页都看得见。
+        组件自己判断要不要显示（不在飞牛环境 / 已授权 → 整条不渲染，不占位）。
+      -->
+      <div class="px-3 pt-2 sm:px-4">
+        <FnosAuthNotice @granted="onFnosGranted" />
+      </div>
 
       <!-- Main Content -->
       <!-- 主内容区：左右滑动切页（跟手位移 / 到头阻尼 / 速度判定，见 components/SwipePager.vue） -->
@@ -844,6 +864,7 @@
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { lxRuntime } from './engine/lx-runtime'
 import { SearchAPI, SourcesAPI, NasAPI, AppAPI } from './api/client'
+import { withBase } from './services/basePath.js'
 import SearchView from './components/SearchView.vue'
 import SourceManager from './components/SourceManager.vue'
 import PlayerBar from './components/PlayerBar.vue'
@@ -868,6 +889,7 @@ import LogViewer from './components/LogViewer.vue'
 import FeedbackHost from './components/FeedbackHost.vue'
 import SegmentedControl from './components/SegmentedControl.vue'
 import TidyDirChip from './components/TidyDirChip.vue'
+import FnosAuthNotice from './components/FnosAuthNotice.vue'
 import { appUpdate } from './services/appUpdate'
 import { downloadManager } from './services/downloadManager'
 import { bridgeWorker } from './services/bridgeWorker'
@@ -880,7 +902,9 @@ import {
 import { VIEWS, NAV_GROUPS, MOBILE_TAB_IDS, viewsOfGroup, segmentsOf, defaultSegment, resolveRoute } from './services/navViews'
 import { fail as feedbackFail } from './services/feedback'
 import { invalidate } from './services/viewCache'
-import { logError, logInfo } from './services/appLog'
+import { logError, logInfo, logWarn } from './services/appLog'
+import { qualityLabel } from './engine/quality.js'
+import { platformName } from './services/libraryFields.js'
 import {
   Compass, Trophy, Cpu, Disc, Library, UserRound, ScrollText, Settings,
   Wand2, Send, Download, ListMusic, ListPlus, CloudDownload,
@@ -932,6 +956,17 @@ watch(
 )
 
 onUnmounted(offNavigate)
+
+/**
+ * 用户在授权提示条上完成了「授权目录」（FnosAuthNotice 的 granted 事件）。
+ *
+ * 只做一件事：把「本地曲库」「曲库管家」两页的缓存标过期 —— 授权后允许扫的根目录
+ * 变了（后端 AllowedRoots 是三路授权的并集），旧目录树是错的。这里**不**立刻发请求，
+ * 用户切过去时各视图自己刷（见 services/viewCache.js 的事件失效约定）。
+ */
+function onFnosGranted() {
+  invalidate('nas', 'library')
+}
 
 /**
  * 全局轻提示（替代 alert）已搬到 `services/feedback.js` + `components/FeedbackHost.vue`。
@@ -1433,6 +1468,15 @@ let isSwitchingDirect = false
 let currentSessionId = 0
 let lastFailedSongId = null
 
+// 日志里只留「直链域名」——完整直链带 token，写进操作日志等于把凭据摊在日志页上。
+function urlHostOf(url) {
+  try {
+    return new URL(url, location.href).host || '未知域名'
+  } catch (_) {
+    return '未知域名'
+  }
+}
+
 async function playSong(songOrPayload) {
   // 只切歌、不展开大屏：列表点歌与切歌时界面不该被全屏盖住（2026-09-27 用户反馈）
 
@@ -1487,6 +1531,7 @@ async function playSong(songOrPayload) {
     fetchNasLyric(song, thisSession)
     startAudioPlay(song.streamUrl, thisSession)
     isResolving.value = false
+    logInfo('播放取链', `${song.title || song.name || '未知曲目'} · 本地曲库 · ${urlHostOf(song.streamUrl)}`)
     return
   }
 
@@ -1512,6 +1557,9 @@ async function playSong(songOrPayload) {
 
   let resolvedUrl = ''
   let resolvedHeaders = {}
+  // 跨源换源命中时记下「换到了哪家、哪一版」，成功后单独写一条换源日志
+  let altHit = null
+  const altPlatforms = ['kw', 'tx', 'kg'].filter(p => p !== platform)
 
   try {
     try {
@@ -1530,8 +1578,7 @@ async function playSong(songOrPayload) {
     // 当原平台无法解析（例如 WY 接口受限或 VIP 付费独家），自动跨平台匹配 KW、TX 的同名音轨
     if (!resolvedUrl && thisSession === currentSessionId && song?.name) {
       console.log(`[PLAY] 原平台 [${platform}] 解析失败，启动智能跨平台换源匹配: "${song.name}"...`)
-      const altPlatforms = ['kw', 'tx', 'kg'].filter(p => p !== platform)
-      
+
       for (const altP of altPlatforms) {
         if (resolvedUrl || thisSession !== currentSessionId) break
         try {
@@ -1548,6 +1595,7 @@ async function playSong(songOrPayload) {
               if (matchResult?.url && /^https?:/.test(matchResult.url) && !isFakeOrNoticeAudio(matchResult.url)) {
                 resolvedUrl = matchResult.url
                 resolvedHeaders = matchResult.headers || {}
+                altHit = { platform: altP, name: cand.name, singer: cand.singer || '', quality: '128k' }
                 console.log(`[PLAY] 智能跨源匹配成功 [${altP.toUpperCase()}]:`, cand.name, cand.singer, resolvedUrl)
                 fetchLyrics(sourceId, altP, cand, thisSession)
                 break
@@ -1564,6 +1612,21 @@ async function playSong(songOrPayload) {
 
     if (resolvedUrl && !isFakeOrNoticeAudio(resolvedUrl)) {
       startAudioPlay(resolvedUrl, thisSession, resolvedHeaders)
+      const srcName = activeSourceMeta.value?.name || '当前音源'
+      if (altHit) {
+        // 跨源换源：把「原本要放哪家 / 最后从哪家拿到 / 具体是哪一版」写全，
+        // 用户反馈「放错歌」时靠这三样就能定位。
+        logWarn(
+          '跨源换源',
+          `${platformName(platform)} → ${platformName(altHit.platform)}：《${altHit.name}》${altHit.singer ? ' — ' + altHit.singer : ''}`,
+          `source=${srcName} quality=${qualityLabel(altHit.quality)} host=${urlHostOf(resolvedUrl)}`,
+        )
+      } else {
+        logInfo(
+          '播放取链',
+          `${srcName} · ${platformName(platform)} · ${qualityLabel(song.quality || '320k')} · ${urlHostOf(resolvedUrl)}`,
+        )
+      }
     } else {
       const srcName = activeSourceMeta.value?.name || '当前音源'
       // 播放失败：界面上只给一句结论 + 该怎么做；完整原因（音源名、平台、歌曲 id）进日志。
@@ -1573,7 +1636,7 @@ async function playSong(songOrPayload) {
       logError(
         '播放取链',
         `${srcName} 未能解析《${song.name}》`,
-        `platform=${platform} source=${song.source || ''} songmid=${song.songmid || song.id || ''}`,
+        `platform=${platform} source=${song.source || ''} songmid=${song.songmid || song.id || ''} quality=${song.quality || '320k'} attempted=${altPlatforms.length ? altPlatforms.map(platformName).join('/') : '无'}`,
       )
     }
   } finally {
@@ -1586,6 +1649,7 @@ async function playSong(songOrPayload) {
 function playAllSongs({ songs, startIndex = 0 }) {
   if (!songs || !songs.length) return
   playlist.value = [...songs]
+  logInfo('播放全部', `共 ${songs.length} 首，从第 ${startIndex + 1} 首开始`)
   if (playMode.value === 'random') {
     currentIndex.value = Math.floor(Math.random() * songs.length)
   } else {
@@ -1654,7 +1718,8 @@ function startAudioPlay(url, sessionId, headers = {}) {
   // 通过后端流中继代理，彻底消除浏览器跨域CORS、防盗链403以及HTTPS Mixed Content阻断！
   if (playSrc.startsWith('http://') || playSrc.startsWith('https://')) {
     if (!playSrc.includes('/api/player/stream') && !playSrc.includes('/api/nas/stream')) {
-      let proxyUrl = `/api/player/stream?url=${encodeURIComponent(playSrc)}`
+      // withBase：微应用形态下页面挂在 /app/yinshu-ai 下，音频中继地址也要带前缀
+      let proxyUrl = withBase(`/api/player/stream?url=${encodeURIComponent(playSrc)}`)
       const ref = headers?.referer || headers?.Referer
       if (ref) {
         proxyUrl += `&referer=${encodeURIComponent(ref)}`

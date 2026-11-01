@@ -1,0 +1,19 @@
+[
+  {
+    "stepTitle": "曲库目录（可选）",
+    "items": [
+      {
+        "type": "text",
+        "field": "wizard_music_dir",
+        "label": "本地曲库目录",
+        "placeholder": "/vol1/Music"
+      },
+      {
+        "type": "text",
+        "field": "wizard_watch_dirs",
+        "label": "额外曲库目录",
+        "placeholder": "/vol1/Music:/vol2/1000/无损"
+      }
+    ]
+  }
+]

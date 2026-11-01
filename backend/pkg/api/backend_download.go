@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 
@@ -38,6 +39,11 @@ func (s *Server) EnableBackendDownload(q *backenddl.Queue, cfg backenddl.Fetcher
 //
 //	{"items":[{client_id,name,singer,album,duration,cover,platform,platform_id,quality}],
 //	 "force":false,"migrate":false}
+//
+// quality 是这一条点名的目标档位（highest / flac / 320k / 128k…）；
+// 「平台没有这一档时降不降」由全局「下载音质」模式统一决定
+// （跟随页面 / 仅下载最高 / 自动降档，config.download_quality_override），
+// 不再逐条指定。
 //
 // migrate=true 时 Item 里的 status/error/path/actual_quality/size/added_at/
 // updated_at 会被原样保留（旧本地队列迁移，见 backenddl.Submit）。
@@ -94,6 +100,9 @@ func (s *Server) HandleBackendDownloadSubmit(w http.ResponseWriter, r *http.Requ
 	added, skippedByQueue, err := s.backendDL.Submit(items, body.Force, body.Migrate)
 	if err != nil {
 		// 落盘失败：Submit 已整体回滚，这里如实 500，前端保留本地任务稍后重提。
+		// 这条必须进运行日志：接口回了 500，前端只会显示「入队失败」，
+		// 而「哪一步写盘失败」只有这里知道。
+		log.Printf("[BACKEND-DL] 提交接口失败（整批已回滚，共 %d 条）：%v", len(body.Items), err)
 		errJSON(w, http.StatusInternalServerError, "入队失败（队列未能落盘）："+err.Error())
 		return
 	}
@@ -162,10 +171,14 @@ func (s *Server) HandleBackendDownloadActions(w http.ResponseWriter, r *http.Req
 	}
 	hit, err := s.backendDL.Apply(strings.TrimSpace(body.Action), body.IDs)
 	if err != nil {
+		// 队列动作失败要留痕：接口只回一句「操作失败」，具体是「未知动作」
+		// 还是「状态写盘失败」决定了用户该刷新重试还是该报磁盘问题。
 		if errors.Is(err, backenddl.ErrUnknownAction) {
+			log.Printf("[BACKEND-DL] 队列动作被拒：未知动作 %q（%d 条）", body.Action, len(body.IDs))
 			errJSON(w, http.StatusBadRequest, "未知动作："+body.Action)
 			return
 		}
+		log.Printf("[BACKEND-DL] 队列动作 %q 失败（%d 条）：%v", body.Action, len(body.IDs), err)
 		errJSON(w, http.StatusInternalServerError, "操作失败（队列未能落盘）："+err.Error())
 		return
 	}

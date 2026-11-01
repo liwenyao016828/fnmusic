@@ -25,16 +25,22 @@ test('breadcrumbsFor：逐段累积，每段都能点回去', () => {
   assert.deepEqual(breadcrumbsFor('/vol1/Music/专辑/'), breadcrumbsFor('/vol1/Music/专辑'))
 })
 
-test('breadcrumbsFor：空路径用兜底值，绝不返回空数组', () => {
-  assert.deepEqual(breadcrumbsFor(''), [{ name: 'vol1', path: '/vol1' }, { name: 'Music', path: '/vol1/Music' }])
+test('breadcrumbsFor：空路径返回空数组（不再兜底成写死的 /vol1/Music）', () => {
+  // 2026-10-31 改：飞牛里用户可能一个目录都没授权，这时凭空显示 /vol1/Music
+  // 的面包屑等于报出一个不存在的位置。空就返回空，由调用方决定画不画这一行。
+  assert.deepEqual(breadcrumbsFor(''), [])
+  assert.deepEqual(breadcrumbsFor(null), [])
+  assert.deepEqual(breadcrumbsFor(undefined), [])
+  assert.deepEqual(breadcrumbsFor('/'), [])
+  // 显式兜底值仍然生效（给「记得上次目录」这类场景用）
   assert.deepEqual(breadcrumbsFor(null, '/vol3/1000/音乐'), [
     { name: 'vol3', path: '/vol3' },
     { name: '1000', path: '/vol3/1000' },
     { name: '音乐', path: '/vol3/1000/音乐' },
   ])
-  for (const p of ['', null, undefined, '/']) {
+  for (const p of ['/vol1', '/vol1/1000/music', '/media/usb/Music']) {
     const list = breadcrumbsFor(p)
-    assert.ok(list.length >= 1, `${p} 的面包屑是空的 —— 标题行会整条消失`)
+    assert.ok(list.length >= 1, `${p} 的面包屑是空的`)
     assert.ok(list.every((c) => c.name && c.path.startsWith('/')), `${p} 的段缺名字或路径`)
   }
 })

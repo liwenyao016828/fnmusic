@@ -143,13 +143,14 @@
 </template>
 
 <script setup>
-import { ref, watch } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { X, Check, Loader2, Sparkles, Music } from 'lucide-vue-next'
 import { MusicAPI } from '../api/client'
 import { fail, apiError } from '../services/userMsg'
 import { logError } from '../services/appLog'
 import InlineNotice from './InlineNotice.vue'
 import { qualityLabel } from '../engine/quality'
+import { downloadManager } from '../services/downloadManager'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -165,13 +166,15 @@ const matchedBy = ref('')
 const fetchError = ref('')
 const picked = ref('highest')
 const remember = ref(false)
-
 function close() {
   emit('update:modelValue', false)
 }
 
 function confirm() {
-  emit('confirm', { quality: picked.value, remember: remember.value })
+  emit('confirm', {
+    quality: picked.value,
+    remember: remember.value,
+  })
   close()
 }
 

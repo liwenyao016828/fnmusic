@@ -40,7 +40,7 @@ import (
 )
 
 // CurrentVersion 应用版本号。发布新版本时与 fpk-package/manifest 的 version 同步修改。
-const CurrentVersion = "2.24.3"
+const CurrentVersion = "2.24.17"
 
 // CurrentAppName 对外暴露的应用标识，必须与 fpk-package/manifest 的 appname 一致。
 //
@@ -140,6 +140,14 @@ type Server struct {
 	musicdlPreviewStatus func() map[string]any
 	musicdlPreviewStop   func() map[string]any
 
+	// 服务端洛雪宿主（见 pkg/api/lxhost.go）。
+	//
+	// 两个函数 = 「看状态」与「动它」：宿主是个 Node 子进程，只写配置不会让它
+	// 起来或停下，所以除了只读状态还必须有一个真的起停动作 —— 与 musicdl 的
+	// SetMusicDL / SetMusicDLRestart 同构。
+	lxHostStatus func() map[string]any
+	lxHostApply  func(enabled bool, port int) error
+
 	// 「替换音质」的四个动作（见 pkg/api/quality.go）。四个都要传：
 	// 起任务/看状态/收回/执行替换是一件事的四个面，分开注册只会出现
 	// 「能扫不能换」这种半截能力。
@@ -231,11 +239,17 @@ func NewServer(cfgMgr *config.ConfigManager, sourcesMgr *sources.Manager, static
 	// 用户通过 POST /api/fnos/token 改动时会立即重新注入，不用重启。
 	fnos.SetManualToken(cfgMgr.Get().FnosToken)
 
-	// 启动即恢复「日志存储位置」（2026-10-26）：设置过的用户，落盘要跨重启持续生效。
+	// 启动即恢复日志落盘（2026-10-26 用户口径「设置增加日志存储位置」，
+	// 2026-11-01 改成默认开）。设置过的用户，落盘要跨重启持续生效。
 	// 目录失效（被删/权限变了）不拦启动 —— 内存日志照常可用，只记一条原因。
-	if dir := cfgMgr.Get().LogDir; dir != "" {
+	//
+	// 判据统一走 cfgMgr.EffectiveLogDir()：用户没自定义时它给 <数据目录>/logs，
+	// 关掉落盘时给空串（见 config.LogDiskEnabled 上的说明）。
+	if dir := cfgMgr.EffectiveLogDir(); dir != "" {
 		if err := applog.EnableFile(dir); err != nil {
 			log.Printf("[applog] 日志落盘目录不可用，继续只写内存: %v", err)
+		} else {
+			log.Printf("[applog] 运行日志同时落盘到 %s", applog.FilePath())
 		}
 	}
 
@@ -263,6 +277,15 @@ func NewServer(cfgMgr *config.ConfigManager, sourcesMgr *sources.Manager, static
 	// 推送任务（账号歌单 → 飞牛音乐歌单），调度器随服务启动
 	s.pushStore = push.NewStore(cfgMgr.DataDir())
 	s.pushRunner = push.NewRunner(s.pushStore, s.accountStore)
+	// 定时/手动推送也要带上本地曲库索引（预览路径一直有，真推路径以前漏了 ——
+	// 于是「本地已下好」的歌在真推时仍被判缺失，见 pkg/push/runner.go SetLocalIndex）。
+	// 传闭包而不是快照：曲库会随扫描/下载变化，抓一份就等于停在启动那一刻。
+	s.pushRunner.SetLocalIndex(func() []push.LocalTrack {
+		if fn := s.localTrackSnapshot(); fn != nil {
+			return fn()
+		}
+		return nil
+	})
 	s.downloadQueue = downloadqueue.NewStore(cfgMgr.DataDir())
 	s.appUpdate = newAppUpdateManager(cfgMgr)
 	s.pushRunner.Start(time.Minute)
@@ -360,8 +383,12 @@ func (s *Server) Router() http.Handler {
 		})
 	}
 
-	// 中间件顺序：CORS（含 preflight 短路）→ 鉴权 → 路由
-	return s.corsMiddleware(s.authMiddleware(mux))
+	// 中间件顺序：剥网关前缀 → CORS（含 preflight 短路）→ 鉴权 → 路由
+	//
+	// 剥前缀必须在最外层：微应用形态下网关把 `/app/yinshu-ai/api/...` 转发过来，
+	// 而 `authMiddleware` 是按 `r.URL.Path` 精确匹配 publicPaths（`/api/health` 等）
+	// 的 —— 不先剥，探活接口会被当成未知路径要求鉴权。见 gateway.go。
+	return stripGatewayPrefix(s.corsMiddleware(s.authMiddleware(mux)))
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -449,17 +476,22 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		entries := applog.Default().Recent(limit)
-		// log_file：落盘文件路径，空 = 用户没设置「日志存储位置」（默认只存内存）。
-		// 跟 /api/logs/config 的字段同名同义；hint 保持原口径不变 ——
-		// 页脚的「同时落盘到 …」由前端自己拼（LogViewer.vue 里已有该分支），这里不再重复。
+		// log_file：当前落盘文件路径，空 = 用户关掉了落盘（默认是开的）。
+		// hint 要按实际情况给：以前这里写死「只保留在内存里，重启即清空」，
+		// 落盘开着的时候那句话是**错的**，会让人以为不用管备份/导出。
+		logFile := applog.FilePath()
+		hint := "日志只保留在内存里，重启应用即清空。"
+		if logFile != "" {
+			hint = "内存里留最近 " + strconv.Itoa(applog.Default().Len()) + " 条，同时落盘到 " + logFile + "（按大小自动轮转，重启不清空）。"
+		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{
 			"code": 200, "message": "ok",
 			"data": map[string]interface{}{
 				"entries":  entries,
 				"count":    len(entries),
 				"total":    applog.Default().Len(),
-				"log_file": applog.FilePath(),
-				"hint":     "日志只保留在内存里，重启应用即清空。",
+				"log_file": logFile,
+				"hint":     hint,
 			},
 		})
 	case http.MethodDelete:
@@ -489,13 +521,20 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleLogsConfig 读取 / 设置日志落盘目录（2026-10-26 用户口径：「设置增加日志存储位置」）。
+// handleLogsConfig 读取 / 设置日志落盘（2026-10-26 用户口径「设置增加日志存储位置」，
+// 2026-11-01 用户口径「出了问题必须能追查」——改成默认开、可关、可换目录）。
 //
-// GET  /api/logs/config → { log_dir, log_file }（log_file 为当前实际写入的文件路径）
-// POST /api/logs/config body { log_dir } —— 空串 = 关闭落盘恢复默认；传路径 = 启用并立即切换。
-// 路径校验与下载/缓存目录同一条红线（绝对路径 + NAS 存储卷内），非法返回 400 人话报错。
-// 生效失败（建不了目录/打不开文件）同样 400，但**不改动已保存的配置** —— 免得配置里
-// 留着一个实际写不进去的目录，下次启动还要再报一次错。
+// GET  /api/logs/config → { enabled, log_dir, effective_dir, log_file }
+// POST /api/logs/config body { enabled?, log_dir? }
+//   · enabled:true/false 开/关落盘；缺省 = 不改（老调用方只传 log_dir 照旧能用）
+//   · log_dir:传路径 = 用这个目录；传空串 = 回到默认位置（<数据目录>/logs）
+//   · 关掉落盘时 log_dir 仍然保存下来 —— 下次打开还是上次那个位置，不用重填
+//
+// 自定义目录的校验与下载/缓存目录同一条红线（绝对路径 + NAS 存储卷内），非法 400。
+// 默认位置（数据目录下）不经这条校验：那是应用自己的目录，不涉及用户音乐库授权。
+//
+// ⚠️ 顺序：**先落配置、再切实例**。反过来的话，配置保存失败（磁盘满、只读）
+// 会出现「文件句柄已经切到新目录、配置里还是旧的」，重启后又跳回去。
 func (s *Server) handleLogsConfig(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	switch r.Method {
@@ -503,38 +542,51 @@ func (s *Server) handleLogsConfig(w http.ResponseWriter, r *http.Request) {
 		cfg := s.cfgMgr.Get()
 		writeJSON(w, http.StatusOK, map[string]interface{}{
 			"code": 200, "message": "ok",
-			"log_dir":  cfg.LogDir,
-			"log_file": applog.FilePath(),
+			"enabled":       cfg.LogDiskOn(),
+			"log_dir":       cfg.LogDirPath(),
+			"effective_dir": s.cfgMgr.EffectiveLogDir(),
+			"log_file":      applog.FilePath(),
 		})
 	case http.MethodPost:
 		var req struct {
-			LogDir string `json:"log_dir"`
+			Enabled *bool   `json:"enabled"`
+			LogDir  *string `json:"log_dir"`
 		}
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil {
 			errJSON(w, http.StatusBadRequest, "请求体不是合法 JSON")
 			return
 		}
-		dir := strings.TrimSpace(req.LogDir)
-		if dir != "" {
-			if err := downloader.ValidateNasDir(dir, "日志目录"); err != nil {
-				errJSON(w, http.StatusBadRequest, err.Error())
-				return
+		// 自定义目录要先过红线校验（默认位置不走这里，见函数注释）。
+		if req.LogDir != nil {
+			if dir := strings.TrimSpace(*req.LogDir); dir != "" {
+				if err := downloader.ValidateNasDir(dir, "日志目录"); err != nil {
+					errJSON(w, http.StatusBadRequest, err.Error())
+					return
+				}
 			}
 		}
+
+		patch := config.AppConfig{LogDiskEnabled: req.Enabled, LogDir: req.LogDir}
+		if err := s.cfgMgr.Update(patch); err != nil {
+			errJSON(w, http.StatusInternalServerError, "保存日志设置失败: "+err.Error())
+			return
+		}
+
+		// 配置已经落盘 → 现在按生效值切实例（开/关/换目录都即时生效，不用重启）。
+		dir := s.cfgMgr.EffectiveLogDir()
 		if err := applog.EnableFile(dir); err != nil {
-			errJSON(w, http.StatusBadRequest, "日志目录无法创建（检查权限）: "+err.Error())
+			// 配置里留着这个目录，但实际写不进去 —— 说清是哪一步失败的，
+			// 别只说「无法创建」让用户去猜是权限还是路径。
+			errJSON(w, http.StatusBadRequest, "日志目录无法写入（检查权限）: "+err.Error())
 			return
 		}
 		cfg := s.cfgMgr.Get()
-		cfg.LogDir = dir
-		if err := s.cfgMgr.Update(cfg); err != nil {
-			errJSON(w, http.StatusInternalServerError, "failed to update config: "+err.Error())
-			return
-		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{
 			"code": 200, "message": "ok",
-			"log_dir":  dir,
-			"log_file": applog.FilePath(),
+			"enabled":       cfg.LogDiskOn(),
+			"log_dir":       cfg.LogDirPath(),
+			"effective_dir": dir,
+			"log_file":      applog.FilePath(),
 		})
 	default:
 		errJSON(w, http.StatusMethodNotAllowed, "Method not allowed")

@@ -14,9 +14,10 @@
  */
 import { computed, ref, watch } from 'vue'
 import { ConfigAPI, DownloadAPI, NasAPI } from '../api/client.js'
-import { qualityOverride } from './qualityOverride.js'
+import { qualityModeTarget } from './qualityOverride.js'
 import { qualityLabel, isHighestQuality } from '../engine/quality.js'
 import { logError, logInfo } from './appLog.js'
+import { platformName } from './libraryFields.js'
 import { fail, apiError } from './userMsg.js'
 import { loadBool, savePref } from './prefs.js'
 import { backendDownload } from './backendDownload.js'
@@ -49,13 +50,18 @@ const UNSENT_STORAGE_KEY = 'fn_download_unsent_v1'
 const tasks = ref([])
 const downloadedMap = ref({})
 const isOpen = ref(false)
-const currentDownloadDir = ref('/vol1/Music')
+// 2026-10-31：默认目录不再写死 /vol1/Music —— 那是项目历史默认，不是飞牛授权目录。
+// 空串表示「还没确定」，由 loadConfig() 用后端配置填，后端没有配置就继续空着，
+// 界面显示「选择曲库目录」引导用户先授权目录（见 NasDirPicker / AppSettings）。
+const currentDownloadDir = ref('')
 const lastActionError = ref('')
 const migration = ref({ active: false, total: 0, remaining: 0, done: false })
 
 // 设置：只保留「音质」是真正逐任务生效的；其余保留字段是为了旧组件不炸。
 const defaultQuality = ref('highest')
-const qualityOverrideSetting = ref('')
+const qualityModeSetting = ref('')
+// 「平台没有目标音质时要不要降级」：ask / always / never（与后端 config 一致）。
+// 默认 ask：下载时弹窗问一句，用户在设置里可以改成「一律接受」或「一律不接受」。
 const maxAttempts = ref(3)
 const autoFailover = ref(true)
 const concurrency = ref(1)
@@ -70,7 +76,7 @@ const isSavingDir = ref(false)
 const dirError = ref('')
 const browseFolders = ref([])
 const browseParentPath = ref('')
-const editDownloadDir = ref('/vol1/Music')
+const editDownloadDir = ref('')
 
 /**
  * 目录浏览里是否连 `.`/`$`/`@` 开头的隐藏目录一起列出来。
@@ -112,9 +118,43 @@ function setTaskRowKey(task, rowKey) {
   }
 }
 
+/**
+ * 时间戳统一成毫秒。后端 added_at / updated_at 是**秒**（queue.go 的 now() 用
+ * time.Now().Unix()），前端占位任务用 Date.now() 是**毫秒**。小于 1e12 的值
+ * 一定是秒（1e12 毫秒 = 2001 年，永远大于等于任何「秒」时间戳）。
+ */
+function toMillis(v) {
+  const n = Number(v) || 0
+  if (!n) return 0
+  return n < 1e12 ? n * 1000 : n
+}
+
 function songKeyOf(song) {
   const s = song || {}
   return s.id || s.songmid || s.song_id || `${s.singer || s.artist || ''} - ${s.name || s.song_name || ''}`
+}
+
+// 任务日志（前端侧）：后端队列是「查询出来的当前状态」，同一个任务每次刷新都会重放一遍，
+// 所以终态只在**首次看到**时记一条 —— 否则一首歌下载完会在日志里刷出几十行。
+const finalizedLog = new Set()
+
+function noteFinalState(t) {
+  if (!t || (t.status !== 'success' && t.status !== 'failed')) return
+  const key = `${t.clientId || t.id}:${t.status}`
+  if (finalizedLog.has(key)) return
+  finalizedLog.add(key)
+  const title = t.song?.name || '未知曲目'
+  const singer = t.song?.singer ? ' — ' + t.song.singer : ''
+  if (t.status === 'success') {
+    // 用户最关心三件事：到底存哪儿了、是哪个音源给的、实际拿到什么档位
+    logInfo(
+      '下载完成',
+      `《${title}》${singer} · ${qualityLabel(t.resolvedQuality || t.quality)} · ${t.resolvedSource ? platformName(t.resolvedSource) : '未知来源'}`,
+      t.path || '',
+    )
+  } else {
+    logError('下载失败', `《${title}》${singer}：${t.error || '未知原因'}`, `tries=${t.attempts || 0} quality=${t.quality || ''}`)
+  }
 }
 
 function mapBackendItem(item) {
@@ -152,14 +192,20 @@ function mapBackendItem(item) {
     resolvedSource: item.source || '',
     path: item.path || '',
     size: item.size || 0,
-    addedAt: item.addedAt || 0,
-    completedAt: item.status === 'success' ? (item.updatedAt || item.addedAt || 0) : 0,
+    // addedAt 一律存**毫秒**。后端给的是秒（queue.go 的 now() = time.Now().Unix()），
+    // 而占位任务（makeProvisional）用 Date.now() 是毫秒 —— 以前原样混存，界面上
+    // 「按时间倒序」就等于拿秒去比毫秒：后端任务的 addedAt 比占位任务小一千倍，
+    // 一有占位任务在，所有后端任务都被挤到后面，看着就是「没按最新在前排」。
+    // 这里换算成毫秒统一口径（小于 1e12 视为秒）。
+    addedAt: toMillis(item.addedAt),
+    completedAt: item.status === 'success' ? (toMillis(item.updatedAt) || toMillis(item.addedAt)) : 0,
     autoRowKey: rowKeys.value[key] || t.autoRowKey || '',
     actualFormat: '',
     embedded: false,
     _submitItem: null,
   })
   if (t.status === 'success') markDownloaded(song, t.path)
+  noteFinalState(t)
   return t
 }
 
@@ -217,7 +263,7 @@ const recentSuccessRate = computed(() => {
 })
 
 function effectiveDefaultQuality() {
-  return qualityOverride(defaultQuality.value, qualityOverrideSetting.value)
+  return qualityModeTarget(defaultQuality.value, qualityModeSetting.value)
 }
 
 // ── 本地已下载标记 ──
@@ -289,7 +335,11 @@ function makeClientId() {
 
 function makeProvisional(song, sourceId, quality) {
   const clientId = makeClientId()
-  const item = songToBackendItem(song, { clientId, sourceId, quality: quality || effectiveDefaultQuality() })
+  const item = songToBackendItem(song, {
+    clientId,
+    sourceId,
+    quality: quality || effectiveDefaultQuality(),
+  })
   const task = {
     id: clientId,
     clientId,
@@ -367,7 +417,7 @@ function loadUnsent() {
         resolvedQuality: '',
         resolvedSource: '',
         path: '',
-        addedAt: row.addedAt || Date.now(),
+        addedAt: toMillis(row.addedAt) || Date.now(),
         completedAt: 0,
         autoRowKey: row.autoRowKey || '',
         _submitItem: row.item,
@@ -440,7 +490,7 @@ async function submitProvisional(list, { force = false } = {}) {
 
 function skipReasonText(reason) {
   return ({
-    no_channel: '后台没有可用渠道取到这首（缺平台 id，或取音渠道未就绪）',
+    no_channel: '后台没有可用渠道取到这首：缺平台 id，或取音渠道没起来（音源管理 → 服务端洛雪宿主 / 设置 → 下载渠道）',
     invalid: '后台认为任务信息不完整',
     duplicate_track: '后台队列里已有同名同歌手的任务',
     duplicate: '后台队列里已有这条任务',
@@ -450,6 +500,7 @@ function skipReasonText(reason) {
 /**
  * 加一首到后台队列。同步返回占位任务（旧调用方要用它观察完成/打 autoRowKey），
  * 提交在后台异步完成；失败会把占位标成 failed 并保留，绝不静默丢。
+ *
  */
 function addSong(song, activeSourceId, autoOpen = true, quality = '') {
   const name = song?.name || song?.song_name
@@ -765,8 +816,8 @@ function updateSettings(patch) {
   persistSettings()
 }
 
-function setQualityOverride(v) {
-  qualityOverrideSetting.value = v || ''
+function setQualityMode(v) {
+  qualityModeSetting.value = v || ''
 }
 
 function setAllQuality(quality) {
@@ -829,7 +880,7 @@ async function loadConfig() {
   try {
     const res = await DownloadAPI.getConfig()
     if (res.code === 200) {
-      currentDownloadDir.value = res.download_dir || res.default_nas_dir || '/vol1/Music'
+      currentDownloadDir.value = res.download_dir || res.default_nas_dir || ''
       editDownloadDir.value = currentDownloadDir.value
     }
   } catch (e) {
@@ -837,7 +888,9 @@ async function loadConfig() {
   }
   try {
     const cfg = await ConfigAPI.get()
-    if (cfg) qualityOverrideSetting.value = String(cfg.download_quality_override || '')
+    if (cfg) {
+      qualityModeSetting.value = String(cfg.download_quality_override || '')
+    }
   } catch (_) {}
 }
 
@@ -1008,7 +1061,7 @@ export const downloadManager = {
 
   // 设置
   defaultQuality,
-  qualityOverrideSetting,
+  qualityModeSetting,
   maxAttempts,
   autoFailover,
   concurrency,
@@ -1017,7 +1070,7 @@ export const downloadManager = {
   startIntervalSec,
   doneIntervalSec,
   updateSettings,
-  setQualityOverride,
+  setQualityMode,
   setAllQuality,
   effectiveDefaultQuality,
 

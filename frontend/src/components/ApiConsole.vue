@@ -239,6 +239,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { AppAPI } from '../api/client'
+import { withBase } from '../services/basePath.js'
 import { bridgeWorker } from '../services/bridgeWorker'
 import {
   Copy, RotateCw, Activity, Cpu, Lightbulb, Play, Loader2, Eye, EyeOff
@@ -258,7 +259,7 @@ const serverBase = ref('')
 // 接口本身依然完全可用，可用「显示全部」展开。
 const showAll = ref(false)
 
-const catalogUrl = computed(() => `${window.location.origin}/api/catalog`)
+const catalogUrl = computed(() => `${window.location.origin}${withBase('/api/catalog')}`)
 
 const hiddenCount = computed(() => endpoints.value.filter(e => e.hidden).length)
 

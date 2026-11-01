@@ -21,6 +21,7 @@
  */
 import { computed, ref } from 'vue'
 import { BackendDownloadAPI } from '../api/client.js'
+import { serverMessage } from './userMsg.js'
 
 export const BACKEND_STATUS_META = {
   pending: { label: '排队中', tone: 'text-gray-500 bg-gray-100' },
@@ -47,7 +48,11 @@ export function unwrap(res) {
   if (body && typeof body === 'object' && !Array.isArray(body) && 'code' in body) {
     const code = Number(body.code)
     if (Number.isFinite(code) && code !== 200) {
-      const err = new Error(String(body.message || body.error || `后端返回 ${code}`))
+      // 字段名不统一（message / msg / error 都有），走 serverMessage 统一口径 ——
+      // 只读 message 的话，`{code:400,msg:'…'}` 那批接口的错因会变成
+      // 「后端返回 400」这种什么都没说的话。
+      const why = serverMessage(body) || `后端返回 ${code}`
+      const err = new Error(why)
       err.backendCode = code
       throw err
     }

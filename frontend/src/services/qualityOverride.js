@@ -1,40 +1,71 @@
 /**
- * 「下载音质」开关的档位映射 —— 后端 pkg/config.QualityOverride 的**镜像**。
+ * 「下载音质」模式（三选一）—— 后端 pkg/config 的**镜像**。
  *
  * 为什么两边各要一份：后端管「飞牛页面触发的下载」，本页管「网页端下载队列」，
- * 两边的取值表不一样（队列有 flac24bit，自动下载没有），但开关是**同一个**。
- * 改这边请同时改 pkg/config 的 QualityOverride 并跑两边的测试。
+ * 但模式是**同一个**（config.download_quality_override）。
+ * 改这边请同时改 pkg/config 的 QualityModeTarget/NormalizeQualityMode 并跑
+ * 两边的测试。
  *
- * 语义：开关是「盖住」而不是「改掉」各入口自己的音质设置 ——
- * 跟随 = 各用各的；无损 / 320k = 这一阵子统一用某一档，改回「跟随」还能复原。
+ * 2026-10-30 重构：从「跟随/无损/320k + 降级开关」两个控件合并成**一个**
+ * 三选一 —— 用户的原话：「下载音质中，只需要三个选择，一个是跟随页面设置，
+ * 一个是仅下载最高，一个是自动降档」。
  */
 
 // 三个取值（与 config.DownloadQuality* 常量一一对应）
 export const QUALITY_FOLLOW = ''
-export const QUALITY_LOSSLESS = 'lossless'
-export const QUALITY_MP3 = 'mp3_320'
+export const QUALITY_TOP_ONLY = 'top_only'
+export const QUALITY_AUTO_LOWER = 'auto_lower'
 
-/** 开关的三个选项（设置页直接渲染这个表） */
-export const QUALITY_OVERRIDE_OPTIONS = [
-  { value: QUALITY_FOLLOW, label: '跟随各入口自己的设置', desc: '下载队列与自动下载各用各的音质' },
-  { value: QUALITY_LOSSLESS, label: '一律无损', desc: '点名 FLAC；拿不到就按原顺序兜底，不会变成下载失败' },
-  { value: QUALITY_MP3, label: '一律 320K', desc: '点名 320K（本应用不转码，是「点名这一档」）' },
+/** 旧配置值（读到的瞬间迁到新三选一，见 normalizeQualityMode） */
+export const LEGACY_QUALITY_LOSSLESS = 'lossless'
+export const LEGACY_QUALITY_MP3 = 'mp3_320'
+
+/** 模式的三个选项（设置页直接渲染这个表） */
+export const QUALITY_MODE_OPTIONS = [
+  { value: QUALITY_FOLLOW, label: '跟随页面设置', desc: '下载时页面选哪档就要哪档；平台没有那一档时自动降级' },
+  { value: QUALITY_TOP_ONLY, label: '仅下载最高', desc: '只要最高档；平台给不了就报缺档，不降级' },
+  { value: QUALITY_AUTO_LOWER, label: '自动降档', desc: '一律先要最高档，拿不到就用平台实际有的那一档' },
 ]
 
 /**
- * 把开关套到某个入口自己的档位上。
- *
- * 认不出的覆盖值一律当「跟随」：宁可退化成各用各的，也不要因为一个错值
- * 把所有下载钉死在某一档。空白同样按跟随。
+ * 归一化模式值：认不出的、空白的一律当「跟随」。
+ * 旧值 lossless → 仅下载最高（意图就是只要最高档）；mp3_320 → 跟随。
  */
-export function qualityOverride(base, override) {
-  switch (String(override || '').trim()) {
-    case QUALITY_LOSSLESS:
-      // 点名无损。两边的取值表里都有 flac 这一档。
+export function normalizeQualityMode(value) {
+  switch (String(value ?? '').trim()) {
+    case QUALITY_TOP_ONLY:
+      return QUALITY_TOP_ONLY
+    case QUALITY_AUTO_LOWER:
+      return QUALITY_AUTO_LOWER
+    case LEGACY_QUALITY_LOSSLESS:
+      return QUALITY_TOP_ONLY
+    case LEGACY_QUALITY_MP3:
+      return QUALITY_FOLLOW
+    default:
+      return QUALITY_FOLLOW
+  }
+}
+
+/**
+ * 把模式套到某个入口自己的档位上，得到这次要**点名**的档位。
+ *
+ * 两种非跟随模式都点名最高档（flac）—— 差别不在要什么，而在拿不到时
+ * 降不降（后端 fetch.go 的 fallbackLower / config.QualityModeAllowsLower）。
+ */
+export function qualityModeTarget(base, mode) {
+  switch (normalizeQualityMode(mode)) {
+    case QUALITY_TOP_ONLY:
+    case QUALITY_AUTO_LOWER:
       return 'flac'
-    case QUALITY_MP3:
-      return '320k'
     default:
       return String(base || '').trim()
   }
+}
+
+/**
+ * 该模式下「平台没有点名的档」时能不能降级去用平台实际有的。
+ * 只有「仅下载最高」说不。
+ */
+export function qualityModeAllowsLower(mode) {
+  return normalizeQualityMode(mode) !== QUALITY_TOP_ONLY
 }

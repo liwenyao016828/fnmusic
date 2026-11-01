@@ -13,6 +13,20 @@ export const MIGRATION_BATCH_SIZE = 50
 
 export const PLATFORM_SOURCES = new Set(['wy', 'tx', 'kg', 'kw', 'mg'])
 
+/**
+ * 毫秒时间戳 → 后端要的**秒**。
+ *
+ * 队列里的 addedAt / completedAt 现在一律是毫秒（见 downloadManager.mapBackendItem），
+ * 而后端 queue.Item.AddedAt 是秒（time.Now().Unix()）。迁移回执如果直接把毫秒写进去，
+ * 后端会看到「2026 年之后第 1.7e9 年」的时间，排序和历史都会乱。大于等于 1e12 视为
+ * 毫秒，除 1000；否则原样当作秒（兼容旧数据里已经是秒的值）。
+ */
+function secondsOf(v) {
+  const n = Number(v) || 0
+  if (!n) return 0
+  return n >= 1e12 ? Math.floor(n / 1000) : Math.floor(n)
+}
+
 export function platformSongId(song, platform) {
   const s = song || {}
   const p = String(platform || '').toLowerCase()
@@ -40,7 +54,7 @@ function platformOf(song, sourceId) {
 export function songToBackendItem(song, { clientId, sourceId = '', quality = 'highest' } = {}) {
   const s = song || {}
   const platform = platformOf(s, sourceId)
-  return {
+  const item = {
     client_id: String(clientId || ''),
     name: s.name || s.song_name || s.title || '',
     singer: s.singer || s.artist || '',
@@ -52,6 +66,7 @@ export function songToBackendItem(song, { clientId, sourceId = '', quality = 'hi
     // 用户显式选的档位优先；搜索结果的 quality 只是渠道标注，不能盖掉设置。
     quality: quality || s.quality || 'highest',
   }
+  return item
 }
 
 /**
@@ -77,8 +92,10 @@ export function legacyTaskToBackendItem(task, { qualityFallback = 'highest', ind
     platform: valid ? platform : '',
     platform_id: valid ? platformSongId(song, platform) : '',
     quality: t.quality || qualityFallback,
-    added_at: Number(t.addedAt || 0) || 0,
-    completed_at: Number(t.completedAt || 0) || 0,
+    added_at: secondsOf(t.addedAt),
+    // 后端 Item 只有 updated_at（没有 completed_at）：迁移历史时把「完成时间」
+    // 落到 updated_at 上，落库后的排序/展示才对得上。
+    updated_at: secondsOf(t.completedAt || t.addedAt),
     error: t.error || '',
   }
   if (t.status === 'success') {

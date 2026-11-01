@@ -156,6 +156,34 @@ func isLoopbackIP(ipStr string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+// isLocalPeer 报告请求是否来自「本机」—— 回环 TCP **或本机 Unix socket**。
+//
+// 为什么要把 Unix socket 算作本机：2026-10-31 起曲率以飞牛统一网关微应用的形态
+// 发布，桌面入口的请求经 `/var/apps/yinshu-ai/target/app.sock` 转发进来。走 unix
+// socket 时 `r.RemoteAddr` 是 socket 路径（或 `@`），不是 IP 字面量，于是
+// `clientIP()` 拿到的不是 IP、`isLoopbackIP()` 必然 false —— 如果只认回环 IP，
+// 网关形态下所有「仅本机可见」的字段都会消失，前端授权提示条就再也读不到
+// `roots` / `fnos_roots`，表现为「明明授权了却一直提示未授权」。
+//
+// 为什么这样判是安全的：能连上这个 socket 的只有本机进程（网关
+// `trim_http_cgi` 以 root 跑，socket 文件 0666 只在本机可达），跨网段的设备没有
+// 任何路径能直接连到它 —— 它们只能经网关，而网关已经校验过 fnOS 会话。这与
+// 「同网段任意设备直连 8898 端口」不是同一件事，后者仍然被排除在外。
+//
+// 仍然不采信 X-Forwarded-For / X-Real-IP：那是客户端随便写的头。
+func isLocalPeer(r *http.Request) bool {
+	peer := clientIP(r)
+	if peer == "" {
+		// 进程内自调用（httptest、内部构造的请求）没有对端信息。
+		return true
+	}
+	if net.ParseIP(peer) == nil {
+		// 不是 IP 字面量 = Unix socket 的路径/`@`。
+		return true
+	}
+	return isLoopbackIP(peer)
+}
+
 // ipNotifier 让同一来源的记录在窗口期内只写一次，
 // 避免被公网扫描时把内存日志缓冲刷爆。
 type ipNotifier struct {

@@ -38,10 +38,52 @@ var client = &http.Client{
 	},
 }
 
-// Available 报告开放 API 是否可用：socket 存在，且系统已注入 token。
-// 非飞牛环境（如本地开发）返回 false，调用方据此走回退逻辑。
+// Available 报告开放 API 是否**可调用**：socket 存在，且系统已注入 token。
+//
+// ⚠️ 这个函数只回答「能不能现在就调开放 API」，**不能**用来判断「这是不是飞牛环境」。
+// 真机实测（2026-10-31，fnOS 1.2.0903）：应用以 root 运行时系统可能没把
+// TRIM_API_TOKEN 注入进来（app center 侧降级日志是
+// `api signature verify failed, degraded: no api token granted`），此时
+// Available() 为 false，但机器明明是飞牛。以前 AllowedRoots() 就是拿它当
+// 「是否飞牛」的判据，于是把「没拿到 token」误判成「不在飞牛」，转而并入
+// /vol1../vol3、/media、/mnt 的探测卷 —— 用户在应用设置里一个目录都没授权，
+// 曲率却能列出整卷，正是用户反馈的那个问题。
+//
+// 判断「是不是飞牛环境」请用 Detected()。
 func Available() bool {
 	return availableSource()
+}
+
+// Detected 报告当前是否运行在飞牛 fnOS 环境里。
+//
+// 判据**只看部署特征，与 token 无关**（这是它与 Available 的关键区别）：
+//
+//	① 开放 API 的 Unix socket 存在（/var/run/trim_open_gateway_apiscope.socket）；
+//	② 或者 /var/apps/<appname> 存在 —— 应用被飞牛应用中心安装过就一定有这个目录。
+//
+// 任一成立即认定为飞牛。这个判据故意宽松：**误判成飞牛的代价是「什么都不给看」**
+// （fail closed，用户点一下授权就恢复），**误判成非飞牛的代价是「把整卷都给看」**
+// （越权）。两害相权，宁可判成飞牛。
+func Detected() bool {
+	return detectedSource()
+}
+
+// detectedSource 供测试替换，见 SetDetectedForTest。
+var detectedSource = func() bool {
+	if _, err := os.Stat(socketPath); err == nil {
+		return true
+	}
+	if _, err := os.Stat("/var/apps/" + appName); err == nil {
+		return true
+	}
+	return false
+}
+
+// SetDetectedForTest 固定「是否飞牛环境」，返回原值供恢复。仅测试用。
+func SetDetectedForTest(v bool) bool {
+	old := detectedSource
+	detectedSource = func() bool { return v }
+	return old()
 }
 
 // availableSource 供测试替换，见 SetAvailableForTest。
@@ -142,11 +184,4 @@ func SharedFolders() ([]string, error) {
 // DelSharedFolder 删除一个应用共享授权目录。
 func DelSharedFolder(path string) error {
 	return Call("trim.file.delSharedAccessibleFolder", map[string]any{"path": path}, nil)
-}
-
-// PlatformConfig 读取系统语言与版本，需声明 trim.system.getPlatformConfig。
-func PlatformConfig() (map[string]any, error) {
-	var data map[string]any
-	err := Call("trim.system.getPlatformConfig", nil, &data)
-	return data, err
 }

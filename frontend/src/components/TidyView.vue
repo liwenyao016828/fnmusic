@@ -1327,7 +1327,7 @@ import {
   fmtWhen, relWhen,
 } from '../services/libraryView'
 import { fail as failText, apiError } from '../services/userMsg'
-import { logError } from '../services/appLog'
+import { logError, logInfo } from '../services/appLog'
 import { ok as notifyOk, fail as notifyFail } from '../services/feedback'
 import { currentView, navigateTo, onNavigate, segmentOf } from '../services/navBus'
 
@@ -2386,6 +2386,7 @@ async function resolveDup(dryRun) {
       // 逐文件失败原因太长，界面只给数量，明细进日志
       const errs = res.data?.errors || []
       if (errs.length) logError('清理重复文件', `${errs.length} 个文件处理失败`, errs.slice(0, 20).join('；'))
+      else logInfo('清理重复文件', dryRun ? '预演完成（未动文件），等待确认' : `已清理重复文件（mode=${mode}）`, `dir=${dir}`)
       if (!dryRun) {
         const done = dupResolveResult.value
         dupConfirmArmed.value = false
@@ -2799,6 +2800,12 @@ async function startPreview() {
           previewPlanId.value = ev.plan_id || ''
           previewMeta.value = { done: ev.done || 0, total: ev.total || 0, matched: ev.matched || 0 }
           previewState.value = 'done'
+          // 预览只匹配不写盘，但「匹配到几首」是后面写入的对账基线，必须留痕
+          logInfo(
+            '补全预览',
+            `匹配 ${ev.matched || 0} / ${ev.total || 0} 首，等待确认写入`,
+            `plan=${ev.plan_id || ''}`,
+          )
         } else if (ev.type === 'cancelled') {
           if (typeof ev.matched === 'number') {
             previewMeta.value = { ...previewMeta.value, matched: ev.matched }
@@ -2846,11 +2853,13 @@ async function executeComplete() {
     const res = await TidyAPI.executeComplete(pid)
     completeJob.value = res?.data
     flash(res?.message || '已开始写入')
+    logInfo('补全写入', `已开始写入（计划 ${pid}）`)
     startCompletePolling()
     // 计划已消费，面板收起（进度接棒显示在下面的补全卡片里）
     resetPreviewState()
   } catch (e) {
     flash(failText('写入补全结果', e), true)
+    logError('补全写入', failText('写入补全结果', e), `plan=${pid}`)
   }
 }
 
@@ -2869,6 +2878,7 @@ function startCompletePolling() {
         if (s) {
           // 被停止 ≠ 跑完（话术在服务层，有单测）
           flash(completeDoneText(j))
+          logInfo('补全写入', completeDoneText(j))
           loadIndexStats()
           // 缺口数字要跟着重算，否则页面还挂着「缺 12 首」而实际已经补好了
           scanGaps().catch(() => {})
@@ -2893,10 +2903,12 @@ async function stopComplete() {
   try {
     const res = await TidyAPI.cancelComplete()
     flash(res?.message || '已请求停止')
+    logInfo('补全写入', res?.message || '已请求停止补全')
     // 不一定停下来了：可能刚好跑完了。拉一次真实状态。
     await loadCompleteStatus()
   } catch (e) {
     flash(failText('停止补全', e), true)
+    logError('补全写入', failText('停止补全', e))
   } finally {
     stopBusy.value = false
   }

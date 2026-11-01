@@ -3,6 +3,7 @@ package intercept
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -378,18 +379,40 @@ func (i *Interceptor) downloadCandidates(ctx context.Context, t online.Track, mi
 // 用户选 128k 是为了省空间，给他 flac 是违背选择。
 func (i *Interceptor) downloadTiers() []string {
 	want := i.autoDownloadQuality()
-	if want == qualityHighest {
-		return online.PlaybackLadder
-	}
-	wantRank := online.TierRank(want)
-	out := make([]string, 0, len(online.PlaybackLadder))
-	out = append(out, want)
-	for _, t := range online.PlaybackLadder {
-		if online.TierRank(t) < wantRank {
-			out = append(out, t)
+	out := func() []string {
+		if want == qualityHighest {
+			return append([]string(nil), online.PlaybackLadder...)
 		}
+		wantRank := online.TierRank(want)
+		out := make([]string, 0, len(online.PlaybackLadder))
+		out = append(out, want)
+		for _, t := range online.PlaybackLadder {
+			if online.TierRank(t) < wantRank {
+				out = append(out, t)
+			}
+		}
+		return out
+	}()
+	// 「仅下载最高」把阶梯砍到只剩第一档：用户点这个模式要的就是
+	// 「宁缺毋滥」，降下来的那一档对他是**不想要的文件**，不是安慰奖。
+	// 阶梯不砍的话，`QualityModeTarget` 给 top_only 和 auto_lower 都是 flac，
+	// 这一层根本分不出两种意图，只能看模式本身（2026-11-01 用户报的
+	// 「选了仅下载最高还是给我 mp3」）。
+	if !i.qualityAllowsLower() && len(out) > 1 {
+		out = out[:1]
 	}
 	return out
+}
+
+// qualityAllowsLower 报告当前「下载音质模式」允不允许降档。
+//
+// 没注入钩子时按允许处理：老构造（单测、外部嵌入）没有这个概念，
+// 而默认模式「跟随页面」本来就是降的。
+func (i *Interceptor) qualityAllowsLower() bool {
+	if i.cfg.QualityMode == nil {
+		return true
+	}
+	return config.QualityModeAllowsLower(i.cfg.QualityMode())
 }
 
 // tierFromLandedFile 用落盘文件的扩展名校正档位。
@@ -569,6 +592,75 @@ func dlTiebreak(ch string) int {
 	}
 }
 
+// ── 降级兜底：平台没有点名的档时，用它实际有的那一档 ──────────────────
+
+// fallbackAllows 报告这次解析失败值不值得再试一次「平台实际能给的那一档」。
+//
+// 只在两种情况下试：模式允许降档（「仅下载最高」不降，宁缺毋滥），
+// 且失败原因是**平台明确没有这一档** —— 曲目本身不可播放（收费 / 无版权）
+// 或平台根本没解析器时，换个问法也问不出来。
+func (i *Interceptor) fallbackAllows(err error) bool {
+	if !i.qualityAllowsLower() {
+		return false
+	}
+	return errors.Is(err, online.ErrTierUnavailable)
+}
+
+// fallbackWant 是兜底时「点名」的档位；空串 = 让平台自己挑。
+//
+// 自动档（highest）的语义是「要不到就退」，点名反而会把平台问死：QQ 匿名账号
+// 按档点名常全档回「没有这一档」，裸问就能拿到 320k。
+func (i *Interceptor) fallbackWant() string {
+	if want := i.autoDownloadQuality(); want != qualityHighest {
+		return want
+	}
+	return ""
+}
+
+// fallbackResolve 绕开阶梯缓存，直接问解析器本人「你能给哪一档」。
+//
+// # 为什么需要这一步
+//
+// `ResolveLadder` 只会问「点名的档 + 预设阶梯里更低的档」，而平台**实际**能给的
+// 档可能根本不在被问的集合里。后台下载队列那边早就补过这一步
+// （见 `pkg/backenddl` 的 `fallbackLower`），而收藏自动下载 / 音质补强走的是
+// 本文件这套独立实现，漏了它 —— 于是同一首歌「网页下载队列下得动、点红心下不来」，
+// 而界面只报一句「操作失败」（2026-11-01 用户报的那 222 条失败就是这么来的）。
+//
+// ⚠️ 不能拿 `ResolveTier` / `Resolve` 来兜：`ResolveLadder` 刚把
+// `ErrTierUnavailable` 负缓存进 `platform\x00id\x00<tier>`，裸 `Resolve` 的键
+// `platform\x00id` 又会被试听、搜索批解写上无关结论 —— 两个都不干净。
+// `Pool.ResolveBypassingLadderCache` 一个缓存都不碰，正是这里的语义。
+func (i *Interceptor) fallbackResolve(ctx context.Context, plat, platformID string) *online.Resolved {
+	if i.pool == nil || strings.TrimSpace(platformID) == "" {
+		return nil
+	}
+	want := i.fallbackWant()
+	res, err := i.pool.ResolveBypassingLadderCache(ctx, plat, platformID, want)
+	if err != nil || res == nil || strings.TrimSpace(res.URL) == "" {
+		i.logf("[INTERCEPT] 平台兜底也没拿到：%s/%s %v", plat, platformID, err)
+		return nil
+	}
+	tier := online.TierOfResolved(res)
+	if tier == "" {
+		// 平台给了链接却说不出档位（老解析器 mp3 又不给码率）：不知道是什么档，
+		// 就别声称「有音源」，老实失败 —— 下回来一个 128k 冒充无损更糟。
+		i.logf("[INTERCEPT] 平台兜底拿到链接但认不出档位：%s/%s", plat, platformID)
+		return nil
+	}
+	// 降级只往低走：用户点名 128k 是为了省空间，平台「能给的」若是 320k
+	// 那是比他要的更好，但不是他要的。（自动档没有上限，want 为空时不受限。）
+	if want != "" && online.TierRank(tier) > online.TierRank(want) {
+		i.logf("[INTERCEPT] 平台兜底拿到 %s，比点名的 %s 更好，按原样失败：%s/%s", tier, want, plat, platformID)
+		return nil
+	}
+	if strings.TrimSpace(res.Tier) == "" {
+		res.Tier = tier // 让下游 a.Tier() / 打分都看到**实际**档位
+	}
+	i.logf("[INTERCEPT] 阶梯无档，平台兜底拿到 %s（%s/%s）", tier, plat, platformID)
+	return res
+}
+
 // downloadChannels 生效的取音渠道顺序（没配 = 默认三条全开，洛雪在最前）。
 func (i *Interceptor) downloadChannels() []string {
 	if i.cfg.AutoDownloadChannels == nil {
@@ -687,6 +779,15 @@ func (i *Interceptor) collectDownloadAttempts(ctx context.Context, t online.Trac
 			res, err := i.pool.ResolveLadder(ctx, c.Platform, c.PlatformID, tiers)
 			if err != nil {
 				i.logf("[INTERCEPT] %s 渠道候选解析失败：%s/%s %v", want, c.Platform, c.PlatformID, err)
+				// 阶梯全灭 ≠ 这条候选不能下：平台可能只是不给**点名的那一档**。
+				if i.fallbackAllows(err) {
+					if fres := i.fallbackResolve(ctx, c.Platform, c.PlatformID); fres != nil {
+						push(want, c, fres)
+						if best >= ceiling {
+							return
+						}
+					}
+				}
 				continue
 			}
 			push(want, c, res)
@@ -721,6 +822,12 @@ func (i *Interceptor) collectDownloadAttempts(ctx context.Context, t online.Trac
 			if err != nil {
 				if ctx.Err() == nil {
 					i.logf("[INTERCEPT] 原生解析拿不到：%s/%s %v", t.Platform, t.PlatformID, err)
+				}
+				// 阶梯问完仍拿不到时再用平台兜底（见 fallbackResolve 的说明）。
+				if ctx.Err() == nil && i.fallbackAllows(err) {
+					if fres := i.fallbackResolve(ctx, t.Platform, t.PlatformID); fres != nil {
+						push(dlChanNative, t, fres)
+					}
 				}
 				continue
 			}

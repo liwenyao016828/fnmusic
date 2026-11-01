@@ -1,5 +1,8 @@
 import axios from 'axios'
 import { splitFrames, parseFrame } from '../services/assistantStream.js'
+// 网关前缀：曲率以飞牛「统一网关微应用」形态运行时，页面挂在 /app/yinshu-ai 下，
+// 所有请求都必须带这个前缀（写死 /api 会打到 fnOS 门户、全站 404）。见 basePath.js。
+import { withBase, API_BASE } from '../services/basePath.js'
 
 // ── NDJSON 流 ──
 //
@@ -32,7 +35,7 @@ async function streamNDJSON(path, payload = {}, opts = {}) {
   }
 
   try {
-    const res = await fetch(`/api${path}`, {
+    const res = await fetch(withBase(`/api${path}`), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' },
       body: JSON.stringify(payload),
@@ -94,7 +97,7 @@ async function streamNDJSON(path, payload = {}, opts = {}) {
 }
 
 const api = axios.create({
-  baseURL: '/api',
+  baseURL: API_BASE,
   timeout: 30000,
 })
 
@@ -288,6 +291,17 @@ export const DownloadQueueAPI = {
 }
 
 /**
+ * 服务端洛雪宿主（`backend/pkg/lxnode` 的 Node 子进程）的状态与开关。
+ *
+ * GET 读状态、POST 开关（`{ enabled: true|false, port?: 0 }`），当场起停进程，
+ * 不用重启应用。`port` 不传/传 0 = 用默认 8920。
+ */
+export const LxHostAPI = {
+  get: () => api.get('/lx/host').then(res => res.data),
+  set: (opts = {}) => api.post('/lx/host', opts).then(res => res.data),
+}
+
+/**
  * 后台托管下载队列（`backend/pkg/backenddl`）。
  *
  * 这是**唯一**的下载队列：任务由 NAS 后端进程执行，提交之后关掉网页/浏览器
@@ -356,8 +370,8 @@ export const NasAPI = {
   readText: (path) => api.get('/nas/read', { params: { path } }).then(res => res.data),
   scan: (dir, refresh = false) => 
     api.get('/nas/scan', { params: { dir, refresh } }).then(res => res.data),
-  streamUrl: (path) => `/api/nas/stream?path=${encodeURIComponent(path)}`,
-  coverUrl: (path) => `/api/nas/cover?path=${encodeURIComponent(path)}`,
+  streamUrl: (path) => withBase(`/api/nas/stream?path=${encodeURIComponent(path)}`),
+  coverUrl: (path) => withBase(`/api/nas/cover?path=${encodeURIComponent(path)}`),
   lyric: (path) => api.get('/nas/lyric', { params: { path } }).then(res => res.data),
   /**
    * 删除本地文件（可批量）。
@@ -414,6 +428,18 @@ export const FnosAPI = {
   saveToken: (token) => api.post('/fnos/token', { token }).then(res => res.data),
   // 触发曲库重扫（合并调度，立即返回不等待扫描完成）
   rescan: () => api.post('/fnos/rescan').then(res => res.data),
+  // 文件访问授权状态：飞牛要求用户**显式授权目录**，未授权时界面要提示。
+  // 返回 {available, authorized, roots, fnos_roots, granted_roots, shared_count, can_grant, hint, hint_action}
+  authStatus: () => api.get('/fnos/auth-status').then(res => res.data),
+  // 让后端丢掉授权目录缓存（默认 30s）后重查 —— 用户刚点完授权时用，否则界面会显示「还没授权」。
+  // opts.path = 宿主选择器刚返回的目录：后端顺手回答「它现在读得到吗」（picked_readable），
+  // 前端据此决定「直接用」还是给一句可操作的提示（宿主侧授权可能异步落库）。
+  authRefresh: (opts = {}) => {
+    const path = String(opts?.path || '').trim()
+    return api
+      .post('/fnos/auth-refresh', null, path ? { params: { path } } : undefined)
+      .then(res => res.data)
+  },
 }
 
 // 第三方平台账号（扫码登录）
@@ -465,14 +491,29 @@ export const UiPrefsAPI = {
   merge: (patch) => api.post('/ui-prefs', patch).then(res => res.data),
 }
 
-// 后端日志：内存环形缓冲，重启应用即清空（不落盘）
+// 运行日志：内存环形缓冲（最近 2000 条）+ **默认落盘**副本（2026-11-01 起）。
+// 落盘默认开、写到 <数据目录>/logs/qulv.log，设置页可换目录或关掉；
+// 关掉后只留内存、重启即清空。
 export const LogsAPI = {
   list: (limit = 200) => api.get('/logs', { params: { limit } }).then(res => res.data),
   clear: () => api.delete('/logs').then(res => res.data),
-  // 日志存储位置（2026-10-26 用户口径：设置增加日志存储位置）：
-  // log_dir 为空串 = 不落盘（默认，内存即清空）；传路径 = 每条日志同时写进该目录下的文件。
+  // 读落盘设置 → { enabled, log_dir, effective_dir, log_file }
   config: () => api.get('/logs/config').then(res => res.data),
-  saveConfig: (logDir) => api.post('/logs/config', { log_dir: logDir }).then(res => res.data),
+  /**
+   * 改落盘设置。两个键都可省：
+   *   saveConfig({ enabled: false })     只关开关（目录保留，下次开还是这儿）
+   *   saveConfig({ logDir: '/vol1/Logs' }) 只换目录
+   *   saveConfig({ logDir: '' })         回到默认位置（注意：不是关闭，关闭看 enabled）
+   * 老写法 saveConfig('/vol1/Logs') 仍兼容，等价于 { logDir }。
+   */
+  saveConfig: (arg) => {
+    const body = typeof arg === 'object' && arg !== null ? arg : { log_dir: arg }
+    if ('logDir' in body) {
+      body.log_dir = body.logDir
+      delete body.logDir
+    }
+    return api.post('/logs/config', body).then(res => res.data)
+  },
   /**
    * 网页端上报前端错误。
    *
@@ -687,7 +728,7 @@ export const AIAPI = {
 // —— 早期版本默认成 'message'，导致助手回复收到了却从不渲染。
 // 帧解析抽到 services/assistantStream.js，便于单测。
 async function streamChat(path, payload, onEvent) {
-  const resp = await fetch(`/api${path}`, {
+  const resp = await fetch(withBase(`/api${path}`), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload || {}),

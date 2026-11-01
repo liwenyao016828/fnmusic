@@ -2,8 +2,17 @@ import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import { fileURLToPath, URL } from 'node:url'
 
-export default defineConfig({
-  base: '/',
+// 网关前缀：曲率以飞牛「统一网关微应用」形态发布，桌面入口挂在 /app/yinshu-ai 下
+// （见 fpk-package/app/ui/config 的 gatewayPrefix）。**打包时必须**把 base 设成这个
+// 前缀，否则 index.html 会引用站点根的 /assets/xxx.js —— 而站点根是 fnOS 门户自己的
+// （真机实测 http://nas:4398/assets/任意文件 恒 404），页面会白屏。
+//
+// `npm run dev` 保持 '/'：开发服务器是纯浏览器直连 3000，没有网关那一层，
+// 加了前缀反而要自己拼。用 VITE_BASE 可以覆盖（想在本地模拟网关形态时用）。
+const GATEWAY_BASE = '/app/yinshu-ai/'
+
+export default defineConfig(({ command }) => ({
+  base: command === 'build' ? (process.env.VITE_BASE || GATEWAY_BASE) : '/',
   plugins: [vue()],
   resolve: {
     alias: {
@@ -36,4 +45,4 @@ export default defineConfig({
     outDir: '../backend/dist',
     emptyOutDir: true
   }
-})
+}))

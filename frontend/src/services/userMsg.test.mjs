@@ -11,7 +11,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { usableMessage, shortReason, describeError, apiError } from './userMsg.js'
+import { usableMessage, shortReason, describeError, apiError, serverMessage } from './userMsg.js'
 
 /** 造一个 axios 风格的错误 */
 function httpError(status, data = {}, url = '/charts/playlist/detail') {
@@ -103,4 +103,33 @@ test('apiError：统一响应里 code!==200 才算失败', () => {
   assert.equal(apiError({ code: 500, message: '账号未登录' }), '账号未登录')
   // 技术串 → 兜底
   assert.equal(apiError({ code: 500, message: 'POST /api/x failed' }), '操作失败')
+})
+
+// ── 后端错误字段名不统一（2026-11-01，issue #10） ──
+//
+// 统一响应壳用 `message`，但补强 / 音质那几个接口回的是 `{code, msg}`。
+// 只认 `message` 时它们一律退化成「操作失败」，真实原因被吞掉 ——
+// 用户点「手动音质补强」永远只看到这三个字（issue #10 原文）。
+test('serverMessage：message / msg / error 三个字段名都认', () => {
+  assert.equal(serverMessage({ message: '账号未登录' }), '账号未登录')
+  assert.equal(serverMessage({ msg: '补强轮次还没到时间' }), '补强轮次还没到时间')
+  assert.equal(serverMessage({ error: '推送任务不存在' }), '推送任务不存在')
+  // 空/非字符串一律当没有
+  assert.equal(serverMessage({ msg: '   ' }), '')
+  assert.equal(serverMessage({ msg: 42 }), '')
+  assert.equal(serverMessage(null), '')
+  assert.equal(serverMessage('boom'), '')
+})
+
+test('apiError：回 {code,msg} 的接口也要把原因说出来', () => {
+  assert.equal(apiError({ code: 400, msg: '补强轮次还没到时间' }), '补强轮次还没到时间')
+  assert.equal(apiError({ code: 500, error: '推送任务不存在' }), '推送任务不存在')
+  // 技术串仍然兜底，不漏接口路径
+  assert.equal(apiError({ code: 500, msg: 'POST /api/x failed' }), '操作失败')
+})
+
+test('shortReason：axios 错误体用 msg 时也能取到人话', () => {
+  assert.equal(shortReason(httpError(400, { msg: '登记表还没就绪' })), '登记表还没就绪')
+  // 空的 msg 不能把状态码兜底挤掉
+  assert.match(shortReason(httpError(500, { msg: '' })), /服务端/)
 })

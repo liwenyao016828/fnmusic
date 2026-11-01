@@ -54,6 +54,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -129,8 +130,14 @@ func New() *Manager {
 	return &Manager{state: StateOff, newProc: func(c Config) process { return &execProc{cfg: c} }}
 }
 
+// logf 洛雪宿主的运行日志。
+//
+// ⚠️ 曾经是 `fmt.Fprintf(os.Stderr, ...)`，绕过了 main.go 里 `log.SetOutput`
+// 接上的 applog —— 于是「宿主起没起来、为什么起不来」只出现在 stderr（容器里
+// 根本看不到），界面「运行日志」页一片空白。走 log.Printf 才同时进 stderr 与
+// 内存环形缓冲（GET /api/logs）。
 func (m *Manager) logf(format string, a ...any) {
-	fmt.Fprintf(os.Stderr, "[LXNODE] "+format+"\n", a...)
+	log.Printf("[LXNODE] "+format, a...)
 }
 
 // Apply 按配置起停。配置没变时不重建（与 sidecar 的语义一致）。
@@ -206,10 +213,19 @@ func (m *Manager) Stop() {
 }
 
 // Status 供 HTTP 层直接序列化。
+//
+// `enabled` 是**配置意图**（开关是开着的），不是进程状态：`state` 里 starting /
+// ready / failed 都意味着开关开着（只是进程还没起来 / 起来了 / 起不来），只有
+// off / stopped 是「用户关掉了」。前端要拿它决定按钮显示「开启宿主」还是
+// 「关闭宿主」—— 只给 state 的话，进程一失败界面就退回「开启宿主」，
+// 用户点一下等于对着一个已经开着的开关再开一次（关不掉的那个 bug 就是这么来的）。
 func (m *Manager) Status() map[string]any {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	st := map[string]any{"state": m.state}
+	st := map[string]any{
+		"state":   m.state,
+		"enabled": m.state == StateStarting || m.state == StateReady || m.state == StateFailed,
+	}
 	if m.err != "" {
 		st["error"] = m.err
 	}
@@ -218,6 +234,55 @@ func (m *Manager) Status() map[string]any {
 		st["dir"] = m.cfg.Dir
 	}
 	return st
+}
+
+// Reload 让宿主重新扫描 `<Dir>/*.js`，返回它现在加载到的脚本数。
+//
+// 为什么非有不可（2026-11-01，issue #11 的根因之一）：
+//
+//	宿主只在**进程启动**时 `loadAll()` 一次（server.mjs），之后脚本目录再怎么
+//	变它都不看；而 Apply 在配置没变时幂等返回、不重建进程。于是「用户在界面上
+//	新加 / 改名 / 删掉一个洛雪源」这条路上，SyncScripts 把 .js 落了盘，宿主里的
+//	loaded 却还是启动那一刻的旧集合（冷启动时甚至可能是 0 个）。
+//
+// 症状特别能骗人：**界面「测试全部正常」**（测速跑在浏览器，跟宿主一点关系没有），
+// 下载却一律失败，`/resolve` 回 502「选中的洛雪音源在宿主里不存在」。
+//
+// 宿主早就准备好了 `POST /reload`（server.mjs 里一行 loadAll），缺的只是调用方。
+// 失败只返回 error，由调用方记一笔日志 —— 与包内其它能力同口径：宿主挂了不影响曲率。
+func (m *Manager) Reload(ctx context.Context) (int, error) {
+	m.mu.Lock()
+	if m.state != StateReady || m.proc == nil {
+		st := m.state
+		m.mu.Unlock()
+		// 与 Resolve 同样的哨兵包法：调用方要能区分「没开」和「开着但重载失败」。
+		return 0, fmt.Errorf("%w（%s）", ErrNotRunning, st)
+	}
+	base := m.cfg.base()
+	m.mu.Unlock()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/reload", nil)
+	if err != nil {
+		return 0, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+
+	var out struct {
+		Reloaded int    `json:"reloaded"`
+		Error    string `json:"error"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	if resp.StatusCode != http.StatusOK {
+		if out.Error != "" {
+			return out.Reloaded, fmt.Errorf("宿主拒绝重载（HTTP %d）：%s", resp.StatusCode, out.Error)
+		}
+		return out.Reloaded, fmt.Errorf("宿主拒绝重载（HTTP %d）", resp.StatusCode)
+	}
+	return out.Reloaded, nil
 }
 
 // resolveRequest 是发给宿主的解析请求体（形状与 host 的 /resolve 对齐）。

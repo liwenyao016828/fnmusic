@@ -185,8 +185,8 @@ func TestExplicitEmptyCacheDirReturnsToDefault(t *testing.T) {
 	}
 }
 
-// 「下载音质」开关：三态（跟随 / 无损 / 320k）与「认不出的值当跟随」。
-func TestDownloadQualityOverrideTriState(t *testing.T) {
+// 「下载音质」模式：三选一（跟随 / 仅下载最高 / 自动降档），且能回到跟随。
+func TestDownloadQualityModeTriState(t *testing.T) {
 	mgr, err := NewConfigManager(t.TempDir(), 8080)
 	if err != nil {
 		t.Fatalf("建配置管理器失败：%v", err)
@@ -197,13 +197,13 @@ func TestDownloadQualityOverrideTriState(t *testing.T) {
 		t.Fatalf("缺省应为跟随，得到 %q", got)
 	}
 
-	// 写成「无损」
-	on := DownloadQualityLossless
-	if err := mgr.Update(AppConfig{DownloadQualityOverride: &on}); err != nil {
+	// 写成「仅下载最高」
+	top := DownloadQualityTopOnly
+	if err := mgr.Update(AppConfig{DownloadQualityOverride: &top}); err != nil {
 		t.Fatalf("写入失败：%v", err)
 	}
-	if got := mgr.Get().DownloadQualitySetting(); got != DownloadQualityLossless {
-		t.Fatalf("应为 lossless，得到 %q", got)
+	if got := mgr.Get().DownloadQualitySetting(); got != DownloadQualityTopOnly {
+		t.Fatalf("应为 top_only，得到 %q", got)
 	}
 
 	// 关键：能回到「跟随」—— 用 string + 非空才写的合并规则就永远回不去。
@@ -216,15 +216,15 @@ func TestDownloadQualityOverrideTriState(t *testing.T) {
 	}
 
 	// 不传 = 不动（选择性合并的另一半语义）
-	keep := DownloadQualityMP3
+	keep := DownloadQualityAutoLower
 	if err := mgr.Update(AppConfig{DownloadQualityOverride: &keep}); err != nil {
 		t.Fatalf("写入失败：%v", err)
 	}
 	if err := mgr.Update(AppConfig{Port: 8081}); err != nil {
 		t.Fatalf("写入失败：%v", err)
 	}
-	if got := mgr.Get().DownloadQualitySetting(); got != DownloadQualityMP3 {
-		t.Fatalf("没传这个字段时应当保持 mp3_320，得到 %q", got)
+	if got := mgr.Get().DownloadQualitySetting(); got != DownloadQualityAutoLower {
+		t.Fatalf("没传这个字段时应当保持 auto_lower，得到 %q", got)
 	}
 
 	// 重启（重读盘）后仍在
@@ -232,29 +232,59 @@ func TestDownloadQualityOverrideTriState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("重建配置管理器失败：%v", err)
 	}
-	if got := mgr2.Get().DownloadQualitySetting(); got != DownloadQualityMP3 {
-		t.Fatalf("重启后应保持 mp3_320，得到 %q", got)
+	if got := mgr2.Get().DownloadQualitySetting(); got != DownloadQualityAutoLower {
+		t.Fatalf("重启后应保持 auto_lower，得到 %q", got)
 	}
 }
 
-// QualityOverride 是「开关套到某个入口自己的档位上」，覆盖优先、认不出当跟随。
-func TestQualityOverrideMapping(t *testing.T) {
-	cases := []struct {
-		base, override, want string
-	}{
-		{"highest", "", "highest"},         // 跟随：不动
-		{"320k", "", "320k"},               // 跟随：不动
-		{"128k", "lossless", "flac"},       // 覆盖：一律无损
-		{"flac24bit", "lossless", "flac"},  // 覆盖：一律无损
-		{"highest", "mp3_320", "320k"},     // 覆盖：一律 320k
-		{"flac", "mp3_320", "320k"},        // 覆盖：一律 320k
-		{"128k", "乱写的", "128k"},            // 认不出 = 跟随（退化成各用各的，不钉死）
-		{"highest", "  ", "highest"},       // 空白 = 跟随
-		{"highest", "LOSSLESS", "highest"}, // 大小写不敏感？不 —— 认不出当跟随
+// 旧配置值的迁移：lossless → 仅下载最高；mp3_320 与任何认不出的值 → 跟随。
+func TestDownloadQualityLegacyMigration(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"top_only", DownloadQualityTopOnly},
+		{"auto_lower", DownloadQualityAutoLower},
+		{"", DownloadQualityFollow},
+		{"lossless", DownloadQualityTopOnly}, // 老「一律无损」= 只要最高档
+		{"mp3_320", DownloadQualityFollow},   // 老「一律 320K」在新三选一里无对应项
+		{"乱写的", DownloadQualityFollow},      // 认不出 = 跟随，不钉死
+		{"  ", DownloadQualityFollow},
 	}
 	for _, c := range cases {
-		if got := QualityOverride(c.base, c.override); got != c.want {
-			t.Errorf("QualityOverride(%q, %q) = %q，期望 %q", c.base, c.override, got, c.want)
+		if got := NormalizeQualityMode(c.in); got != c.want {
+			t.Errorf("NormalizeQualityMode(%q) = %q，期望 %q", c.in, got, c.want)
 		}
+	}
+}
+
+// QualityModeTarget 把模式套到某个入口自己的档位上：两种「非跟随」都点名最高。
+func TestQualityModeTarget(t *testing.T) {
+	cases := []struct{ base, mode, want string }{
+		{"highest", DownloadQualityFollow, "highest"},   // 跟随：不动
+		{"320k", DownloadQualityFollow, "320k"},         // 跟随：不动
+		{"128k", DownloadQualityTopOnly, "flac"},        // 仅下载最高：点名无损
+		{"highest", DownloadQualityAutoLower, "flac"},   // 自动降档：先要最高
+		{"flac24bit", DownloadQualityAutoLower, "flac"},
+		{"128k", "乱写的", "128k"},                        // 认不出 = 跟随
+		{"", DownloadQualityTopOnly, "flac"},
+	}
+	for _, c := range cases {
+		if got := QualityModeTarget(c.base, c.mode); got != c.want {
+			t.Errorf("QualityModeTarget(%q, %q) = %q，期望 %q", c.base, c.mode, got, c.want)
+		}
+	}
+}
+
+// QualityModeAllowsLower：只有「仅下载最高」不降。
+func TestQualityModeAllowsLower(t *testing.T) {
+	if !QualityModeAllowsLower(DownloadQualityFollow) {
+		t.Error("跟随页面应允许降级")
+	}
+	if !QualityModeAllowsLower(DownloadQualityAutoLower) {
+		t.Error("自动降档应允许降级")
+	}
+	if QualityModeAllowsLower(DownloadQualityTopOnly) {
+		t.Error("仅下载最高不该降级")
+	}
+	if !QualityModeAllowsLower("") {
+		t.Error("空值（= 跟随）应允许降级")
 	}
 }

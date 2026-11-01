@@ -21,9 +21,11 @@ import (
 	"fn-lx-player/pkg/applog"
 	"fn-lx-player/pkg/backenddl"
 	"fn-lx-player/pkg/config"
+	"fn-lx-player/pkg/fnos"
 	"fn-lx-player/pkg/intercept"
 	"fn-lx-player/pkg/lxnode"
 	"fn-lx-player/pkg/namefmt"
+	"fn-lx-player/pkg/nas"
 	"fn-lx-player/pkg/online"
 	"fn-lx-player/pkg/search"
 	"fn-lx-player/pkg/sources"
@@ -36,6 +38,11 @@ var frontendDist embed.FS
 func main() {
 	port := flag.Int("port", 8899, "HTTP server listening port")
 	dataDir := flag.String("data", "./data", "Data directory for persistent configuration")
+	// socket 是飞牛统一网关（微应用）要连的 Unix domain socket 路径。
+	// 由 fpk-package/cmd/main 传 `--socket ${TRIM_APPDEST}/app.sock`，必须落在
+	// 应用安装的 target 目录里 —— 网关只认那儿（官方 gatewaySocket 文档）。
+	// 留空 = 只监听 TCP（本地开发 / 直接跑二进制时的默认行为）。
+	socketPath := flag.String("socket", "", "Unix domain socket path for fnOS gateway (empty = TCP only)")
 	flag.Parse()
 
 	// 日志同时写 stderr 与内存环形缓冲：网页端「日志」页读后者。
@@ -57,6 +64,31 @@ func main() {
 	if err != nil {
 		log.Fatalf("[FATAL] Failed to initialize config manager: %v", err)
 	}
+
+	// 2.05 「默认曲库目录」的唯一来源：路径守卫的真实授权根。
+	//
+	// 2026-10-31：以前这里（和 pkg/config、pkg/downloader 各写一份）都是写死
+	// "/vol1/Music" 兜底。用户没在「应用中心 → 曲率 → 设置 → 授权目录」里授权
+	// 任何目录时，它会把一个**无权访问**的路径当成曲库：界面拿它当默认值、
+	// 下载任务往里写 —— 表现成「没授权却在动别处」。
+	//
+	// 现在的口径：
+	//   - 飞牛环境（fnos.Detected()）→ 只认 AllowedRoots()（管理员共享授权 +
+	//     系统注入的授权路径），一个都没有就回空串（fail closed，界面提示去授权）；
+	//   - 非飞牛（本地开发）→ 保留老行为，回落到数据目录下的 music/。
+	// 注意 AllowedRoots() 在飞牛里可能因为「开放 API 暂时调不通」而拿不到共享目录，
+	// 但 data-share 注入的路径（TRIM_DATA_SHARE_PATHS）仍在，所以这里不会空得莫名。
+	config.SetDefaultDirProvider(func() string {
+		if roots := nas.AllowedRoots(); len(roots) > 0 {
+			return roots[0]
+		}
+		if fnos.Detected() {
+			return ""
+		}
+		dir := filepath.Join(*dataDir, "music")
+		_ = os.MkdirAll(dir, 0755)
+		return dir
+	})
 
 	sourcesMgr := sources.NewManager(cfgMgr, nil, "")
 
@@ -164,13 +196,16 @@ func main() {
 			// pkg/intercept/autodownload.go）。两者都是现取：用户在界面上改了
 			// 「音质下载」，下一次收藏就按新档位取。
 			AutoDownloadLog: autoLogAppend,
-			// 取的是「开关套上去之后」的档位，不是原始的 auto_download_quality ——
-			// 「下载音质」开关（下载音质：跟随 / 无损 / 320k）是**盖住**它的，
-			// 套不套这一步必须只有一个地方做（见 config.QualityOverride）。
+			// 取的是「模式套上去之后」的档位，不是原始的 auto_download_quality ——
+			// 「下载音质」模式（跟随页面 / 仅下载最高 / 自动降档）是**盖住**它的，
+			// 套不套这一步必须只有一个地方做（见 config.QualityModeTarget）。
 			AutoDownloadQuality: func() string {
 				c := cfgMgr.Get()
-				return config.QualityOverride(c.AutoDownloadQuality, c.DownloadQualitySetting())
+				return config.QualityModeTarget(c.AutoDownloadQuality, c.DownloadQualitySetting())
 			},
+			// 「下载音质模式」本身，现取。拦截层要靠它区分「仅下载最高」（不降档）
+			// 和「自动降档」—— 光看上面那个套过的档位分不出来（两者都是 flac）。
+			QualityMode: func() string { return cfgMgr.Get().DownloadQualitySetting() },
 			// 「自动下载源」的允许集与顺序（见 pkg/config/channels.go）。现取：
 			// 用户在界面上勾掉某条渠道，下一次收藏就不碰它，不需要重启。
 			AutoDownloadChannels: func() []string { return cfgMgr.Get().DownloadChannels() },
@@ -360,7 +395,7 @@ func main() {
 					"pending":          pending,
 					"cooling":          cooling,
 					"channels":         chans,
-					"quality":          config.QualityOverride(c.AutoDownloadQuality, c.DownloadQualitySetting()),
+					"quality":          config.QualityModeTarget(c.AutoDownloadQuality, c.DownloadQualitySetting()),
 					"last_run_at":      st.LastRunAt,
 					"last_dispatched":  st.LastDispatched,
 					"next_run_at":      st.NextRunAt,
@@ -379,7 +414,11 @@ func main() {
 	// 服务端洛雪宿主（goal-a5eb2a23 ⑤ 方案 b）—— 缺省关。
 	// 它与 musicdl 的 sidecar 是两回事：那个跑的是 Python 音乐平台客户端，
 	// 这个跑的是用户自己的洛雪音源脚本。同样是「挂了不影响曲率」：Resolve 只返回错误。
-	{
+	//
+	// 起停收在一个闭包里（2026-10-30）：开机调一次、配置一变再调一次、
+	// 界面开关也能直接调它 —— 三处共用同一条「落盘脚本 + Apply」的路径，
+	// 不会出现「开机那套」和「运行时那套」各写一遍、口径慢慢分叉。
+	applyLXHost := func() {
 		c := cfgMgr.Get()
 		// 先把用户脚本正文落盘 —— 宿主是 Node 子进程，只会读 `<Dir>/*.js`，
 		// 而脚本正文存在配置里（前端要拿它去浏览器执行）。
@@ -405,9 +444,9 @@ func main() {
 		if err := lxnode.SyncScripts(lxDir, scripts); err != nil {
 			// 落盘失败**不让应用起不来**：洛雪那条路用不了而已，
 			// 其余功能（含 musicdl 那条腿）照常。
-			log.Printf("[INIT] 洛雪脚本落盘失败（服务端洛雪将不可用）：%v", err)
+			log.Printf("[LXHOST] 洛雪脚本落盘失败（服务端洛雪将不可用）：%v", err)
 		} else {
-			log.Printf("[INIT] 服务端洛雪脚本已同步 %d 个 → %s", len(scripts), lxDir)
+			log.Printf("[LXHOST] 服务端洛雪脚本已同步 %d 个 → %s", len(scripts), lxDir)
 		}
 		lxn.Apply(lxnode.Config{
 			Enabled: c.LXServerOn(),
@@ -420,14 +459,49 @@ func main() {
 		})
 		// 宿主起来没有、为什么没起来 —— **必须记一笔**。
 		// 这个能力的失败以前是静默的（只写进 lxnode 的 stderr），于是
-		// 「洛雪源一次都没参与过下载」查不到根因。现在启动后立刻问一次状态。
+		// 「洛雪源一次都没参与过下载」查不到根因。现在起停后立刻问一次状态。
 		if st := lxn.Status(); st["state"] != lxnode.StateReady {
-			log.Printf("[INIT] 服务端洛雪宿主未就绪：state=%v err=%v（脚本目录 %s）",
+			log.Printf("[LXHOST] 服务端洛雪宿主未就绪：state=%v err=%v（脚本目录 %s）",
 				st["state"], st["error"], lxDir)
 		} else {
-			log.Printf("[INIT] 服务端洛雪宿主就绪：%v", st["base"])
+			log.Printf("[LXHOST] 服务端洛雪宿主就绪：%v", st["base"])
+			// ⚠️ 脚本刚才是**照着配置重新落盘**的，宿主必须跟着重扫一遍。
+			// Apply 在配置没变时是幂等的（不重建进程），而宿主只在启动那一刻
+			// loadAll() 一次 —— 少了这一步，「新加/改名的洛雪源」永远进不去宿主，
+			// 表现就是界面测速全绿、下载却一律「选中的洛雪音源在宿主里不存在」
+			// （issue #11）。这行就是那个缺了很久的调用方。
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			n, err := lxn.Reload(ctx)
+			cancel()
+			if err != nil {
+				log.Printf("[LXHOST] 宿主脚本重载失败（新加/改名的洛雪源可能不生效）：%v", err)
+			} else {
+				log.Printf("[LXHOST] 宿主脚本已重载：%d 个（目录 %s）", n, lxDir)
+			}
 		}
 	}
+	applyLXHost() // 开机按配置决定起不起
+	// 配置一变就跟着动：宿主的开关是个「点了就该生效」的开关（用户 2026-10-30），
+	// 不能改完还要重启应用。Apply 幂等，配置没变时不重建。
+	cfgMgr.OnUpdate(func(config.AppConfig) { applyLXHost() })
+	// 界面开关走 /api/lx/host：写配置会触发上面的 OnUpdate（含落盘脚本），
+	// 这里再补一次 Apply 只是兜底 —— 真正的语义以 OnUpdate 那条为准。
+	server.SetLxHost(
+		func() map[string]any { return lxn.Status() },
+		func(enabled bool, port int) error {
+			// 先落配置（持久化 + 触发 OnUpdate 热起停），端口为 0 时沿用现有值
+			// （0 在 ConfigManager.Update 里语义是「不改」）。
+			patch := config.AppConfig{LXServerEnabled: &enabled}
+			if port > 0 {
+				patch.LXServerPort = port
+			}
+			if err := cfgMgr.Update(patch); err != nil {
+				return err
+			}
+			applyLXHost() // OnUpdate 已经调过一次；再调一次幂等无害（配置没变不重建）
+			return nil
+		},
+	)
 	defer lxn.Stop()
 
 	// 后端托管的下载队列：**唯一**的下载执行者（见 pkg/backenddl 包注释）。
@@ -497,6 +571,13 @@ func main() {
 				c := cfgMgr.Get() // Get 返回的是值拷贝，不能对它直接调指针方法
 				return c.LibraryDir()
 			},
+			// 「下载音质」模式：跟随页面 / 仅下载最高 / 自动降档。
+			// 现取（函数）：用户在设置里改完，下一条任务就生效，不用重启服务。
+			// 抓一份就等于永远停在启动那一刻。
+			QualityMode: func() string {
+				c := cfgMgr.Get()
+				return c.DownloadQualitySetting()
+			},
 			Logf: log.Printf,
 		}
 		bq = backenddl.New(*dataDir, backenddl.NewFetcher(bcfg), log.Printf)
@@ -542,6 +623,42 @@ func main() {
 		}
 	}
 
+	// 飞牛统一网关（微应用）通道：同一个 httpServer 再挂一个 Unix socket。
+	//
+	// 为什么 TCP 必须留着，不是「网关上线后就能删」：
+	//   · `service_port=8898` 是 manifest 声明，应用中心的探活与「打开应用」的
+	//     端口直连入口都还在用它；
+	//   · 更硬的一条：队列取音→落盘是**从进程里打回自己** `http://127.0.0.1:8898/api/download/song`
+	//     （见下面 bq.Start 的注释），只有 TCP 监听能满足。
+	// 所以这里是「TCP + Unix socket 并行」，不是替换。
+	//
+	// 启动前必须清残留：上一次进程被 kill -9 时 socket 文件会留在盘上，而
+	// `net.Listen("unix", ...)` 遇到已存在的文件会直接 `bind: address already in use`，
+	// 表现成「应用重启后一直起不来、日志只有一行 bind 失败」。
+	var unixListener net.Listener
+	if strings.TrimSpace(*socketPath) != "" {
+		if err := os.MkdirAll(filepath.Dir(*socketPath), 0o755); err != nil {
+			log.Printf("[GATEWAY] 创建 socket 目录失败（继续只用 TCP）：%v", err)
+		} else {
+			if _, statErr := os.Stat(*socketPath); statErr == nil {
+				_ = os.Remove(*socketPath)
+			}
+			ul, uerr := net.Listen("unix", *socketPath)
+			if uerr != nil {
+				// socket 起不来不该拦住整个应用：TCP 还在，端口直连照旧可用。
+				log.Printf("[GATEWAY] 监听 Unix socket 失败（继续只用 TCP）：%v", uerr)
+			} else {
+				// 0666：网关进程（trim_http_cgi，root）要能连上；同机普通用户也只在本机
+				// 内网信任模型下才有意义。文件权限本身就是这层的边界。
+				if cerr := os.Chmod(*socketPath, 0o666); cerr != nil {
+					log.Printf("[GATEWAY] chmod socket 失败（不影响连接）：%v", cerr)
+				}
+				unixListener = ul
+				log.Printf("[GATEWAY] 已监听 Unix socket %s（飞牛统一网关入口）", *socketPath)
+			}
+		}
+	}
+
 	// 先建监听再开跑：队列的取音→落盘要回调本机 /api/download/song，
 	// 服务没 listen 就 Start，重启恢复的第一批任务会全部 connection refused。
 	if bq != nil {
@@ -570,6 +687,16 @@ func main() {
 			serveErr <- err
 		}
 	}()
+
+	// Unix socket 走同一个 handler：Serve 返回时（Shutdown/Close）也只是
+	// 把这条腿收掉，不当成致命错误 —— TCP 那条腿的错误才由 serveErr 上报。
+	if unixListener != nil {
+		go func() {
+			if err := httpServer.Serve(unixListener); err != nil && err != http.ErrServerClosed {
+				log.Printf("[GATEWAY] Unix socket 服务退出：%v", err)
+			}
+		}()
+	}
 
 	// Graceful shutdown
 	quit := make(chan os.Signal, 1)
@@ -629,5 +756,15 @@ func main() {
 		_ = httpServer.Close()
 	} else {
 		log.Println("[SHUTDOWN] All connections drained, bye.")
+	}
+
+	// 收尾：删掉自己的网关 socket 文件。
+	// 不删也不致命（下次启动会先 Remove），但留着会让 `ls target/` 看到一条
+	// 指向死进程的 socket，排查时容易误判成「应用还在跑」。
+	if unixListener != nil && strings.TrimSpace(*socketPath) != "" {
+		_ = unixListener.Close()
+		if err := os.Remove(*socketPath); err != nil && !os.IsNotExist(err) {
+			log.Printf("[GATEWAY] 删除 socket 失败：%v", err)
+		}
 	}
 }

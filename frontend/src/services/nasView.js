@@ -18,19 +18,21 @@ export const SCAN_TRUNCATED_TITLE = '本次枚举结果不完整'
 /**
  * 路径 → 面包屑（每一段都能点）。
  *
- * `path` 为空时用 `fallback`；根目录（`/vol1`）也返回一段，
- * 否则标题行会空掉 —— 空数组在模板里就是「什么都不显示」。
+ * 空路径返回**空数组**（调用方自己决定要不要画这一行）。
+ * ⚠️ 2026-10-31：以前空路径会兜底成 `/vol1/Music`，那是写死的默认曲库位置；
+ * 飞牛环境里用户可能一个目录都没授权，此时显示 `/vol1/Music` 的面包屑等于凭空
+ * 报出一个不存在的位置，用户点了只会撞 403。
  */
-export function breadcrumbsFor(path, fallback = '/vol1/Music') {
-  const p = path || fallback
-  const parts = String(p).split('/').filter(Boolean)
+export function breadcrumbsFor(path, fallback = '') {
+  const p = String(path || fallback || '')
+  const parts = p.split('/').filter(Boolean)
   const list = []
   let acc = ''
   for (const part of parts) {
     acc += '/' + part
     list.push({ name: part, path: acc })
   }
-  return list.length ? list : [{ name: p, path: p }]
+  return list
 }
 
 /** 记忆缓存的键（按目录分开：换目录不该看到别的目录的列表） */

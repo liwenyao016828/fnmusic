@@ -1,5 +1,5 @@
 <template>
-  <div class="flex min-h-0 flex-1 flex-col overflow-hidden">
+  <div class="relative flex min-h-0 flex-1 flex-col overflow-hidden">
     <!--
       工具条（2026-10-19 渐进式披露重构）
 
@@ -23,25 +23,35 @@
         **队列页不再有目录入口**：落盘目录在「系统 → 设置 → 存储目录」唯一一处修改，
         这里连只读路径也不摆了 —— 用户点名「去掉目录选择」，留着只读路径仍会让人误以为能点。
       -->
-      <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
-        <!-- 筛选：分段控件（沉底轨道 + 白色药丸），窄屏可横向滚动，不再换行挤成两行 -->
-        <div class="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto rounded-[8px] bg-[var(--ys-surface-sunken)] p-1 no-scrollbar">
+      <div class="flex min-w-0 flex-col gap-y-1.5 sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-2">
+        <!--
+          筛选分段控件（沉底轨道 + 白色药丸）。
+          2026-11-01（用户）：「下载页面（全部，下载中，已暂停，已停止…）这几个在移动端要
+          单独一行，并且在适配的时候可以精简文字以便在一行里显示完，不用拖动条」——
+          所以：
+            · 移动端这一条**独占一行**（父容器 flex-col，sm 起才回到同一行）；
+            · 标签文字按断点收字（`<span class="sm:hidden">` 用 2 字短名，宽屏用全名）；
+            · 计数在移动端藏起来（一屏只留最必要的字）；
+            · 轨道用 `overflow-hidden` + 均分（`flex-1` + `min-w-0`），**不出现横向滚动条**。
+        -->
+        <div class="flex w-full min-w-0 items-center gap-0.5 overflow-hidden rounded-[8px] bg-[var(--ys-surface-sunken)] p-1 sm:w-auto sm:flex-1">
           <button
             v-for="tab in filterTabs" :key="tab.id"
             @click="currentFilter = tab.id"
             :class="[
-              'ys-press shrink-0 whitespace-nowrap rounded-[8px] px-2.5 py-1 text-[11.5px] font-medium transition-colors',
+              'ys-press min-w-0 flex-1 whitespace-nowrap rounded-[8px] px-1.5 py-1 text-[11px] font-medium transition-colors sm:flex-none sm:px-2.5 sm:text-[11.5px]',
               currentFilter === tab.id
                 ? 'bg-white text-[var(--ys-text)] shadow-[0_1px_2px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.04]'
                 : 'text-[var(--ys-text-muted)] hover:text-[var(--ys-text)]',
             ]"
           >
-            {{ tab.name }}
-            <span class="ml-0.5 text-[10px] opacity-60">{{ tab.count }}</span>
+            <span class="sm:hidden">{{ tab.short }}</span>
+            <span class="hidden sm:inline">{{ tab.name }}</span>
+            <span class="ml-0.5 hidden text-[10px] opacity-60 sm:inline">{{ tab.count }}</span>
           </button>
         </div>
 
-        <div class="flex shrink-0 items-center gap-0.5">
+        <div class="flex shrink-0 items-center justify-end gap-0.5">
           <!--
             队列的「暂停 / 继续」合成**一个常显的切换按钮**：此刻能做什么就画什么。
             用户 2026-10-25：「下载页面我怎么看到的还是没有继续的三角形图标」——
@@ -101,43 +111,19 @@
 
       <!--
         勾选后的批量动作（用户 2026-10-23：「多选歌曲后，没有出现相应的按钮」）。
-        单独一行、左侧对齐：挤在第一层会和上面的批量动作抢宽度，窄屏直接被推出去。
 
-        2026-10-25 #4：**没勾选时也常驻一条「全选当前（N）」**。以前全选只藏在这里，
-        必须先勾上一行才浮出来 —— 用户进页面找不到全选按钮（Issue 原文：
-        「下载里边儿增加全选功能方便操作省时间」）。勾选与否只影响后面的批量动作。
-        `pt-0.5` + 负边距是为了让空状态这一行不把工具栏撑高太多。
+        2026-10-30 用户：「下载页面中,全选后,出现的已选,继续重新下载,删除记录这些和右上角的
+        恢复,失败,停止,记录重复了吧.我的建议是,去掉全选后出现的四个按钮.把全选按钮放到按序号选
+        这里.取消全选也放这里.右边原来的去掉全选的位置,改为重新下载.」
+
+        所以这一整行**删掉**了：
+          · 「已选 N」不再单独占一行 —— 它已经在「按序号选」那一行的标签里
+            （「按序号选（共 N 行可勾）」）+ 按钮文案「取消全选（M）」里；
+          · 暂停选中 / 继续 / 停止选中：对应右上角的「暂停 / 继续」切换与「停止全部」；
+          · 重新下载：移到右上角那一组（原来全选所在的位置）；
+          · 删除记录：右上角本来就有「清除记录」。
+        一句话：勾选只是「限定范围」，动作仍然只有一份、位置固定。
       -->
-      <div class="flex flex-wrap items-center gap-1">
-        <span v-if="selectedIds.length" class="px-1 text-[11px] text-[var(--ys-text-muted)]">
-          已选 <b class="text-[var(--ys-text)]">{{ selectedIds.length }}</b>
-        </span>
-        <button
-          v-for="a in (selectedIds.length ? selectionActions : idleActions)" :key="a.key"
-          type="button"
-          :disabled="a.disabled"
-          :class="[
-            'ys-press flex items-center gap-1 rounded-full px-2.5 py-1 text-[11.5px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-35',
-            a.danger
-              ? 'text-rose-600 hover:bg-rose-50'
-              : 'text-[var(--ys-text-muted)] hover:bg-black/[0.05] hover:text-[var(--ys-text)]',
-          ]"
-          :title="a.hint || a.label"
-          @click="onSelectionAction(a.key)"
-        >
-          <component :is="a.icon" v-if="a.icon" class="h-3.5 w-3.5" :stroke-width="1.9" />
-          {{ a.label }}
-        </button>
-        <button
-          v-if="selectedIds.length"
-          type="button"
-          class="ys-press grid h-7 w-7 place-items-center rounded-full text-[var(--ys-text-aux)] transition-colors hover:bg-black/[0.05] hover:text-[var(--ys-text)]"
-          title="取消选择"
-          @click="selected = new Set()"
-        >
-          <X class="h-3.5 w-3.5" :stroke-width="2" />
-        </button>
-      </div>
     </div>
 
   <!--
@@ -342,8 +328,9 @@
           </span>
 
           <!--
-            下载失败：列表里只给结论「下载失败」，具体原因放在 title 悬停可见，
-            同时已由 downloadManager 写进日志（见 services/appLog.js 的约定）。
+            下载失败：徽标给一句 4~6 字的结论（平台无此档 / 洛雪宿主未开 / 写盘失败…），
+            具体原因链在下面单独一行摊开 —— 以前只把整串塞进 title 悬停，
+            用户根本看不到（issue #10 原话「个别下载任务成功，歌单全部失败，这是废了吗」）。
           -->
           <span
             v-else-if="task.status === 'failed'"
@@ -351,7 +338,7 @@
             :title="task.error || '下载失败'"
           >
             <AlertCircle class="w-3 h-3 text-rose-500 shrink-0" />
-            <span>下载失败</span>
+            <span>{{ explainFailure(task.error).label }}</span>
           </span>
 
           <!--
@@ -404,8 +391,33 @@
           <span v-if="task.attempts > 0" class="text-gray-500">
             重试 {{ task.attempts }} 次
           </span>
+          <!--
+            去重标记：同一首歌在失败段里被收了 N 条（不同来源/不同 client_id 提交过
+            同一首，后端按 client_id 去重所以它们本来就是多条，见 dedupeBySong 的说明）。
+            只在这一行上标个数，不再列 N 行 —— 用户原话「失败里怎么出现多个同一首歌曲」。
+          -->
+          <span
+            v-if="task.dupCount > 1"
+            class="rounded bg-rose-50 px-1.5 py-0.5 font-mono text-rose-600"
+            :title="`同一首歌有 ${task.dupCount} 条失败记录（不同来源/不同时间提交），这里只列最新一条`"
+          >
+            共 {{ task.dupCount }} 条
+          </span>
           <span v-if="task.path" class="text-gray-500 truncate max-w-[220px]" :title="task.path">{{ task.path }}</span>
         </div>
+
+        <!--
+          失败原因链：把后端拼好的「原生：…；洛雪：…；外挂池：…」摊开成几行。
+          只在失败任务上出现，且只在真有明细时出现 —— 成功/排队中的行不多占一像素。
+        -->
+        <ul
+          v-if="task.status === 'failed' && explainFailure(task.error).detail.length"
+          class="mt-1 space-y-0.5 text-[10px] leading-4 text-rose-500/90"
+        >
+          <li v-for="(line, li) in explainFailure(task.error).detail" :key="li" class="truncate" :title="line">
+            · {{ line }}
+          </li>
+        </ul>
       </div>
 
       <!-- 右侧操作按钮 -->
@@ -500,34 +512,90 @@
   </div>
 
   <!--
+    底部状态提示条（2026-11-01 用户）：「下载页增加底部状态提示，并跟随状态切换页面
+    （有下载→下载页、有失败→失败页）」。
+
+    放底部不放顶部：顶部已有一行 backendNotice（讲「后台能不能下」，是前置条件），
+    再堆一行就两行提示抢位置；这条讲的是**队列此刻在干什么**，属于看一眼就走的状态，
+    贴着列表下沿最顺手。
+
+    移动端（同一条需求）：「下载状态单独一行、文字精简、不使用滚动条」——所以：
+      · 单独一层、flex 不换行，窄屏只留最关键的几个数字；
+      · 文字 truncate（父级 overflow-hidden），横向滚动条永不出现；
+      · 不做两套 DOM，只靠断点收字。
+  -->
+  <!--
+    ══ 底部任务状态提示：**弹出的小提示框**，不是常驻条 ══
+    2026-11-01（用户）：「底部状态提示是底部任务状态弹的小提示框。不是常驻」——
+    所以它不再是贴着列表下沿的一条常驻横条（原来那条会一直占着一行高度），
+    而是「任务状态一变就浮出来一下、几秒后自己收起」的浮动小胶囊：
+      · 绝对定位贴底居中，不占布局高度（列表高度不再被它吃掉）；
+      · 每次状态文案变化才重新弹出并重新计时（见 script 里 watch statusToast）；
+      · 带跳转按钮时把倒计时暂停——用户正要点的东西不能自己消失。
+  -->
+  <Transition
+    enter-active-class="transition duration-200 ease-out"
+    enter-from-class="translate-y-2 opacity-0"
+    enter-to-class="translate-y-0 opacity-100"
+    leave-active-class="transition duration-150 ease-in"
+    leave-from-class="translate-y-0 opacity-100"
+    leave-to-class="translate-y-2 opacity-0"
+  >
+    <div
+      v-if="statusToast"
+      class="pointer-events-none absolute inset-x-0 bottom-3 z-20 flex justify-center px-3"
+    >
+      <div
+        class="pointer-events-auto flex max-w-full items-center gap-2 rounded-full bg-[var(--ys-text)] px-3 py-1.5 text-[11.5px] text-white shadow-[0_4px_16px_rgba(0,0,0,0.18)]"
+        @mouseenter="holdStatusToast"
+        @mouseleave="resumeStatusToast"
+      >
+        <span class="h-1.5 w-1.5 shrink-0 rounded-full" :class="statusToast.dotClass" />
+        <span class="min-w-0 truncate">{{ statusToast.text }}</span>
+        <!--
+          跳转而不是自动抢筛选：自动切会把用户正看着的「已完成」列表抢走，
+          所以给一个明说「点去哪个页」的入口。优先级同样是 下载中 > 失败。
+        -->
+        <button
+          v-if="statusToast.jumpTo"
+          type="button"
+          class="ys-press shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold text-white/90 transition-colors hover:bg-white/15"
+          @click="jumpFromToast(statusToast.jumpTo)"
+        >{{ statusToast.jumpLabel }}</button>
+      </div>
+    </div>
+  </Transition>
+
+  <!--
     勾选了任务才浮出的操作条：清除选中 / 全选当前筛选。
 
     ⚠️ 这一条必须留在任何弹窗外面。以前它被写在 `Teleport + v-if` 的弹窗里，
     于是只有在那个弹窗打开时才存在 —— 平时勾了行什么都不浮出来，
     看起来就像「多选失效了」（用户 2026-10-23：「多选框上方增加多选功能……这些都失效了」）。
   -->
-  <SelectionBar
-    :count="selectedIds.length"
-    :actions="selectionActions"
-    @action="onSelectionAction"
-    @clear="selected = new Set()"
-  />
+  <!--
+    2026-10-30 用户：「去掉全选后出现的四个按钮」——
+    底部这条浮出条（已选 N + 继续 / 重新下载 / 删除记录 + X）同样是与右上角批量动作
+    重复的第二份，一并移除。勾选范围与「取消全选（M）」现在只在「按序号选」那一行，
+    动作只保留右上角那一份。
+    <SelectionBar> 组件本身继续由 DownloadHub / QualityView 使用，不删。
+  -->
 
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, onBeforeUnmount } from 'vue'
 import { downloadManager } from '../services/downloadManager'
 import SelectField from './SelectField.vue'
 import { backendDownload } from '../services/backendDownload.js'
-import SelectionBar from './SelectionBar.vue'
 import RangeSelectBar from './RangeSelectBar.vue'
 import { pickByIndexes } from '../services/rangeSelect'
+import { explainFailure } from '../services/failureBadge'
 import { ok as notifyOk, warn as notifyWarn } from '../services/feedback'
 import {
   X, RotateCw, Trash2, Check,
   AlertCircle, Loader2, Music2, Clock, Pause, PlayCircle, Square,
-  ListChecks, Eraser, RotateCcw, Info
+  ListChecks, Eraser, RotateCcw, RefreshCw, Info
 } from 'lucide-vue-next'
 
 const props = defineProps({
@@ -619,6 +687,19 @@ const queueActions = computed(() => [
       ? `${downloadManager.failedCount.value} 首失败，点一下全部重新排队`
       : '没有失败的任务',
   },
+  {
+    id: 'redownload',
+    // 2026-10-30 用户：「右边原来的去掉全选的位置,改为重新下载」。
+    // 这里原来是「全选当前」（已移到列表上方的「按序号选」那一行），
+    // 空出来的位置放「重新下载」：把已完成的任务用当前音质策略再要一遍，
+    // 与「重试失败」语义不重叠（一个补失败，一个换更好的音质重下）。
+    label: selectedDoneCount.value > 0 ? `重新下载已完成（${selectedDoneCount.value}）` : '重新下载',
+    icon: RefreshCw,
+    disabled: selectedDoneCount.value === 0,
+    hint: selectedDoneCount.value > 0
+      ? `把勾选的 ${selectedDoneCount.value} 首已完成任务用当前音质重新下载（盘上那份不会被更差的覆盖）`
+      : '先在左侧勾选已完成的歌曲，再点这里用当前音质重新下载',
+  },
   { id: 'stopAll', label: '停止全部', icon: Square, danger: true, disabled: downloadManager.activeCount.value + downloadManager.pausedCount.value === 0, hint: '停掉正在下载与排队中的任务（已完成的不受影响）' },
   { id: 'clearRecords', label: '清除记录', icon: Eraser, danger: true, disabled: terminalCount.value === 0, hint: `清除已完成 / 失败 / 已停止的 ${terminalCount.value} 条记录` },
 ])
@@ -647,6 +728,16 @@ async function onQueueMenu(key) {
       const n = await downloadManager.stopAll()
       if (n > 0) notifyOk(`已停止 ${n} 首`)
       else notifyWarn('当前没有在跑或排队的任务')
+    } else if (key === 'redownload') {
+      // 只有勾选了「已完成」的行才有意义：重下用的是当前音质策略，
+      // 盘上已有的文件不会被更差的覆盖（后端 force 提交，走同一套判重）。
+      const ids = selectedTasks.value.filter(t => t.status === 'success').map(t => t.id)
+      if (!ids.length) {
+        notifyWarn('先在列表左侧勾选已完成的歌曲，再点「重新下载」')
+        return
+      }
+      const n = await downloadManager.redownloadTasksByIds(ids)
+      notifyOk(`已把 ${n || ids.length} 首重新排进队列（原文件不会被删除）`)
     } else if (key === 'clearRecords') {
       await clearAllRecords()
     }
@@ -869,13 +960,133 @@ async function clearAllRecords() {
 
 const currentFilter = ref('all') // 'all' | 'downloading' | 'paused' | 'completed' | 'failed'
 
+/**
+ * 底部任务状态提示的内容（2026-11-01 用户要的「底部状态提示 + 跟随状态切页」）。
+ *
+ * 口径：
+ *   · 有在下的 → 先说「下载中 N」（最重要，用户想看进度）；
+ *   · 有失败的 → 再说「失败 M」，并给一个「去失败页」的入口（用户原话
+ *     「有失败→失败页」）；下载中也失败时，**下载中优先**，失败只作为后半句；
+ *   · 只有已完成 → 一行「已完成 K」。
+ * 全空（没有任何任务）时不出提示。
+ *
+ * 2026-11-01（用户）：「底部状态提示是底部任务状态弹的小提示框。不是常驻」——
+ * 所以这里只负责算出**内容**，由下面的 statusToast 状态机决定什么时候浮出来、
+ * 几秒后收起（见 watch(statusSummary)）。**不自动改 currentFilter**：自动切会把
+ * 用户正在看的列表抢走（看「已完成」时突然跳去「失败」，比没有提示更烦）。
+ */
+const statusSummary = computed(() => {
+  const tasks = downloadManager.tasks.value
+  const active = tasks.filter(t => t.status === 'pending' || t.status === 'downloading').length
+  const failed = tasks.filter(t => t.status === 'failed').length
+  const done = tasks.filter(t => t.status === 'success').length
+  const parts = []
+  if (active) parts.push(`下载中 ${active}`)
+  if (failed) parts.push(`失败 ${failed}`)
+  if (!active && done) parts.push(`已完成 ${done}`)
+
+  let jumpTo = ''
+  let jumpLabel = ''
+  if (active) {
+    jumpTo = 'downloading'
+    jumpLabel = '去看下载'
+  } else if (failed) {
+    jumpTo = 'failed'
+    jumpLabel = '去处理失败'
+  }
+
+  return {
+    hasAnything: parts.length > 0,
+    text: parts.join(' · ') || '',
+    dotClass: active
+      ? 'bg-[var(--ys-accent)]'
+      : (failed ? 'bg-rose-500' : 'bg-[#22c55e]'),
+    jumpTo,
+    jumpLabel,
+  }
+})
+
+/**
+ * 底部小提示框的状态机（2026-11-01 用户：「底部任务状态弹的小提示框。不是常驻」）。
+ *
+ * 规则：
+ *   · 文案（`statusSummary.text`）**变了**才弹出，并重新计时 —— 同一个数字不重复弹，
+ *     不然队列一直在跑时会每隔几秒闪一下，很吵；
+ *   · `STATUS_TOAST_MS` 后自动收起；鼠标停在上面时暂停倒计时（`holdStatusToast`），
+ *     移开继续（`resumeStatusToast`）—— 用户正要点跳转时它不能自己消失；
+ *   · 没有任何任务（`hasAnything` false）时立刻收起。
+ */
+const STATUS_TOAST_MS = 4000
+const statusToast = ref(null)
+let toastTimer = null
+let toastRemain = STATUS_TOAST_MS
+let toastStartedAt = 0
+
+function clearToastTimer() {
+  if (toastTimer) {
+    clearTimeout(toastTimer)
+    toastTimer = null
+  }
+}
+
+function armToastTimer(ms) {
+  clearToastTimer()
+  toastRemain = ms
+  toastStartedAt = Date.now()
+  toastTimer = setTimeout(() => {
+    toastTimer = null
+    statusToast.value = null
+  }, ms)
+}
+
+function holdStatusToast() {
+  if (!statusToast.value || !toastTimer) return
+  const elapsed = Date.now() - toastStartedAt
+  toastRemain = Math.max(600, toastRemain - elapsed)
+  clearToastTimer()
+}
+
+function resumeStatusToast() {
+  if (!statusToast.value) return
+  armToastTimer(toastRemain)
+}
+
+function jumpFromToast(filter) {
+  if (!filter) return
+  currentFilter.value = filter
+  statusToast.value = null
+  clearToastTimer()
+}
+
+watch(
+  () => statusSummary.value,
+  (s) => {
+    if (!s.hasAnything) {
+      statusToast.value = null
+      clearToastTimer()
+      return
+    }
+    if (statusToast.value && statusToast.value.text === s.text) return
+    statusToast.value = { ...s }
+    armToastTimer(STATUS_TOAST_MS)
+  },
+  { immediate: true, deep: false }
+)
+
+onBeforeUnmount(() => clearToastTimer())
+
+/**
+ * 筛选分段。
+ * `short` 是移动端用的 2 字名（2026-11-01 用户：「移动端……可以精简文字以便在一行里
+ * 显示完，不用拖动条」）——6 个 2 字标签 + 无计数，390px 宽也能一行放下。
+ */
 const filterTabs = computed(() => [
-  { id: 'all', name: '全部', count: downloadManager.totalCount.value },
-  { id: 'downloading', name: '下载中', count: downloadManager.activeCount.value },
-  { id: 'paused', name: '已暂停', count: downloadManager.pausedCount.value },
-  { id: 'stopped', name: '已停止', count: stoppedCount.value },
-  { id: 'completed', name: '已完成', count: downloadManager.completedCount.value },
-  { id: 'failed', name: '失败', count: downloadManager.failedCount.value },
+  { id: 'all', name: '全部', short: '全部', count: downloadManager.totalCount.value },
+  { id: 'downloading', name: '下载中', short: '下载', count: downloadManager.activeCount.value },
+  { id: 'paused', name: '已暂停', short: '暂停', count: downloadManager.pausedCount.value },
+  { id: 'stopped', name: '已停止', short: '停止', count: stoppedCount.value },
+  { id: 'completed', name: '已完成', short: '完成', count: downloadManager.completedCount.value },
+  { id: 'failed', name: '失败', short: '失败', count: downloadManager.failedCount.value },
 ])
 
 const stoppedCount = computed(() =>
@@ -886,6 +1097,35 @@ const currentFilterName = computed(() => {
   const match = filterTabs.value.find(t => t.id === currentFilter.value)
   return match ? match.name : ''
 })
+
+/**
+ * 失败列表里去重（2026-11-01 用户：「失败里怎么出现多个同一首歌曲」）。
+ *
+ * 真话：后端队列按 `client_id` 去重，**同一首歌确实只会有一条**（见
+ * backenddl.Queue.Submit）。界面上出现「好几首一样的」，是同一个平台同一首歌
+ * 被**不同来源**分别提交过：订阅行自动补下载用 `mon:<订阅id>:...` 当 client_id，
+ * 用户手动下载用 `dl-...`，重试又是另一次提交 —— client_id 各不相同，后端就不算
+ * 重复，界面上自然排成多行同一个歌名 + 歌手。
+ *
+ * 失败段按「歌名+歌手」收成一行（保留**最新那条**，其余计数），这样一眼看得出
+ * 是「同一首失败了好几次」而不是「这里有一堆不同的坏歌」。只在 failed 筛选下做，
+ * 「全部」段仍按原样逐条列出（那里能看到每一条的真实身份和错误）。
+ */
+function dedupeBySong(list) {
+  const seen = new Map()
+  for (const t of list) {
+    const s = t.song || {}
+    const key = `${(s.singer || '').trim()}||${(s.name || t.name || '').trim()}` || t.id
+    const hit = seen.get(key)
+    if (!hit) {
+      seen.set(key, { task: t, dup: 0 })
+    } else {
+      // list 已按 addedAt 倒序，第一条就是最新的一条
+      hit.dup += 1
+    }
+  }
+  return [...seen.values()].map(({ task, dup }) => (dup ? { ...task, dupCount: dup + 1 } : task))
+}
 
 const filteredTasks = computed(() => {
   const list = downloadManager.tasks.value
@@ -908,7 +1148,7 @@ const filteredTasks = computed(() => {
     return order.filter(t => t.status === 'success')
   }
   if (currentFilter.value === 'failed') {
-    return order.filter(t => t.status === 'failed')
+    return dedupeBySong(order.filter(t => t.status === 'failed'))
   }
   return order
 })

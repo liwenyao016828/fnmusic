@@ -43,10 +43,27 @@ type AppConfig struct {
 	DefaultNasDir string `json:"default_nas_dir"`
 	DownloadDir   string `json:"download_dir"`
 	// LogDir 日志落盘目录（2026-10-26 用户口径：「设置增加日志存储位置」）。
-	// 空串 = 默认不落盘（见 pkg/applog 包注释）；设置后每条运行日志同时写进 <LogDir>/qulv.log，
-	// 启动时由 NewServer 恢复生效。校验走 downloader.ValidateNasDir（绝对路径 + NAS 存储卷内）。
-	LogDir string `json:"log_dir"`
-	// 注：读目录请用 LibraryDir()，不要直接读字段 —— 空值时它要回退 DefaultNasDir，
+	// 设置后每条运行日志同时写进 <LogDir>/qulv.log，启动时由 NewServer 恢复生效。
+	//
+	// 三态语义（用指针才表达得出来，与 CacheDir 同一个坑）：
+	//   · nil 或指向空串 = 没自定义 → 用默认目录 <数据目录>/logs；
+	//   · 指向目录       = 用户指定的落盘位置。
+	// 关掉落盘不靠这个字段，靠 LogDiskEnabled（见下）。读它请走
+	// ConfigManager.EffectiveLogDir()，别自己解引用 —— nil 上 *a.LogDir 会崩。
+	//
+	// ⚠️ 这是 2026-11-01 补登记的字段。它 2026-10-26 上线时**只声明、没登记**
+	// load/Update 两处选择性合并，表现为「设置页保存成功、提示也写进去了，
+	// 但 log_dir 回读仍是空、重启更不用说」—— 因为 Get→改字段→Update 这条路里，
+	// Update 的合并循环压根没有 LogDir 分支，写盘的配置里它永远是空串。
+	LogDir *string `json:"log_dir,omitempty"`
+	// LogDiskEnabled 是否把运行日志落盘（2026-11-01，用户 m00938「要能追查」）。
+	//
+	// nil = 默认**开**（落盘到 <数据目录>/logs，开箱即用、重启不丢）；false = 关闭，
+	// 日志只留内存、重启即清空。之所以默认开：日志只存内存等于「出事时现场已经没了」，
+	// 而 pkg/applog 早已把带签名的直链一律降级成域名（applog.HostOf），
+	// 落盘留在 NAS 上的不再是访问凭据，只剩路径与动作。
+	LogDiskEnabled *bool `json:"log_disk_enabled,omitempty"`
+	// 注：读目录请用 LibraryDir()，不要直接读字段 —— 空值时它要回退 DefaultNasDir、
 	// 两处各写一份回退逻辑迟早会漂（下载器就踩过：显示 /vol1/Music、实际写别处）。
 	ActiveSourceID string `json:"active_source_id"`
 	// ActiveSourceIDs 启用池（有序，前面的优先）。用户 2026-09-30 定的多选激活：
@@ -95,16 +112,20 @@ type AppConfig struct {
 	// 顺序只决定「先问谁」，**不承诺音质** —— 换源判据仍然是实际解析出的档位，
 	// 不比基线好的候选一律不换（v2.13.0 定下的口径，不许用顺序去推翻它）。
 	AutoDownloadChannels []string `json:"auto_download_channels,omitempty"`
-	// DownloadQualityOverride 是**全局**「下载音质」开关（照参考实现的
-	// FNMUSIC_DL_QUALITY）。它不改上面那两个字段，而是**盖住**它们 ——
-	// 「跟着各自设置」和「这次我想都用某档」是两件事，混进一个字段就再也回不去了。
+	// DownloadQualityOverride 是**全局**「下载音质」模式。它不改上面那两个
+	// 字段，而是**盖住**它们 —— 一个开关管到底，不再有第二个开关。
 	//
-	//   ""         = 跟随各入口自己的设置（默认）；
-	//   "lossless" = 一律点名无损（下不到就按各入口自己的规则兜底，不会变成下载失败）；
-	//   "mp3_320"  = 一律点名 320k。
+	//   ""           = 跟随页面设置（默认）：用下载时页面上选的档位；平台没有
+	//                  那一档时，自动降下去用平台实际有的那档（有音源就下下来）；
+	//   "top_only"   = 仅下载最高：一律只要最高档，平台给不了就报缺档，不降；
+	//   "auto_lower" = 自动降档：一律先要最高档，拿不到就自动降。
 	//
-	// 只有这两个取值会被认；认不出就当作跟随。**没有转码能力**（NAS 上没有
-	// ffmpeg），所以「MP3 320k」是「点名这一档」而不是「转成 320k」。
+	// 认不出的值一律当「跟随」（宁可退化成各用各的，也不要因为一个错值把
+	// 所有下载钉死）。字段名沿用 override 是为了兼容老配置：旧值 lossless
+	// 迁移成 top_only，mp3_320 迁移成跟随。
+	//
+	// **没有转码能力**（NAS 上没有 ffmpeg），所以任何档位都是「点名这一档」
+	// 而不是「转成这一档」。
 	//
 	// 指针是必须的：空串本身就是一个合法取值（= 跟随）。用 string 的话
 	// 「非空才写」的合并规则会让它永远回不到跟随 —— 与 CacheDir 同一个坑。
@@ -776,36 +797,63 @@ func (a AppConfig) ValidateDirs() string {
 	return ""
 }
 
-// 「下载音质」开关的三个取值。
+// 「下载音质」模式的三个取值 —— 用户只需要在这三个里选一个。
 const (
-	DownloadQualityFollow   = ""         // 跟随各入口自己的设置
-	DownloadQualityLossless = "lossless" // 一律点名无损
-	DownloadQualityMP3      = "mp3_320"  // 一律点名 320k
+	DownloadQualityFollow    = ""           // 跟随页面设置
+	DownloadQualityTopOnly   = "top_only"   // 仅下载最高（给不了就报缺档，不降）
+	DownloadQualityAutoLower = "auto_lower" // 自动降档（先要最高，拿不到就降）
 )
 
-// DownloadQualitySetting 返回生效的「下载音质」开关；nil / 空白 = 跟随。
+// 旧配置值的迁移目标（见 DownloadQualityOverride 的注释）。
+const (
+	legacyQualityLossless = "lossless"
+	legacyQualityMP3      = "mp3_320"
+)
+
+// NormalizeQualityMode 把任意输入收敛成三个合法模式之一；认不出就当「跟随」。
+func NormalizeQualityMode(v string) string {
+	switch strings.TrimSpace(v) {
+	case DownloadQualityTopOnly:
+		return DownloadQualityTopOnly
+	case DownloadQualityAutoLower:
+		return DownloadQualityAutoLower
+	case legacyQualityLossless:
+		// 旧值「一律无损」的意图就是「只要最高档」，映射到唯一沾边的模式。
+		return DownloadQualityTopOnly
+	case legacyQualityMP3:
+		// 旧值「一律 320K」在新三选一里没有对应项：退回「跟随页面」，
+		// 至少不会把用户的下载钉死在一个他这次没选的档位上。
+		return DownloadQualityFollow
+	default:
+		return DownloadQualityFollow
+	}
+}
+
+// DownloadQualitySetting 返回生效的「下载音质」模式（已收敛到三种之一）。
 func (a AppConfig) DownloadQualitySetting() string {
 	if a.DownloadQualityOverride == nil {
 		return DownloadQualityFollow
 	}
-	return strings.TrimSpace(*a.DownloadQualityOverride)
+	return NormalizeQualityMode(*a.DownloadQualityOverride)
 }
 
-// QualityOverride 把「下载音质」开关套到某个入口自己的档位上。
+// QualityModeTarget 把模式套到某个入口自己的档位上，得到这次要**点名**的档位。
 //
-// 认不出的覆盖值一律当「跟随」：宁可退化成各用各的，也不要因为一个错值
-// 把所有下载都钉死在某一档。这个映射在网页端 services/qualityOverride.js
-// 有一份镜像（那份是给下载队列用的），改这里请一起改。
-func QualityOverride(base, override string) string {
-	switch strings.TrimSpace(override) {
-	case DownloadQualityLossless:
-		// 点名无损。两个入口的取值表里都有 "flac" 这一档。
+// 两种非跟随模式都先点名最高档（"flac"）—— 它们的差别不在要什么，而在
+// **拿不到时降不降**（见 QualityModeAllowsLower）。
+func QualityModeTarget(base, mode string) string {
+	switch NormalizeQualityMode(mode) {
+	case DownloadQualityTopOnly, DownloadQualityAutoLower:
 		return "flac"
-	case DownloadQualityMP3:
-		return "320k"
 	default:
 		return strings.TrimSpace(base)
 	}
+}
+
+// QualityModeAllowsLower 表示该模式下「平台没有点名的这一档」时能不能降级去
+// 用它实际有的那一档。只有「仅下载最高」说不。
+func QualityModeAllowsLower(mode string) bool {
+	return NormalizeQualityMode(mode) != DownloadQualityTopOnly
 }
 
 // CacheDirPath 返回生效的缓存目录；空串 = 用程序推导的默认值。
@@ -814,6 +862,22 @@ func (a AppConfig) CacheDirPath() string {
 		return ""
 	}
 	return strings.TrimSpace(*a.CacheDir)
+}
+
+// LogDirPath 返回**用户自定义**的日志落盘目录；空串 = 没自定义（用默认位置）。
+//
+// 这是"原始字段"的读取口径，只在设置页回显、以及计算最终生效目录时用。
+// 想知道"现在日志到底写不写、写到哪"，请用 ConfigManager.EffectiveLogDir()。
+func (a AppConfig) LogDirPath() string {
+	if a.LogDir == nil {
+		return ""
+	}
+	return strings.TrimSpace(*a.LogDir)
+}
+
+// LogDiskOn 报告日志是否落盘：**没表过态就是开**（用户 m00938：出问题必须能追查）。
+func (a AppConfig) LogDiskOn() bool {
+	return a.LogDiskEnabled == nil || *a.LogDiskEnabled
 }
 
 // MusicDLOn 报告 sidecar 开没开（nil = 关）。
@@ -947,11 +1011,11 @@ func NewConfigManager(dataDir string, defaultPort int) (*ConfigManager, error) {
 		_ = os.MkdirAll(dataDir, 0755)
 	}
 
-	defaultDir := "/vol1/Music"
-	if _, err := os.Stat("/vol1"); err != nil {
-		defaultDir = filepath.Join(dataDir, "music")
-		_ = os.MkdirAll(defaultDir, 0755)
-	}
+	// 2026-10-31：不再写死 /vol1/Music。那是项目历史默认，不是飞牛授权目录 ——
+	// 用户根本没在「应用中心 → 曲率 → 设置 → 授权目录」里授权过 /vol1，
+	// 却会被当成曲库目录用（下载往里写、界面拿它当默认值）。
+	// 现在只认路径守卫的真实授权根（见 SetDefaultDirProvider），一个都没有就留空。
+	defaultDir := DefaultLibraryDir()
 
 	cm := &ConfigManager{
 		filePath: filepath.Join(dataDir, "config.json"),
@@ -989,6 +1053,17 @@ func (cm *ConfigManager) load() {
 		} else if cm.config.DefaultNasDir != "" {
 			cm.config.DownloadDir = cm.config.DefaultNasDir
 		}
+		// 日志落盘（2026-11-01 补登记）。两个字段都是「给了才改」：nil = 文件里没这个键
+	// → 保持原值。⚠️ 这条以前**整段不存在**，字段在结构体里、接口也在用，但
+	// load 不读回，重启后一律当成「没配置」。见 AppConfig.LogDir 上的说明。
+		if c.LogDir != nil {
+			v := *c.LogDir
+			cm.config.LogDir = &v
+		}
+		if c.LogDiskEnabled != nil {
+			v := *c.LogDiskEnabled
+			cm.config.LogDiskEnabled = &v
+		}
 		// 启用池：nil = 老配置（或从没设置过）→ 用旧的单值迁移成单元素池；
 		// 非 nil（含空数组）都是用户的真实选择，原样读回。
 		if c.ActiveSourceIDs != nil {
@@ -1015,7 +1090,7 @@ func (cm *ConfigManager) load() {
 			cm.config.AutoDownloadChannels = NormalizeDownloadChannels(c.AutoDownloadChannels)
 		}
 		if c.DownloadQualityOverride != nil {
-			v := strings.TrimSpace(*c.DownloadQualityOverride)
+			v := NormalizeQualityMode(*c.DownloadQualityOverride)
 			cm.config.DownloadQualityOverride = &v
 		}
 		if c.CustomSources != nil {
@@ -1147,6 +1222,27 @@ func (cm *ConfigManager) DataDir() string {
 	return filepath.Dir(cm.filePath)
 }
 
+// EffectiveLogDir 返回**当前生效**的日志落盘目录；空串 = 不落盘。
+//
+// 这是「日志到底写不写、写到哪」的唯一判据，启动恢复与设置页都要走它：
+//   · LogDiskOn() 为假（用户明确关掉了）→ 空串；
+//   · 用户自定义了目录 → 用那个目录；
+//   · 都没设置 → <数据目录>/logs（开箱即落盘，重启不丢）。
+//
+// 默认落在数据目录里而不是 NAS 音乐目录，是因为后者要用户先授权（
+// downloader.ValidateNasDir 会拦），而「日志该落盘」这件事不该被授权流程堵住。
+// 数据目录本来就是应用自己的地方（配置、缓存、索引都在那儿），写日志不算越界。
+func (cm *ConfigManager) EffectiveLogDir() string {
+	cfg := cm.Get()
+	if !cfg.LogDiskOn() {
+		return ""
+	}
+	if dir := cfg.LogDirPath(); dir != "" {
+		return filepath.Clean(dir)
+	}
+	return filepath.Join(cm.DataDir(), "logs")
+}
+
 // UIPrefs 返回窗口记忆管理器（各页面点击状态持久化到 ui_prefs.json）。
 func (cm *ConfigManager) UIPrefs() *UIPrefsManager {
 	return cm.uiPrefs
@@ -1190,6 +1286,16 @@ func (cm *ConfigManager) Update(c AppConfig) error {
 	if c.DownloadDir != "" {
 		cm.config.DownloadDir = c.DownloadDir
 	}
+	// 日志落盘（2026-11-01 补登记）：nil = 这次没提 → 不动；
+	// 给了就照给（LogDir 指向空串 = 回到默认位置，LogDiskEnabled 给 false = 关闭）。
+	if c.LogDir != nil {
+		v := *c.LogDir
+		cm.config.LogDir = &v
+	}
+	if c.LogDiskEnabled != nil {
+		v := *c.LogDiskEnabled
+		cm.config.LogDiskEnabled = &v
+	}
 	if c.ActiveSourceIDs != nil {
 		cm.config.SetActiveIDs(c.ActiveSourceIDs)
 	} else if c.ActiveSourceID != "" {
@@ -1215,7 +1321,7 @@ func (cm *ConfigManager) Update(c AppConfig) error {
 		cm.config.AutoDownloadChannels = NormalizeDownloadChannels(c.AutoDownloadChannels)
 	}
 	if c.DownloadQualityOverride != nil {
-		v := strings.TrimSpace(*c.DownloadQualityOverride)
+		v := NormalizeQualityMode(*c.DownloadQualityOverride)
 		cm.config.DownloadQualityOverride = &v
 	}
 	if c.CustomSources != nil {
@@ -1404,17 +1510,49 @@ func (a AppConfig) SnapshotsScheduled() bool {
 // LibraryDir 返回**生效**的下载落盘目录（曲库目录）。
 //
 // 与 pkg/downloader 的 getDownloadDir 同一口径：DownloadDir 为空时回退
-// DefaultNasDir，再为空回退 /vol1/Music，最后 Clean —— 下载写哪里，这里就报哪里。
+// DefaultNasDir，再为空回退「当前授权到的第一个目录」（DefaultLibraryDir），
+// 仍然为空就返回空串 —— 下载写哪里，这里就报哪里。
+//
+// ⚠️ 2026-10-31：最后那级兜底以前是写死的 "/vol1/Music"。用户没授权任何目录时
+// 它会返回一个**根本无权访问**的路径，界面拿它当默认值、下载任务往里写，
+// 最后表现成「没授权却能看到/动到别处」。现在改成 fail closed：没有授权目录就回空串，
+// 由界面提示「先授权一个音乐目录」。
 func (a *AppConfig) LibraryDir() string {
 	if a == nil {
-		return "/vol1/Music"
+		return DefaultLibraryDir()
 	}
 	dir := a.DownloadDir
 	if dir == "" {
 		dir = a.DefaultNasDir
 	}
 	if dir == "" {
-		dir = "/vol1/Music"
+		dir = DefaultLibraryDir()
+	}
+	if dir == "" {
+		return ""
 	}
 	return filepath.Clean(dir)
+}
+
+// defaultDirProvider 由 main 注入，返回「当前真实授权到的第一个目录」。
+//
+// 放在这里而不是直接 import pkg/nas：pkg/config 是被所有层依赖的底层包，
+// 让它反向依赖路径守卫会把授权判断和配置读写绑死（也会把 nas 那一大票
+// 依赖拖进来）。main 里用 nas.AllowedRoots() + fnos.DataSharePaths() 组合实现。
+var defaultDirProvider func() string
+
+// SetDefaultDirProvider 注入「默认曲库目录」的来源，传 nil 表示清除。
+func SetDefaultDirProvider(fn func() string) {
+	defaultDirProvider = fn
+}
+
+// DefaultLibraryDir 返回注入来源给出的默认目录；没注入或没有授权目录时回空串。
+//
+// 空串是**合法结果**（= 用户还没授权任何目录），调用方不得把它当成错误，
+// 也不能自己再补一个写死的路径。
+func DefaultLibraryDir() string {
+	if defaultDirProvider == nil {
+		return ""
+	}
+	return strings.TrimSpace(defaultDirProvider())
 }

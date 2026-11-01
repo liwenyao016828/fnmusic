@@ -62,9 +62,11 @@ func (s *Server) HandleProtocols(w http.ResponseWriter, r *http.Request) {
 }
 
 // protocolSummary 生成人类可读的当前协议状态说明。
+// 2026-11-01（用户）：协议卡里的 LX 卡位已换成「服务端洛雪宿主」卡（含开关），
+// 这里不再提「LX 协议卡」，只说「取直链」这件事。
 func protocolSummary(lxSourceCount int) string {
 	if lxSourceCount > 0 {
-		return "官方协议（搜索 / 榜单 / 歌单 / 歌词）与 LX 协议（取直链）均已就绪，可正常搜索并播放。"
+		return "官方协议（搜索 / 榜单 / 歌单 / 歌词）已就绪，取直链已接入服务端洛雪宿主，可正常搜索并播放。"
 	}
-	return "官方协议已就绪：无需导入音源即可搜索、浏览榜单与查看歌词。要播放音乐，还需在「音源管理」导入一个 LX 音源脚本用于取直链。"
+	return "官方协议已就绪：无需导入音源即可搜索、浏览榜单与查看歌词。要播放音乐，还需在下方「服务端洛雪宿主」里导入一个洛雪音源脚本用于取直链。"
 }

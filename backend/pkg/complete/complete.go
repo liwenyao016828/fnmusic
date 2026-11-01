@@ -29,10 +29,12 @@ package complete
 import (
 	"context"
 	"fmt"
+	"log"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"fn-lx-player/pkg/ai"
 	"fn-lx-player/pkg/match"
@@ -343,8 +345,47 @@ func withDefaults(o Options) Options {
 // 需要「先预览后写」时用 `Resolve` + `Execute` 两步，见它们的注释。
 // 单首失败不会拖垮整批：结果里逐条给出原因。
 func Run(ctx context.Context, targets []Target, opts Options, onProgress func(Progress)) Summary {
+	// 任务日志：补全整理是「一次跑几百首、动的是用户原始文件」的批任务。
+	// 以前整个包一条日志都没有 —— 跑完之后「写了多少、哪几首没写进去、
+	// 备份在哪」只能靠界面那一屏，关掉就没了。这里给任务两端各留一条。
+	log.Printf("[COMPLETE] 任务开始：目标 %d 首（并发 %d）", len(targets), withDefaults(opts).Concurrency)
+	startedAt := time.Now()
 	plan := Resolve(ctx, targets, opts, nil)
-	return Execute(ctx, plan, opts, onProgress)
+	sum := Execute(ctx, plan, opts, onProgress)
+	log.Printf("[COMPLETE] 任务结束：共 %d，匹配 %d，未匹配 %d，写歌词 %d，写封面 %d，写流派 %d，写年份 %d，失败 %d，已停止 %d，耗时 %s%s%s",
+		sum.Total, sum.Matched, sum.NoMatch, sum.LyricFilled, sum.CoverFilled,
+		sum.GenreFilled, sum.YearFilled, sum.Failed, sum.Cancelled,
+		briefSpan(time.Since(startedAt)), backupLog(sum), cancelledLog(ctx))
+	return sum
+}
+
+// backupLog 把「撤销到底还能不能用」写进任务日志：备份清单写失败时，
+// 界面上只是一句不影响本次结果的小字，事后要能查得到。
+func backupLog(sum Summary) string {
+	if sum.BackupError != "" {
+		return "；" + sum.BackupError
+	}
+	if sum.BackupDir != "" {
+		return "；备份目录 " + sum.BackupDir
+	}
+	return ""
+}
+
+// cancelledLog 区分「正常跑完」和「被用户停止」——两者汇总数字很像，
+// 但后半部分文件根本没被处理，日志里必须说清。
+func cancelledLog(ctx context.Context) string {
+	if ctx.Err() != nil {
+		return "（任务被停止，未处理的曲目未改动）"
+	}
+	return ""
+}
+
+// briefSpan 把耗时压成「12s」「1m23s」。
+func briefSpan(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%.1fs", d.Seconds())
+	}
+	return fmt.Sprintf("%dm%02ds", int(d.Minutes()), int(d.Seconds())%60)
 }
 
 // ── 阶段一：解析（**不动文件**）──
@@ -847,11 +888,16 @@ func Execute(ctx context.Context, plan Plan, opts Options, onProgress func(Progr
 	// 否则「停了一次，汇总里只少了 1 首」，用户会以为剩下的都处理过了。
 	out.Cancelled += len(plan.Items) - dispatched
 
+	// 失败其实不需要「逐条进日志」——几百首一起跑会把日志刷满。真正需要的是
+	// 「哪几首出问题、原因是什么」：只摘前 10 条明细 + 总数，其余靠结果页。
+	logFailures(out.Results)
+
 	// 落盘备份清单 —— 「撤销」要用它。没备份任何文件时不会留下空目录。
 	if opts.Backup != nil {
 		if err := opts.Backup.Commit(); err != nil {
 			// 清单写不出来不阻断任务（文件已经改了），但要让调用方知道撤销会不可用
 			out.BackupError = "备份清单写入失败，本次可能无法撤销：" + err.Error()
+			log.Printf("[COMPLETE] 备份清单写入失败（本次可能无法撤销）：%v", err)
 		}
 		if opts.Backup.Count() > 0 {
 			out.BackupDir = opts.Backup.Dir()
@@ -1187,4 +1233,30 @@ func firstNonEmpty(vals ...string) string {
 		}
 	}
 	return ""
+}
+
+// logFailures 把「匹配上了但没写成功」的条目摘几条进运行日志。
+//
+// 只记 !OK && Matched：没匹配上（find 不到同名曲目）是正常结果，
+// 单独罗列会把日志刷成噪音，也让真失败被淹掉。
+func logFailures(results []ItemResult) {
+	var lines []string
+	total := 0
+	for _, r := range results {
+		if r.OK || !r.Matched || r.Cancelled {
+			continue
+		}
+		total++
+		if len(lines) < 10 {
+			lines = append(lines, fmt.Sprintf("%s（%s）：%s", r.Path, r.Title, r.Error))
+		}
+	}
+	if total == 0 {
+		return
+	}
+	suffix := ""
+	if total > len(lines) {
+		suffix = fmt.Sprintf("；另有 %d 首未列出", total-len(lines))
+	}
+	log.Printf("[COMPLETE] %d 首写入失败：%s%s", total, strings.Join(lines, "；"), suffix)
 }

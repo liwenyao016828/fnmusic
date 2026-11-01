@@ -149,6 +149,14 @@ type Config struct {
 	// 与 PreferQuality（网页端下载队列的默认音质）分开：那两个入口的用户意图不同 ——
 	// 网页端点下载的人看着进度条，官方页面点红心的人只想「这首歌归我」。
 	AutoDownloadQuality func() string
+	// QualityMode 返回「下载音质模式」（见 pkg/config 的 DownloadQuality* ）：
+	// follow 跟随页面 / top_only 仅下载最高 / auto_lower 自动降档。现取；nil = 跟随。
+	//
+	// 为什么拦截层也要知道模式：`AutoDownloadQuality` 拿到的是**模式套过之后**的档位，
+	// 而 `QualityModeTarget` 对「仅下载最高」和「自动降档」都返回 flac —— 光看档位
+	// 分不出这两种意图，于是「仅下载最高」在自动下载这条路上会照样降档（2026-11-01
+	// 用户报的「选了仅下载最高还是给我 mp3」）。要判「能不能降」只能问模式本身。
+	QualityMode func() string
 	// AutoDownloadChannels 返回「允许哪些取音渠道、按什么顺序试」，现取。
 	//
 	// 用户 2026-10-21 的要求（m02588）：「增加一个自动下载源（方式：lx，网易云，dl）

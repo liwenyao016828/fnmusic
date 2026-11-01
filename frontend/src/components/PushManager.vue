@@ -94,8 +94,8 @@
               <div class="mt-3 flex flex-wrap gap-1.5">
                 <button
                   :class="[
-                    'rounded-lg px-2.5 py-1 text-[11px] font-semibold transition-all',
-                    s.done ? 'border border-[var(--ys-border)] text-gray-600 hover:bg-[var(--ys-surface-hover)]' : 'bg-emerald-600 text-white hover:bg-emerald-700',
+                    'ys-btn ys-btn-sm',
+                    s.done ? 'border border-[var(--ys-border)] text-gray-600 hover:bg-[var(--ys-surface-hover)]' : 'ys-btn-primary',
                   ]"
                   @click="runGuideAction(s)"
                 >{{ s.action.label }}</button>
@@ -103,16 +103,14 @@
             </div>
           </div>
         </div>
-        <div v-else
-          class="flex flex-wrap items-center gap-2 rounded-[var(--ys-radius-block)] border border-[var(--ys-border)] bg-white px-[17px] py-3 text-[11px] text-gray-500">
-          <span class="flex h-5 w-5 items-center justify-center rounded-md bg-emerald-50 text-emerald-600">
-            <Check class="h-3 w-3" />
-          </span>
-          <span>使用引导已收起</span>
-          <button class="text-emerald-600 hover:underline" @click="openPushGuide">展开看看</button>
-        </div>
-
         <!--
+          工具栏（2026-10-30 用户：「引导文字和按钮可以与下面多选全部执行,新建订阅一行」）
+
+          以前：收起态是一条独立的白卡横幅，展开态是一条「首次使用 · N/3」条，
+          两种态各占一整行，然后把多选 / 全部执行 / 新建订阅挤在下一行。
+          现在合成**一行**：左边是引导的状态与入口（纯文字级，不占版面），
+          右边是三个动作。工具栏只留一行，列表就能早一点出现在第一屏。
+
           全部执行（GitHub issue #6，@jinjinfun：「大佬订阅里建议增加一键下载到本地，
           一键同步到飞牛歌单，一键执行。」）—— 之前只有行内的「立即执行」，
           订阅一多就得一行一行点，批量这件事完全没有入口。
@@ -122,77 +120,88 @@
 
           title 挂在 span 上：禁用状态的 button 在多数浏览器里收不到 hover 事件，
           挂在它自己的 title 上等于没写 —— 用户会觉得「灰着但不告诉我为什么」。
+
+          按钮统一用全站 `.ys-btn` 系列（2026-10-30 v2.28 飞牛化后统一 8px 圆角 /
+          12px 字 / 32px 高），不再手抄 emerald 实心色 —— 主按钮走 `.ys-btn-primary`
+          （钴蓝 `--ys-accent`），与设置页、命名规则面板同一套。
         -->
-        <div class="flex flex-wrap items-center justify-end gap-2">
-          <button
-            v-if="runAllBusy"
-            class="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[13px] font-medium text-rose-600 transition-colors hover:bg-rose-100 disabled:opacity-50"
-            :disabled="runAllStopRequested"
-            title="当前请求返回后停止提交，已开始的后台任务会继续"
-            @click="stopRunAll"
-          >{{ runAllStopRequested ? '停止中…' : '停止' }}</button>
-          <!--
-            用户 2026-10-25：「多选后右上角展示删除」—— 删除按钮就落在这行工具栏的最右，
-            也就是页面右上角；没勾任何订阅时不出现，避免一个点了没用的红按钮常驻。
-            进入选择态用「多选」按钮（与飞牛同步历史的勾选式多选同一套习惯：勾选框 + 全选 + 批量按钮）。
-          -->
-          <template v-if="subSelectMode">
-            <span class="mr-auto text-[11px] text-gray-500">
-              已选 <b class="text-gray-700">{{ subSelected.size }}</b> / {{ subscriptions.length }}
+        <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+          <div class="flex min-w-0 items-center gap-2 text-[11px] text-[var(--ys-text-muted)]">
+            <span v-if="pushGuideCollapsed" class="flex items-center gap-1.5">
+              <span class="flex h-4 w-4 items-center justify-center rounded-full bg-emerald-50 text-emerald-600">
+                <Check class="h-2.5 w-2.5" />
+              </span>
+              使用引导已收起
+            </span>
+            <span v-else class="flex items-center gap-1.5">
+              <span class="h-1.5 w-1.5 rounded-full" :class="pushGuideAllDone ? 'bg-emerald-600' : 'bg-[var(--ys-accent)]'"></span>
+              首次使用 · 已完成
+              <b class="tabular-nums text-[var(--ys-text)]">{{ pushGuideDone }}/{{ pushGuideSteps.length }}</b>
             </span>
             <button
-              class="rounded-lg px-2.5 py-1 text-[12px] text-gray-500 transition-colors hover:bg-[var(--ys-surface-hover)] disabled:opacity-50"
-              :disabled="subDeleting"
-              @click="toggleAllSubs"
-            >{{ subAllSelected ? '全不选' : '全选' }}</button>
-            <button
-              class="rounded-lg px-2.5 py-1 text-[12px] text-gray-500 transition-colors hover:bg-[var(--ys-surface-hover)] hover:text-gray-600 disabled:opacity-50"
-              :disabled="subDeleting"
-              @click="exitSubSelect"
-            >取消</button>
-            <button
-              v-if="subSelected.size"
-              class="rounded-lg bg-rose-50 px-3 py-2 text-[13px] font-semibold text-rose-600 transition-colors hover:bg-rose-100 disabled:opacity-50"
-              :disabled="subDeleting"
-              title="删除选中的订阅：两侧任务记录一起删；已下载的文件和飞牛歌单里的歌不受影响"
-              @click="batchRemoveRows"
-            >{{ subDeleting ? '删除中…' : `删除（${subSelected.size}）` }}</button>
-          </template>
-          <button
-            v-else
-            class="rounded-lg border border-[var(--ys-border)] px-3 py-2 text-[12px] text-gray-600 transition-colors hover:bg-[var(--ys-surface-hover)] disabled:opacity-40"
-            :disabled="!subscriptions.length"
-            title="进入多选：勾选多条订阅后一次删掉"
-            @click="enterSubSelect"
-          >多选</button>
-          <span v-if="!subSelectMode" class="inline-flex" :title="runAllTitle">
-            <button
-              class="rounded-lg border px-4 py-2 text-[13px] font-semibold transition-all disabled:opacity-50"
-              :class="runnableRows.length
-                ? 'border-emerald-200 bg-emerald-50 text-emerald-600 hover:bg-emerald-50'
-                : 'border-[var(--ys-border)] bg-white text-gray-500'"
-              :disabled="runAllBusy || !runnableRows.length"
-              @click="runAll"
-            >{{ runAllText }}</button>
-          </span>
-          <button
-            v-if="!subSelectMode"
-            class="flex shrink-0 items-center justify-center rounded-lg bg-emerald-600 px-4 py-2 text-[13px] font-semibold text-white transition-all hover:bg-emerald-700"
-            @click="openCreate"
-          >
-            + 新建订阅
-          </button>
-        </div>
+              class="shrink-0 text-[11px] font-medium text-[var(--ys-accent)] hover:underline"
+              @click="pushGuideCollapsed ? openPushGuide() : hidePushGuide()"
+            >{{ pushGuideCollapsed ? '展开看看' : '收起' }}</button>
+          </div>
 
-        <!-- 下载统一由服务端执行，可用渠道以下载页状态为准。 -->
-        <p
-          v-if="pushGuideCollapsed && !apiSourceCount"
-          class="rounded-[var(--ys-radius-block)] border border-[var(--ys-border)] bg-white px-4 py-2.5 text-[11px] text-gray-500"
-          title="下载由后端服务执行并持久化，页面关闭后仍继续；可用渠道在「下载」页查看状态。"
-        >
-          <b class="text-gray-700">下载任务由后台服务执行</b>
-          <span class="ml-1 text-gray-500">页面可关闭，状态见「下载」页</span>
-        </p>
+          <div class="flex flex-wrap items-center justify-end gap-1.5">
+            <button
+              v-if="runAllBusy"
+              class="ys-btn ys-btn-sm"
+              :disabled="runAllStopRequested"
+              title="当前请求返回后停止提交，已开始的后台任务会继续"
+              @click="stopRunAll"
+            >{{ runAllStopRequested ? '停止中…' : '停止' }}</button>
+
+            <!--
+              用户 2026-10-25：「多选后右上角展示删除」—— 删除落在工具栏最右，
+              没勾任何订阅时不出现，避免一个点了没用的红按钮常驻。
+              进入选择态用「多选」按钮（与飞牛同步历史同一套习惯：勾选框 + 全选 + 批量按钮）。
+            -->
+            <template v-if="subSelectMode">
+              <span class="text-[11px] text-[var(--ys-text-muted)]">
+                已选 <b class="tabular-nums text-[var(--ys-text)]">{{ subSelected.size }}</b> / {{ subscriptions.length }}
+              </span>
+              <button
+                class="ys-btn ys-btn-sm ys-btn-ghost"
+                :disabled="subDeleting"
+                @click="toggleAllSubs"
+              >{{ subAllSelected ? '全不选' : '全选' }}</button>
+              <button
+                class="ys-btn ys-btn-sm ys-btn-ghost"
+                :disabled="subDeleting"
+                @click="exitSubSelect"
+              >取消</button>
+              <button
+                v-if="subSelected.size"
+                class="ys-btn ys-btn-sm ys-btn-danger"
+                :disabled="subDeleting"
+                title="删除选中的订阅：两侧任务记录一起删；已下载的文件和飞牛歌单里的歌不受影响"
+                @click="batchRemoveRows"
+              >{{ subDeleting ? '删除中…' : `删除（${subSelected.size}）` }}</button>
+            </template>
+            <button
+              v-else
+              class="ys-btn ys-btn-sm"
+              :disabled="!subscriptions.length"
+              title="进入多选：勾选多条订阅后一次删掉"
+              @click="enterSubSelect"
+            >多选</button>
+
+            <span v-if="!subSelectMode" class="inline-flex" :title="runAllTitle">
+              <button
+                class="ys-btn ys-btn-sm"
+                :disabled="runAllBusy || !runnableRows.length"
+                @click="runAll"
+              >{{ runAllText }}</button>
+            </span>
+            <button
+              v-if="!subSelectMode"
+              class="ys-btn ys-btn-sm ys-btn-primary"
+              @click="openCreate"
+            >新建订阅</button>
+          </div>
+        </div>
 
         <!--
           飞牛没连上不影响「下载」这一位，但「同步飞牛」建不出来 —— 提前说清，
@@ -211,20 +220,29 @@
           <p class="text-[12px] text-gray-500">还没有订阅 —— 点右上角「新建订阅」开始</p>
         </div>
 
-        <div v-else class="space-y-2.5">
           <!--
-            用户 2026-10-25：「订阅更新。列表增加卡片点击，多选，右上角展示删除。」
-            - 整张卡片可点（以前只有「设置」按钮能点）：平时点卡片 = 展开/收起这一行的设置，
-              多选态点卡片 = 勾选/取消 —— 那样选择态里点哪儿都行，不用瞄准那个小方框。
-            - 多选态的勾选框放卡片最左（与下面的「飞牛同步历史」同一个位置），
-              选中行整卡染一层淡绿底，一眼看出勾了哪几张。
+            卡片网格（2026-10-30 用户：「已订阅的列表,可以用一行两个或者优化为卡片吧。
+            替我优化卡片中的多余文字和重复按钮」）
+
+            · 一行两张：`sm:grid-cols-2`，宽屏一屏能看到 4~6 条订阅，不用一路往下滚；
+              窄屏自然回落到一列。
+            · 卡片瘦身：原来一条订阅里有十来个元素抢视线。现在——
+              - 名称 + 来源 + 至多两颗 chip（待下载 / 同步失败），其余零碎状态
+                收进一句悬停说明（见 rowNote / rowNoteTitle）。
+              - 动作只留「执行」一个按钮（原来「补下载 N 首 / 立即执行 / 设置 /
+                删除」四个）：补下载本来就是执行的一部分，设置与删除都收进展开区，
+                整张卡片点一下就是展开 / 收起 —— 与「点整行即选中」的多选习惯一致。
+              - 灰字信息从四段并成一行：「每 6 小时 · 歌单名 · 10-30 20:11」。
+              - 两个能力位从可点药丸改成**只读标签**（开 = 强调色圆点 + 名，
+                关 = 灰字划线），开关动作进展开区，卡片只陈述「这条订阅在做什么」。
           -->
+          <div v-else class="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div
             v-for="row in subscriptions" :key="row.key"
-            class="rounded-[var(--ys-radius-block)] border bg-white p-4 transition-colors"
+            class="flex cursor-pointer flex-col rounded-[var(--ys-radius-block)] border bg-white p-4 transition-colors"
             :class="[
-              subSelected.has(row.key) ? 'border-emerald-200 bg-emerald-50/40' : 'border-[var(--ys-border)]',
-              subSelectMode ? 'cursor-pointer hover:border-emerald-200' : 'hover:border-[var(--ys-line-control)]',
+              subSelected.has(row.key) ? 'border-[var(--ys-accent)] bg-[var(--ys-accent-soft)]/40' : 'border-[var(--ys-border)]',
+              subSelectMode ? '' : 'hover:border-[var(--ys-line-strong)]',
             ]"
             @click="onSubCardClick(row, $event)"
           >
@@ -238,126 +256,80 @@
                 @change="toggleSubSelect(row.key)"
               />
               <div class="min-w-0 flex-1">
-                <div class="flex flex-wrap items-center gap-2">
-                  <span class="text-sm font-semibold text-gray-800">{{ row.name }}</span>
-                  <span class="rounded bg-[var(--ys-surface-sunken)] px-1.5 py-0.5 font-mono text-[10px] text-gray-500">{{ row.sourceLabel }}</span>
-                  <span v-if="row.hasDownload && !row.baselineDone" class="rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] text-amber-700" title="第一次检查还没跑完。跑完就会开始记录「以后新增了哪些歌」">还没开始追新</span>
-                  <span v-if="row.pendingCount" class="rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] text-amber-700">待下载 {{ row.pendingCount }}</span>
-                  <span v-if="row.missingCount" class="rounded border border-[var(--ys-border)] bg-[var(--ys-surface-sunken)] px-1.5 py-0.5 text-[10px] text-gray-500">飞牛缺 {{ row.missingCount }}</span>
-                  <!--
-                    2026-10-24 P1：用户手动从飞牛歌单里删掉的歌，以后不再加回。
-                    这事必须让用户**看得见**，否则他只是发现「删了没回来」，
-                    会以为同步坏了。灰色不是警告色 —— 这是他主动要的结果。
-                  -->
-                  <span
-                    v-if="row.removedCount"
-                    class="rounded border border-[var(--ys-border)] bg-[var(--ys-surface-sunken)] px-1.5 py-0.5 text-[10px] text-gray-500"
-                    :title="`这些歌你从飞牛歌单里删过，同步时不会再自动加回：\n${(row.removedTitles || []).join('\n') || `${row.removedCount} 首`}`"
-                  >已删不补 {{ row.removedCount }}</span>
-                  <span
-                    v-if="row.revivedCount"
-                    class="rounded border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] text-emerald-600"
-                    :title="'你自己又把这些歌加回歌单了，已恢复成正常曲目'"
-                  >已恢复 {{ row.revivedCount }}</span>
+                <div class="flex items-center gap-2">
+                  <span class="truncate text-[13px] font-semibold text-[var(--ys-text)]" :title="row.name">{{ row.name }}</span>
+                  <span class="shrink-0 rounded bg-[var(--ys-surface-sunken)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--ys-text-aux)]">{{ row.sourceLabel }}</span>
+                </div>
+                <div class="mt-1.5 flex flex-wrap items-center gap-1.5">
+                  <!-- 待办：还没下下来的歌。点它就是把缺的这批补下来（= 原来重复的「补下载」按钮） -->
+                  <button
+                    v-if="row.pendingCount || row.missingCount"
+                    class="rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 transition-colors hover:bg-amber-100 disabled:opacity-50"
+                    :disabled="!!busyKey || runAllBusy"
+                    :title="fillHint(row)"
+                    @click.stop="fillRow(row)"
+                  >{{ fillingKey === row.key && fillProgress ? `入队中 ${fillProgress}` : `待下载 ${row.pendingCount + row.missingCount} 首` }}</button>
+                  <span v-if="row.lastError" class="max-w-[130px] truncate rounded border border-rose-200 bg-[#fff1f0] px-1.5 py-0.5 text-[10px] text-[var(--ys-danger)]" :title="row.lastError">同步失败</span>
+                  <span v-if="rowNote(row)" class="rounded bg-[var(--ys-surface-sunken)] px-1.5 py-0.5 text-[10px] text-[var(--ys-text-aux)]" :title="rowNoteTitle(row)">{{ rowNote(row) }}</span>
                   <span v-if="rowBusy(row)" class="animate-pulse rounded bg-blue-50 px-1.5 py-0.5 text-[10px] text-blue-600">处理中</span>
-                  <span v-else-if="!row.download && !row.fnos" class="rounded bg-[var(--ys-surface-sunken)] px-1.5 py-0.5 text-[10px] text-gray-500">已停止</span>
-                </div>
-                <div class="mt-1.5 flex flex-wrap items-center gap-3 text-[11px] text-gray-500">
-                  <span>间隔 {{ intervalText(row.intervalMinutes) }}</span>
-                  <span v-if="row.targetTitle">飞牛歌单 {{ row.targetTitle }}</span>
-                  <span v-if="row.lastRunAt">上次发现 {{ row.lastRunAt.replace('T', ' ') }}</span>
-                  <span v-if="row.lastError" class="max-w-[260px] truncate text-rose-500" :title="row.lastError">
-                    同步失败：{{ row.lastError }}
-                  </span>
                 </div>
               </div>
-              <div class="flex shrink-0 items-center gap-1">
-                <button
-                  v-if="row.pendingCount || row.missingCount"
-                  class="rounded-lg bg-amber-50 px-2.5 py-1.5 text-[11px] font-medium text-amber-700 hover:bg-amber-100 disabled:opacity-50"
-                  :disabled="!!busyKey || runAllBusy"
-                  :title="fillHint(row)"
-                  @click="fillRow(row)"
-                >
-                  {{ fillingKey === row.key && fillProgress ? `入队中 ${fillProgress}` : `补下载 ${row.pendingCount + row.missingCount} 首` }}
-                </button>
-                <!--
-                  立即执行 = 「发现新歌」，勾了下载时连下载一起做（用户 2026-10-23：
-                  「合并…实现勾选，执行，下载」）。所以按钮文字跟着能力位走，
-                  让用户点之前就知道会不会把歌下下来。
-                -->
-                <button
-                  class="rounded-lg bg-emerald-50 px-2.5 py-1.5 text-[11px] font-medium text-emerald-600 hover:bg-emerald-50 disabled:opacity-50"
-                  :disabled="!!busyKey || runAllBusy || (!row.download && !row.fnos)"
-                  :title="row.download
-                    ? '立刻检查一遍有没有新歌，并把缺的直接下到本地曲库'
-                    : '立刻检查一遍有没有新歌（没勾「下载到本地曲库」，只登记不下载）'"
-                  @click="runRow(row)"
-                >
-                  {{ row.download ? '立即执行并下载' : '立即执行' }}
-                </button>
-                <button
-                  class="rounded-lg bg-[var(--ys-surface-control)] px-2.5 py-1.5 text-[11px] text-gray-600 hover:bg-[var(--ys-surface-hover)]"
-                  @click="toggleExpand(row)"
-                >
-                  {{ expandedKey === row.key ? '收起' : '设置' }}
-                </button>
-                <button
-                  class="rounded-lg p-1.5 text-gray-300 hover:bg-red-50 hover:text-red-400 disabled:opacity-40"
-                  :disabled="runAllBusy"
-                  title="全部执行进行中，跑完再删"
-                  @click="removeRow(row)"
-                >
-                  <Trash2 class="h-3.5 w-3.5" />
-                </button>
-              </div>
+              <button
+                class="ys-btn ys-btn-sm shrink-0"
+                :disabled="!!busyKey || runAllBusy || (!row.download && !row.fnos)"
+                :title="row.download
+                  ? '立刻检查一遍有没有新歌，并把缺的直接下到本地曲库'
+                  : '立刻检查一遍有没有新歌（没勾「下载到本地曲库」，只登记不下载）'"
+                @click.stop="runRow(row)"
+              >
+                {{ rowBusy(row) ? '执行中…' : (row.download ? '执行并下载' : '立即执行') }}
+              </button>
             </div>
 
+            <!-- 一行灰字：间隔 · 歌单 · 上次发现（异常时补原因） -->
+            <p class="mt-2 truncate text-[11px] text-[var(--ys-text-aux)]" :title="rowSummary(row)">{{ rowSummary(row, false) }}</p>
+
             <!--
-              两个能力位：点一下即开、再点即停。
-              沿用项目里筛选器的**药丸选中样式**（选中 = 实心 emerald + 打勾图标），
-              不用裸 checkbox —— 一排小方框和整体视觉不搭。
-              ⚠️ 「停」是**两侧一起停**、「开」只开点的那一侧（见 `capTitle` 的注释）；
-              记录、已下载的文件、飞牛歌单都保留，要彻底清掉记录用右侧的删除。
+              能力位：只读标签。开着的染强调色 + 圆点，没开的灰字划线。
+              要改就点卡片展开设置 —— 卡片上不再放一排可点的药丸。
             -->
-            <div class="mt-3 flex flex-wrap items-center gap-2 border-t border-gray-50 pt-3">
-              <span class="mr-0.5 text-[11px] text-gray-500">这个订阅做什么</span>
-              <button
-                class="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[12px] font-medium transition-all disabled:opacity-50"
-                :class="row.download ? 'bg-emerald-600 text-white' : 'bg-[var(--ys-surface-control)] text-gray-600 hover:bg-[var(--ys-surface-hover)]'"
-                :disabled="!!busyKey || runAllBusy || capBlocked(row, 'download')"
+            <div class="mt-2.5 flex flex-wrap items-center gap-1.5">
+              <span
+                class="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10.5px]"
+                :class="row.download ? 'bg-[var(--ys-accent-soft)] text-[var(--ys-accent)]' : 'bg-[var(--ys-surface-sunken)] text-[var(--ys-text-aux)] line-through'"
                 :title="capTitle(row, 'download')"
-                @click="toggleCapability(row, 'download', !row.download)"
               >
-                <Check v-if="row.download" class="h-3.5 w-3.5" />
-                <Download v-else class="h-3.5 w-3.5" />
+                <span class="h-1.5 w-1.5 rounded-full" :class="row.download ? 'bg-[var(--ys-accent)]' : 'bg-[var(--ys-line-strong)]'"></span>
                 下载到本地曲库
-              </button>
-              <button
-                class="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[12px] font-medium transition-all disabled:opacity-50"
-                :class="row.fnos ? 'bg-emerald-600 text-white' : 'bg-[var(--ys-surface-control)] text-gray-600 hover:bg-[var(--ys-surface-hover)]'"
-                :disabled="!!busyKey || runAllBusy || capBlocked(row, 'fnos')"
+              </span>
+              <span
+                class="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10.5px]"
+                :class="row.fnos ? 'bg-emerald-50 text-emerald-600' : 'bg-[var(--ys-surface-sunken)] text-[var(--ys-text-aux)] line-through'"
                 :title="capTitle(row, 'fnos')"
-                @click="toggleCapability(row, 'fnos', !row.fnos)"
               >
-                <Check v-if="row.fnos" class="h-3.5 w-3.5" />
-                <Send v-else class="h-3.5 w-3.5" />
+                <span class="h-1.5 w-1.5 rounded-full" :class="row.fnos ? 'bg-emerald-600' : 'bg-[var(--ys-line-strong)]'"></span>
                 同步到飞牛歌单
-              </button>
-              <!--
-                只停推送（用户 2026-09-22 提出）：
-                药丸点关闭是两侧一起停，但「下载继续、先别往飞牛推」也说得通。
-                只在推送开着的时候出现，免得平时多一个看不懂的按钮。
-              -->
-              <button
-                v-if="row.fnos"
-                class="rounded-lg px-2.5 py-1.5 text-[11px] text-gray-500 transition-colors hover:bg-[var(--ys-surface-hover)] hover:text-gray-600 disabled:opacity-50"
-                :disabled="!!busyKey || runAllBusy"
-                title="只停「同步到飞牛歌单」，本地下载继续跑。要恢复就再点一下左边的「同步到飞牛歌单」"
-                @click="stopPushOnly(row)"
-              >
-                仅停推送
-              </button>
+              </span>
+              <span class="ml-auto flex items-center gap-2">
+                <button
+                  v-if="row.fnos"
+                  class="text-[10.5px] text-[var(--ys-text-aux)] transition-colors hover:text-[var(--ys-text)] disabled:opacity-50"
+                  :disabled="!!busyKey || runAllBusy"
+                  title="只停「同步到飞牛歌单」，本地下载继续跑。要恢复就在设置里再打开"
+                  @click.stop="stopPushOnly(row)"
+                >仅停推送</button>
+                <button
+                  v-if="expandedKey !== row.key"
+                  class="text-[10.5px] text-[var(--ys-text-aux)] transition-colors hover:text-[var(--ys-text)]"
+                  @click.stop="toggleExpand(row)"
+                >设置</button>
+                <button
+                  class="text-[10.5px] text-[var(--ys-danger)] transition-colors hover:underline disabled:opacity-40"
+                  :disabled="runAllBusy"
+                  title="删除这条订阅：两侧任务记录一起删；已下载的文件和飞牛歌单里的歌不受影响"
+                  @click.stop="removeRow(row)"
+                >删除</button>
+              </span>
             </div>
 
             <!--
@@ -415,17 +387,16 @@
             <div v-if="expandedKey === row.key" class="mt-3 space-y-3 rounded-lg border border-[var(--ys-border)] bg-[var(--ys-surface-sunken)] p-3" @click.stop>
               <!--
                 两个能力位**并排成卡片**（用户 2026-10-07：「可以用一行多个，每个按照
-                卡片形式展示按钮和文字标题，简介就可以」）。以前它们各自整行、第二个靠
-                border-top 分隔 —— 一屏只看得到「下载」，得往下滚才知道还有「同步」，
-                而这两个开关是这条订阅的全部意义。
+                卡片形式展示按钮和文字标题，简介就可以」）。一屏内同时看到「下载」与「同步」。
+                单选控件（音质 / 保留期 / 间隔）沿用全站设置页口径：
+                13px 字、8px 圆角、`--ys-line-control` 描边；焦点样式交给 @layer base 的统一规则。
               -->
               <div class="grid grid-cols-1 gap-3 lg:grid-cols-2">
-              <div v-if="row.hasDownload" class="space-y-2 rounded-lg border border-[var(--ys-border)] bg-white p-3">
-                <p class="text-[12px] font-bold text-gray-700">下载到本地曲库</p>
-                <div class="grid grid-cols-2 gap-2">
+                <div v-if="row.hasDownload" class="space-y-2.5 rounded-lg border border-[var(--ys-border)] bg-white p-3">
+                  <p class="text-[12px] font-semibold text-[var(--ys-text)]">下载到本地曲库</p>
                   <label class="block">
-                    <span class="mb-1 block text-[11px] text-gray-500">目标音质</span>
-                    <select v-model="editForm.quality" class="w-full rounded-lg border border-[var(--ys-line-control)] px-2 py-1.5 text-[12px] outline-none focus:border-emerald-200">
+                    <span class="mb-1 block text-[11px] text-[var(--ys-text-muted)]">目标音质</span>
+                    <select v-model="editForm.quality" class="w-full rounded-[var(--ys-radius-control)] border border-[var(--ys-line-control)] bg-white px-2.5 py-1.5 text-[12px]">
                       <option value="lossless">无损 (FLAC)</option>
                       <option value="hires">Hi-Res</option>
                       <option value="high">较高 (≈320k)</option>
@@ -434,87 +405,70 @@
                   </label>
                   <!--
                     用户 2026-09-22：「手动选择，或者手动输入」——
-                    所以既有预设药丸（常用值一键选），也能直接填任意数（上限 300，后端 MaxDownloadsPerRun）。
+                    既有预设药丸（常用值一键选），也能直接填任意数（上限 300，后端 MaxDownloadsPerRun）。
                   -->
-                  <div class="col-span-2 sm:col-span-1">
-                    <span class="mb-1 block text-[11px] text-gray-500">每次下载数量</span>
+                  <div>
+                    <span class="mb-1 block text-[11px] text-[var(--ys-text-muted)]">每次下载数量</span>
                     <div class="flex flex-wrap items-center gap-1">
                       <button
                         v-for="opt in batchOptions" :key="opt"
-                        class="rounded-lg px-2 py-1 text-[11px] font-medium transition-all"
-                        :class="editForm.max_downloads === opt ? 'bg-emerald-600 text-white' : 'bg-white text-gray-600 hover:bg-[var(--ys-surface-hover)]'"
+                        class="rounded-lg border px-2 py-1 text-[11px] font-medium tabular-nums transition-colors"
+                        :class="editForm.max_downloads === opt
+                          ? 'border-transparent bg-[var(--ys-accent-soft)] text-[var(--ys-accent)]'
+                          : 'border-[var(--ys-line-control)] bg-white text-[var(--ys-text-muted)] hover:bg-[var(--ys-surface-hover)]'"
                         @click="editForm.max_downloads = opt"
                       >{{ opt }}</button>
                       <input
                         v-model.number="editForm.max_downloads"
                         type="number" min="1" max="300"
-                        class="w-16 rounded-lg border border-[var(--ys-line-control)] px-2 py-1 text-[11px] outline-none focus:border-emerald-200"
+                        class="w-16 rounded-lg border border-[var(--ys-line-control)] px-2 py-1 text-[11px] tabular-nums"
                         title="也可以直接填一个数（1~300）"
                       />
                     </div>
                   </div>
                   <label class="block">
-                    <span class="mb-1 block text-[11px] text-gray-500">排除关键词</span>
-                    <input v-model="editForm.exclude_kw" class="w-full rounded-lg border border-[var(--ys-line-control)] px-2 py-1.5 text-[12px] outline-none focus:border-emerald-200" placeholder="伴奏,Live" />
+                    <span class="mb-1 block text-[11px] text-[var(--ys-text-muted)]">排除关键词</span>
+                    <input v-model="editForm.exclude_kw" class="w-full rounded-[var(--ys-radius-control)] border border-[var(--ys-line-control)] px-2.5 py-1.5 text-[12px]" placeholder="伴奏,Live" />
                   </label>
-                  <div class="flex items-end pb-1.5">
-                    <button
-                      class="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11px] font-medium transition-all"
-                      :class="editForm.embed ? 'bg-emerald-600 text-white' : 'bg-white text-gray-600 hover:bg-[var(--ys-surface-hover)]'"
-                      @click="editForm.embed = !editForm.embed"
-                    >
-                      <Check v-if="editForm.embed" class="h-3 w-3" />
-                      内嵌歌词封面
-                    </button>
+                </div>
+
+                <div v-if="row.hasFnos" class="space-y-2.5 rounded-lg border border-[var(--ys-border)] bg-white p-3">
+                  <p class="text-[12px] font-semibold text-[var(--ys-text)]">同步到飞牛歌单</p>
+                  <label class="block">
+                    <span class="mb-1 block text-[11px] text-[var(--ys-text-muted)]">目标歌单名</span>
+                    <input v-model="editForm.target_title" class="w-full rounded-[var(--ys-radius-control)] border border-[var(--ys-line-control)] px-2.5 py-1.5 text-[12px]" placeholder="留空用订阅名" />
+                  </label>
+                  <div class="grid grid-cols-2 gap-2">
+                    <label class="block">
+                      <span class="mb-1 block text-[11px] text-[var(--ys-text-muted)]">保留期</span>
+                      <select v-model="editForm.retention_mode" class="w-full rounded-[var(--ys-radius-control)] border border-[var(--ys-line-control)] bg-white px-2.5 py-1.5 text-[12px]">
+                        <option value="keep">永久保留</option>
+                        <option value="days">按天移除</option>
+                      </select>
+                    </label>
+                    <label v-if="editForm.retention_mode === 'days'" class="block">
+                      <span class="mb-1 block text-[11px] text-[var(--ys-text-muted)]">保留天数</span>
+                      <input v-model.number="editForm.retention_days" type="number" min="1" class="w-full rounded-[var(--ys-radius-control)] border border-[var(--ys-line-control)] px-2.5 py-1.5 text-[12px] tabular-nums" />
+                    </label>
                   </div>
+                  <p class="text-[11px] leading-relaxed text-[var(--ys-text-aux)]">
+                    只清理本任务推送过的曲目。
+                  </p>
                 </div>
               </div>
 
-              <div v-if="row.hasFnos" class="space-y-2 rounded-lg border border-[var(--ys-border)] bg-white p-3">
-                <p class="text-[12px] font-bold text-gray-700">同步到飞牛歌单</p>
-                <div class="grid grid-cols-2 gap-2">
-                  <label class="block">
-                    <span class="mb-1 block text-[11px] text-gray-500">目标歌单名</span>
-                    <input v-model="editForm.target_title" class="w-full rounded-lg border border-[var(--ys-line-control)] px-2 py-1.5 text-[12px] outline-none focus:border-emerald-200" placeholder="留空用订阅名" />
-                  </label>
-                  <label class="block">
-                    <span class="mb-1 block text-[11px] text-gray-500">保留期</span>
-                    <select v-model="editForm.retention_mode" class="w-full rounded-lg border border-[var(--ys-line-control)] px-2 py-1.5 text-[12px] outline-none focus:border-emerald-200">
-                      <option value="keep">永久保留</option>
-                      <option value="days">按天移除</option>
-                    </select>
-                  </label>
-                  <label v-if="editForm.retention_mode === 'days'" class="block">
-                    <span class="mb-1 block text-[11px] text-gray-500">保留天数</span>
-                    <input v-model.number="editForm.retention_days" type="number" min="1" class="w-full rounded-lg border border-[var(--ys-line-control)] px-2 py-1.5 text-[12px] outline-none focus:border-emerald-200" />
-                  </label>
-                  <div class="flex items-end pb-1.5">
-                    <button
-                      class="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11px] font-medium transition-all"
-                      :class="editForm.sync_cover ? 'bg-emerald-600 text-white' : 'bg-white text-gray-600 hover:bg-[var(--ys-surface-hover)]'"
-                      @click="editForm.sync_cover = !editForm.sync_cover"
-                    >
-                      <Check v-if="editForm.sync_cover" class="h-3 w-3" />
-                      同步封面
-                    </button>
-                  </div>
-                </div>
-                <p class="text-[11px] leading-relaxed text-gray-500">
-                  只清理本任务推送过的曲目。
-                </p>
-              </div>
-              </div>
-
-              <div class="flex flex-wrap items-center gap-2 border-t border-[var(--ys-border)] pt-3">
-                <span class="text-[11px] text-gray-500">检查间隔</span>
+              <div class="flex flex-wrap items-center gap-1.5 border-t border-[var(--ys-border)] pt-3">
+                <span class="text-[11px] text-[var(--ys-text-muted)]">检查间隔</span>
                 <button
                   v-for="opt in intervalOptions" :key="opt.value"
-                  class="rounded-lg px-2.5 py-1 text-[11px] font-medium transition-all"
-                  :class="editForm.interval_minutes === opt.value ? 'bg-emerald-600 text-white' : 'bg-white text-gray-600 hover:bg-[var(--ys-surface-hover)]'"
+                  class="rounded-lg border px-2.5 py-1 text-[11px] font-medium transition-colors"
+                  :class="editForm.interval_minutes === opt.value
+                    ? 'border-transparent bg-[var(--ys-accent-soft)] text-[var(--ys-accent)]'
+                    : 'border-[var(--ys-line-control)] bg-white text-[var(--ys-text-muted)] hover:bg-[var(--ys-surface-hover)]'"
                   @click="editForm.interval_minutes = opt.value"
                 >{{ opt.label }}</button>
                 <button
-                  class="ml-auto rounded-lg bg-emerald-600 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
+                  class="ys-btn ys-btn-sm ys-btn-primary ml-auto"
                   :disabled="!!busyKey || runAllBusy"
                   @click="onSaveSettings(row)"
                 >保存设置</button>
@@ -620,7 +574,7 @@
             <!-- 名称 -->
             <label class="block">
               <span class="mb-1.5 block text-[12px] font-medium text-gray-600">订阅名称</span>
-              <input v-model="form.name" class="w-full rounded-lg border border-[var(--ys-line-control)] px-3 py-2 text-[13px] outline-none focus:border-emerald-200" placeholder="例如：每周新歌" />
+              <input v-model="form.name" class="w-full rounded-lg border border-[var(--ys-line-control)] px-3 py-2 text-[13px] outline-none" placeholder="例如：每周新歌" />
             </label>
 
             <!--
@@ -644,7 +598,7 @@
 
               <template v-if="form.sourceMode === 'link'">
                 <textarea v-model="form.links" rows="3"
-                          class="w-full rounded-lg border border-[var(--ys-line-control)] px-3 py-2 text-[12px] font-mono outline-none focus:border-emerald-200"
+                          class="w-full rounded-lg border border-[var(--ys-line-control)] px-3 py-2 text-[12px] font-mono outline-none"
                           placeholder="https://music.163.com/playlist?id=123&#10;https://y.qq.com/n/ryqq/playlist/456"></textarea>
                 <span class="mt-1 block text-[11px] leading-relaxed text-gray-500">
                   网易云 / QQ 公开歌单，分享短链也行。每行一个。
@@ -665,7 +619,7 @@
                 <select
                   v-else
                   v-model="form.sourceValue"
-                  class="w-full rounded-lg border border-[var(--ys-line-control)] px-3 py-2 text-[13px] outline-none focus:border-emerald-200"
+                  class="w-full rounded-lg border border-[var(--ys-line-control)] px-3 py-2 text-[13px] outline-none"
                 >
                   <option v-for="s in accountSources" :key="s.kind + ':' + s.id" :value="s.kind + ':' + s.id">
                     {{ s.name }}{{ s.count ? `（${s.count} 首）` : '' }}
@@ -719,15 +673,15 @@
 
             <label class="block">
               <span class="mb-1.5 block text-[12px] font-medium text-gray-600">检查间隔（分钟）</span>
-              <input v-model.number="form.interval" type="number" class="w-full rounded-lg border border-[var(--ys-line-control)] px-3 py-2 text-[13px] outline-none focus:border-emerald-200" />
+              <input v-model.number="form.interval" type="number" class="w-full rounded-lg border border-[var(--ys-line-control)] px-3 py-2 text-[13px] outline-none" />
             </label>
 
             <InlineNotice :text="createError" />
           </div>
 
           <div class="flex justify-end gap-2 border-t border-[var(--ys-border)] px-5 py-3.5">
-            <button class="rounded-lg bg-[var(--ys-surface-control)] px-4 py-2 text-[12px] font-medium text-gray-600 hover:bg-[var(--ys-surface-hover)]" @click="showCreate = false">取消</button>
-            <button class="rounded-lg bg-emerald-600 px-4 py-2 text-[12px] font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
+            <button class="ys-btn" @click="showCreate = false">取消</button>
+            <button class="ys-btn ys-btn-primary"
                     :disabled="creating || !canCreateSubscription" @click="createSubscription">
               {{ creating ? '创建中…' : '创建订阅' }}
             </button>
@@ -770,7 +724,7 @@ const {
   subscriptions, fnosConnected, apiSourceCount, pushRuns,
   fillingKey, fillProgress, busyKey,
   fillRow, fillHint,
-  toggleCapability, stopPushOnly, runRow, removeRow, saveRowSettings,
+  stopPushOnly, runRow, removeRow, saveRowSettings,
   createLinkSubscriptions, createAccountTask,
   reloadAll, loadPushRuns, loadFnosStatus, loadApiSourceCount,
 } = pushEngine
@@ -989,40 +943,79 @@ function intervalText(minutes) {
   return `${m} 分钟`
 }
 
-/**
- * 能力位药丸能不能点 / 悬停文案。
- * ⚠️ 「停」是两侧一起停（见 services/subscribe.js 的 setCapability）——
- * 用户反馈过「点了停止怎么还在推」，capTitle 必须把这一点说出来。
- */
-function capBlocked(row, which) {
-  if (!row) return true
-  if (which === 'download') {
-    return row.hasDownload ? false : !row.canCreate
-  }
-  if (row.hasFnos) return false
-  if (!row.canCreate) return true
-  return !fnosConnected.value
+// ── 卡片上的一行灰字 / 一颗状态 chip（2026-10-30 卡片瘦身）──
+//
+// 原来卡片里铺了四段灰字（间隔 / 飞牛歌单 / 上次发现 / 同步失败）和三颗常驻 chip，
+// 一条订阅占三行高度、一屏只看得下两条。现在把零碎状态压成：
+//   · 一行灰字 = 间隔 · 歌单 · 上次发现（异常时补原因）
+//   · 至多一颗中性 chip = 其余状态的一句话概括（详情在 title 里）
+/** 「上次发现」：今天 / 昨天 / MM-DD，省掉年份和秒 —— 用户关心的是「多久之前」 */
+function shortWhen(iso) {
+  if (!iso) return ''
+  const d = new Date(String(iso).replace(' ', 'T'))
+  if (Number.isNaN(d.getTime())) return String(iso).slice(0, 16).replace('T', ' ')
+  const now = new Date()
+  const day = (x) => `${x.getFullYear()}-${x.getMonth()}-${x.getDate()}`
+  const t = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+  if (day(d) === day(now)) return `今天 ${t}`
+  const y = new Date(now)
+  y.setDate(y.getDate() - 1)
+  if (day(d) === day(y)) return `昨天 ${t}`
+  return `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${t}`
 }
 
-function capReason(row, which) {
-  if (!row) return ''
-  const has = which === 'download' ? row.hasDownload : row.hasFnos
-  if (!has && !row.canCreate) return row.blockReason || '这个来源建不了新的任务'
-  if (which === 'fnos' && !has && !fnosConnected.value) return '飞牛音乐未连接，先到「账号连接」登录'
+/**
+ * 一行灰字：间隔 · 歌单 · 上次发现 · 状态。
+ * `withError=true` 时把失败原因接在末尾（给 title 用）；卡片上那条省略原因 ——
+ * 原因可能很长，卡片里已经有「同步失败」这颗 chip，细节放悬停即可。
+ */
+function rowSummary(row, withError = true) {
+  const parts = [row.intervalMinutes ? `每 ${intervalText(row.intervalMinutes)}` : '仅手动检查']
+  if (row.targetTitle) parts.push(`歌单「${row.targetTitle}」`)
+  if (row.lastRunAt) parts.push(`上次发现 ${shortWhen(row.lastRunAt)}`)
+  if (row.lastError) parts.push(withError ? `同步失败：${row.lastError}` : '同步失败')
+  if (!row.download && !row.fnos) parts.push('两侧都已停止')
+  return parts.join(' · ')
+}
+
+/**
+ * 中性 chip 的一句话：把原来那堆 chip（还没开始追新 / 飞牛缺 N / 已删不补 N /
+ * 已恢复 N / 已停止）压成一颗。没有要说的就返回空串（不占位）。
+ */
+function rowNote(row) {
+  if (row.hasDownload && !row.baselineDone) return '首次检查未完成'
+  if (row.missingCount) return `飞牛缺 ${row.missingCount} 首`
+  if (row.removedCount) return `已删不补 ${row.removedCount}`
+  if (row.revivedCount) return `已恢复 ${row.revivedCount}`
   return ''
 }
 
-function capTitle(row, which) {
-  const blocked = capReason(row, which)
-  if (blocked) return blocked
-  const on = which === 'download' ? row.download : row.fnos
-  if (on) {
-    const both = '点一下停止 —— 下载与同步飞牛会一起停（记录、已下载的文件、飞牛歌单都保留）'
-    return which === 'fnos' ? `${both}；只想停推送、留着下载，用旁边的「仅停推送」` : both
+/** chip 的悬停说明：把被压缩掉的细节还回来 */
+function rowNoteTitle(row) {
+  if (row.hasDownload && !row.baselineDone) return '第一次检查还没跑完。跑完就会开始记录「以后新增了哪些歌」'
+  if (row.missingCount) return `飞牛歌单里有 ${row.missingCount} 首在本地曲库找不到`
+  if (row.removedCount) {
+    const list = (row.removedTitles || []).join('\n')
+    return `这些歌你从飞牛歌单里删过，同步时不会再自动加回：\n${list || `${row.removedCount} 首`}`
   }
-  return which === 'download'
-    ? '点一下开始：每轮发现的新歌自动下到本地'
-    : '点一下开始：把曲库里匹配上的歌同步到飞牛歌单'
+  if (row.revivedCount) return '你自己又把这些歌加回歌单了，已恢复成正常曲目'
+  return ''
+}
+
+/**
+ * 卡片上「下载到本地曲库 / 同步到飞牛歌单」两颗只读标签的悬停说明。
+ * 2026-10-30：卡片不再放可点的能力药丸（开关搬进展开设置），所以这里只说状态，
+ * 不再给「点一下开 / 点一下停」的承诺。
+ */
+function capTitle(row, which) {
+  const on = which === 'download' ? row.download : row.fnos
+  const label = which === 'download' ? '下载到本地曲库' : '同步到飞牛歌单'
+  if (on) {
+    return which === 'fnos'
+      ? `${label}：已开启。点卡片底部的「设置」可以一起关掉下载与推送（记录、已下载的文件、飞牛歌单都保留）`
+      : `${label}：已开启。每轮发现的新歌会自动下到本地`
+  }
+  return `${label}：未开启。点卡片底部「设置」打开`
 }
 
 // ── 行内设置（一次只展开一行）──

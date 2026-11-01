@@ -123,7 +123,7 @@
           <FolderOpen class="w-3.5 h-3.5" :stroke-width="1.9" />
         </button>
 
-        <div class="flex min-w-0 flex-wrap items-center gap-x-1 gap-y-0.5 py-0.5 font-mono text-gray-600">
+        <div v-if="currentDir" class="flex min-w-0 flex-wrap items-center gap-x-1 gap-y-0.5 py-0.5 font-mono text-gray-600">
           <button
             v-for="(crumb, idx) in breadcrumbs"
             :key="idx"
@@ -155,8 +155,13 @@
         </span>
       </div>
 
-      <!-- 右：快速切换（多行铺开，窄屏折行而不是横滚） -->
-      <div class="flex min-w-0 flex-wrap items-center gap-1.5 lg:max-w-[58%] lg:justify-end">
+      <!-- 右：快速切换（多行铺开，窄屏折行而不是横滚）
+           ⚠️ 2026-10-31：候选目录只来自后端「已授权目录」，没有授权时整块不渲染 ——
+           以前这里恒定摆着 /vol1/Music、/vol1 等写死的位置，等于暗示「曲率能看全盘」。 -->
+      <div
+        v-if="quickDirs.length"
+        class="flex min-w-0 flex-wrap items-center gap-1.5 lg:max-w-[58%] lg:justify-end"
+      >
         <span class="shrink-0 text-gray-500">快速切换:</span>
         <button
           v-for="d in quickDirs"
@@ -189,15 +194,36 @@
         <div class="w-14 h-14 rounded-2xl bg-emerald-50 flex items-center justify-center mb-3">
           <FolderOpen class="w-7 h-7 text-emerald-600" />
         </div>
-        <p class="text-base font-semibold text-gray-700">当前目录未找到音频文件</p>
-        <p class="text-xs text-gray-500 mt-1 mb-4">当前路径：{{ currentDir }}</p>
-        <button
-          @click="openFolderModal"
-          class="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-sm transition-all flex items-center gap-1.5"
-        >
-          <FolderOpen class="w-3.5 h-3.5" />
-          <span>点击选择包含音乐的文件夹</span>
-        </button>
+        <!--
+          没授权 ≠ 没文件（2026-10-31）。以前两种情况共用「当前目录未找到音频文件」，
+          于是「一个目录都没授权」的用户被告知「这个文件夹里没有歌」，怎么点都点不出来。
+          这里分开：没有授权目录时直接把「去授权」摆出来。
+        -->
+        <template v-if="!quickDirs.length">
+          <p class="text-base font-semibold text-gray-700">还没有被授权访问任何目录</p>
+          <p class="text-xs text-gray-500 mt-1 mb-4 text-center">
+            飞牛要求先授权目录，曲率才能读到里面的音乐。点上方提示条的「授权目录」，
+            或到「应用中心 → 曲率 → 设置 → 授权目录」里添加。
+          </p>
+          <button
+            @click="openFolderModal"
+            class="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-sm transition-all flex items-center gap-1.5"
+          >
+            <FolderOpen class="w-3.5 h-3.5" />
+            <span>查看授权说明</span>
+          </button>
+        </template>
+        <template v-else>
+          <p class="text-base font-semibold text-gray-700">当前目录未找到音频文件</p>
+          <p class="text-xs text-gray-500 mt-1 mb-4">当前路径：{{ currentDir }}</p>
+          <button
+            @click="openFolderModal"
+            class="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-sm transition-all flex items-center gap-1.5"
+          >
+            <FolderOpen class="w-3.5 h-3.5" />
+            <span>点击选择包含音乐的文件夹</span>
+          </button>
+        </template>
       </div>
 
       <!--
@@ -572,13 +598,19 @@
           </button>
         </div>
 
-        <!-- Volume Switcher Tabs -->
-        <div class="py-3 border-b border-[var(--ys-border)] flex items-center gap-2 overflow-x-auto shrink-0 text-xs">
-          <span class="text-gray-500 shrink-0 font-medium">存储卷:</span>
+        <!-- 已授权目录切换（2026-10-31 由「存储卷」改名）——
+             飞牛环境下后端只返回官方授权目录，不再返回 /vol1、/vol2、/media 这类存储卷，
+             所以这里既不该叫「存储卷」，也不该硬编码兜底盘符。 -->
+        <div
+          v-if="modalVolumes.length"
+          class="py-3 border-b border-[var(--ys-border)] flex items-center gap-2 overflow-x-auto shrink-0 text-xs"
+        >
+          <span class="text-gray-500 shrink-0 font-medium">已授权目录:</span>
           <button
             v-for="vol in modalVolumes"
             :key="vol"
             @click="modalDrillDown(vol)"
+            :title="vol"
             :class="[
               'px-3 py-1 rounded-lg font-mono transition-all flex items-center gap-1',
               modalCurrentPath.startsWith(vol)
@@ -735,6 +767,7 @@ import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import { markLoaded, isStale } from '../services/viewCache'
 import { currentView } from '../services/navBus'
 import { NasAPI, TagsAPI, FnosAPI } from '../api/client'
+import { withBase } from '../services/basePath.js'
 import { loadPref, savePref, loadBool, memGet, memSet } from '../services/prefs'
 import { sortSongs, parseSortPref, sortPrefOf, nextSortDir } from '../services/librarySort'
 import {
@@ -757,8 +790,13 @@ import { deleteOutcome, normalizeScanSongs, withoutPath } from '../services/nasD
 
 const emit = defineEmits(['play'])
 
-const quickDirs = ref(['/vol1/Music', '/vol1/music', '/vol2/Music', '/vol1'])
-const currentDir = ref(loadPref('nas_dir', '/vol1/Music'))
+// 「快速切换」候选目录。
+// ⚠️ 2026-10-31 以前这里是写死的 ['/vol1/Music', '/vol1/music', '/vol2/Music', '/vol1']，
+// 在飞牛里等于「不管用户授权了什么，界面上都摆着整块盘的位置」—— 用户点一下就
+// 撞 403，或者更糟：管理员授权了 /vol1 时真的能进去，看起来像曲率能看全盘。
+// 现在默认空，由后端 /api/nas/directories 只回**已授权目录**（见 nas.ListFolders）。
+const quickDirs = ref([])
+const currentDir = ref(loadPref('nas_dir', ''))
 const songs = ref([])
 
 // ── 列表排序（2026-10-24 用户：「曲库里面已下载的歌曲，按照最新排序，或者帮我增加列排序选项」）──
@@ -1030,7 +1068,7 @@ async function applyCover(url) {
     }
     // 成功：立刻换掉这一行的缩略图。后端已让扫描缓存失效，
     // 再加个时间戳参数强制浏览器重新取图（否则会拿缓存的旧图）。
-    st.song.cover_url = `/api/nas/cover?path=${encodeURIComponent(st.song.path)}&v=${Date.now()}`
+    st.song.cover_url = withBase(`/api/nas/cover?path=${encodeURIComponent(st.song.path)}&v=${Date.now()}`)
     st.show = false
     // 飞牛按 mtime/size 决定要不要重读，排一次重扫让它尽快看到新封面
     try { await FnosAPI.rescan() } catch (_) {}
@@ -1043,9 +1081,11 @@ async function applyCover(url) {
 
 // Folder Selector Modal state
 const showFolderModal = ref(false)
-const modalCurrentPath = ref('/vol1')
+// ⚠️ 2026-10-31：默认值从写死的 '/vol1' / ['/vol1','/vol2'] 改成空 ——
+// 飞牛环境下这两个值是「用户没授权却看到盘符」的另一处来源。
+const modalCurrentPath = ref('')
 const modalParentPath = ref('')
-const modalVolumes = ref(['/vol1', '/vol2'])
+const modalVolumes = ref([])
 const modalFolders = ref([])
 /** 被折叠掉的隐藏子目录数量与前几个名字（后端回报，供「还有 N 个」提示） */
 const modalHiddenCount = ref(0)
@@ -1058,8 +1098,8 @@ const modalAudioCount = ref(0)
  */
 const modalShowHidden = ref(loadBool('nas_show_hidden', false))
 
-const breadcrumbs = computed(() => breadcrumbsFor(currentDir.value, '/vol1/Music'))
-const modalBreadcrumbs = computed(() => breadcrumbsFor(modalCurrentPath.value, '/vol1'))
+const breadcrumbs = computed(() => breadcrumbsFor(currentDir.value, ''))
+const modalBreadcrumbs = computed(() => breadcrumbsFor(modalCurrentPath.value, ''))
 
 function formatSize(bytes) {
   if (!bytes) return '0 B'
@@ -1071,10 +1111,12 @@ function formatSize(bytes) {
 async function loadDirectories() {
   try {
     const res = await NasAPI.directories()
-    if (res.code === 200 && res.data?.length) {
-      quickDirs.value = res.data
+    if (res.code === 200) {
+      // 一律以接口结果为准：飞牛里这份列表就是「已授权目录」，一个都没有时是空数组。
+      // 以前只在 res.data 非空时才赋值，于是空数组会把上面写死的 /vol1/Music 留在界面上。
+      quickDirs.value = Array.isArray(res.data) ? res.data : []
       if (!loadPref('nas_dir', '')) {
-        currentDir.value = res.data[0]
+        currentDir.value = quickDirs.value[0] || ''
       }
     }
   } catch (err) {
@@ -1138,8 +1180,10 @@ function switchDir(dir) {
 
 function openFolderModal() {
   showFolderModal.value = true
-  // 回到上次浏览过的位置，而不是每次都从当前曲库根目录重新开始
-  modalCurrentPath.value = loadPref('nas_modal_path', currentDir.value || '/vol1')
+  // 回到上次浏览过的位置；没有记忆时从「第一个已授权目录」开始。
+  // ⚠️ 2026-10-31：兜底从写死的 '/vol1' 改成已授权目录 —— 没授权时 '/vol1'
+  // 会在弹窗里报出一块用户根本进不去的盘。
+  modalCurrentPath.value = loadPref('nas_modal_path', currentDir.value || quickDirs.value[0] || '')
   loadBrowse(modalCurrentPath.value)
 }
 
