@@ -485,6 +485,36 @@ html[data-theme='gray'] {
     transform: scale(0.97);
   }
 
+  /* ── 折叠区标题（2026-11-02，更新弹窗第 5 项）──────────────────────────
+     以前更新弹窗的三块展开区标题是 11.5px + --ys-text-muted，和它下面的说明
+     正文（11px 同色）几乎分不出来，用户的原话是「下拉框标题的字体颜色或大小
+     需明显区别于正文」。这里单独起两个类：
+       · .ys-fold-title —— 可点击的标题：字号提到 13px、半粗、正文色、带图标；
+       · .ys-fold-hint  —— 标题右侧的补充说明：保持 11px 弱化，形成层级；
+       · .ys-sub-title  —— 展开区内部的小节标题（GitHub 令牌/更新镜像/网络代理）：
+                           12.5px 半粗正文色，与下面的 11px 说明分开。 */
+  .ys-fold-title {
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.35;
+    color: var(--ys-text);
+    transition: color var(--ys-dur-1) linear;
+  }
+  .ys-fold-title:hover {
+    color: var(--ys-accent);
+  }
+  .ys-fold-hint {
+    font-size: 10.5px;
+    font-weight: 400;
+    color: var(--ys-text-aux);
+  }
+  .ys-sub-title {
+    font-size: 12.5px;
+    font-weight: 600;
+    line-height: 1.35;
+    color: var(--ys-text);
+  }
+
   /* ── 表格单元格（2026-10-27 新增，审查报告「8.10」）───────────────────
      表格里的歌名/歌手一律 `truncate` + 挂 `:title` 显示全文 —— 桌面悬停能看，
      **手机上既没有 hover 也没有 title，截断就等于信息永久丢失**（中文歌名

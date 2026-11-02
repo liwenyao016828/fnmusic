@@ -78,7 +78,7 @@
       <button
         type="button"
         class="font-medium underline decoration-dotted underline-offset-2"
-        @click="settingsOpen = true"
+        @click="openSection('settings')"
       >网络代理</button>
       里填上地址即可（不用改环境变量、不用重启应用）。
     </p>
@@ -114,13 +114,13 @@
     <div v-if="installLog" class="mt-3 border-t border-[var(--ys-border)] pt-2.5">
       <button
         type="button"
-        class="flex w-full items-center gap-1.5 text-[11.5px] font-medium text-[var(--ys-text-muted)] transition-colors hover:text-[var(--ys-text)]"
+        class="ys-fold-title flex w-full items-center gap-1.5"
         :aria-expanded="installLogOpen"
-        @click="installLogOpen = !installLogOpen"
+        @click="toggleSection('log')"
       >
         <ChevronDown class="h-3.5 w-3.5 shrink-0 transition-transform" :class="{ 'rotate-180': installLogOpen }" :stroke-width="1.8" />
         安装日志
-        <span class="font-normal text-[var(--ys-text-aux)]">装完还是旧版本就看这里</span>
+        <span class="ys-fold-hint">装完还是旧版本就看这里</span>
       </button>
       <pre
         v-if="installLogOpen"
@@ -138,9 +138,9 @@
     <div v-if="notes" class="mt-3 border-t border-[var(--ys-border)] pt-2.5">
       <button
         type="button"
-        class="flex w-full items-center gap-1.5 text-[11.5px] font-medium text-[var(--ys-text-muted)] transition-colors hover:text-[var(--ys-text)]"
+        class="ys-fold-title flex w-full items-center gap-1.5"
         :aria-expanded="notesOpen"
-        @click="notesOpen = !notesOpen"
+        @click="toggleSection('notes')"
       >
         <ChevronDown class="h-3.5 w-3.5 shrink-0 transition-transform" :class="{ 'rotate-180': notesOpen }" :stroke-width="1.8" />
         {{ hasUpdate ? '更新说明' : '更新日志' }}
@@ -167,13 +167,13 @@
     <div class="mt-3 border-t border-[var(--ys-border)] pt-2.5">
       <button
         type="button"
-        class="flex items-center gap-1.5 text-[11.5px] font-medium text-[var(--ys-text-muted)] transition-colors hover:text-[var(--ys-text)]"
+        class="ys-fold-title flex items-center gap-1.5"
         :aria-expanded="settingsOpen"
-        @click="settingsOpen = !settingsOpen"
+        @click="toggleSection('settings')"
       >
         <SlidersHorizontal class="h-3.5 w-3.5" :stroke-width="1.8" />
         镜像、网络与令牌
-        <span class="text-[10.5px] font-normal text-[var(--ys-text-aux)]">
+        <span class="ys-fold-hint">
           {{ settingsSummary }}
         </span>
       </button>
@@ -181,7 +181,7 @@
       <div v-if="settingsOpen" class="mt-2.5 space-y-3">
         <!-- 个人 token -->
         <div>
-          <div class="text-[11.5px] font-medium text-[var(--ys-text)]">GitHub 个人令牌（可选）</div>
+          <div class="ys-sub-title">GitHub 个人令牌（可选）</div>
           <p class="mt-0.5 text-[11px] leading-relaxed text-[var(--ys-text-muted)]">
             不填也能用，但 GitHub 对未登录来源限 <b>60 次/小时/IP</b>，共享出口下经常直接 403。
             填一个只读 token（<code class="font-mono text-[10.5px]">public_repo</code> 或 fine-grained 的 Contents 只读）后是 5000 次/小时。
@@ -219,7 +219,7 @@
              填自己的也能填：前缀（拼在原地址前）或含 {repo} 的完整更新源地址。 -->
         <div class="border-t border-[var(--ys-border)] pt-2.5">
           <div class="flex items-center justify-between gap-2">
-            <div class="text-[11.5px] font-medium text-[var(--ys-text)]">更新镜像（按顺序尝试）</div>
+            <div class="ys-sub-title">更新镜像</div>
             <button
               type="button"
               class="ys-press text-[11px] text-[var(--ys-text-muted)] underline decoration-dotted underline-offset-2 transition-colors hover:text-[var(--ys-text)] disabled:opacity-50"
@@ -308,7 +308,7 @@
 
         <!-- 出站代理。只作用于「检查更新 / 下载安装包」这一条链路，不影响音源与播放。 -->
         <div class="border-t border-[var(--ys-border)] pt-2.5">
-          <div class="text-[11.5px] font-medium text-[var(--ys-text)]">网络代理（可选）</div>
+          <div class="ys-sub-title">网络代理（可选）</div>
           <p class="mt-0.5 text-[11px] leading-relaxed text-[var(--ys-text-muted)]">
             应用由飞牛系统拉起，读不到 shell 里的 <code class="font-mono text-[10.5px]">HTTP_PROXY</code>；
             GitHub 在部分网络下必须经代理才连得上。填在这里就生效，不用改环境变量、不用重启。
@@ -333,6 +333,14 @@
               :disabled="proxySaving || !proxyInput.trim()"
               @click="saveProxy"
             >保存</button>
+            <!-- 测速（用户 2026-11-02 第 6 项）：配了代理就点一下，立刻知道它通不通。 -->
+            <button
+              v-if="proxySet"
+              type="button"
+              class="ys-press rounded-[8px] border border-[var(--ys-border)] bg-white px-3 py-1.5 text-[12px] font-medium text-[var(--ys-text-muted)] transition-colors hover:text-[var(--ys-text)] disabled:opacity-50"
+              :disabled="proxySaving || proxyProbing"
+              @click="testProxy"
+            >{{ proxyProbing ? '测速中…' : '测试代理' }}</button>
             <button
               v-if="proxySet"
               type="button"
@@ -342,6 +350,13 @@
             >清除</button>
           </div>
           <p v-if="proxyNote" class="mt-1 text-[11px]" :class="proxyError ? 'text-rose-600' : 'text-[var(--ys-text-aux)]'">{{ proxyNote }}</p>
+          <!-- 测速结论：通→「代理可用（120ms），优先走代理」；不通→「回退官方源」。
+               探在检查更新时也会顺手做一次，所以什么都不点时这里也可能是通的。 -->
+          <p
+            v-if="proxyProbeText"
+            class="mt-1 text-[11px] leading-relaxed"
+            :class="proxyProbe && proxyProbe.configured && !proxyProbe.ok ? 'text-[#8A6100]' : 'text-[var(--ys-text-aux)]'"
+          >{{ proxyProbeText }}</p>
         </div>
       </div>
     </div>
@@ -364,10 +379,11 @@ const {
   checkTried, checkSource,
   checking, installed, progress, error, phase,
   installLog, installLogPath,
+  proxyProbe, proxyProbing,
+  downloaded, downloadedPath,
 } = appUpdate
 
-const notesOpen = ref(false)
-const installLogOpen = ref(false)
+
 
 const active = computed(() => ['downloading', 'ready', 'installing'].includes(phase.value))
 const busy = computed(() => checking.value || active.value || installed.value)
@@ -404,7 +420,11 @@ const primaryHint = computed(() => {
 const statusText = computed(() => {
   if (phase.value === 'installed') return ''
   if (phase.value === 'installing') return '正在安装，请勿关闭飞牛应用中心…'
-  if (phase.value === 'ready') return '下载完成，正在准备安装…'
+  if (phase.value === 'ready') {
+    // 第 1 项：这个包不只是「刚下好」，也可能是检查时发现上次已经下好的 ——
+    // 两种都直接进安装，不重新下载。
+    return downloaded.value ? '安装包已就绪（复用已下载的包），正在准备安装…' : '下载完成，正在准备安装…'
+  }
   if (phase.value === 'downloading') return `正在下载更新 ${progress.value}%`
   if (phase.value === 'error') return error.value || '更新失败'
   if (checkError.value && !hasUpdate.value) return `检查更新失败：${checkError.value}`
@@ -412,8 +432,30 @@ const statusText = computed(() => {
   if (!checkedAt.value) return ''
   if (!hasUpdate.value) return '已是最新版本'
   const when = formatWhen(publishedAt.value)
-  return when ? `发现新版本 · 发布于 ${when}` : '发现新版本'
+  const head = when ? `发现新版本 · 发布于 ${when}` : '发现新版本'
+  // 第 1 项：磁盘上已经有这个包了，点更新会直接装，不再下一次。
+  return downloaded.value ? `${head}（安装包已下载，可直接安装）` : head
 })
+
+// 代理测速结论的一句话（第 6 项）。后端在检查更新时也会顺手测一次，
+// 所以即使用户没点「测试代理」，只要配了代理这里就有结论。
+const proxyProbeText = computed(() => {
+  const p = proxyProbe.value
+  if (!p || !p.configured) return ''
+  if (p.ok) {
+    const ms = p.latencyMs ? `${p.latencyMs}ms` : '已连通'
+    return `代理可用（${ms}），本次优先走代理`
+  }
+  return `代理不可用${p.error ? `：${p.error}` : ''}，本次已回退到官方源`
+})
+
+// 手动测速：结论由 proxyProbeText 渲染，这里只负责触发与清掉上一次的保存提示，
+// 避免「已保存」和「代理不可用」两句话同时挂着让人分不清哪句是新结论。
+async function testProxy() {
+  proxyNote.value = ''
+  proxyError.value = false
+  await appUpdate.probeProxy()
+}
 
 function toDate(v) {
   if (!v) return null
@@ -454,7 +496,26 @@ function reloadPage() {
 // 那类 bug 的老根因（榜单首数踩过一次）。
 //
 // （同一次需求里的「下载限速」被用户当场否掉了：「不需要下载限速」，别再加。）
-const settingsOpen = ref(false)
+// 展开区互斥（用户 2026-11-02 第 4 项：「三个下拉框增加联动：展开其中一个时，
+// 自动折叠另外两个」）。三块分别是「安装日志 / 更新说明 / 镜像、网络与令牌」——
+// 以前它们各管各的 ref，全展开时弹窗在手机上会长到看不见底。
+const SECTION_KEYS = ['log', 'notes', 'settings']
+const openSectionKey = ref('')
+
+const installLogOpen = computed(() => openSectionKey.value === 'log')
+const notesOpen = computed(() => openSectionKey.value === 'notes')
+const settingsOpen = computed(() => openSectionKey.value === 'settings')
+
+/** 点标题：已展开就收起，没展开就展开并收起其它两块。 */
+function toggleSection(key) {
+  openSectionKey.value = openSectionKey.value === key ? '' : key
+}
+
+/** 跳转到某一块（提示条里的「网络代理」链接用）：总是展开并独占。 */
+function openSection(key) {
+  openSectionKey.value = key
+}
+
 const tokenInput = ref('')
 const tokenSet = ref(false)
 const tokenSaving = ref(false)

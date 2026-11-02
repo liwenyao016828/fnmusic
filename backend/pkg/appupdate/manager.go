@@ -77,6 +77,16 @@ type CheckResult struct {
 	// Tried 是依次试过的源（失败原因内嵌），仅在有失败时非空。
 	// 只给「试过哪些」不够用 —— 用户要知道**每台为什么失败**。
 	Tried []SourceAttempt `json:"tried,omitempty"`
+	// Downloaded 表示这个版本的安装包**已经躺在磁盘上**（上次下好没装、
+	// 或进程重启丢了内存状态）。这时前端可以让「下载」直接跳过，点「安装」
+	// 就行 —— 用户 2026-11-02 第 1 项：「若已存在更新包则直接复用，避免
+	// 二次下载」。
+	Downloaded bool `json:"downloaded,omitempty"`
+	// DownloadedPath 是复用的那个包的绝对路径（排障用，界面不必显示）。
+	DownloadedPath string `json:"downloaded_path,omitempty"`
+	// Proxy 是这次检查里「代理测速 → 要不要走代理」的结论（用户 2026-11-02
+	// 第 6 项）。没配代理时 Configured=false，界面不必显示。
+	Proxy *ProxyProbeResult `json:"proxy,omitempty"`
 }
 
 // SourceAttempt 记录一次更新源尝试（成功/失败都要，界面按 ok 显示颜色）。
@@ -293,7 +303,15 @@ func (m *Manager) httpClient() *http.Client {
 	if m.proxyFunc == nil {
 		return m.client // 测试注入的 client，或没配代理的默认 client
 	}
-	proxy := strings.TrimSpace(m.proxyFunc())
+	return m.clientFor(strings.TrimSpace(m.proxyFunc()))
+}
+
+// clientFor 返回「按指定代理值建的」client，并在值变化时重建。
+//
+// 为什么把 proxy 当参数而不是在读一次配置：代理测速（probe.go）要先拿一个
+// 「只在这一次用的是某代理」的 client 去探路，探不通就**这一次**改走直连 ——
+// 这条路径不能污染 m.clientProxy，否则下一次真正的检查会误用刚被判定不通的代理。
+func (m *Manager) clientFor(proxy string) *http.Client {
 	m.cmu.Lock()
 	defer m.cmu.Unlock()
 	if m.client == nil || proxy != m.clientProxy {
@@ -377,6 +395,10 @@ func (m *Manager) storeCheck(res CheckResult) {
 }
 
 // State 返回当前下载/安装状态。
+//
+// 除了内存里的状态机，还会**顺手探一下磁盘**（probeDownloadedLocked）：
+// 应用重启过、或者上次下载完还没来得及点安装，内存状态是空的，但
+// <dataDir>/updates/ 里的 fpk 还在 —— 这时候应该直接复用，而不是再下一遍。
 func (m *Manager) State() DownloadState {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -392,7 +414,141 @@ func (m *Manager) State() DownloadState {
 			m.dl = st
 		}
 	}
+	if st.Status == StatusIdle {
+		if found, ok := m.probeDownloadedLocked(); ok {
+			m.dl = found
+			st = found
+		}
+	}
 	return st
+}
+
+// DownloadedVersion 返回磁盘上**已经下好**的安装包版本（没有则空串）。
+//
+// 用户 2026-11-02 的第 1 项要求：「增加『已下载更新包』探测：若已存在更新包
+// 则直接复用，避免二次下载」。路由层用它判断「这个版本是不是已经躺在磁盘上」，
+// 从而在检查更新返回后立刻把状态推进到 ready，让界面直接出现「安装」按钮。
+func (m *Manager) DownloadedVersion() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.dl.Status == StatusReady && m.dl.Path != "" {
+		if _, err := os.Stat(m.dl.Path); err == nil {
+			return m.dl.Version
+		}
+	}
+	if found, ok := m.probeDownloadedLocked(); ok {
+		m.dl = found
+		return found.Version
+	}
+	return ""
+}
+
+// AdoptDownloaded 在磁盘上找到目标版本的安装包时，把状态机直接推进到 ready。
+//
+// 与 DownloadedVersion 的差别：这个函数会**核对版本号**。检查更新（Check）
+// 之后调用它，可以避免「磁盘上是 2.24.19、release 已经到 2.24.20」时把旧包
+// 当成新包复用 —— 用户点「安装」却发现版本没变，比再下一遍更让人困惑。
+// 返回 true 表示状态已就绪，可以立刻安装。
+func (m *Manager) AdoptDownloaded(version string) bool {
+	version = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(version), "v"))
+	if version == "" {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.dl.Status == StatusInstalling {
+		return false
+	}
+	if m.dl.Status == StatusReady && m.dl.Path != "" && m.dl.Version == version {
+		if _, err := os.Stat(m.dl.Path); err == nil {
+			return true
+		}
+	}
+	found, ok := m.probeDownloadedLocked()
+	if !ok || found.Version != version {
+		return false
+	}
+	m.dl = found
+	m.logf("[UPDATE] 检测到已下载的安装包，直接复用：%s", found.Path)
+	return true
+}
+
+// probeDownloadedLocked 在 <dataDir>/updates/ 里找已下载好的 fpk。
+//
+// 调用方必须持有 m.mu。只认「名字以 <appname>- 开头、以 .fpk 结尾、没有 .part
+// 残留（或至少本体完整）、版本号比当前新」的文件；版本号从文件名里解析，
+// 解析不出来就跳过 —— 宁可重新下，也不要拿一个来路不明的包去装。
+//
+// 多个都能用时取版本最高的那个，并顺手把更旧的清掉：更新包通常 7~30MB，
+// 装在 NAS 的系统盘上，堆着没意义。（用户 2026-11-02 第 1 项要求）
+func (m *Manager) probeDownloadedLocked() (DownloadState, bool) {
+	dir := filepath.Join(m.dataDir, "updates")
+	if m.dataDir == "" {
+		return DownloadState{}, false
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return DownloadState{}, false
+	}
+	prefix := m.appName + "-"
+	type cand struct {
+		path string
+		ver  string
+		size int64
+	}
+	var best cand
+	var stale []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, ".fpk") {
+			continue
+		}
+		ver := strings.TrimSuffix(strings.TrimPrefix(name, prefix), ".fpk")
+		if ver == "" || strings.ContainsAny(ver, " /\\") {
+			continue
+		}
+		// 只复用**比当前版本新**的包：旧包装了等于没装，还会白等一次重启。
+		if !IsNewer(ver, m.current) {
+			stale = append(stale, filepath.Join(dir, name))
+			continue
+		}
+		info, ierr := e.Info()
+		if ierr != nil || info.Size() <= 0 {
+			continue
+		}
+		// 有 .part 说明上次下载到一半就被杀了，这个 .part 不能算数；
+		// 但同名的 .fpk 本体如果已经 rename 完成，是完整的。
+		if _, perr := os.Stat(filepath.Join(dir, name+".part")); perr == nil {
+			continue
+		}
+		if best.path == "" || IsNewer(ver, best.ver) {
+			best = cand{path: filepath.Join(dir, name), ver: ver, size: info.Size()}
+		} else {
+			stale = append(stale, filepath.Join(dir, name))
+		}
+	}
+	// 清掉用不上的旧包（失败无所谓，只是省空间）。
+	for _, p := range stale {
+		if p == best.path {
+			continue
+		}
+		if err := os.Remove(p); err == nil {
+			m.logf("[UPDATE] 清理过期的更新包：%s", p)
+		}
+	}
+	if best.path == "" {
+		return DownloadState{}, false
+	}
+	return DownloadState{
+		Status:   StatusReady,
+		Progress: 100,
+		Path:     best.path,
+		Size:     best.size,
+		Version:  best.ver,
+	}, true
 }
 
 // StartDownload 启动后台下载并立即返回当前状态（不等下载完成）。
@@ -420,6 +576,19 @@ func (m *Manager) StartDownload(ctx context.Context) (DownloadState, error) {
 		return st, fmt.Errorf("正在安装，无法再次下载")
 	}
 	url, name, version, src := m.assetURL, m.assetName, m.assetVersion, m.assetSource
+	// 内存里没状态（例如刚重启过），但磁盘上已经有这个版本的包：
+	// 直接复用，别再下一遍（用户 2026-11-02 第 1 项要求）。
+	if found, ok := m.probeDownloadedLocked(); ok {
+		if version == "" || found.Version == version {
+			m.dl = found
+			if found.Version != "" {
+				m.assetVersion = found.Version
+			}
+			m.mu.Unlock()
+			m.logf("[UPDATE] 复用已下载的安装包：%s", found.Path)
+			return found, nil
+		}
+	}
 	m.mu.Unlock()
 
 	if url == "" {
@@ -487,6 +656,17 @@ func (m *Manager) download(ctx context.Context, rawURL, assetName string, src so
 	}
 	finalPath := filepath.Join(dir, name)
 	tmpPath := finalPath + ".part"
+
+	// 下载和检查必须用**同一个出口结论**（用户 2026-11-02 第 6 项）：检查时
+	// 代理测通了才走代理；测不通就直连。这里现测一次而不是沿用检查时的结论，
+	// 是因为下载可能发生在检查之后的几分钟，代理可能已经变了 —— 但代价是
+	// 每次下载多一趟 8 秒内的探测。为了让「本来就是直连」的普通用户完全不
+	// 受影响，只在配了代理时才测。
+	if m.proxyFunc != nil && strings.TrimSpace(m.proxyFunc()) != "" {
+		if _, probe := m.proxyPreferred(ctx); !probe.OK {
+			m.logf("[UPDATE] 下载前代理测速未通过，本次下载回退直连：%s", probe.Info())
+		}
+	}
 
 	resp, tried, derr := m.openAsset(ctx, rawURL, src)
 	if derr != nil {

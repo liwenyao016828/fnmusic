@@ -14,14 +14,28 @@
   <Teleport to="body">
     <div
       v-if="open"
-      class="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4 backdrop-blur-xs"
+      class="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-3 backdrop-blur-xs sm:p-4"
       role="dialog"
       aria-modal="true"
       aria-label="版本更新"
       @click.self="emit('close')"
     >
-      <div class="w-full max-w-md rounded-2xl border border-[var(--ys-border)] bg-white p-5 shadow-2xl">
-        <div class="mb-3 flex items-center justify-between">
+      <!--
+        手机端内容显示不全（用户 2026-11-02 第 3 项）：原来的卡片只有
+        `w-full max-w-md` + `p-5`，高度不设上限 —— 展开「镜像、网络与令牌」
+        （token + 镜像清单 + 代理）后整张卡片比手机视口还高，而弹窗外层是
+        `items-center`，超出的部分**上下两头同时被裁掉**，中间那段谁也滚不到：
+        关闭按钮和底部按钮都可能按不着。
+
+        现在把卡片改成「最高不超过可视区，内部自己滚」：
+          · `max-h-[calc(100dvh - 安全区 - 1.5rem)]`（dvh 而不是 vh：手机浏览器地址栏
+            收起时 vh 不跟着变；再扣掉刘海与手势条，卡片不会顶到屏幕边）；
+          · flex 纵向布局，标题行 `shrink-0` 钉在顶部，只有内容区 `overflow-y-auto`；
+          · 内边距在手机上收一点（p-4），给正文让出宽度。
+        这样无论哪一块展开、展开多久，标题与关闭按钮始终可见，内容永远能滚到底。
+      -->
+      <div class="flex max-h-[calc(100dvh_-_var(--safe-top)_-_var(--safe-bottom)_-_1.5rem)] w-full max-w-md flex-col rounded-2xl border border-[var(--ys-border)] bg-white p-4 shadow-2xl sm:p-5">
+        <div class="mb-3 flex shrink-0 items-center justify-between">
           <h3 class="flex items-center gap-1.5 text-sm font-bold text-gray-800">
             <ArrowUpCircle class="h-4 w-4 text-emerald-600" />
             <span>版本更新</span>
@@ -35,7 +49,10 @@
             <X class="h-4 w-4" />
           </button>
         </div>
-        <UpdateCard plain />
+        <!-- 内容区独立滚动：`-mx-1 px-1` 是给 focus 环留的余量，避免被 overflow 裁掉。 -->
+        <div class="-mx-1 min-h-0 flex-1 overflow-y-auto overscroll-contain px-1">
+          <UpdateCard plain />
+        </div>
       </div>
     </div>
   </Teleport>

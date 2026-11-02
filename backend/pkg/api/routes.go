@@ -64,6 +64,9 @@ var routeTable = []routeSpec{
 	{Path: "/api/app/update/install", Handler: func(s *Server) http.HandlerFunc { return s.HandleAppUpdateInstall }},
 	// 安装脚本日志（2026-11-01）：界面靠它显示「装到哪一步、为什么失败」。
 	{Path: "/api/app/update/install/log", Handler: func(s *Server) http.HandlerFunc { return s.HandleAppUpdateInstallLog }},
+	// 代理测速（2026-11-02）：配了代理就先探一次通不通，通了优先走代理，
+	// 不通当场回退官方源。界面用它显示「这次为什么没走代理」。
+	{Path: "/api/app/update/proxy/probe", Handler: func(s *Server) http.HandlerFunc { return s.HandleAppUpdateProxyProbe }},
 	// 「更新完成后第一次进入应用，提示更新完成和版本号」（用户 2026-10-25）。
 	{Path: "/api/app/update/notice", Handler: func(s *Server) http.HandlerFunc { return s.HandleAppUpdateNotice }},
 	{Path: "/api/app/update/notice/ack", Handler: func(s *Server) http.HandlerFunc { return s.HandleAppUpdateNoticeAck }},

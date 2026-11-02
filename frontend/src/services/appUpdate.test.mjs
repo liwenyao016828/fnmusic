@@ -276,3 +276,74 @@ test('ensureNotice 命中时写入 notice，并只请求一次', async () => {
   assert.equal(await c.ensureNotice(), null)
   assert.equal(noticeCalls, 1)
 })
+
+// ── 2026-11-02 更新弹窗的六项改动 ─────────────────────────────────────
+
+test('检测到已下载的更新包：normalizeCheck 带出 downloaded/downloaded_path', () => {
+  const out = normalizeCheck({
+    ...CHECK_PAYLOAD,
+    downloaded: true,
+    downloaded_path: '/vol1/@appdata/yinshu-ai/data/updates/yinshu-ai-2.18.0.fpk',
+  })
+  assert.equal(out.downloaded, true)
+  assert.equal(out.downloadedPath, '/vol1/@appdata/yinshu-ai/data/updates/yinshu-ai-2.18.0.fpk')
+  // 老后端没有这两个字段时不能变成 undefined（模板里会当成 falsy，但测试要钉住形状）
+  const old = normalizeCheck(CHECK_PAYLOAD)
+  assert.equal(old.downloaded, false)
+  assert.equal(old.downloadedPath, '')
+})
+
+test('检查结果里的代理测速结论被归一并写进状态', async () => {
+  const c = createAppUpdate({
+    fetchImpl: async () => ok({
+      ...CHECK_PAYLOAD,
+      proxy: {
+        configured: true,
+        url: 'http://192.168.1.3:7890',
+        ok: true,
+        latency_ms: 128,
+        preferred_proxy: true,
+      },
+    }),
+  })
+  await c.check()
+  assert.equal(c.proxyProbe.value.configured, true)
+  assert.equal(c.proxyProbe.value.ok, true)
+  assert.equal(c.proxyProbe.value.latencyMs, 128)
+  assert.equal(c.proxyProbe.value.preferredProxy, true)
+})
+
+test('没配代理时 proxyProbe 保持 null，界面不会显示测速结论', async () => {
+  const c = createAppUpdate({ fetchImpl: async () => ok(CHECK_PAYLOAD) })
+  await c.check()
+  assert.equal(c.proxyProbe.value, null)
+})
+
+test('probeProxy 走 /api/app/update/proxy/probe 并归一返回', async () => {
+  const calls = []
+  const c = createAppUpdate({
+    fetchImpl: async (url) => {
+      calls.push(url)
+      return ok({ configured: true, url: 'http://p:7890', ok: false, error: 'connection refused' })
+    },
+  })
+  const res = await c.probeProxy()
+  assert.deepEqual(calls, ['/api/app/update/proxy/probe'])
+  assert.equal(res.configured, true)
+  assert.equal(res.ok, false)
+  assert.equal(res.error, 'connection refused')
+  assert.equal(c.proxyProbe.value.ok, false)
+})
+
+test('安装日志倒序：新日志在顶部（第 2 项）', async () => {
+  const c = createAppUpdate({
+    fetchImpl: async () => ok({
+      ok: true,
+      path: '/tmp/yinshu-update/install.log',
+      tail: '第一行\n第二行\n第三行',
+    }),
+  })
+  await c.fetchInstallLog()
+  assert.equal(c.installLog.value, '第三行\n第二行\n第一行')
+  assert.equal(c.installLogPath.value, '/tmp/yinshu-update/install.log')
+})

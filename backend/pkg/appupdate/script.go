@@ -25,34 +25,33 @@ type ScriptConfig struct {
 	Version string
 }
 
-// BuildApplyScript 生成自安装脚本。
+// BuildApplyScript 生成自更新脚本。
 //
-// 这个脚本是整条更新链里最危险的一环：它會 uninstall 掉正在运行的自己。
-// 因此下面每一条命令的顺序都不能随便调整：
+// 这个脚本是整条更新链里最危险的一环：它要替换掉正在运行的自己。
+// 顺序不能随便调整：
 //  1. 先提权（非 root 时 exec sudo 重新执行自己，而不是每行命令前加 sudo ——
 //     后者会漏掉某一行就只失败一半）；
-//  2. 先备份 cmd/main：飞牛的 uninstall 会删掉整个应用目录，而 install-fpk
-//     需要入口脚本存在才会把应用登记为可启动；先 tar 出来覆盖回去，
-//     是「卸载后还能装回来」的保险；
-//  3. stop → uninstall → install-fpk，**每一步都要查结果**；
-//  4. 按**版本号**验收：装完之后的 /api/app/version 必须等于目标版本，
-//     并且进程真的在跑。只看 running 不算成功（见下）；
-//  5. 最多 10 次 start+status 轮询：安装完成不代表进程已起；
-//  6. trap 里至少 start 一次：中途任何一步失败，旧应用还能被拉起来。
+//  2. **先摊包校验**：把新 fpk 解到 /tmp 下，确认里面有可执行的本体与
+//     cmd/main，再动线上的应用目录。摊包失败=什么都没发生，旧版照跑；
+//  3. 备份旧的程序文件（target/ 下除数据之外的部分），失败才用得上；
+//  4. 停进程 → 就地替换程序文件（**不再 uninstall**，见下）→ 拉起；
+//  5. 按**版本号**验收：/api/app/version 必须等于目标版本且进程在跑；
+//  6. 版本没变就自动回退到备份，并把原因写进日志。
 //
-// # 为什么必须按版本验收（2026-11-01 用户「下载完成后刷新还是旧版本」）
+// # 为什么不再 uninstall（2026-11-02 用户「手动点击更新仍然失败」）
 //
-// 旧版脚本只判断 `appcenter-cli status` 里有没有 `running` 字样，而且
-// `uninstall` / `install-fpk` 的失败全被 `|| true` 吞掉。这两件事凑在一起就是
-// 一个**静默失败**的闭环：
+// 老流程是 stop → `appcenter-cli uninstall` → `appcenter-cli install-fpk`。
+// 从 v2.24.5 起 fpk 里多了 `wizard/uninstall`（卸载前问「数据保留还是删除」），
+// 飞牛应用中心命令行**不支持**回答卸载向导，于是 uninstall 在无交互环境下
+// 直接被拒（返回值仍是 0，输出被 `>/dev/null` 吞掉）。后果是一条静默失败链：
 //
-//	uninstall 静默失败（应用其实还在）→ install-fpk 对已安装应用是空操作
-//	（HANDOVER §1.4.1 实测：只打印「is installed」然后什么都不做）
-//	→ 旧进程还在 running → 脚本看到 running 就打印「更新完成」并 exit 0。
+//	uninstall 没真的执行（应用还在）→ install-fpk 对已安装应用是空操作
+//	（只打印「Application [yinshu-ai] is installed.」）→ 旧进程还在 running
+//	→ 磁盘上还是旧版 → 按版本号验收必然失败。
 //
-// 用户看到的就是「下载完成了、安装也提示成功了，刷新还是旧版本」。
-// 现在改成：uninstall 失败就重试一次并如实报错；install-fpk 之后**必须**用
-// 版本号确认真的换成了新版，否则脚本 exit 1 并把原因写进 install.log。
+// 现在的做法是「就地升级」：不动应用登记、不触发卸载向导，直接把新包里的
+// 程序文件覆盖到应用目录。数据目录（var/ → @appdata）与配置目录（etc/ →
+// @appconf）本来就在应用目录之外，全程不被触碰。
 func BuildApplyScript(cfg ScriptConfig) string {
 	pkg := shellQuote(cfg.Pkg)
 	fpk := shellQuote(cfg.Fpk)
@@ -64,7 +63,7 @@ func BuildApplyScript(cfg ScriptConfig) string {
 	var b strings.Builder
 	b.WriteString("#!/bin/sh\n")
 	b.WriteString("# 曲率（yinshu-ai）自更新脚本 —— 应用自动生成，请勿手改。\n")
-	b.WriteString("# 为什么放在 /tmp：下一步会 uninstall 应用目录，脚本留在里面会把自己删掉。\n")
+	b.WriteString("# 为什么放在 /tmp：更新过程中应用目录会被整体替换，脚本留在里面会被自己删掉。\n")
 	b.WriteString("set -eu\n\n")
 	fmt.Fprintf(&b, "PKG=%s\n", pkg)
 	fmt.Fprintf(&b, "FPK=%s\n", fpk)
@@ -88,7 +87,7 @@ fi
 on_exit() {
   rc=$?
   if [ "$rc" -ne 0 ]; then
-    log "安装流程失败（exit $rc），尝试拉起应用"
+    log "更新流程失败（exit $rc），尝试拉起应用"
     appcenter-cli start "$PKG" >/dev/null 2>&1 || true
   fi
   exit "$rc"
@@ -98,66 +97,125 @@ trap on_exit EXIT
 log "开始更新：pkg=$PKG fpk=$FPK"
 mkdir -p "$STAGE" /tmp/appcenter
 
-# ── 3. 保住启动入口 ─────────────────────────────────────────────────────
-# uninstall 会删掉 /var/apps/<pkg>；install-fpk 之后若 cmd/main 缺失，应用
-# 就会「装着但起不来」。先把新包里的 cmd/main 覆盖到现目录，卸载再装时
-# 飞牛能沿用它判定入口。
-if [ -e "$APP_DIR/cmd/main" ]; then
-  if tar -xOzf "$FPK" cmd/main > "$STAGE/cmd-main.new" 2>/dev/null && [ -s "$STAGE/cmd-main.new" ]; then
-    chmod +x "$STAGE/cmd-main.new"
-    mv -f "$STAGE/cmd-main.new" "$APP_DIR/cmd/main"
-    log "已保留启动入口 cmd/main"
-  else
-    log "警告：未能从 fpk 提取 cmd/main，跳过入口保护"
+# ── 3. 结果目录：兼容「平铺」与「带 app/ 子目录」两种布局 ────────────────
+# target/ 是应用中心托管程序的那一层（只有 uninstall 才删，升级不动它）。
+DEST="$APP_DIR/target"
+if [ ! -d "$DEST" ]; then
+  DEST="$APP_DIR"
+fi
+
+# ── 4. 摊包校验：先把新包解开，确认能装再动线上文件 ─────────────────────
+# 摊包失败=什么都没发生，旧版继续跑。这是整个脚本唯一「必须成功才能继续」的前置。
+UNPACK="$STAGE/unpack"
+rm -rf "$UNPACK"
+mkdir -p "$UNPACK"
+
+# fpk 是 gzip 包着的 tar；里面通常还有一层 app.tgz（程序本体）。
+if ! tar -xzf "$FPK" -C "$UNPACK" 2>/dev/null; then
+  log "解包失败：安装包可能不完整，已放弃本次更新（应用未做任何改动）"
+  exit 1
+fi
+
+if [ -f "$UNPACK/app.tgz" ]; then
+  if ! tar -xzf "$UNPACK/app.tgz" -C "$UNPACK" 2>/dev/null; then
+    log "解包失败：app.tgz 损坏，已放弃本次更新（应用未做任何改动）"
+    exit 1
   fi
 fi
 
-# ── 4. 选卷：有 @appcenter 标记的那个卷才是应用中心卷 ────────────────────
-VOL=""
-for d in /vol[1-9]*; do
-  if [ -d "$d/@appcenter" ]; then
-    VOL="$d"
+# 找程序根：本体可能在顶层，也可能在 app/ 下。
+if [ -f "$UNPACK/$PKG" ]; then
+  SRC="$UNPACK"
+elif [ -f "$UNPACK/app/$PKG" ]; then
+  SRC="$UNPACK/app"
+else
+  log "安装包里找不到可执行文件 $PKG，已放弃本次更新（应用未做任何改动）"
+  exit 1
+fi
+if [ ! -f "$SRC/cmd/main" ]; then
+  log "安装包里找不到 cmd/main（飞牛用它启动应用），已放弃本次更新"
+  exit 1
+fi
+chmod +x "$SRC/$PKG" "$SRC"/cmd/* 2>/dev/null || true
+log "摊包完成：$SRC（目标版本 ${WANT_VERSION:-未知}）"
+
+# ── 5. 备份旧程序（数据不在这一层，不会被碰到）──────────────────────────
+BK="$STAGE/backup"
+rm -rf "$BK"
+mkdir -p "$BK"
+for item in "$DEST"/*; do
+  [ -e "$item" ] || continue
+  name="$(basename "$item")"
+  case "$name" in
+    var|etc|home|meta|tmp|shares) continue ;;
+    app.sock) continue ;;
+  esac
+  cp -a "$item" "$BK/" 2>/dev/null || true
+done
+log "已备份旧程序到 $BK"
+
+# ── 6. 停进程 → 就地替换 → 拉起 ─────────────────────────────────────────
+appcenter-cli stop "$PKG" >/dev/null 2>&1 || true
+sleep 1
+
+# 旧进程如果没被停掉，替换会失败（Text file busy），所以再硬停一次。
+if command -v pkill >/dev/null 2>&1; then
+  pkill -f "$DEST/$PKG" >/dev/null 2>&1 || true
+  sleep 1
+fi
+
+replace_ok=1
+for item in "$SRC"/*; do
+  [ -e "$item" ] || continue
+  name="$(basename "$item")"
+  case "$name" in
+    app.tgz|manifest|ICON*.PNG|manifest.json) continue ;;
+  esac
+  rm -rf "$DEST/$name"
+  if ! cp -a "$item" "$DEST/" 2>/dev/null; then
+    log "替换失败：$name 没能写到 $DEST"
+    replace_ok=0
     break
   fi
 done
-VOLNUM=""
-if [ -n "$VOL" ]; then
-  VOLNUM="${VOL#/vol}"
+
+if [ "$replace_ok" = "0" ]; then
+  log "程序文件替换失败，回退到备份"
+  for item in "$BK"/*; do
+    [ -e "$item" ] || continue
+    name="$(basename "$item")"
+    # 备份里的 manifest 属于 $APP_DIR（不是 $DEST），单独还原。
+    if [ "$name" = "manifest" ]; then
+      cp -a "$item" "$APP_DIR/manifest" 2>/dev/null || true
+      continue
+    fi
+    rm -rf "$DEST/$name"
+    cp -a "$item" "$DEST/" 2>/dev/null || true
+  done
+  appcenter-cli start "$PKG" >/dev/null 2>&1 || true
+  log "已回退到旧版。请到飞牛应用中心手动安装 $FPK"
+  exit 1
 fi
-log "安装包：$FPK（卷：${VOLNUM:-自动}，目标版本 ${WANT_VERSION:-未知}）"
+chmod +x "$DEST/$PKG" "$DEST"/cmd/* 2>/dev/null || true
 
-# ── 5. 卸载旧版 → 安装新版（每一步都查结果，不再 || true 吞掉） ──────────
-appcenter-cli stop "$PKG" >/dev/null 2>&1 || true
-
-# uninstall 失败会让后面 install-fpk 变成空操作（对已安装应用它是 no-op），
-# 于是「装成功了」其实是「什么都没做」。所以这里失败要重试一次，再失败就报错。
-if ! appcenter-cli uninstall "$PKG" >/dev/null 2>&1; then
-  log "uninstall 第一次失败，重试一次"
-  sleep 2
-  if ! appcenter-cli uninstall "$PKG" >/dev/null 2>&1; then
-    log "卸载旧版失败：应用可能仍处于已安装状态。请到飞牛应用中心手动卸载后再装 ${FPK}"
-    exit 1
+# manifest 也要跟着换：应用中心「已安装版本」读的是 $APP_DIR/manifest，
+# 只换 target/ 会让应用中心永远显示旧版本（用户下次看到「可更新」又点一遍）。
+# 先把旧 manifest 存进备份目录（回退时用得上），覆盖失败不算致命。
+if [ -f "$SRC/manifest" ]; then
+  cp -a "$APP_DIR/manifest" "$BK/manifest" 2>/dev/null || true
+  if cp -a "$SRC/manifest" "$APP_DIR/manifest" 2>/dev/null; then
+    log "manifest 已更新（应用中心将显示 ${WANT_VERSION:-新版本}）"
+  else
+    log "警告：manifest 没能更新，应用中心可能仍显示旧版本号（程序本体已替换）"
   fi
 fi
 
-if [ -n "$VOLNUM" ]; then
-  if ! out="$(appcenter-cli install-fpk "$FPK" --env "$ENVF" --volume "$VOLNUM" 2>&1)"; then
-    log "install-fpk 失败（卷 ${VOLNUM}）：$out"
-    log "请到飞牛应用中心手动安装 $FPK"
-    exit 1
-  fi
-else
-  if ! out="$(appcenter-cli install-fpk "$FPK" --env "$ENVF" 2>&1)"; then
-    log "install-fpk 失败：$out"
-    log "请到飞牛应用中心手动安装 $FPK"
-    exit 1
-  fi
-fi
-log "install-fpk 输出：$out"
+log "程序文件已替换为 ${WANT_VERSION:-新版本}"
 
-# ── 6. 等它真的起来，并**按版本号验收** ─────────────────────────────────
-# 光看 status 里的 running 是不够的：uninstall 没生效时旧进程照样 running，
-# 脚本会误报「更新完成」，用户刷新页面还是旧版本（2026-11-01 就是这个现象）。
+appcenter-cli start "$PKG" >/dev/null 2>&1 || true
+
+# ── 7. 等它真的起来，并**按版本号验收** ─────────────────────────────────
+# 只看 running 不算成功：老版本进程可能还没走，会误报「更新完成」。
 # 所以除了 running，还要求 /api/app/version 报的版本等于目标版本。
 #
 # 版本探测只用 curl（飞牛镜像里一定有）；curl 不可用时退回 status-only，
@@ -173,32 +231,48 @@ running_version() {
     | sed -n 's/.*"version":"\([^"]*\)".*/\1/p'
 }
 
+# 版本已经对了就直接成功，不再多等。
 i=1
-while [ "$i" -le 15 ]; do
-  st="$(appcenter-cli status "$PKG" 2>&1 || true)"
-  case "$st" in
-    *running*)
-      got="$(running_version)"
-      if [ -z "$WANT_VERSION" ]; then
+while [ "$i" -le 20 ]; do
+  got="$(running_version)"
+  if [ -z "$WANT_VERSION" ]; then
+    st="$(appcenter-cli status "$PKG" 2>&1 || true)"
+    case "$st" in
+      *running*)
         log "警告：本次没有目标版本号，无法按版本验收；只确认了 $PKG 在 running（实报版本 ${got:-未知}）"
         exit 0
-      fi
-      if [ "$got" = "$WANT_VERSION" ]; then
-        log "更新完成：$PKG 已运行，版本 $got"
-        exit 0
-      fi
-      log "第 $i 轮：进程在 running，但版本是 ${got:-未知}（期望 $WANT_VERSION），继续等待"
-      ;;
-    *)
-      log "第 $i 轮：状态不是 running（$st）"
-      ;;
-  esac
+        ;;
+    esac
+  elif [ "$got" = "$WANT_VERSION" ]; then
+    log "更新完成：$PKG 已运行，版本 $got"
+    exit 0
+  fi
+  log "第 $i 轮：实报版本 ${got:-未知}（期望 ${WANT_VERSION:-未知}），继续等待"
   appcenter-cli start "$PKG" >/dev/null 2>&1 || true
   sleep 2
   i=$((i + 1))
 done
 
-log "安装后 15 轮仍未验收通过（期望版本 $WANT_VERSION，实报 ${got:-未知}）：请到飞牛应用中心检查，或手动安装 $FPK"
+# ── 8. 验收没过：回退到备份，别把用户丢在一个起不来的版本上 ─────────────
+log "更新后 20 轮仍未验收通过（期望版本 ${WANT_VERSION:-未知}，实报 ${got:-未知}），开始回退"
+appcenter-cli stop "$PKG" >/dev/null 2>&1 || true
+sleep 1
+for item in "$BK"/*; do
+  [ -e "$item" ] || continue
+  name="$(basename "$item")"
+  # manifest 属于 $APP_DIR（不在 $DEST 里），回退时要还原到它自己的位置，
+  # 否则会在 target/ 下多出一个没人读的 manifest 副本，而应用中心仍显示新版号。
+  if [ "$name" = "manifest" ]; then
+    cp -a "$item" "$APP_DIR/manifest" 2>/dev/null || true
+    continue
+  fi
+  rm -rf "$DEST/$name"
+  cp -a "$item" "$DEST/" 2>/dev/null || true
+done
+chmod +x "$DEST/$PKG" 2>/dev/null || true
+appcenter-cli start "$PKG" >/dev/null 2>&1 || true
+sleep 2
+log "已回退到旧版（实报版本 $(running_version)）。请到飞牛应用中心手动安装 $FPK"
 exit 1
 `)
 	return b.String()

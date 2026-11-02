@@ -218,7 +218,7 @@ func APICatalog(baseURL string) []Endpoint {
 		{
 			Method: http.MethodPost, Path: "/api/app/update/download", Summary: "下载新版 fpk 安装包（后台，幂等）", Category: catSystem,
 			Example: "curl -X POST " + baseURL + "/api/app/update/download",
-			Notes:   "立即返回，下载在后台继续；进度用 GET /api/app/update/state 轮询。已下载完成时重复调用直接返回 ready 与已有路径。落盘位置：<数据目录>/updates/。",
+			Notes:   "立即返回，下载在后台继续；进度用 GET /api/app/update/state 轮询。已下载完成（含进程重启前下好的包）时直接复用磁盘上的 fpk，返回 ready 与已有路径。落盘位置：<数据目录>/updates/。",
 		},
 		{
 			Method: http.MethodGet, Path: "/api/app/update/state", Summary: "查看更新下载与安装状态", Category: catSystem,
@@ -228,12 +228,19 @@ func APICatalog(baseURL string) []Endpoint {
 		{
 			Method: http.MethodPost, Path: "/api/app/update/install", Summary: "安装已下载的新版（会重启应用）", Category: catSystem,
 			Example: "curl -X POST " + baseURL + "/api/app/update/install",
-			Notes:   "脚本写在 /tmp/yinshu-update/apply-update.sh 并脱离本进程执行（需 root 或免密 sudo），会 stop/uninstall/install 本应用，因此请求可能中断。403=没有安装权限（请到飞牛应用中心手动安装 fpk）；409=安装包未就绪；日志见 /tmp/yinshu-update/install.log。",
+			Notes:   "脚本写在 /tmp/yinshu-update/apply-update.sh 并脱离本进程执行（需 root 或免密 sudo），会就地替换程序文件并重启本应用，因此请求可能中断。403=没有安装权限（请到飞牛应用中心手动安装 fpk）；409=安装包未就绪；日志见 /tmp/yinshu-update/install.log。",
 		},
 		{
 			Method: http.MethodGet, Path: "/api/app/update/install/log", Summary: "读安装脚本日志尾部（排障用）", Category: catSystem,
 			Example: "curl " + baseURL + "/api/app/update/install/log?lines=40",
 			Notes:   "`ok=false` 表示还没有安装日志；`tail` 是最后 N 行（`lines` 1~200，默认 40）。日志在 /tmp 里，应用重启后仍可读。",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/app/update/proxy/probe", Summary: "测试已配置网络代理的可用性（通了优先走代理，不通回退官方源）", Category: catSystem,
+			Example: "curl " + baseURL + "/api/app/update/proxy/probe",
+			Notes:   "只读，不改配置。返回 {configured,url,ok,latency_ms,version,error,checked_at,preferred_proxy}；" +
+				"`configured=false` 表示没配代理（不是错误）。检查更新时后端会自动做同样的探测，这个接口供界面手动重测。" +
+				"探测上限 8 秒，超时即判不通并回退官方源。",
 		},
 		{
 			Method: http.MethodGet, Path: "/api/app/update/notice", Summary: "读取「更新完成」提示（版本号变化时提示一次）", Category: catSystem,

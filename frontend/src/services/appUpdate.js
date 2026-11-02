@@ -80,6 +80,27 @@ export function normalizeCheck(data) {
         error: String(t?.error || ''),
       }))
       : [],
+    // 已下载更新包探测（2026-11-02 第 1 项）：后端在检查时顺手看了一眼
+    // <数据目录>/updates/，有现成的包就直接标出来，界面据此不再显示「下载中」。
+    downloaded: !!d.downloaded,
+    downloadedPath: typeof d.downloaded_path === 'string' ? d.downloaded_path : '',
+    // 代理测速结论（第 6 项）：没配代理时后端不带这个字段。
+    proxy: normalizeProxyProbe(d.proxy),
+  }
+}
+
+/** normalizing 代理测速结论；缺字段时给一个「未配置」的稳定形状。 */
+export function normalizeProxyProbe(v) {
+  if (!v || typeof v !== 'object') return null
+  return {
+    configured: !!v.configured,
+    url: String(v.url || ''),
+    ok: !!v.ok,
+    latencyMs: Number(v.latency_ms || 0) || 0,
+    version: String(v.version || ''),
+    error: String(v.error || ''),
+    checkedAt: String(v.checked_at || ''),
+    preferredProxy: !!v.preferred_proxy,
   }
 }
 
@@ -169,6 +190,11 @@ export function createAppUpdate({
   // 既不知道装成功没有，也不知道卡在哪一步。现在把日志尾部取回来摊开显示。
   const installLog = ref('')
   const installLogPath = ref('')
+  // 代理测速结论（2026-11-02 第 6 项）：配了代理时后端会先探一次通不通。
+  // null = 还没探测过 / 没配代理。形状见后端 ProxyProbeResult。
+  const proxyProbe = ref(null)
+  // 正在测速（界面要能显示「正在测代理…」，否则用户以为按钮没反应）。
+  const proxyProbing = ref(false)
 
   let timer = null
   let polling = false
@@ -248,6 +274,9 @@ export function createAppUpdate({
     checkError.value = d.error
     checkSource.value = d.source || ''
     checkTried.value = Array.isArray(d.tried) ? d.tried : []
+    // 后端在检查时顺手做了代理测速（第 6 项），结论直接拿来显示，
+    // 不必再单独点一次「测速」。
+    if (d.proxy) proxyProbe.value = d.proxy
     if (installed.value) {
       phase.value = 'installed'
     } else if (d.hasUpdate) {
@@ -384,10 +413,42 @@ export function createAppUpdate({
     try {
       const data = await request(`/api/app/update/install/log?lines=${lines}`, { timeout: 8000 })
       installLogPath.value = data?.path || ''
-      installLog.value = data?.ok && data?.tail ? String(data.tail) : ''
+      const raw = data?.ok && data?.tail ? String(data.tail) : ''
+      // 用户 2026-11-02 第 2 项：「更新日志改为新日志在顶部显示」。
+      // 安装日志是按时间**追加**写的（最新的在文件末尾），而界面上一屏只放得下
+      // 几行 —— 停在末尾就意味着每次都得往下滚才能看到「刚刚失败在哪一步」。
+      // 所以这里把行序倒过来，让最新的一行出现在最上面。
+      // 只在日志块内部倒序，不改文件、不影响后端读取（后端仍是 tail 语义）。
+      installLog.value = raw ? raw.split('\n').slice().reverse().join('\n') : ''
       return installLog.value
     } catch (_) {
       return ''
+    }
+  }
+
+  /**
+   * 测一次「已配置的代理能不能真的连上更新源」（2026-11-02 第 6 项）。
+   *
+   * 为什么要前端也留一个入口：检查更新时后端会自动探，但用户刚填完代理、或刚把
+   * 代理软件拉起来时，想立刻看到结果。失败静默成一个可展示的结论，不抛异常。
+   */
+  async function probeProxy() {
+    if (proxyProbing.value) return proxyProbe.value
+    proxyProbing.value = true
+    try {
+      const data = await request('/api/app/update/proxy/probe', { timeout: 25000 })
+      // request() 已经把 {code,data} 拆过一层，这里拿到的是 ProxyProbeResult 本身。
+      proxyProbe.value = normalizeProxyProbe(data)
+      return proxyProbe.value
+    } catch (e) {
+      proxyProbe.value = {
+        configured: true,
+        ok: false,
+        error: e?.message || '代理测速请求失败',
+      }
+      return proxyProbe.value
+    } finally {
+      proxyProbing.value = false
     }
   }
 
@@ -588,6 +649,8 @@ export function createAppUpdate({
     phase.value = 'idle'
     installLog.value = ''
     installLogPath.value = ''
+    proxyProbe.value = null
+    proxyProbing.value = false
     polling = false
     installRequested = false
     autoChecked = false
@@ -603,9 +666,10 @@ export function createAppUpdate({
     checking, downloading, installing, installed, progress,
     downloadPath, error, phase,
     installLog, installLogPath,
+    proxyProbe, proxyProbing,
     notice,
     check, startUpdate, pollOnce, installUpdate, stopPolling, startPolling,
-    resumeIfActive, ensureChecked, ensureNotice, ackNotice, fetchInstallLog,
+    resumeIfActive, ensureChecked, ensureNotice, ackNotice, fetchInstallLog, probeProxy,
     startAutoCheck, stopAutoCheck, resetForTests, debugState,
   }
 }

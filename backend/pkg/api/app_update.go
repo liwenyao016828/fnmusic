@@ -9,6 +9,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"fn-lx-player/pkg/applog"
 	"fn-lx-player/pkg/appupdate"
@@ -53,6 +54,14 @@ func (s *Server) HandleAppUpdateCheck(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), appupdate.CheckTimeout)
 	defer cancel()
 	res := m.Check(ctx, refresh)
+	// 检查完顺手对一下磁盘：这个版本的 fpk 如果已经下过了（上次下好没来得及
+	// 装、或者进程重启丢了内存状态），直接把状态推进到 ready，界面就能立刻
+	// 出现「安装」按钮，不用再等一遍下载。（用户 2026-11-02 第 1 项要求）
+	if res.AssetName != "" && res.Latest != "" && m.AdoptDownloaded(res.Latest) {
+		st := m.State()
+		res.Downloaded = true
+		res.DownloadedPath = st.Path
+	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"code": 200, "data": res})
 }
 
@@ -288,5 +297,34 @@ func (s *Server) HandleAppUpdateInstallLog(w http.ResponseWriter, r *http.Reques
 			"tail":  tail,
 			"lines": lines,
 		},
+	})
+}
+
+// HandleAppUpdateProxyProbe 测一次「经当前配置的代理能不能真的访问更新源」。
+//
+//	GET /api/app/update/proxy/probe
+//
+// 用户 2026-11-02 第 6 项：「若已配置代理，自动测试代理速度；测试成功则优先
+// 使用代理，失败则回退到官方源」。检查更新（/check）内部已经会自动做这件事，
+// 这个接口是给**界面上的手动重测**用的 —— 用户刚填完代理、或刚把代理软件拉起来，
+// 想立刻知道通不通，不必再去点一次「检查更新」等完整结果。
+//
+// 只读：不改配置、不动下载状态。没配代理时返回 {configured:false}，不是错误。
+func (s *Server) HandleAppUpdateProxyProbe(w http.ResponseWriter, r *http.Request) {
+	m := s.appUpdateManager()
+	if m == nil {
+		errJSON(w, http.StatusServiceUnavailable, "更新模块未初始化")
+		return
+	}
+	if r.Method != http.MethodGet && r.Method != http.MethodPost {
+		errJSON(w, http.StatusMethodNotAllowed, "只支持 GET / POST")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	res := m.ProbeProxy(ctx)
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"code": 200,
+		"data": res,
 	})
 }

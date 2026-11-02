@@ -22,8 +22,8 @@
 | **后端依赖** | **已引入第三方依赖**（`modernc.org/sqlite v1.36.1`，纯 Go）。旧版「零依赖」规则已作废，见 §2 规则二 |
 | **前端依赖** | vue / vite / tailwindcss / axios / lucide-vue-next / crypto-js / buffer / qrcode |
 | **打包** | `bash scripts/build.sh`，**不需要 fnpack** |
-| **当前版本** | `2.24.19`（代码与 manifest 已同步，见 §7） |
-| **应用内更新** | `backend/pkg/appupdate` + `frontend/src/components/UpdateCard.vue`：查 GitHub Release → 流式下载到 `<数据目录>/updates/` → 执行 `/tmp/yinshu-update/apply-update.sh`（`appcenter-cli stop/uninstall/install-fpk` 再 `start`）。**安装这一跳在开发机上无法验证**（没有 `appcenter-cli`、没有 `/var/apps/`），真机第一次用要盯着 log。 |
+| **当前版本** | `2.28.0`（代码与 manifest 已同步，见 §7） |
+| **应用内更新** | `backend/pkg/appupdate` + `frontend/src/components/UpdateCard.vue`：查 GitHub Release → 流式下载到 `<数据目录>/updates/` → 执行 `/tmp/yinshu-update/apply-update.sh`。**v2.28.0 起改为「就地升级」**：摊包校验 → 备份旧程序 → `appcenter-cli stop` + 覆盖程序文件 → `start` → 按 `/api/app/version` 版本验收 → 不变就自动回退。⚠️ **绝对不要改回 `appcenter-cli uninstall` + `install-fpk`**（v2.24.5–v2.24.19 的更新全挂在这条路上：带卸载向导的应用 CLI 拒绝卸载、返回码还是 0，install-fpk 对已安装应用又是 no-op，见 §1.4.1）。**安装这一跳在开发机上无法验证**（没有 `appcenter-cli`、没有 `/var/apps/`），真机第一次用要盯着 log。 |
 | **文件名体检** | `backend/pkg/nas/health.go`：扫出非法 UTF-8 / 控制字符 / 首尾空格 / 0 字节音频 / `.part` 残留 / 权限 000 等条目（它们会让 fnOS 整层目录报「未知错误」）。修复接口**只收 `id`（路径字节的 base64url）不收 path** —— 非法 UTF-8 的名字过一次 JSON 就变成 U+FFFD，传 path 必然找不到文件；服务端在最近 8 次扫描缓存里回查。 |
 | **自动发布** | 功能完成并验证后由 DSH 提交、推送 main；GitHub Actions 校验四处版本 → 前端构建 → 后端/前端/洛雪测试 → FPK 自检 → 新版本 Release + SHA256。已有版本不覆盖；不自动部署 NAS。不用 git hook 自动暂存工作区。 |
 | **作者署名** | `fpk-package/manifest` 的 `maintainer` / `distributor` 与 `LICENSE` 的版权人统一为 `<作者账号>`（此前是第三方壳的 `积木搬运师` / `webspider7`）。README 顶部署名作者并注明「AI 协作」，致谢只列参考过的项目，不再自称「上游移植」。改这四处是署名问题，与 `appname=yinshu-ai` / `desktop_applaunchme` 这些**技术标识**无关，别混在一起改。 |
@@ -256,12 +256,27 @@ ssh -p <SSH端口> <user>@192.168.x.x \
 
 ### 1.4.1 升级已安装的应用（2026-10-07 实测的坑）
 
+> ⛔ **2026-11-02 补充：下面这条「卸载 + 重装」的路在 v2.24.5 之后已经走不通了，应用内更新已改用「就地升级」，别再改回去。**
+>
+> - 2026-11-01 的提交 `566caee` 给 fpk 加了 `wizard/uninstall`（卸载时问「数据保留 / 删除」）。
+> - 飞牛官方 CLI 文档（`fnos` 技能 `reference/app-center.md` 的 Failure handling matrix）明确写着：
+>   **带自定义卸载向导参数的应用，CLI 一律拒绝卸载，只能用应用中心 Web UI**
+>   （`Custom uninstall wizard parameters are required → Rejects before uninstall task → Use App Center UI`）。
+> - 更坑的是**它返回码是 0**，而 `apply-update.sh` 把 uninstall 的输出 `>/dev/null 2>&1` 吞了，
+>   脚本以为卸载成功继续调用 `install-fpk`；`install-fpk` 见应用还在就直接 no-op。
+>   → 旧进程一直在跑、新包从未落盘，日志里只有一句 `[Info]Application [yinshu-ai] is installed.`，
+>   最后卡在「安装后 15 轮仍未验收通过（期望 X，实报旧版）」。**11-01 18:06 起的 7 次更新失败全是这个链。**
+> - 现在 `script.go` 的 `BuildApplyScript` 走：摊包校验 → 备份旧程序到 `/tmp/yinshu-update/backup`
+>   → `appcenter-cli stop` + `pkill` → `cp -a` 覆盖程序文件（跳过 `var/etc/home/meta/tmp/shares/app.sock`）
+>   → `appcenter-cli start` → 版本验收 20 轮 → 不达标自动回退备份。
+>   程序目录与 `@appdata`/`@appconf` 是两个地方，覆盖程序文件不碰数据。
+
 ⚠️ **`appcenter-cli install-fpk` 对已安装的应用是空操作** —— 它会打印
 `[Info]Application [yinshu-ai] is installed.` 然后**什么都不做**（磁盘上的二进制时间戳与大小都不变）。
 **停掉应用再试也一样**（我试过），README 里那句「命令行 install-fpk 在已安装时不会升级」是真的。
 `manual-install` 已是 `enable`，不是这个原因；CLI 也没有 `upgrade` 子命令。
 
-✅ **能用的路：卸载 + 重装**（应用中心 GUI 的升级内部也是这么做的）：
+~~✅ **能用的路：卸载 + 重装**~~（⛔ 见上方 2026-11-02 补充：带卸载向导后 CLI 不再接受，仅在没有 `wizard/uninstall` 的老版本上成立）：
 
 ```bash
 sudo -n appcenter-cli uninstall yinshu-ai

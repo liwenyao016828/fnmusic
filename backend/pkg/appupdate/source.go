@@ -55,6 +55,19 @@ type sourceEntry struct {
 // 停用的镜像不进返回列表，但要记进 skipped —— 界面「为什么没走我填的那台」
 // 的答案通常就是「它被停用了」。
 func (m *Manager) sources() (list []sourceEntry, skipped []SourceAttempt) {
+	return m.sourcesFor(false)
+}
+
+// sourcesFor 是 sources 的「带偏好」版本。
+//
+// preferOfficial=true 时把官方源排到**最前**（镜像仍会试，只是排在后面）。
+// 只在一个情况下用它：用户配了代理，且代理测速**不通**。这时候镜像多半也
+// 一起不通（同一条出网链路），先撞一遍镜像只是白等两轮超时；而官方源 +
+// 直连（代理已回退）才是当前网络下最可能的通路。
+//
+// 不能改成「只用官方源」：用户明确要求过「失败回退到官方源」，而不是
+// 「失败后就不再试镜像」—— 镜像排在后面照样会被试到。
+func (m *Manager) sourcesFor(preferOfficial bool) (list []sourceEntry, skipped []SourceAttempt) {
 	official := sourceEntry{
 		name:       officialName,
 		releaseURL: m.officialReleaseURL(),
@@ -79,7 +92,11 @@ func (m *Manager) sources() (list []sourceEntry, skipped []SourceAttempt) {
 		})
 	}
 	if !officialDisabled(mirrors) && m.allowOfficial {
-		list = append(list, official)
+		if preferOfficial {
+			list = append([]sourceEntry{official}, list...)
+		} else {
+			list = append(list, official)
+		}
 	}
 	return list, skipped
 }
@@ -131,8 +148,21 @@ func assetURLFor(src sourceEntry, raw string) string {
 // 前缀型镜像遇到不可达主机时，transport 自己会在连接阶段快速失败。
 func (m *Manager) tryCheck(ctx context.Context) (CheckResult, Release, sourceEntry) {
 	res := CheckResult{Current: m.current, CheckedAt: m.now().Format(time.RFC3339)}
-	list, skipped := m.sources()
+
+	// 用户 2026-11-02 第 6 项：配了代理就先测速 —— 通了优先走代理（连镜像那一步
+	// 也走代理，代理通说明出网没问题，比撞一个可能被限速的公共镜像更稳），
+	// 不通就这一次回退成「直连 + 官方源优先」，不再让一个死代理拖死整次检查。
+	proxy, probe := m.proxyPreferred(ctx)
+	res.Proxy = &probe
+
+	list, skipped := m.sourcesFor(probe.OK)
 	res.Tried = append(res.Tried, skipped...)
+
+	client := m.httpClient()
+	if probe.Configured {
+		// 测通了用代理出口；测不通用直连出口（空 = 环境变量/直连）。
+		client = m.clientFor(proxy)
+	}
 
 	var failures []string
 	for _, src := range list {
@@ -143,7 +173,7 @@ func (m *Manager) tryCheck(ctx context.Context) (CheckResult, Release, sourceEnt
 		}
 		// 每台各自限时（sourceAttemptWindow），剩余总预算更短就取更短的那个。
 		sctx, cancel := context.WithTimeout(ctx, sourceAttemptWindow)
-		rel, err := FetchLatestRelease(sctx, m.httpClient(), src.releaseURL, m.repo, m.tokenNow(), m.ua)
+		rel, err := FetchLatestRelease(sctx, client, src.releaseURL, m.repo, m.tokenNow(), m.ua)
 		cancel()
 		if err != nil {
 			reason := briefErr(err)
