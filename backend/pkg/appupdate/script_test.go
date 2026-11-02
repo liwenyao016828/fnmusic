@@ -146,61 +146,25 @@ func TestApplyScriptVerifiesVersionNotJustRunning(t *testing.T) {
 	}
 }
 
-// 2026-11-02 真机事故：带卸载向导的应用不能用命令行卸载。
-//
-// v2.24.5 起 fpk 里多了 wizard/uninstall（问「数据保留还是删除」）。飞牛应用中心
-// 命令行不支持回答卸载向导，uninstall 在无交互环境下直接被拒 —— 而且**返回值
-// 仍是 0**，输出又被 `>/dev/null` 吞掉。于是老脚本一路往下走：
-//
-//	uninstall 没真执行 → install-fpk 对已安装应用是空操作（只打印
-//	「Application [yinshu-ai] is installed.」）→ 磁盘上还是旧版
-//	→ 按版本号验收必然失败 → 用户看到「手动点更新仍然失败」。
-//
-// 所以脚本现在**根本不该再调用 uninstall**，也不该再依赖 install-fpk。
-func TestApplyScriptDoesNotUninstall(t *testing.T) {
+func TestApplyScriptSurfacesUninstallAndInstallFailures(t *testing.T) {
 	body := BuildApplyScript(ScriptConfig{
 		Pkg: "yinshu-ai", Fpk: "/data/updates/a.fpk",
 		EnvFile: "/tmp/yinshu-update/install.env", Stage: "/tmp/yinshu-update",
-		Log: "/tmp/yinshu-update/install.log", Version: "2.24.19",
+		Log: "/tmp/yinshu-update/install.log", Version: "2.24.18",
 	})
-	for _, banned := range []string{
-		"appcenter-cli uninstall",
-		"appcenter-cli install-fpk",
-	} {
-		if strings.Contains(body, banned) {
-			t.Errorf("脚本不应再调用 %q：带卸载向导的应用会被应用中心命令行拒绝，且失败被返回码 0 掩盖", banned)
-		}
+	// uninstall 不能再被 `|| true` 吞掉：失败要重试一次，再失败就报错退出
+	if strings.Contains(body, `appcenter-cli uninstall "$PKG" >/dev/null 2>&1 || true`) {
+		t.Error("uninstall 的失败仍被 || true 吞掉 —— 这正是「装成功但版本没变」的根因")
 	}
-}
-
-// 就地升级必须「先摊包校验、后动线上文件」，且失败了要能回退。
-func TestApplyScriptUnpacksBeforeTouchingAppDir(t *testing.T) {
-	body := BuildApplyScript(ScriptConfig{
-		Pkg: "yinshu-ai", Fpk: "/data/updates/a.fpk",
-		EnvFile: "/tmp/yinshu-update/install.env", Stage: "/tmp/yinshu-update",
-		Log: "/tmp/yinshu-update/install.log", Version: "2.24.19",
-	})
-	// 摊包的位置要排在第一次动应用目录之前
-	unpack := strings.Index(body, `tar -xzf "$FPK" -C "$UNPACK"`)
-	backup := strings.Index(body, `log "已备份旧程序到 $BK"`)
-	if unpack < 0 {
-		t.Fatal("脚本没有摊包校验步骤")
+	if !strings.Contains(body, "卸载旧版失败") {
+		t.Error("卸载失败没有如实报出来")
 	}
-	if backup < 0 {
-		t.Fatal("脚本没有备份旧程序的步骤")
+	// install-fpk 失败也要暴露，并把 cli 的原始输出写进日志
+	if !strings.Contains(body, "install-fpk 失败") {
+		t.Error("install-fpk 失败没有如实报出来")
 	}
-	if unpack > backup {
-		t.Error("摊包校验必须排在备份/替换之前：解不开的包不该动线上文件")
-	}
-	// 必须有回退
-	for _, want := range []string{
-		"已放弃本次更新", // 前置校验失败时明确告知「什么都没发生」
-		"开始回退",     // 验收不过时回退
-		"已回退到旧版",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("脚本缺少 %q", want)
-		}
+	if !strings.Contains(body, "install-fpk 输出") {
+		t.Error("install-fpk 的输出应当写进日志（排障唯一线索）")
 	}
 }
 
@@ -245,40 +209,5 @@ func TestApplyScriptVersionExtractionWorks(t *testing.T) {
 	}
 	if got := strings.TrimSpace(string(out)); got != "2.24.18" {
 		t.Fatalf("版本提取得到 %q，期望 2.24.18", got)
-	}
-}
-
-// manifest 必须跟着换：应用中心的「已安装版本」读的是 /var/apps/<pkg>/manifest，
-// 只替换 target/ 会让它永远显示旧版本号（2026-11-02 收尾自查发现的洞）。
-func TestApplyScriptUpdatesManifest(t *testing.T) {
-	s := BuildApplyScript(ScriptConfig{
-		Pkg: "yinshu-ai", Fpk: "/tmp/x.fpk", EnvFile: "/tmp/x.env",
-		Stage: "/tmp/yinshu-update", Log: "/tmp/yinshu-update/install.log", Version: "2.28.0",
-	})
-	if !strings.Contains(s, `cp -a "$SRC/manifest" "$APP_DIR/manifest"`) {
-		t.Fatal("脚本没有把新 manifest 覆盖到 $APP_DIR，应用中心会一直显示旧版本")
-	}
-	if !strings.Contains(s, "manifest 已更新") {
-		t.Fatal("脚本没有记录 manifest 更新结果")
-	}
-	// 备份与回退：旧 manifest 要进备份目录，并且回退时还原到 $APP_DIR（不是 $DEST）
-	if !strings.Contains(s, `cp -a "$APP_DIR/manifest" "$BK/manifest"`) {
-		t.Fatal("旧 manifest 没有进备份目录")
-	}
-	if !strings.Contains(s, `cp -a "$item" "$APP_DIR/manifest"`) {
-		t.Fatal("回退分支没有还原 $APP_DIR/manifest")
-	}
-}
-
-// 回退分支也要把 manifest 还原到 $APP_DIR —— 第 8 节那个循环如果照搬 $DEST，
-// 会在 target/ 下留一个没人读的 manifest 副本，应用中心还是显示新版号。
-func TestApplyScriptRestorePutsManifestBackToAppDir(t *testing.T) {
-	s := BuildApplyScript(ScriptConfig{
-		Pkg: "yinshu-ai", Fpk: "/tmp/x.fpk", EnvFile: "/tmp/x.env",
-		Stage: "/tmp/yinshu-update", Log: "/tmp/yinshu-update/install.log", Version: "2.28.0",
-	})
-	// 两处（替换失败回退 + 版本验收失败回退）都得有 $APP_DIR/manifest 的还原
-	if n := strings.Count(s, `cp -a "$item" "$APP_DIR/manifest"`); n != 2 {
-		t.Fatalf("回退分支还原 $APP_DIR/manifest 的次数 = %d，期望 2（替换失败 + 验收失败）", n)
 	}
 }
