@@ -38,7 +38,7 @@ type ScriptConfig struct {
 //  5. 按**版本号**验收：/api/app/version 必须等于目标版本且进程在跑；
 //  6. 版本没变就自动回退到备份，并把原因写进日志。
 //
-// # 为什么不再 uninstall（2026-11-02 用户「手动点击更新仍然失败」）
+// # 为什么不用 uninstall / install-fpk（2026-11-02 用户「手动点击更新仍然失败」）
 //
 // 老流程是 stop → `appcenter-cli uninstall` → `appcenter-cli install-fpk`。
 // 从 v2.24.5 起 fpk 里多了 `wizard/uninstall`（卸载前问「数据保留还是删除」），
@@ -49,9 +49,16 @@ type ScriptConfig struct {
 //	（只打印「Application [yinshu-ai] is installed.」）→ 旧进程还在 running
 //	→ 磁盘上还是旧版 → 按版本号验收必然失败。
 //
-// 现在的做法是「就地升级」：不动应用登记、不触发卸载向导，直接把新包里的
-// 程序文件覆盖到应用目录。数据目录（var/ → @appdata）与配置目录（etc/ →
-// @appconf）本来就在应用目录之外，全程不被触碰。
+// 2026-11-02 用户拍板：卸载向导去掉（改成纯说明文字，不再要求选择），
+// 但**升级链路仍然不走 uninstall/install-fpk** —— 官方 CLI 对已安装应用的
+// install-fpk 就是空操作这条坑（HANDOVER §1.4.1）不随向导消失而消失，
+// 而「就地升级」既不碰应用登记、也不碰数据目录，是唯一一条在真机上
+// 可靠跑通的路径（2026-10-30 之前能成功的那套流程也一样依赖卸载）。
+//
+// 所以这里保留「就地升级」：摊包校验 → 备份旧程序 → 停进程 → 覆盖程序文件
+// → 同步 manifest → 启动 → 按版本号验收 20 轮 → 不达标自动回退。
+// 数据目录（var/ → @appdata）与配置目录（etc/ → @appconf）在应用目录之外，
+// 全程不被触碰。
 func BuildApplyScript(cfg ScriptConfig) string {
 	pkg := shellQuote(cfg.Pkg)
 	fpk := shellQuote(cfg.Fpk)
@@ -194,6 +201,7 @@ if [ "$replace_ok" = "0" ]; then
   done
   appcenter-cli start "$PKG" >/dev/null 2>&1 || true
   log "已回退到旧版。请到飞牛应用中心手动安装 $FPK"
+  log "提示：卸载曲率时数据默认保留在 /vol1/@appdata/yinshu-ai，卸载前会自动备份到卷根目录 /vol1/yinshu-ai-backup-<时间戳>.tar.gz"
   exit 1
 fi
 chmod +x "$DEST/$PKG" "$DEST"/cmd/* 2>/dev/null || true
@@ -273,6 +281,7 @@ chmod +x "$DEST/$PKG" 2>/dev/null || true
 appcenter-cli start "$PKG" >/dev/null 2>&1 || true
 sleep 2
 log "已回退到旧版（实报版本 $(running_version)）。请到飞牛应用中心手动安装 $FPK"
+log "提示：卸载曲率时数据默认保留在 /vol1/@appdata/yinshu-ai，卸载前会自动备份到卷根目录 /vol1/yinshu-ai-backup-<时间戳>.tar.gz"
 exit 1
 `)
 	return b.String()

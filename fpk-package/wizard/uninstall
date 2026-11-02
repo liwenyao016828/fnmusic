@@ -1,16 +1,10 @@
 [
   {
-    "stepTitle": "卸载选项",
+    "stepTitle": "卸载说明",
     "items": [
       {
-        "type": "radio",
-        "field": "wizard_keep_data",
-        "label": "数据",
-        "initValue": "true",
-        "options": [
-          { "label": "保留", "value": "true" },
-          { "label": "删除", "value": "false" }
-        ]
+        "type": "description",
+        "content": "曲率的曲库索引、订阅与下载记录保存在 /vol1/@appdata/yinshu-ai，卸载不会删除这些数据。卸载前会自动打包一份备份到卷根目录 /vol1/yinshu-ai-backup-<时间戳>.tar.gz（保留最近 5 份）。若要连数据一起清理，卸载后到「文件管理」删除该目录即可。"
       }
     ]
   }

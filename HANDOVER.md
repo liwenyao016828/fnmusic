@@ -22,7 +22,7 @@
 | **后端依赖** | **已引入第三方依赖**（`modernc.org/sqlite v1.36.1`，纯 Go）。旧版「零依赖」规则已作废，见 §2 规则二 |
 | **前端依赖** | vue / vite / tailwindcss / axios / lucide-vue-next / crypto-js / buffer / qrcode |
 | **打包** | `bash scripts/build.sh`，**不需要 fnpack** |
-| **当前版本** | `2.28.0`（代码与 manifest 已同步，见 §7） |
+| **当前版本** | `2.28.1`（代码与 manifest 已同步，见 §7） |
 | **应用内更新** | `backend/pkg/appupdate` + `frontend/src/components/UpdateCard.vue`：查 GitHub Release → 流式下载到 `<数据目录>/updates/` → 执行 `/tmp/yinshu-update/apply-update.sh`。**v2.28.0 起改为「就地升级」**：摊包校验 → 备份旧程序 → `appcenter-cli stop` + 覆盖程序文件 → `start` → 按 `/api/app/version` 版本验收 → 不变就自动回退。⚠️ **绝对不要改回 `appcenter-cli uninstall` + `install-fpk`**（v2.24.5–v2.24.19 的更新全挂在这条路上：带卸载向导的应用 CLI 拒绝卸载、返回码还是 0，install-fpk 对已安装应用又是 no-op，见 §1.4.1）。**安装这一跳在开发机上无法验证**（没有 `appcenter-cli`、没有 `/var/apps/`），真机第一次用要盯着 log。 |
 | **文件名体检** | `backend/pkg/nas/health.go`：扫出非法 UTF-8 / 控制字符 / 首尾空格 / 0 字节音频 / `.part` 残留 / 权限 000 等条目（它们会让 fnOS 整层目录报「未知错误」）。修复接口**只收 `id`（路径字节的 base64url）不收 path** —— 非法 UTF-8 的名字过一次 JSON 就变成 U+FFFD，传 path 必然找不到文件；服务端在最近 8 次扫描缓存里回查。 |
 | **自动发布** | 功能完成并验证后由 DSH 提交、推送 main；GitHub Actions 校验四处版本 → 前端构建 → 后端/前端/洛雪测试 → FPK 自检 → 新版本 Release + SHA256。已有版本不覆盖；不自动部署 NAS。不用 git hook 自动暂存工作区。 |
@@ -259,6 +259,11 @@ ssh -p <SSH端口> <user>@192.168.x.x \
 > ⛔ **2026-11-02 补充：下面这条「卸载 + 重装」的路在 v2.24.5 之后已经走不通了，应用内更新已改用「就地升级」，别再改回去。**
 >
 > - 2026-11-01 的提交 `566caee` 给 fpk 加了 `wizard/uninstall`（卸载时问「数据保留 / 删除」）。
+> - **v2.28.1 已把那个选择框去掉**（用户 2026-11-02 拍板「卸载的确认去掉，默认保留数据」）：
+>   `wizard/uninstall` 现在只剩一段 `type: description` 的说明文字（数据在哪、卸载不删、卸载前自动备份、
+>   要彻底清理去哪儿删），没有任何需要回答的字段，`uninstall_init` 里 `${wizard_keep_data:-true}`
+>   的默认值就是 `true`，备份逻辑照常执行。**但升级链路仍不走 uninstall/install-fpk** ——
+>   「install-fpk 对已安装应用是空操作」这条坑与本条向导无关，见本节开头。
 > - 飞牛官方 CLI 文档（`fnos` 技能 `reference/app-center.md` 的 Failure handling matrix）明确写着：
 >   **带自定义卸载向导参数的应用，CLI 一律拒绝卸载，只能用应用中心 Web UI**
 >   （`Custom uninstall wizard parameters are required → Rejects before uninstall task → Use App Center UI`）。
