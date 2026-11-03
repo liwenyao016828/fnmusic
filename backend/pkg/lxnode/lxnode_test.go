@@ -217,6 +217,70 @@ func TestProcessExitMarksFailed(t *testing.T) {
 	t.Fatalf("进程退出后该变成 failed：%+v", m.Status())
 }
 
+// Status 必须回 enabled/running：界面那个开关是按它决定显示「开启宿主」还是
+// 「已开启 · 点此关闭」的。
+//
+// 2026-11-02 真机踩坑：Status 原来只回 state，前端读 `!!st.enabled` 恒得 false，
+// 于是后端已经 ready、按钮还写着「开启宿主」，用户点了看不出任何变化，报「点击没反应」。
+// 这条用例钉的正是「三态可分」，不只是字段存在。
+func TestStatusReportsEnabledAndRunning(t *testing.T) {
+	p := &fakeProc{}
+	m := fakeManager(p)
+
+	// ① 没开过：关着、没在跑
+	st := m.Status()
+	if st["enabled"] != false || st["running"] != false {
+		t.Fatalf("初始该是 enabled=false running=false：%+v", st)
+	}
+
+	// ② 开着且在跑
+	m.Apply(Config{Enabled: true, Dir: "/tmp"})
+	st = m.Status()
+	if st["enabled"] != true || st["running"] != true || st["state"] != StateReady {
+		t.Fatalf("开着且在跑时三样都该为真：%+v", st)
+	}
+
+	// ③ 开着但起不来：用户「想开」，进程没跑 —— 这一态最容易被写成 enabled=false，
+	// 那样用户再点一下就是「关」，而 failed 的进程本来就不在跑，点什么都不会发生。
+	bad := &fakeProc{failOn: os.ErrPermission}
+	mb := fakeManager(bad)
+	mb.Apply(Config{Enabled: true, Dir: "/tmp"})
+	st = mb.Status()
+	if st["enabled"] != true {
+		t.Fatalf("起不来时配置仍是开的，enabled 必须是 true：%+v", st)
+	}
+	if st["running"] != false {
+		t.Fatalf("起不来时 running 必须是 false：%+v", st)
+	}
+
+	// ④ 主动关掉：回去关着、没在跑
+	m.Apply(Config{Enabled: false})
+	st = m.Status()
+	if st["enabled"] != false || st["running"] != false {
+		t.Fatalf("关掉后该是 enabled=false running=false：%+v", st)
+	}
+}
+
+// 进程自己死了：配置还开着（enabled=true），但 running 要立刻变 false。
+func TestProcessExitClearsRunning(t *testing.T) {
+	p := &fakeProc{}
+	m := fakeManager(p)
+	m.Apply(Config{Enabled: true, Dir: "/tmp"})
+	close(p.done)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		st := m.Status()
+		if st["running"] == false {
+			if st["enabled"] != true {
+				t.Fatalf("进程死了不代表用户关了它，enabled 仍应是 true：%+v", st)
+			}
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("进程退出后 running 该变成 false：%+v", m.Status())
+}
+
 // 宿主不可用时 Resolve 必须**只返回错误**（调用方回落），不能 panic、不能挂住。
 func TestResolveUnavailableReturnsError(t *testing.T) {
 	m := New()

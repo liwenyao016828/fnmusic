@@ -11,6 +11,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"fn-lx-player/pkg/procnet"
 )
 
 // 这一组盯的是 sidecar 的**生命周期**，不碰真实网络与真实 pip。
@@ -153,12 +155,21 @@ func realPython(t *testing.T) string {
 
 // freePort 找一个空着的端口（避免与真在跑的 sidecar 撞）。
 //
-// 用「时间纳秒取模」而不是 net.Listen 探测：探测要 listen 再关，中间那段窗口
-// 别的进程可能正好占上；而这个区间（18800–18999）只给测试用，撞上的概率极低，
-// 真撞上了健康检查会失败、用例会红 —— 不会静默通过。
+// 原实现是「时间纳秒取模 200」：既不确认端口是否真的空着，同一进程里连续两次调用
+// 还可能拿到同一个值。真机上偶发报 `OSError: [Errno 98] Address already in use`、
+// 用例 20 秒超时后红掉，就是这个分配方式造成的，与 sidecar 本身无关。
+//
+// 现在按序扫测试专用区间，先确认「端口上确实没人 LISTEN」再返回。这里不用
+// net.Listen 试——那会让端口短暂进入 TIME_WAIT，反而干扰随后的绑定。
 func freePort(t *testing.T) int {
 	t.Helper()
-	return 18800 + int(time.Now().UnixNano()%200)
+	for port := 18800; port < 19000; port++ {
+		if procnet.PortFree(port) {
+			return port
+		}
+	}
+	t.Skip("18800–18999 全被占用，跳过这条需要真实端口的用例")
+	return 0
 }
 
 // listenTCP 起一个监听（给「谁在这个端口上」那条用例用）。
@@ -505,7 +516,7 @@ func TestKillStaleIsNoopWhenPortFree(t *testing.T) {
 	}
 }
 
-func TestPidsOnPortFindsListener(t *testing.T) {
+func TestHoldersFindsListener(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("/proc 只在 Linux 上有")
 	}
@@ -517,28 +528,28 @@ func TestPidsOnPortFindsListener(t *testing.T) {
 	}
 	defer func() { _ = ln.Close() }()
 
-	pids := pidsOnPort(port)
-	if len(pids) == 0 {
+	holders := procnet.Holders(port)
+	if len(holders) == 0 {
 		t.Skip("这个环境读不到 /proc/net/tcp（容器/受限），跳过")
 	}
 	self := os.Getpid()
 	found := false
-	for _, p := range pids {
-		if p == self {
+	for _, h := range holders {
+		if h.PID == self {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("该认出自己（pid %d）在监听 %d，实际 %v", self, port, pids)
+		t.Fatalf("该认出自己（pid %d）在监听 %d，实际 %v", self, port, holders)
 	}
 }
 
-func TestPidsOnPortEmptyForUnusedPort(t *testing.T) {
+func TestHoldersEmptyForUnusedPort(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("/proc 只在 Linux 上有")
 	}
-	if pids := pidsOnPort(freePort(t)); len(pids) != 0 {
-		t.Fatalf("没人监听的端口不该报出 pid：%v", pids)
+	if holders := procnet.Holders(freePort(t)); len(holders) != 0 {
+		t.Fatalf("没人监听的端口不该报出持有者：%v", holders)
 	}
 }
 

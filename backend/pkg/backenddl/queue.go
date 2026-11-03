@@ -102,6 +102,7 @@ type Item struct {
 	Path          string `json:"path,omitempty"`
 	ActualQuality string `json:"actual_quality,omitempty"`
 	Source        string `json:"source,omitempty"`
+	SourceDetail  string `json:"source_detail,omitempty"`
 	Size          int64  `json:"size,omitempty"`
 
 	// Tries 是「这条被真正尝试过几次」，用来给 UI 区分「刚失败」与「一直失败」。
@@ -113,10 +114,11 @@ type Item struct {
 
 // Result 是一次成功取音的结果。
 type Result struct {
-	Path    string
-	Quality string
-	Source  string
-	Size    int64
+	Path         string
+	Quality      string
+	Source       string
+	SourceDetail string
+	Size         int64
 }
 
 // Fetcher 是「取音 + 落盘」的能力，由 main.go 注入。
@@ -506,6 +508,7 @@ func (q *Queue) runOne(it Item) {
 		q.items[idx].Path = res.Path
 		q.items[idx].ActualQuality = res.Quality
 		q.items[idx].Source = res.Source
+		q.items[idx].SourceDetail = res.SourceDetail
 		q.items[idx].Size = res.Size
 		q.items[idx].Error = ""
 		q.items[idx].UpdatedAt = now
@@ -672,6 +675,7 @@ func (q *Queue) Submit(items []Item, force, migrate bool) (added []Submitted, sk
 				old.Status = StatusPending
 				old.Error = ""
 				old.Path, old.ActualQuality, old.Source, old.Size = "", "", "", 0
+				old.SourceDetail = ""
 				old.Tries = 0
 				old.UpdatedAt = now
 				// 重新提交的应该是「最新的意图」：平台 id / 音质可能变了。
@@ -716,6 +720,7 @@ func (q *Queue) Submit(items []Item, force, migrate bool) (added []Submitted, sk
 			it.Status = StatusPending
 			it.Error = ""
 			it.Path, it.ActualQuality, it.Source, it.Size = "", "", "", 0
+			it.SourceDetail = ""
 			it.Tries = 0
 			hasPending = true
 		}

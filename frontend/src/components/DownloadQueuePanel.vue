@@ -279,9 +279,10 @@
             {{ task.song.name }}
           </p>
           <!-- 平台标签 -->
-          <span class="text-[9px] px-1.5 py-0.2 rounded-full bg-[var(--ys-surface-sunken)] text-gray-500 font-mono shrink-0">
-            {{ task.song.source || task.platform || 'kw' }}
-          </span>
+          <span
+            class="shrink-0 rounded-full bg-[var(--ys-surface-sunken)] px-1.5 py-0.2 text-[9px] text-gray-500"
+            :title="`原歌曲平台：${platformName(task.song.source || task.platform)}`"
+          >{{ platformName(task.song.source || task.platform) }}</span>
         </div>
         <p class="text-[11px] text-gray-500 truncate mb-1" :title="task.song.singer">
           {{ task.song.singer }}{{ task.song.album ? ' · ' + task.song.album : '' }}
@@ -303,10 +304,10 @@
           <span
             v-else-if="task.status === 'downloading'"
             class="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-600 flex items-center gap-1 font-medium"
-            title="由 NAS 后端执行，关掉本页/浏览器也会继续"
+            title="NAS 正在解析并下载；原平台无链时会尝试其他已配置渠道，以最终结果为准"
           >
             <Loader2 class="w-3 h-3 animate-spin text-emerald-600" />
-            <span>后台下载中</span>
+            <span>解析与下载中</span>
           </span>
 
           <!-- 已暂停 -->
@@ -384,9 +385,9 @@
           <span
             v-if="task.resolvedSource"
             class="px-1.5 py-0.5 rounded bg-[var(--ys-surface-sunken)] text-gray-500 truncate max-w-[130px]"
-            :title="'实际取链渠道：' + task.resolvedSource"
+            :title="`实际音频平台：${platformName(task.resolvedSource)}${task.resolvedSourceDetail ? `；实际音源：${task.resolvedSourceDetail}` : ''}${task.resolvedSource !== task.platform ? `；原歌曲平台：${platformName(task.platform)}` : ''}`"
           >
-            {{ task.resolvedSource }}
+            音频 {{ platformName(task.resolvedSource) }}<template v-if="task.resolvedSourceDetail"> · {{ task.resolvedSourceDetail }}</template>
           </span>
           <span v-if="task.attempts > 0" class="text-gray-500">
             重试 {{ task.attempts }} 次
@@ -586,6 +587,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch, onBeforeUnmount } from 'vue'
 import { downloadManager } from '../services/downloadManager'
+import { platformName } from '../services/libraryFields'
 import SelectField from './SelectField.vue'
 import { backendDownload } from '../services/backendDownload.js'
 import RangeSelectBar from './RangeSelectBar.vue'

@@ -36,6 +36,22 @@ func waitStatus(t *testing.T, q *Queue, id, want string) Item {
 	return Item{}
 }
 
+func TestSuccessfulResultKeepsActualPlatformAndSourceDetail(t *testing.T) {
+	q := newTestQueue(t, func(context.Context, Item) (Result, error) {
+		return Result{Path: "/music/test.flac", Quality: "flac", Source: "wy", SourceDetail: "lx/星海音乐源_v2.2.8.js"}, nil
+	})
+	added, _, err := q.Submit([]Item{{ClientID: "source-detail", Platform: "tx", Name: "测试歌曲"}}, false, false)
+	q.Start()
+	t.Cleanup(q.Close)
+	if err != nil || len(added) != 1 {
+		t.Fatalf("提交：added=%v err=%v", added, err)
+	}
+	it := waitStatus(t, q, added[0].ID, StatusSuccess)
+	if it.Platform != "tx" || it.Source != "wy" || it.SourceDetail != "lx/星海音乐源_v2.2.8.js" {
+		t.Fatalf("原平台 / 实际平台 / 实际音源必须分别保留：%+v", it)
+	}
+}
+
 func TestSubmitIsIdempotentPerClientID(t *testing.T) {
 	var calls int32
 	q := newTestQueue(t, func(ctx context.Context, it Item) (Result, error) {

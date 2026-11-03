@@ -54,14 +54,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
+
+	"fn-lx-player/pkg/procnet"
 )
 
 // State 是宿主的运行状态（与 sidecar 的取值保持一致，前端复用同一套渲染）。
@@ -86,6 +89,13 @@ type Config struct {
 	Script  string // lx_host/server.mjs 的绝对路径
 	Dir     string // 音源脚本目录（用户自己的 .js 放这里）
 	Port    int    // 默认 8920
+
+	// baseOverride 只给单测用：把宿主基地址指到一个应答器上，好让 checkIdentity
+	// 的三种情况（自己的 pid / 别人的 pid / 老宿主不报 pid）不必各拉一个真进程。
+	//
+	// 不导出是刻意的：生产代码唯一的调用点在 backend/main.go，永远走 port()。
+	// Config 仍保持可比较（Apply 里 `m.cfg == cfg` 依赖这一点），加字符串字段不影响。
+	baseOverride string
 }
 
 // readyTimeout 是等宿主起来的上限。首次加载脚本目录可能较慢，给足。
@@ -123,6 +133,19 @@ type Manager struct {
 	state   string
 	err     string
 	newProc func(cfg Config) process
+
+	// running 是「这一份 cfg 到底有没有真在跑」—— 与 cfg.Enabled（**想不想**开）
+	// 是两件事，绝不能混。
+	//
+	// 2026-11-02 踩过：Status() 以前只回 state，不回 enabled，界面拿不到开关的当前态，
+	// 开关按钮就永远显示「开启宿主」—— 用户点了、后端也确实 ready 了，界面却看不出
+	// 任何变化，读起来就是「点了没反应」。而 `cfg.Enabled` 也不能直接拿去顶：
+	// 「开着但启动失败（failed）」时开关必须仍显示「开」，否则用户点一下会去关它，
+	// 而 failed 的进程本来就不在跑，点了等于什么也没发生。
+	//
+	// 存成显式字段而不是从 state 反推，是因为 state 有两个「在跑」以外的来源：
+	// failed 之后我们自己改配置重试（Apply 会再写 cfg）等，反推迟早跟真值分叉。
+	running bool
 }
 
 // New 造一个 Manager（初始为 off）。
@@ -130,14 +153,8 @@ func New() *Manager {
 	return &Manager{state: StateOff, newProc: func(c Config) process { return &execProc{cfg: c} }}
 }
 
-// logf 洛雪宿主的运行日志。
-//
-// ⚠️ 曾经是 `fmt.Fprintf(os.Stderr, ...)`，绕过了 main.go 里 `log.SetOutput`
-// 接上的 applog —— 于是「宿主起没起来、为什么起不来」只出现在 stderr（容器里
-// 根本看不到），界面「运行日志」页一片空白。走 log.Printf 才同时进 stderr 与
-// 内存环形缓冲（GET /api/logs）。
 func (m *Manager) logf(format string, a ...any) {
-	log.Printf("[LXNODE] "+format, a...)
+	fmt.Fprintf(os.Stderr, "[LXNODE] "+format+"\n", a...)
 }
 
 // Apply 按配置起停。配置没变时不重建（与 sidecar 的语义一致）。
@@ -147,6 +164,10 @@ func (m *Manager) Apply(cfg Config) {
 
 	if !cfg.Enabled {
 		m.stopLocked()
+		// m.cfg 也要跟上：Status 回的是 cfg.Enabled（用户**想**开不开），
+		// 不更新就是「关掉了但界面仍显示已开启，再点一下变成又开一次」。
+		m.cfg = cfg
+		m.running = false
 		m.state, m.err = StateOff, ""
 		m.logf("已关闭")
 		return
@@ -158,10 +179,14 @@ func (m *Manager) Apply(cfg Config) {
 	m.cfg = cfg
 	m.state, m.err = StateStarting, ""
 	m.proc = m.newProc(cfg)
+	// 先置 true 再 Start：Start 里可能因为端口被残留进程占着而失败，那种情况下面
+	// 会把 running 改回来 —— 但**配置仍是开的**，用户点开关应当能关掉它。
+	m.running = true
 	if err := m.proc.Start(); err != nil {
 		m.err = err.Error()
 		m.state = StateFailed
 		m.proc = nil
+		m.running = false
 		m.logf("启动失败：%v", err)
 		return
 	}
@@ -177,7 +202,12 @@ func (c Config) port() int {
 	return 8920
 }
 
-func (c Config) base() string { return fmt.Sprintf("http://127.0.0.1:%d", c.port()) }
+func (c Config) base() string {
+	if c.baseOverride != "" {
+		return c.baseOverride
+	}
+	return fmt.Sprintf("http://127.0.0.1:%d", c.port())
+}
 
 // watch 盯住进程退出 —— 它死了状态要如实变成 failed，不能还挂着 ready。
 func (m *Manager) watch(p process) {
@@ -191,6 +221,7 @@ func (m *Manager) watch(p process) {
 		m.state, m.err = StateFailed, "lx 宿主进程退出"
 	}
 	m.proc = nil
+	m.running = false
 	m.logf("进程已退出，状态置为 %s", m.state)
 }
 
@@ -200,6 +231,7 @@ func (m *Manager) stopLocked() {
 	}
 	_ = m.proc.Stop()
 	m.proc = nil
+	m.running = false
 	if m.state != StateFailed {
 		m.state = StateStopped
 	}
@@ -214,75 +246,32 @@ func (m *Manager) Stop() {
 
 // Status 供 HTTP 层直接序列化。
 //
-// `enabled` 是**配置意图**（开关是开着的），不是进程状态：`state` 里 starting /
-// ready / failed 都意味着开关开着（只是进程还没起来 / 起来了 / 起不来），只有
-// off / stopped 是「用户关掉了」。前端要拿它决定按钮显示「开启宿主」还是
-// 「关闭宿主」—— 只给 state 的话，进程一失败界面就退回「开启宿主」，
-// 用户点一下等于对着一个已经开着的开关再开一次（关不掉的那个 bug 就是这么来的）。
+// 除了 state，还回三样界面必需的东西：
+//
+//	enabled —— 配置里开没开（用户**想不想**开）
+//	running —— 子进程此刻真在不在跑
+//	state   —— 这次起停的结果（off / starting / ready / failed / stopped）
+//
+// 三个都在，是因为界面上的开关要区分「开着且在跑」「开着但起不来」「关着」三种，
+// 只给 state 就分不出前两种。历史坑见 Manager.running 的注释。
 func (m *Manager) Status() map[string]any {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	st := map[string]any{
 		"state":   m.state,
-		"enabled": m.state == StateStarting || m.state == StateReady || m.state == StateFailed,
+		"enabled": m.cfg.Enabled,
+		"running": m.running,
 	}
 	if m.err != "" {
 		st["error"] = m.err
 	}
-	if m.state == StateReady {
-		st["base"] = m.cfg.base()
+	// base/dir 不只在 ready 时给：failed 的现场排障最需要知道「它想在哪个端口、
+	// 读哪个脚本目录」。缺省端口也一样有意义（用户没配端口时就是 8920）。
+	st["base"] = m.cfg.base()
+	if m.cfg.Dir != "" {
 		st["dir"] = m.cfg.Dir
 	}
 	return st
-}
-
-// Reload 让宿主重新扫描 `<Dir>/*.js`，返回它现在加载到的脚本数。
-//
-// 为什么非有不可（2026-11-01，issue #11 的根因之一）：
-//
-//	宿主只在**进程启动**时 `loadAll()` 一次（server.mjs），之后脚本目录再怎么
-//	变它都不看；而 Apply 在配置没变时幂等返回、不重建进程。于是「用户在界面上
-//	新加 / 改名 / 删掉一个洛雪源」这条路上，SyncScripts 把 .js 落了盘，宿主里的
-//	loaded 却还是启动那一刻的旧集合（冷启动时甚至可能是 0 个）。
-//
-// 症状特别能骗人：**界面「测试全部正常」**（测速跑在浏览器，跟宿主一点关系没有），
-// 下载却一律失败，`/resolve` 回 502「选中的洛雪音源在宿主里不存在」。
-//
-// 宿主早就准备好了 `POST /reload`（server.mjs 里一行 loadAll），缺的只是调用方。
-// 失败只返回 error，由调用方记一笔日志 —— 与包内其它能力同口径：宿主挂了不影响曲率。
-func (m *Manager) Reload(ctx context.Context) (int, error) {
-	m.mu.Lock()
-	if m.state != StateReady || m.proc == nil {
-		st := m.state
-		m.mu.Unlock()
-		// 与 Resolve 同样的哨兵包法：调用方要能区分「没开」和「开着但重载失败」。
-		return 0, fmt.Errorf("%w（%s）", ErrNotRunning, st)
-	}
-	base := m.cfg.base()
-	m.mu.Unlock()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/reload", nil)
-	if err != nil {
-		return 0, err
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return 0, err
-	}
-	defer resp.Body.Close()
-
-	var out struct {
-		Reloaded int    `json:"reloaded"`
-		Error    string `json:"error"`
-	}
-	_ = json.NewDecoder(resp.Body).Decode(&out)
-	if resp.StatusCode != http.StatusOK {
-		if out.Error != "" {
-			return out.Reloaded, fmt.Errorf("宿主拒绝重载（HTTP %d）：%s", resp.StatusCode, out.Error)
-		}
-		return out.Reloaded, fmt.Errorf("宿主拒绝重载（HTTP %d）", resp.StatusCode)
-	}
-	return out.Reloaded, nil
 }
 
 // resolveRequest 是发给宿主的解析请求体（形状与 host 的 /resolve 对齐）。
@@ -640,6 +629,55 @@ func (m *Manager) Search(ctx context.Context, source, keyword string, page, limi
 	return out.Results, nil
 }
 
+// Reload 让宿主**重新加载脚本目录**（POST /reload），不必重启进程。
+//
+// # 为什么需要它
+//
+// 用户改的是脚本**正文**（配置里那份），我们负责把它同步到 `<Dir>/*.js`
+// （见 SyncScripts）。但宿主只在启动时把目录读进内存 —— 换新版本、加一个源、
+// 删一个源，全都得让宿主再读一次。
+//
+// 以前只有「重启整个应用」这一条路：Apply 的相等判断（`m.cfg == cfg`）认不出
+// 「目录内容变了」这种差别，配置没变就直接 return。用户的实际感受是
+// 「我换了音源脚本，下载还是走的旧脚本」—— 2026-10-29 issue #10/#11。
+//
+// 失败**不抛**给调用方（它是个尽力而为的刷新）：宿主没在跑、或者老版本宿主没有
+// 这个路由，都只是「下次重启才生效」，不该让配置保存报错。
+func (m *Manager) Reload(ctx context.Context) (int, error) {
+	m.mu.Lock()
+	if m.state != StateReady || m.proc == nil {
+		st := m.state
+		m.mu.Unlock()
+		return 0, fmt.Errorf("%w（%s）", ErrNotRunning, st)
+	}
+	base := m.cfg.base()
+	m.mu.Unlock()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/reload", nil)
+	if err != nil {
+		return 0, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	var out struct {
+		Reloaded int    `json:"reloaded"`
+		Error    string `json:"error"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	if resp.StatusCode != http.StatusOK {
+		msg := out.Error
+		if msg == "" {
+			msg = resp.Status
+		}
+		return 0, errors.New(msg)
+	}
+	m.logf("已重新加载 %d 个脚本", out.Reloaded)
+	return out.Reloaded, nil
+}
+
 // SearchAll 搜**所有**声明了 musicSearch 的源，第 1 页。
 //
 // 参数形状专门对齐下载池的注入口（pkg/intercept.Config.LxSearch）——
@@ -811,6 +849,99 @@ type execProc struct {
 	done chan struct{}
 }
 
+// staleScanInterval / staleKillWait 控制「清完残留之后等端口真的让出来」的节奏。
+//
+// 必须等：SIGTERM 发出去到 socket 真正关闭是异步的，不等的话紧接着 spawn 仍然会
+// EADDRINUSE，而现象跟没修一模一样。
+const (
+	staleScanInterval = 200 * time.Millisecond
+	staleKillWait     = 5 * time.Second
+)
+
+// clearStaleHost 在**拉起新宿主之前**清掉占着端口的上一代残留。
+//
+// # 为什么必须有这一步
+//
+// 2026-11-02 真机故障：升级/重启时 fnOS 的停服务脚本只杀主进程，Node 子进程被
+// init 收养（实测 PPID=1）继续握着 8920。新后端起来 → ping /health 拿到 200
+// （其实是老进程答的）→ 判定「已就绪」→ 真正拉起自己的子进程 → EADDRINUSE 秒退
+// → 2 秒后 watch() 翻成 failed。日志就是那个死循环。
+//
+// 判据是**端口**而不是进程名：按名字 pkill node 会误杀用户自己的别的 Node 程序。
+//
+// # 三条自保
+//
+//  1. 持有者里有**本进程** → 绝不动手（那是我们自己正跑着的宿主，配置没变时
+//     Apply 不会走到这，但绝不能靠「调用方不会这么调」来保证安全）；
+//  2. 持有者不是我们的 lx 宿主（cmdline 对不上）→ 不动手，报清楚是谁占着，
+//     让用户自己决定。误杀别人的服务比「lx 起不来」严重得多；
+//  3. 查不到持有者 / 没权限发信号 → 明说「不猜、不动手，请人工确认」。
+//     真机上那个 root 的孤儿进程就是这种情况（应用 uid 895，读不到它的 fd）。
+//
+// 返回 nil 表示「端口现在可以让出来了」，否则错误里带可直接照做的处置说明。
+func (p *execProc) clearStaleHost() error {
+	port := p.cfg.port()
+	if procnet.PortFree(port) {
+		return nil
+	}
+	holders := procnet.Holders(port)
+	if len(holders) == 0 {
+		return fmt.Errorf("端口 %d 被占用，但查不到持有者（可能是 root 等其它用户的进程，"+
+			"当前 uid 无权查看）。不猜、不动手 —— 请人工确认后结束占用进程，或在飞牛里重启一次应用；"+
+			"也可以把 lx 宿主端口改成别的值", port)
+	}
+	self := os.Getpid()
+	for _, h := range holders {
+		if h.PID == self {
+			return fmt.Errorf("端口 %d 的持有者就是本进程（pid=%d），拒绝自我清理；请检查是否有重复启动", port, h.PID)
+		}
+		if !procnet.CanSignal(h) {
+			return fmt.Errorf("端口 %d 被 %s 占用，当前 uid=%d 无权结束它。"+
+				"请用有权限的账号结束该进程（或在飞牛里重启应用），或改用其它端口", port, h.String(), os.Getuid())
+		}
+		if !looksLikeLxHost(h.Cmdline) {
+			return fmt.Errorf("端口 %d 被 %s 占用，它看起来不是曲率的 lx 宿主，不自动清理。"+
+				"请确认后手动处理，或把 lx 宿主端口改成别的值", port, h.String())
+		}
+	}
+
+	// 确认过了：都是自己上一代的残留，整组收掉（负 pid = 进程组）。
+	for _, h := range holders {
+		_ = syscall.Kill(-h.PID, syscall.SIGTERM)
+		_ = syscall.Kill(h.PID, syscall.SIGTERM)
+	}
+	deadline := time.Now().Add(staleKillWait)
+	for time.Now().Before(deadline) {
+		if procnet.PortFree(port) {
+			return nil
+		}
+		time.Sleep(staleScanInterval)
+	}
+	// 还没让出来：升级成 SIGKILL 再等等。
+	for _, h := range holders {
+		_ = syscall.Kill(-h.PID, syscall.SIGKILL)
+		_ = syscall.Kill(h.PID, syscall.SIGKILL)
+	}
+	time.Sleep(staleScanInterval)
+	if procnet.PortFree(port) {
+		return nil
+	}
+	return fmt.Errorf("上一代 lx 宿主（%s）占用端口 %d，已发 TERM/KILL 但端口仍未让出，请人工检查",
+		holders[0].String(), port)
+}
+
+// looksLikeLxHost 判断一条 cmdline 像不像「我们拉起来的那个 lx 宿主」。
+//
+// 只用于**自动清理前的身份确认**，所以宁可保守：认不出就不杀。
+// 宿主脚本的固定名字是 server.mjs，启动参数里有 --dir / --port（见 hostArgs）。
+func looksLikeLxHost(cmdline string) bool {
+	if cmdline == "" {
+		// 读不到 cmdline 时不能当成「是我们」——那正是需要人工确认的情况。
+		return false
+	}
+	return strings.Contains(cmdline, "lx_host") || strings.Contains(cmdline, "server.mjs")
+}
+
 func (p *execProc) Start() error {
 	node := resolveNodeBin(p.cfg.NodeBin)
 	if node == "" {
@@ -822,34 +953,110 @@ func (p *execProc) Start() error {
 	if _, err := os.Stat(p.cfg.Script); err != nil {
 		return fmt.Errorf("lx 宿主脚本不存在：%w", err)
 	}
+	// **先清残留再 spawn**。顺序不能反：先 spawn 的话新进程会撞 EADDRINUSE，
+	// 而健康检查又被老进程应答，表现出来的故障极难定位。
+	if err := p.clearStaleHost(); err != nil {
+		return err
+	}
 	p.cmd = exec.Command(node, p.cfg.hostArgs()...)
 	// 环境变量显式指定（不继承）—— 理由见 childEnv。
 	p.cmd.Env = childEnv()
 	p.cmd.Stdout, p.cmd.Stderr = os.Stderr, os.Stderr
+	// 自己的进程组：停止时对整组发信号，宿主若再拉子进程也不会变成孤儿。
+	// 这也是 clearStaleHost 敢用 `kill(-pid)` 的前提。
+	p.cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	p.done = make(chan struct{})
 	if err := p.cmd.Start(); err != nil {
 		return err
 	}
 	go func() { _ = p.cmd.Wait(); close(p.done) }()
 	// 等它真的能应答再算 ready —— 进程起来了但脚本目录加载失败的情况很常见。
+	//
+	// ⚠️ **就绪判据是身份，不是 200**：/health 现在自报 pid + startedAt，
+	// 必须与本次拉起的 pid 对得上才算数。只看 200 会被上一代残留进程骗过去
+	// （它健康得很，应答得比我们新拉起的还快），那正是这次故障的直接原因。
+	pid := p.cmd.Process.Pid
 	deadline := time.Now().Add(readyTimeout)
 	for time.Now().Before(deadline) {
-		if ping(p.cfg.base()) {
+		ok, err := p.checkIdentity(pid)
+		if err == nil && ok {
 			return nil
 		}
 		select {
 		case <-p.done:
-			return errors.New("lx 宿主启动后立刻退出了（看日志）")
+			if err != nil {
+				return fmt.Errorf("lx 宿主启动后立刻退出了：%w", err)
+			}
+			return errors.New("lx 宿主启动后立刻退出了（看日志，多半是端口仍被占用）")
 		case <-time.After(200 * time.Millisecond):
 		}
 	}
-	return errors.New("lx 宿主在 20 秒内没有就绪")
+	return fmt.Errorf("lx 宿主在 20 秒内没有就绪（等的是 pid=%d 自报身份）", pid)
 }
 
+// checkIdentity 问一次 /health，确认**应答的就是我们这次拉起的那个进程**。
+//
+// 返回值 (false, nil) = 还没就绪，继续等；(false, err) = 有明确异常（例如应答的
+// 是别的 pid，说明端口上还有个残留）。两种情况 Start 都会继续轮询直到超时，
+// 区别只在最后报错时能不能带上真正的原因。
+func (p *execProc) checkIdentity(pid int) (bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.cfg.base()+"/health", nil)
+	if err != nil {
+		return false, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false, nil // 还没起来 / 连接被拒：正常的等待过程，不是错误
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return false, nil
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return false, nil
+	}
+	var health struct {
+		PID       int   `json:"pid"`
+		StartedAt int64 `json:"startedAt"`
+	}
+	if err := json.Unmarshal(raw, &health); err != nil {
+		return false, nil
+	}
+	// 老版本宿主不报 pid：那一定不是「这次拉起的」（本次拉起的一定是新代码），
+	// 所以继续等，直到我们自己的那个把端口抢回来或超时。
+	if health.PID == 0 {
+		return false, nil
+	}
+	if health.PID != pid {
+		return false, fmt.Errorf("端口 %d 上应答的是另一个 lx 宿主（pid=%d，本次拉起的是 %d）——还有残留进程没清掉",
+			p.cfg.port(), health.PID, pid)
+	}
+	return true, nil
+}
+
+// Stop 停掉宿主：**整组**发信号，而不只是杀那一个 pid。
+//
+// 以前这里是 `p.cmd.Process.Kill()` —— 只杀父进程，宿主若拉过子进程就会被 init
+// 收养，变成占着端口的孤儿（与 sidecar 当年踩过的是同一个坑）。
 func (p *execProc) Stop() error {
 	if p.cmd == nil || p.cmd.Process == nil {
 		return nil
 	}
+	pid := p.cmd.Process.Pid
+	_ = syscall.Kill(-pid, syscall.SIGTERM)
+	_ = p.cmd.Process.Signal(syscall.SIGTERM)
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case <-p.done:
+			return nil
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	_ = syscall.Kill(-pid, syscall.SIGKILL)
 	_ = p.cmd.Process.Kill()
 	return nil
 }
@@ -861,20 +1068,4 @@ func (p *execProc) Exited() <-chan struct{} {
 		return c
 	}
 	return p.done
-}
-
-// ping 探一次 /health。
-func ping(base string) bool {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/health", nil)
-	if err != nil {
-		return false
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return false
-	}
-	defer resp.Body.Close()
-	return resp.StatusCode == http.StatusOK
 }

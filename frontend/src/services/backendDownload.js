@@ -80,6 +80,7 @@ export function normalizeBackendTask(it) {
     path: o.path || '',
     actualQuality: o.actual_quality || o.actualQuality || '',
     source: o.source || '',
+    sourceDetail: o.source_detail || o.sourceDetail || '',
     size: Number(o.size || 0),
     tries: Number(o.tries || 0),
     addedAt: Number(o.added_at || o.addedAt || 0),

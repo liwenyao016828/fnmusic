@@ -1736,10 +1736,11 @@ func downloadOne(ctx context.Context, client *http.Client, cfg FetcherConfig, it
 	// 档位用**落盘文件的扩展名**校正一次 —— 扩展名是魔数嗅探出来的，
 	// 比任何声明都硬。
 	return Result{
-		Path:    path,
-		Quality: firstNonEmpty(audioext.TierOfFile(path), a.tier, it.Quality),
-		Source:  firstNonEmpty(a.source, it.Platform),
-		Size:    size,
+		Path:         path,
+		Quality:      firstNonEmpty(audioext.TierOfFile(path), a.tier, it.Quality),
+		Source:       firstNonEmpty(a.source, it.Platform),
+		SourceDetail: a.label,
+		Size:         size,
 	}, nil
 }
 

@@ -198,7 +198,9 @@ function noteFinalState(t) {
     // 用户最关心三件事：到底存哪儿了、是哪个音源给的、实际拿到什么档位
     logInfo(
       '下载完成',
-      `《${title}》${singer} · ${qualityLabel(t.resolvedQuality || t.quality)} · ${t.resolvedSource ? platformName(t.resolvedSource) : '未知来源'}`,
+      `《${title}》${singer} · ${qualityLabel(t.resolvedQuality || t.quality)} · ${t.resolvedSource ? platformName(t.resolvedSource) : '未知来源'}`
+        + `${t.resolvedSourceDetail ? ` · ${t.resolvedSourceDetail}` : ''}`
+        + `${t.resolvedSource && t.platform && t.resolvedSource !== t.platform ? `（原歌曲：${platformName(t.platform)}）` : ''}`,
       t.path || '',
     )
   } else {
@@ -239,6 +241,7 @@ function mapBackendItem(item) {
     platform: item.platform || '',
     resolvedQuality: item.actualQuality || '',
     resolvedSource: item.source || '',
+    resolvedSourceDetail: item.sourceDetail || '',
     path: item.path || '',
     size: item.size || 0,
     // addedAt 一律存**毫秒**。后端给的是秒（queue.go 的 now() = time.Now().Unix()），

@@ -29,6 +29,29 @@ export const DEAD_STREAK = 3
  * 该音源是否已被测速记录判定为失效：最近 `streak` 次**全部失败**。
  * 不足 `streak` 条一律不算 —— 单次失败可能只是上游抖一下，按单次判死会把还能用的源清掉。
  */
+/**
+ * 测速成功率只认记录条本身：最近 10 条里成功几条就是百分之几。
+ * 不要混入 sourceHealth 的累计成功/失败数，否则它和下方十个记录点会对不上。
+ */
+export function probeSuccessSummary(list = []) {
+  const rows = Array.isArray(list) ? list.slice(-10) : []
+  const success = rows.filter((r) => r && r.ok).length
+  return {
+    success,
+    total: rows.length,
+    rateText: rows.length ? `测速 ${Math.round(success * 100 / rows.length)}% · ${success}/${rows.length}` : '尚无测速记录',
+  }
+}
+
+/**
+ * 优先测用户正在浏览的平台；音源不支持时明确退回它声明的第一个平台。
+ * 不把当前平台硬塞给不支持它的脚本，也不再用「列表第一个」冒充当前平台测速。
+ */
+export function chooseProbePlatform(platforms = [], preferred = '') {
+  const usable = [...new Set((platforms || []).filter((p) => p && p !== 'mg' && p !== 'local'))]
+  return usable.includes(preferred) ? preferred : (usable[0] || '')
+}
+
 export function isDeadByHistory(history = {}, id, streak = DEAD_STREAK) {
   const list = (history || {})[id] || []
   if (list.length < streak) return false

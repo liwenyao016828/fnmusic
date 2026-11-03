@@ -1,10 +1,24 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { DEAD_STREAK, SWEEP_BUDGET, isDeadByHistory, sweepPlan } from './probePlan.js'
+import { DEAD_STREAK, SWEEP_BUDGET, chooseProbePlatform, isDeadByHistory, probeSuccessSummary, sweepPlan } from './probePlan.js'
 
 const fail = n => Array.from({ length: n }, (_, i) => ({ ok: false, ms: 0, t: i }))
 const ok = n => Array.from({ length: n }, (_, i) => ({ ok: true, ms: 120, t: i }))
 const src = (...ids) => ids.map(id => ({ id, name: id }))
+
+test('probeSuccessSummary：只按十个记录点算，8 绿 2 红就是 80% · 8/10', () => {
+  assert.deepEqual(probeSuccessSummary([...ok(8), ...fail(2)]), { success: 8, total: 10, rateText: '测速 80% · 8/10' })
+  assert.deepEqual(probeSuccessSummary([...ok(8), ...fail(2), ...ok(3)]), { success: 8, total: 10, rateText: '测速 80% · 8/10' })
+  assert.equal(probeSuccessSummary([]).rateText, '尚无测速记录')
+})
+
+test('chooseProbePlatform：优先当前平台，不支持才回退且排除 mg/local', () => {
+  assert.equal(chooseProbePlatform(['kw', 'wy', 'tx'], 'wy'), 'wy')
+  assert.equal(chooseProbePlatform(['kw', 'wy', 'tx'], 'tx'), 'tx')
+  assert.equal(chooseProbePlatform(['kw', 'wy'], 'tx'), 'kw')
+  assert.equal(chooseProbePlatform(['mg', 'local', 'kw'], 'wy'), 'kw')
+  assert.equal(chooseProbePlatform([], 'wy'), '')
+})
 
 test('isDeadByHistory：不足 DEAD_STREAK 条一律不算失效', () => {
   assert.equal(DEAD_STREAK, 3)

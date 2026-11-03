@@ -21,7 +21,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -31,6 +30,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"fn-lx-player/pkg/procnet"
 )
 
 // 状态取值。
@@ -454,82 +455,38 @@ func (m *Manager) kill(cmd *exec.Cmd) error {
 // 场景：主进程被 kill -9（升级、断电）→ sidecar 留在那儿占着端口。不清掉的话
 // 新进程绑不上端口、静默退出，而现象是「健康检查一直不过」。
 // 判据是**端口**而不是进程名：按名字匹配容易误杀别人的 python。
+//
+// 端口反查由共享的 procnet 包提供（lxnode 当年踩过同一个坑，现在两处用同一份实现）。
+// 这里比原来多两条自保：
+//
+//  1. 持有者是**本进程** → 绝不动手。`Stop()` 也会调 killStale，那时我们自己的
+//     sidecar 可能还来不及退出，不能把它当成「上一代残留」再补一刀；
+//  2. 持有者属主不是当前 uid（例如 root 的残留）→ 明说杀不动，不要静默失败。
 func (m *Manager) killStale() {
-	ln, err := net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(m.cfg.Port))
-	if err == nil {
-		_ = ln.Close()
+	if procnet.PortFree(m.cfg.Port) {
 		return // 端口空着，没有残留
 	}
-	pids := pidsOnPort(m.cfg.Port)
-	if len(pids) == 0 {
+	holders := procnet.Holders(m.cfg.Port)
+	if len(holders) == 0 {
 		m.cfg.Logf("[SIDECAR] 端口 %d 被占，但查不到持有者（不猜、不动）", m.cfg.Port)
 		return
 	}
-	for _, pid := range pids {
-		m.cfg.Logf("[SIDECAR] 清理上一次残留的 sidecar 进程 pid=%d", pid)
-		_ = syscall.Kill(-pid, syscall.SIGTERM)
+	self := os.Getpid()
+	for _, h := range holders {
+		if h.PID == self {
+			m.cfg.Logf("[SIDECAR] 端口 %d 的持有者是本进程（pid=%d），跳过自我清理", m.cfg.Port, h.PID)
+			continue
+		}
+		if !procnet.CanSignal(h) {
+			m.cfg.Logf("[SIDECAR] 端口 %d 被 %s 占用，当前 uid=%d 无权结束它，请人工处理",
+				m.cfg.Port, h.String(), os.Getuid())
+			continue
+		}
+		m.cfg.Logf("[SIDECAR] 清理上一次残留的 sidecar 进程 %s", h.String())
+		_ = syscall.Kill(-h.PID, syscall.SIGTERM)
 		time.Sleep(200 * time.Millisecond)
-		_ = syscall.Kill(pid, syscall.SIGKILL)
+		_ = syscall.Kill(h.PID, syscall.SIGKILL)
 	}
-}
-
-// pidsOnPort 从 /proc/net/tcp 找出监听该端口的进程 pid。
-//
-// 只在 Linux 上有意义（飞牛就是 Linux）；读不到就返回空，调用方不会因此出错。
-func pidsOnPort(port int) []int {
-	raw, err := os.ReadFile("/proc/net/tcp")
-	if err != nil {
-		return nil
-	}
-	// 本地地址形如 `0100007F:22C5`（小端 hex IP + 大端 hex 端口），状态 0A = LISTEN
-	want := fmt.Sprintf(":%04X", port)
-	var inodes []string
-	for _, line := range strings.Split(string(raw), "\n")[1:] {
-		fields := strings.Fields(line)
-		if len(fields) < 10 || fields[3] != "0A" {
-			continue
-		}
-		if !strings.HasSuffix(fields[1], want) {
-			continue
-		}
-		inodes = append(inodes, fields[9])
-	}
-	if len(inodes) == 0 {
-		return nil
-	}
-	entries, err := os.ReadDir("/proc")
-	if err != nil {
-		return nil
-	}
-	var out []int
-	for _, e := range entries {
-		pid, err := strconv.Atoi(e.Name())
-		if err != nil {
-			continue
-		}
-		fds, err := os.ReadDir(filepath.Join("/proc", e.Name(), "fd"))
-		if err != nil {
-			continue
-		}
-		matched := false
-		for _, fd := range fds {
-			link, err := os.Readlink(filepath.Join("/proc", e.Name(), "fd", fd.Name()))
-			if err != nil {
-				continue
-			}
-			for _, inode := range inodes {
-				if link == "socket:["+inode+"]" {
-					out = append(out, pid)
-					matched = true
-					break
-				}
-			}
-			if matched {
-				break
-			}
-		}
-	}
-	return out
 }
 
 // pingHealth 打一次 /healthz。

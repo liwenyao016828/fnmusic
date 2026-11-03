@@ -56,6 +56,73 @@ log_error() {
     fi
 }
 
+# ── 兜底：按端口找「上一代残留的 lx 宿主」并收掉 ──────────────────────────
+#
+# 2026-11-02 真机故障：停服务只杀主进程（kill "$PID" + pkill 二进制名），而后端拉起的
+# Node 宿主不在 PID 文件里、进程名也不是 yinshu-ai，于是它被 init 收养（实测 PPID=1），
+# 继续占着 8920。下一代后端起来时健康检查由这个老进程应答，误判「已就绪」，真正拉起
+# 自己的子进程时 EADDRINUSE 秒退 —— lx 功能就这么一直 failed。
+#
+# 这里的判据**是端口**（/proc/net/tcp 里该端口的 LISTEN socket），不是进程名：
+# pkill node 会把用户自己跑的其它 Node 程序一起杀掉。
+#
+# 脚本能读到 /proc/<pid>/fd 才能反查，root 下没有权限问题；查不到就只提示、不动手。
+LX_HOST_PORT="${QULV_LX_PORT:-8920}"
+
+pids_on_port() {
+    local port="$1"
+    local hexport inodes line inode pid fd link
+    hexport=$(printf ':%04X' "$port")
+    [ -r /proc/net/tcp ] || return 0
+    inodes=""
+    while read -r line; do
+        # 字段：sl local_address rem_address st ... uid timeout inode
+        # st=0A 是 LISTEN；其余状态（TIME_WAIT 等）不是「端口被占」，不能算进来。
+        case "$line" in
+            *" $hexport "*" 0A "*) ;;
+            *) continue ;;
+        esac
+        inode=$(echo "$line" | awk '{print $10}')
+        [ -n "$inode" ] && inodes="$inodes $inode"
+    done < /proc/net/tcp
+    [ -n "$inodes" ] || return 0
+    for pid in $(ls /proc 2>/dev/null | grep -E '^[0-9]+$'); do
+        [ -d "/proc/$pid/fd" ] || continue
+        for fd in "/proc/$pid/fd"/*; do
+            link=$(readlink "$fd" 2>/dev/null) || continue
+            case "$link" in
+                socket:\[*\])
+                    for inode in $inodes; do
+                        if [ "$link" = "socket:[$inode]" ]; then
+                            echo "$pid"
+                            break 2
+                        fi
+                    done
+                    ;;
+            esac
+        done
+    done
+}
+
+kill_stale_lx_host() {
+    local pids pid
+    pids=$(pids_on_port "$LX_HOST_PORT" | sort -u)
+    if [ -z "$pids" ]; then
+        return 0
+    fi
+    for pid in $pids; do
+        echo "清理上一代残留的 lx 宿主进程 (PID: $pid，端口 ${LX_HOST_PORT})."
+        # 负号 = 整个进程组；宿主以 Setpgid 启动，这样它的子进程也不会留下来。
+        kill -TERM "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+    done
+    sleep 1
+    for pid in $pids; do
+        if kill -0 "$pid" 2>/dev/null; then
+            kill -9 "-$pid" 2>/dev/null || kill -9 "$pid" 2>/dev/null || true
+        fi
+    done
+}
+
 # ── 读 ${VAR_DIR}/.env 作为环境变量入口 ────────────────────────────────────
 #
 # 飞牛启动应用时只给一组固定的 TRIM_* 变量，没有「应用自定义环境变量」的界面。
@@ -125,8 +192,17 @@ case "$1" in
     # 删不掉，脚本以 root 跑总删得掉）。
     rm -f "${GATEWAY_SOCKET}"
 
+    # 残留的 lx 宿主同理：后端自己也会清（lxnode.clearStaleHost），但后端以应用 uid
+    # 运行、杀不掉 root 的残留；这个脚本以 root 跑，能把那一类也收掉。
+    kill_stale_lx_host
+
     # 启动后台守护进程，日志写入 /tmp
-    nohup "${BIN_PATH}" --port ${APP_PORT} --data "${DATA_DIR}" --socket "${GATEWAY_SOCKET}" > "${LOG_FILE}" 2>&1 &
+    #
+    # setsid：让主进程成为**新会话 + 新进程组的组长**。这是 stop 能「整组收掉」的前提 ——
+    # 后端拉起的 lx 宿主 / Python sidecar 都在这棵树上，只杀主 PID 会留下占着端口的孤儿。
+    # PID 文件依然有效：$! 就是 setsid 之后那个进程的 pid（setsid 直接 exec，不再 fork
+    # 一层，因为这里的调用方不是进程组组长）。
+    nohup setsid "${BIN_PATH}" --port ${APP_PORT} --data "${DATA_DIR}" --socket "${GATEWAY_SOCKET}" > "${LOG_FILE}" 2>&1 &
     DAEMON_PID=$!
     echo "$DAEMON_PID" > "$PID_FILE"
 
@@ -148,13 +224,18 @@ case "$1" in
     if [ -f "$PID_FILE" ]; then
       PID=$(cat "$PID_FILE")
       if kill -0 "$PID" 2>/dev/null; then
-        kill "$PID" 2>/dev/null || true
+        # 先对**整个进程组**发 TERM（start 用 setsid 起了新组），再单独点一次主进程，
+        # 兼容「老版本没用 setsid 启动、进程组里还有别人」的情况 —— 那时 kill 负 pid
+        # 会失败，单独这一条兜底仍然有效。
+        kill -TERM "-$PID" 2>/dev/null || true
+        kill -TERM "$PID" 2>/dev/null || true
         for i in {1..10}; do
           if ! kill -0 "$PID" 2>/dev/null; then
             break
           fi
           sleep 0.3
         done
+        kill -9 "-$PID" 2>/dev/null || true
         kill -9 "$PID" 2>/dev/null || true
       fi
       rm -f "$PID_FILE"
@@ -164,6 +245,9 @@ case "$1" in
       # 否则会把并存的旧「极光音乐」一起杀掉
       pkill -f "${BIN_NAME}" 2>/dev/null || true
     fi
+    # 兜底：主进程已经没了，但 lx 宿主可能还占着端口（上一代没被整组停掉的残留）。
+    # 不收掉它的话，下一次 start 之后 lx 会一直 failed。
+    kill_stale_lx_host
     # 进程没了 socket 文件还在的话，网关会一直往一个没人接的 socket 转发，
     # 表现是「应用页打开一片空白但进程状态正常」。停服务时顺手清掉。
     rm -f "${GATEWAY_SOCKET}"

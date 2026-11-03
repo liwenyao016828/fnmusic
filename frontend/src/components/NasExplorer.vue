@@ -933,7 +933,9 @@ const scanHint = computed(() => scanHintOf({ truncated: scanTruncated.value, war
  * 只把这首歌从对应的那份载荷里去掉 —— 载荷里有 dir，能知道它属于哪个目录。
  */
 function dropFromScanCache(path) {
-  for (const dir of new Set([currentDir.value, ...quickDirs])) {
+  // quickDirs 是 ref：脚本里必须 .value 解包再展开（模板才有自动解包），
+  // 直接 ...quickDirs 展的是 Ref 对象本身，删歌时会抛 TypeError，把已成功的删除误报成失败。
+  for (const dir of new Set([currentDir.value, ...quickDirs.value])) {
     const key = scanCacheKey(dir)
     const cached = memGet(key)
     if (!cached) continue

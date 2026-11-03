@@ -38,6 +38,16 @@ const arg = (n, d) => { const i = argv.indexOf('--' + n); return i >= 0 && argv[
 const DIR = arg('dir', path.join(process.cwd(), 'preset_sources'));
 const PORT = Number(arg('port', '8920'));
 
+// 本次启动的身份标识，随 /health 一起自报。
+//
+// 为什么必须有：Go 侧的「就绪」判据**不能只看 200**。上一代残留的宿主进程
+// （升级时被 init 收养的孤儿）一样会答 200，而且答得比新拉起的还快 ——
+// 2026-11-02 真机就是这么被骗过去的：新后端判定「已就绪」→ 拉自己的子进程 →
+// EADDRINUSE 秒退。现在 Go 会拿这里的 pid 与它 spawn 出来的 pid 比对，
+// 对不上就一律视为「还没就绪」。
+const HOST_PID = process.pid;
+const HOST_STARTED_AT = Date.now();
+
 // ─────────────────────────────────────────────────────────────
 // 陷阱：读 miss 就记账（**含嵌套层**）
 // ─────────────────────────────────────────────────────────────
@@ -722,10 +732,18 @@ function probeAudioUrl(raw, hops = 0, budgetMs = 7000) {
   });
 }
 
-http.createServer(async (req, res) => {
+const serverHandler = async (req, res) => {
   const send = (code, obj) => { const s = JSON.stringify(obj); res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': Buffer.byteLength(s) }); res.end(s); };
   if (req.url === '/health') {
-    return send(200, { ok: true, dir: DIR, scripts: loaded.map((l) => l.meta) });
+    // pid + startedAt 是**身份**，不是装饰：Go 侧靠它们确认「应答的就是我这次拉起的
+    // 那个进程」。少了 pid 的应答会被 Go 当成「还没就绪」（见 lxnode.checkIdentity）。
+    return send(200, {
+      ok: true,
+      pid: HOST_PID,
+      startedAt: HOST_STARTED_AT,
+      dir: DIR,
+      scripts: loaded.map((l) => l.meta),
+    });
   }
   if (req.url === '/resolve' && req.method === 'POST') {
     let payload = {};
@@ -861,4 +879,25 @@ http.createServer(async (req, res) => {
   }
   if (req.url === '/reload' && req.method === 'POST') { loadAll(); return send(200, { reloaded: loaded.length }); }
   send(404, { error: 'not found', routes: ['GET /health', 'POST /resolve', 'POST /search', 'POST /reload'] });
-}).listen(PORT, '127.0.0.1', () => console.log(`[lx_host] 监听 127.0.0.1:${PORT}，脚本目录 ${DIR}，加载 ${loaded.length} 个脚本`));
+};
+
+const server = http.createServer(serverHandler);
+// listen 失败要说人话，尤其是 EADDRINUSE。
+//
+// 真机上最常见的原因不是配置错，而是**上一代残留的宿主进程还活着**（升级/重启时
+// 只杀了主进程，Node 被 init 收养继续占着端口）。原样的 `Error: listen EADDRINUSE:
+// address already in use 127.0.0.1:8920` 看不出这一层，于是这里补一句可操作的提示。
+//
+// ⚠️ **故意不自动换端口**：端口是 Go 与宿主之间的契约，悄悄换到别的端口会让 Go
+// 一直打到一个没人接的地址，故障从「起不来、有明确报错」退化成「看起来 ready 但
+// 永远搜不到」。起不来就应该响亮地起不来。
+server.on('error', (e) => {
+  if (e && e.code === 'EADDRINUSE') {
+    console.error(`[lx_host] 端口 ${PORT} 已被占用，多半是上一代残留的宿主进程还活着（升级/重启时只杀了主进程）。`);
+    console.error(`[lx_host] 处置：结束占用 ${PORT} 的进程后重试，或在曲率里把 lx 宿主端口改成别的值。`);
+  } else {
+    console.error(`[lx_host] 监听 127.0.0.1:${PORT} 失败：${(e && e.message) || e}`);
+  }
+  process.exit(1);
+});
+server.listen(PORT, '127.0.0.1', () => console.log(`[lx_host] 监听 127.0.0.1:${PORT}，脚本目录 ${DIR}，加载 ${loaded.length} 个脚本，pid ${HOST_PID}`));

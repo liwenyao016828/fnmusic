@@ -179,9 +179,9 @@
               @click.stop
             >
               <div class="mb-1.5 flex flex-wrap items-center gap-1 text-[10px] text-gray-500">
-                <span>当前平台</span>
+                <span>榜单与歌单平台</span>
                 <span class="text-gray-300">·</span>
-                <span>决定「发现 / 榜单」看哪个平台的内容</span>
+                <span>音源标签同步高亮；下载按已启用渠道查找可用音频</span>
               </div>
               <div class="flex flex-wrap items-center gap-1.5">
                 <button
@@ -199,6 +199,7 @@
                   <span>{{ opt.icon }}</span><span>{{ opt.name }}</span>
                 </button>
               </div>
+              <div class="mt-1.5 text-[10px] text-gray-500">{{ activePlatformSourceSummary }}</div>
             </div>
 
             <!-- ⬇️ 折叠时**唯一**藏起来的东西：两段文字解释 -->
@@ -403,18 +404,28 @@
               即：**暂时不显示**，等有真正的开发者名（而不是 dev 里的占位「张三」）再说。
               要恢复就把 `<span>{{ s.author }}</span>` + 竖线加回来。
             -->
-            <div v-if="getPlatforms(s.id).length" class="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-500">
-              <span v-for="p in getPlatforms(s.id)" :key="p" class="shrink-0 px-1.5 py-0.5 rounded bg-[var(--ys-surface-sunken)] text-gray-500 font-mono text-[10px]">{{ p }}</span>
+            <div v-if="getPlatforms(s.id).length" class="mt-1 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-gray-500">
+              <span
+                v-for="p in getPlatforms(s.id)" :key="p"
+                :aria-current="p === officialPlatform ? 'true' : undefined"
+                class="shrink-0 rounded px-1.5 py-0.5 text-[10px]"
+                :class="p === officialPlatform
+                  ? 'border border-[var(--ys-accent)] bg-[var(--ys-accent-soft)] font-medium text-[var(--ys-accent)]'
+                  : 'border border-transparent bg-[var(--ys-surface-sunken)] text-gray-500'"
+                :title="p === officialPlatform
+                  ? `当前浏览平台 · ${platformName(p)}；支持该平台，不代表每首歌都能下载`
+                  : `${platformName(p)}（${p}）；下载时按歌曲与实际渠道匹配`"
+              >{{ platformName(p) }}</span>
             </div>
             <!-- 健康状态行 -->
             <div class="flex items-center gap-1.5 mt-1.5 text-[10px]">
               <span :class="['px-1.5 py-0.5 rounded font-medium', healthOf(s.id).badgeClass]">
                 {{ healthOf(s.id).label }}
               </span>
-              <span v-if="healthOf(s.id).rateText" class="text-gray-500">{{ healthOf(s.id).rateText }}</span>
+              <span class="text-gray-500">{{ probeSuccessSummary(probeHistory[s.id]).rateText }}</span>
             </div>
             <!-- 最近 10 次测速记录：小长条（圆角），左旧右新，颜色按延迟分档 -->
-            <div class="mt-2 flex items-center gap-1" title="最近 10 次测速记录（左旧右新）">
+            <div class="mt-2 flex items-center gap-1" :title="`最近 10 次真实取链测速（左旧右新）；${probeHistoryPlatform(s.id)}；支持平台不等于歌曲一定可下载`">
               <span
                 v-for="d in probeDots(s.id)" :key="d.key"
                 class="h-1.5 w-4 rounded-full transition-colors"
@@ -808,7 +819,8 @@ import {
   mergePicked,
 } from '../services/sourceImport'
 import { isNotReadyError, explainSourceError } from '../engine/source-error'
-import { DEAD_STREAK, SWEEP_BUDGET, isDeadByHistory as isDeadByHistoryOf, sweepPlan } from '../services/probePlan'
+import { DEAD_STREAK, SWEEP_BUDGET, chooseProbePlatform, isDeadByHistory as isDeadByHistoryOf, probeSuccessSummary, sweepPlan } from '../services/probePlan'
+import { platformName } from '../services/libraryFields'
 import PageShell from './PageShell.vue'
 import SectionCard from './SectionCard.vue'
 import InlineNotice from './InlineNotice.vue'
@@ -830,6 +842,11 @@ const activeSourceId = computed(() => activeSourceIds.value[0] || '')
 /** 该音源是否在启用池里 */
 function isActive(id) { return activeSourceIds.value.includes(id) }
 
+const activePlatformSourceSummary = computed(() => {
+  const count = activeSourceIds.value.filter(id => getPlatforms(id).includes(officialPlatform.value)).length
+  return `已启用音源中 ${count} 个支持${platformName(officialPlatform.value)}；不限定其他平台，实际以下载结果为准`
+})
+
 /** 把池广播给 App（池首 = activeSourceMeta，下游不用改） */
 function emitPool() {
   const metas = activeSourceIds.value.map(id => sources.value.find(s => s.id === id)).filter(Boolean)
@@ -845,8 +862,8 @@ function loadProbeHistory() {
 const probeHistory = ref(loadProbeHistory())
 
 /** 记一次测速结果（成功记延迟，失败记 ok:false），只留最近 10 条 */
-function recordProbe(id, ok, latencyMs) {
-  const rec = { ok: !!ok, ms: ok ? Math.round(latencyMs || 0) : 0, t: Date.now() }
+function recordProbe(id, ok, latencyMs, platform = '') {
+  const rec = { ok: !!ok, ms: ok ? Math.round(latencyMs || 0) : 0, t: Date.now(), platform }
   const list = [...(probeHistory.value[id] || []), rec].slice(-PROBE_HISTORY_MAX)
   probeHistory.value = { ...probeHistory.value, [id]: list }
   savePref(PROBE_HISTORY_KEY, JSON.stringify(probeHistory.value))
@@ -865,14 +882,20 @@ function recordProbe(id, ok, latencyMs) {
  * 所以 `bg-emerald-400` 会随主题变蓝/粉/灰。`rose` 是写死的危险红，正好是"失败=红"
  * 要的语义，保留。空位是中性灰（`--ys-surface-sunken`），不参与语义。
  */
+function probeHistoryPlatform(id) {
+  const platform = [...(probeHistory.value[id] || [])].reverse().find(rec => rec?.platform)?.platform
+  return platform ? `最近测速：${platformName(platform)}` : '历史记录未标平台'
+}
+
 function probeDots(id) {
   const list = probeHistory.value[id] || []
   const padded = new Array(Math.max(0, PROBE_HISTORY_MAX - list.length)).fill(null).concat(list)
   return padded.map((rec, i) => {
     if (!rec) return { key: 'e' + i, cls: 'bg-[var(--ys-surface-sunken)]', title: '暂无记录' }
     const when = new Date(rec.t).toLocaleTimeString('zh-CN', { hour12: false })
-    if (!rec.ok) return { key: rec.t, cls: 'bg-rose-400', title: `${when} · 取链失败` }
-    return { key: rec.t, cls: 'bg-[#22c55e]', title: `${when} · ${rec.ms}ms` }
+    const platform = rec.platform ? `${platformName(rec.platform)} · ` : ''
+    if (!rec.ok) return { key: rec.t, cls: 'bg-rose-400', title: `${when} · ${platform}取链失败` }
+    return { key: rec.t, cls: 'bg-[#22c55e]', title: `${when} · ${platform}${rec.ms}ms` }
   })
 }
 
@@ -1084,7 +1107,10 @@ async function loadLxHost() {
       return
     }
     lxHost.value = String(st.state || '')
-    lxHostOn.value = !!st.enabled
+    const enabled = st.enabled ?? st.running
+    lxHostOn.value = typeof enabled === 'boolean'
+      ? enabled
+      : ['ready', 'starting', 'failed'].includes(lxHost.value)
     lxHostDir.value = st.dir || ''
     lxHostDetail.value = st.state === 'ready'
       ? (st.base ? `已就绪：${st.base}` : '')
@@ -1159,7 +1185,6 @@ function getPlatforms(id) {
 function healthOf(id) {
   void nowTs.value
   const available = sourceHealth.isAvailable(id)
-  const rate = sourceHealth.successRate(id)
   const rec = sourceHealth.get(id)
   let badgeClass = 'bg-[var(--ys-surface-sunken)] text-gray-500'
   let dotClass = 'bg-[var(--ys-line-control)]'
@@ -1182,7 +1207,6 @@ function healthOf(id) {
     label: sourceHealth.statusLabel(id),
     badgeClass,
     dotClass,
-    rateText: rate == null ? '' : `成功率 ${Math.round(rate * 100)}%`,
     lastError: rec?.lastError || '',
   }
 }
@@ -1325,10 +1349,12 @@ async function probeOne(id, opts = {}) {
     // 所以对「还没准备好」这一类：先等脚本自己 init 完，再退避重试，而不是直接记失败。
     let res = null
     let lastErr = null
+    let probedPlatform = ''
     const attempts = light ? 1 : PROBE_NOT_READY_RETRIES
     for (let attempt = 0; attempt < attempts; attempt++) {
       const platforms = getPlatforms(id)
-      const platform = platforms.find(p => p !== 'mg' && p !== 'local') || 'kw'
+      const platform = chooseProbePlatform(platforms, officialPlatform.value)
+      probedPlatform = platform
       res = await lxRuntime.probeSource(id, platform)
       if (res.ok || !isNotReadyError(res.error)) break
       lastErr = res.error
@@ -1344,7 +1370,7 @@ async function probeOne(id, opts = {}) {
       return null
     }
     latencies.value = { ...latencies.value, [id]: res.ok ? `${res.latencyMs}ms` : '异常' }
-    recordProbe(id, res.ok, res.latencyMs)
+    recordProbe(id, res.ok, res.latencyMs, probedPlatform)
     // 卡片上只显示「异常」两个字，具体原因（脚本原始报错）进日志 + 留给导入报告展示
     if (res.ok) probeErrors.delete(id)
     else {
@@ -1356,7 +1382,7 @@ async function probeOne(id, opts = {}) {
     return !!res.ok
   } catch (e) {
     latencies.value = { ...latencies.value, [id]: '异常' }
-    recordProbe(id, false, 0)
+    recordProbe(id, false, 0, probedPlatform)
     probeErrors.set(id, explainSourceError(e))
     logError('音源探测', `${meta?.name || id} 探测异常`, describeError(e))
     return false
@@ -1448,7 +1474,7 @@ async function testActiveResolution() {
   const name = meta?.name || '当前音源'
   try {
     const platforms = getPlatforms(activeSourceId.value)
-    const platform = platforms.find(p => p !== 'mg' && p !== 'local') || 'kw'
+    const platform = chooseProbePlatform(platforms, officialPlatform.value)
     const res = await lxRuntime.probeSource(activeSourceId.value, platform)
     latencies.value = { ...latencies.value, [activeSourceId.value]: res.ok ? `${res.latencyMs}ms` : '异常' }
     if (res.ok) {
