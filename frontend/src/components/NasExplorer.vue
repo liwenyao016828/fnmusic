@@ -353,21 +353,26 @@
             >
               <td class="py-3 px-2 sm:px-3 text-center text-gray-500 font-mono">{{ (page - 1) * PAGE_SIZE + idx + 1 }}</td>
               <td class="py-3 px-3 sm:px-4 flex items-center gap-2.5 sm:gap-3 min-w-0">
-                <div class="w-8 h-8 sm:w-9 sm:h-9 rounded-lg overflow-hidden bg-[var(--ys-surface-sunken)] border border-[var(--ys-border)] shrink-0 flex items-center justify-center">
+                <div class="relative w-8 h-8 sm:w-9 sm:h-9 rounded-lg overflow-hidden bg-[var(--ys-surface-sunken)] border border-[var(--ys-border)] shrink-0 flex items-center justify-center">
                   <!-- 2026-11-01：封面地址**按 path 现算**，不再只信后端那份相对地址。
                        旧版扫描缓存 / 旧后端返回的 `cover_url` 没转义也没带网关前缀，
                        直接拿来当 src 会 404 → 整列只剩 💿（用户「看不到封面」）。
                        rowCoverSrc 内部对两者都做了兜底，坏地址也会回落到按 path 取。 -->
-                  <img 
-                    v-if="rowCoverSrc(song)" 
-                    :src="rowCoverSrc(song)" 
-                    alt="cover" 
+                  <!-- 2026-11-03（用户「看不到封面」）：💿 常驻在底层，图片盖在上面。
+                       以前是 v-if/v-else —— 加载中那一格是**空白**，手机上看起来就像「没封面」；
+                       现在占位一直在，图到了自然盖住。 -->
+                  <span class="text-sm sm:text-base select-none" aria-hidden="true">💿</span>
+                  <img
+                    v-if="rowCoverSrc(song)"
+                    :key="rowCoverKey(song)"
+                    :src="rowCoverSrc(song)"
+                    alt="cover"
                     loading="lazy"
                     referrerpolicy="no-referrer"
-                    class="w-full h-full object-cover"
+                    class="absolute inset-0 h-full w-full bg-[var(--ys-surface-sunken)] object-cover"
+                    @load="markCoverLoaded(song.path)"
                     @error="markCoverBroken(song.path)"
                   />
-                  <span v-else class="text-sm sm:text-base">💿</span>
                 </div>
                 <div class="min-w-0 flex-1 overflow-hidden">
                   <div class="flex min-w-0 items-center gap-1.5">
@@ -790,7 +795,7 @@ import {
 } from 'lucide-vue-next'
 import InlineNotice from './InlineNotice.vue'
 import { describeError } from '../services/userMsg'
-import { logError } from '../services/appLog'
+import { logError, logInfo } from '../services/appLog'
 import { deleteOutcome, normalizeScanSongs, withoutPath } from '../services/nasDelete'
 
 const emit = defineEmits(['play'])
@@ -977,12 +982,14 @@ async function deleteSong(song) {
     const out = deleteOutcome(res)
     if (!out.ok) {
       showEmbedNotice(`删除失败：${out.message}`, false)
-      logError('删除本地文件失败', out.message)
+      logError('删除本地文件失败', `${song.path} | ${out.message}`)
       return
     }
     songs.value = withoutPath(songs.value, song.path)
     dropFromScanCache(song.path)
-    showEmbedNotice(`已删除「${song.title || song.filename}」${out.mode === 'delete' ? '' : '，可在数据快照里恢复'}`, true)
+    // 删成功也记一条：用户时报「点了删除没任何变化」时，日志里得能看出到底有没有走到后端
+    logInfo('删除本地文件', `已${out.mode === 'delete' ? '删除' : '挪进回收站'} ${song.path}`)
+    showEmbedNotice(`已${out.mode === 'delete' ? '删除' : '挪进回收站'}「${song.title || song.filename}」${out.mode === 'delete' ? '' : '，可在数据快照里恢复'}`, true)
   } catch (e) {
     showEmbedNotice(describeError(e, '删除失败'), false)
     logError('删除本地文件失败', e)
@@ -999,11 +1006,13 @@ const embedNotice = ref('')
 const embedOk = ref(true)
 let noticeTimer = null
 
+// 失败提示留得久一点：手机上扫一眼就走开了，4 秒太短，回来时提示已经消失
+// （2026-11-03 用户「删除歌曲时…也没有提示」—— 失败原因既没留下也没处可看）。
 function showEmbedNotice(text, ok = true) {
   embedOk.value = ok
   embedNotice.value = text
   if (noticeTimer) clearTimeout(noticeTimer)
-  noticeTimer = setTimeout(() => { embedNotice.value = '' }, 4000)
+  noticeTimer = setTimeout(() => { embedNotice.value = '' }, ok ? 4000 : 12000)
 }
 
 // ── 更换封面 ──
@@ -1011,13 +1020,59 @@ function showEmbedNotice(text, ok = true) {
 // 为什么要有它：飞牛**只认内嵌封面**，而「曲库补全」是「搜到哪首就用哪首的图」，
 // 用户没得挑（2026-09-22 反馈：「手动获取音源的封面或者搜索歌曲封面」）。
 // 这里把候选图列出来让人自己选，选定后走 POST /api/nas/tags 内嵌进文件。
-// 取图失败的 path 记在这里：这一次访问内不再反复请求（省两次 404 + 闪动），
-// 但**不写进 songs 本身** —— 曲库重扫/切目录后自然重试。
+// 取图失败的 path 记在这里：这一次访问内不再反复请求（省两次 404 + 闪动）。
+// 但**不能一次失败就永久放弃**：用户网络抖一下、后端刚好看门狗超时，
+// 那一行封面这个会话就再也回不来（2026-11-03「有时能显示、有时不能」就是这么来的）。
+// 所以按 path 记重试次数，COVER_RETRY_MAX 次之后才落到 💿；换目录 / 重扫会清零。
+const COVER_RETRY_MAX = 2
 const brokenCovers = ref(new Set())
+const coverRetryCount = new Map()
+
 function markCoverBroken(path) {
+  const key = String(path || '')
+  if (!key) return
+  const n = (coverRetryCount.get(key) || 0) + 1
+  coverRetryCount.set(key, n)
+  if (n > COVER_RETRY_MAX) {
+    const s = new Set(brokenCovers.value)
+    s.add(key)
+    brokenCovers.value = s
+    return
+  }
+  // 仍可重试：抽掉失败图（v-if 变假）→ 下一拍再挂上去，
+  // 搭上 `:key` 的变化，浏览器会重新发一次请求而不是复用那个失败的缓存条目。
   const s = new Set(brokenCovers.value)
-  s.add(String(path || ''))
+  s.add(key)
   brokenCovers.value = s
+  setTimeout(() => {
+    const next = new Set(brokenCovers.value)
+    next.delete(key)
+    brokenCovers.value = next
+  }, 600 * n)
+}
+
+/** 图终于加载出来了：清掉失败与计数，下次地址变化时重新从零算 */
+function markCoverLoaded(path) {
+  const key = String(path || '')
+  if (!key) return
+  coverRetryCount.delete(key)
+  if (brokenCovers.value.has(key)) {
+    const s = new Set(brokenCovers.value)
+    s.delete(key)
+    brokenCovers.value = s
+  }
+}
+
+/** 重置封面失败状态（切目录 / 重扫 / 数据被服务端覆盖时都要做一次） */
+function resetCoverFailures() {
+  coverRetryCount.clear()
+  if (brokenCovers.value.size) brokenCovers.value = new Set()
+}
+
+/** `<img :key>`：重试次数变了 key 就变，强制浏览器重新发请求 */
+function rowCoverKey(song) {
+  if (!song || !song.path) return ''
+  return `${song.path}#${coverRetryCount.get(String(song.path)) || 0}`
 }
 
 /**
@@ -1174,6 +1229,9 @@ function applyScanView(view) {
   //    ⚠️ 2026-11-01：补齐 name 之后**必须**再套 withCoverSrc —— 后端给的是站内
   //    相对地址，飞牛网关形态下 `<img src>` 不走 axios，不补前缀就只显示 💿。
   songs.value = withCoverSrc(normalizeScanSongs(view.songs))
+  // 新数据 = 新机会：把「这个会话里已经放弃的封面」全部放回可重试状态。
+  // （2026-11-03：以前这里不清，注释里说的「重扫后自然重试」其实从没发生过。）
+  resetCoverFailures()
   scanTruncated.value = view.truncated
   scanWarnings.value = view.warnings
 }
@@ -1202,6 +1260,8 @@ async function scanFolder(dir, refresh = false) {
       savePref('nas_dir', dir)
     }
   } catch (err) {
+    // 2026-11-03：以前失败只进日志 —— 界面上什么都不发生，用户以为点了没反应。
+    showEmbedNotice(`扫描「${dir}」失败：${describeError(err)}`, false)
     logError('扫描曲库目录', `扫描 ${dir} 失败`, describeError(err))
   } finally {
     isScanning.value = false

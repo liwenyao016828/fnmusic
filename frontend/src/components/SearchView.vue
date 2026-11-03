@@ -653,6 +653,13 @@
         <div v-if="isLoadingDetail || isSearching" class="flex flex-col items-center justify-center py-20 text-gray-500">
           <Loader2 class="w-8 h-8 animate-spin text-emerald-600 mb-2" />
           <p class="text-xs">{{ isSearching ? '正在检索歌曲...' : '正在载入曲目列表...' }}</p>
+          <!-- 流式搜索进度：第 1 批到货前后都给一句动态状态（源返回/超时数） -->
+          <p v-if="isSearching && searchStatusText" class="text-[11px] text-gray-400 mt-1.5">{{ searchStatusText }}</p>
+          <button
+            v-if="isSearching && streamState.active"
+            @click="stopStreamSearch"
+            class="mt-3 px-3 py-1.5 rounded-lg border border-[var(--ys-border)] text-xs text-gray-600 hover:bg-[var(--ys-surface-hover)] transition-all cursor-pointer"
+          >停止搜索</button>
         </div>
 
         <div v-else-if="!activeSongList.length" class="flex flex-col items-center justify-center py-20 text-gray-500 bg-white rounded-xl border border-[var(--ys-border)]">
@@ -746,6 +753,9 @@
           class="py-3 text-center text-[11px] text-gray-500"
         >
           <span v-if="isLoadingMore">正在加载更多…</span>
+          <span v-else-if="streamState.timeouts.length && !isSearching" class="text-gray-400">
+            {{ streamState.timeouts.length }} 个源超时未返回（{{ streamState.timeouts.join(' / ') }}）
+          </span>
           <span v-else-if="!hasMore && activeSongList.length >= SEARCH_PAGE_SIZE">没有更多了</span>
         </div>
       </div>
@@ -1453,6 +1463,27 @@ const isLoadingMore = ref(false)
 const hasMore = ref(false)
 const scrollEl = ref(null) // 内容区滚动容器，触底判定挂在它身上
 
+// ── 流式搜索（逐源返回）──
+//
+// 为什么：/api/search 等全部平台跑完才返回单个 JSON，慢源（musicdl 外挂单源
+// 预算 120s）会把整个请求拖过前端 30s 超时 —— 2026-11-03 实测「晴天」全源冷搜
+// 107s+。流式版谁先到先展示，慢源超时也如实标出来，不再拖死整个请求。
+//
+// streamState.active：一次流式搜索在路上。期间 loadMore 的「拉下一页」被挡住
+// （pager.hasMore 仍是 true），收尾 endStream() 后才恢复经典的触底翻页。
+const streamState = ref({ active: false, platforms: [], arrived: {}, timeouts: [] })
+const searchAbort = ref(null)
+const searchStatusText = computed(() => {
+  const st = streamState.value
+  if (!st.active) return ''
+  const arrived = Object.keys(st.arrived).length
+  const timeouts = st.timeouts.length
+  const parts = []
+  if (arrived) parts.push(`${arrived} 个源已返回`)
+  if (timeouts) parts.push(`${timeouts} 个源超时`)
+  return parts.length ? `已收到 ${parts.join('、')}` : '正在等待各音源返回…'
+})
+
 // 热门搜索词已按用户要求移除（发现页不再放关键词快捷入口）
 // 歌单分类由后端提供（各平台能力不同，没有分类的平台返回空数组 → 前端隐藏筛选条）。
 // 网易云的分类 id 就是分类名，QQ 是数字 id，所以 selectedCategory 存的是 **id**。
@@ -2031,6 +2062,16 @@ async function handleSearch() {
   // 新搜索从第 1 页重新开始；还有没有下一页，等第一页回来才知道
   pager.reset()
   hasMore.value = true
+
+  // 流式优先（source=all 时逐源返回）：partial 到一条展示一批，慢源超时单独
+  // 标注、不拖死整个请求；流整体失败且一条都没拿到 → 回退经典 /api/search。
+  if (selectedPlatform.value === 'all') {
+    const ok = await runStreamSearch(q)
+    if (ok) return
+    // 落到这里 = 流式失败且 0 结果，走老路兜底
+    isSearching.value = true
+  }
+
   try {
     const res = await SearchAPI.search(q, selectedPlatform.value, 1, pager.pageSize)
     const bad = apiError(res, '搜索失败')
@@ -2061,6 +2102,84 @@ async function handleSearch() {
 }
 
 /**
+ * 流式搜索（/api/search/stream）：谁先到先展示谁。
+ *
+ * 返回 true = 流式按设计收尾（哪怕部分源超时、哪怕 0 条 —— 这时界面会显示
+ * 「未找到相关歌曲」而不是报错）；返回 false = 流本身没跑成（非 2xx / 网络
+ * 中断）且一条结果都没拿到，调用方应回退经典 /api/search。
+ */
+async function runStreamSearch(q) {
+  streamState.value = { active: true, platforms: [], arrived: {}, timeouts: [] }
+  // 新的一次搜索先掐掉上一条流（快速连搜 / 切词的场景）
+  searchAbort.value?.abort()
+  const ctrl = new AbortController()
+  searchAbort.value = ctrl
+
+  let gotAny = false
+  let streamFailed = false
+  const appendRows = (rows) => {
+    if (!rows.length) return
+    gotAny = true
+    searchResults.value = [...searchResults.value, ...rows]
+    activeSongList.value = searchResults.value
+    hasMore.value = pager.hasMore
+    checkSongsDownloaded(rows)
+    nextTick(() => maybeLoadMore())
+  }
+
+  await SearchAPI.streamSearch(q, { source: 'all', signal: ctrl.signal }, (ev) => {
+    const st = streamState.value
+    switch (ev.type) {
+      case 'meta':
+        st.platforms = ev.platforms || []
+        break
+      case 'partial': {
+        st.arrived[ev.platform] = true
+        appendRows(pager.push(ev.list || []))
+        break
+      }
+      case 'platform_timeout':
+        st.timeouts.push(ev.platform)
+        logWarn('搜索', `源 ${ev.platform} 预算内未返回，已跳过`, `q=${q}`)
+        break
+      case 'error':
+        streamFailed = true
+        break
+      default:
+        break
+    }
+  })
+
+  pager.endStream()
+  hasMore.value = pager.hasMore
+  const st = streamState.value
+  const timedOut = st.timeouts.length
+  logInfo('搜索', `「${q}」流式完成：${Object.keys(st.arrived).length} 个源返回、${timedOut} 个源超时、合计 ${searchResults.value.length} 首`)
+  streamState.value = { ...st, active: false }
+  isSearching.value = false
+
+  // 流本身没跑成（error 事件）且一条结果都没有 → 告诉调用方走老路兜底
+  if (streamFailed && !gotAny) {
+    searchResults.value = []
+    activeSongList.value = []
+    pager.reset()
+    return false
+  }
+  if (!gotAny) {
+    // 全部源都超时 / 都空：如实一句话，别假装成功也别报错
+    loadError.value = timedOut
+      ? '各音源在预算时间内都没有返回结果，可稍后重试。'
+      : ''
+  }
+  return true
+}
+
+/** 用户主动停止这条流式搜索（停止按钮）：已到的结果保留，收尾不再等。 */
+function stopStreamSearch() {
+  searchAbort.value?.abort()
+}
+
+/**
  * 触底时再露一批 / 拉下一页。
  *
  * 两步走：缓冲里还有货就直接露出 30 条（**不打后端**），缓冲空了才发请求。
@@ -2071,6 +2190,8 @@ async function loadMore() {
   if (isLoadingMore.value || isSearching.value) return
   // 只有搜索结果分页；榜单 / 歌单 / 详情都是整份给的，不分页
   if (currentMode.value !== 'search') return
+  // 流式搜索在路上时不打下一页：各源还在陆续到货，翻页等 endStream 之后再开始
+  if (streamState.value.active) return
   const q = query.value.trim()
   if (!q) return
 
@@ -2146,6 +2267,9 @@ function resetToDiscover() {
   pager.reset()
   hasMore.value = false
   currentDetailMeta.value = null
+  // 在途的流式搜索一并停掉：词都清了，结果不该再陆续冒出来
+  searchAbort.value?.abort()
+  streamState.value = { active: false, platforms: [], arrived: {}, timeouts: [] }
 }
 
 /**
@@ -2287,6 +2411,8 @@ onUnmounted(() => {
   if (catResizeHandler) window.removeEventListener('resize', catResizeHandler)
   scrollEl.value?.removeEventListener('scroll', maybeLoadMore)
   stopQrPolling()
+  // 在途的流式搜索一并停掉（页面常驻不卸载是常态，但防御性收口不亏）
+  searchAbort.value?.abort()
 })
 
 // ── 页面现在**常驻**（SwipePager 不再卸载）──

@@ -238,7 +238,7 @@ func APICatalog(baseURL string) []Endpoint {
 		{
 			Method: http.MethodGet, Path: "/api/app/update/proxy/probe", Summary: "测试已配置网络代理的可用性（通了优先走代理，不通回退官方源）", Category: catSystem,
 			Example: "curl " + baseURL + "/api/app/update/proxy/probe",
-			Notes:   "只读，不改配置。返回 {configured,url,ok,latency_ms,version,error,checked_at,preferred_proxy}；" +
+			Notes: "只读，不改配置。返回 {configured,url,ok,latency_ms,version,error,checked_at,preferred_proxy}；" +
 				"`configured=false` 表示没配代理（不是错误）。检查更新时后端会自动做同样的探测，这个接口供界面手动重测。" +
 				"探测上限 8 秒，超时即判不通并回退官方源。",
 		},
@@ -359,6 +359,19 @@ func APICatalog(baseURL string) []Endpoint {
 			},
 			Example:  "curl '" + baseURL + "/api/search?q=周杰伦%20夜曲&source=all'",
 			Notes:    "纯服务端能力，不需要浏览器，也不需要音源脚本。",
+			Requires: "none",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/search/stream", Summary: "全网搜索歌曲（NDJSON 流式，逐平台推送）", Category: catSearch,
+			Params: []Param{
+				{Name: "q", In: "query", Required: true, Desc: "关键词，如「周杰伦 夜曲」"},
+				{Name: "source", In: "query", Desc: "平台 wy/tx/kg/kw，默认 all 聚合"},
+				{Name: "page", In: "query", Desc: "页码，默认 1"},
+			},
+			Example: "curl -N '" + baseURL + "/api/search/stream?q=周杰伦%20夜曲&source=all'",
+			Notes: "与 /api/search 同数据源，但响应为 NDJSON 事件流：meta（平台清单）→ 每个源一条 " +
+				"partial（list 可为空）或 platform_timeout → done（total/timeout_platforms/elapsed_ms）。" +
+				"整体 20s 封顶：慢源不再拖死整个请求，先到的结果先返回。适合界面渐进展示与长尾源超时的场景。",
 			Requires: "none",
 		},
 		{

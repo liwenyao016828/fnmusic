@@ -40,7 +40,7 @@ import (
 )
 
 // CurrentVersion 应用版本号。发布新版本时与 fpk-package/manifest 的 version 同步修改。
-const CurrentVersion = "2.29.0"
+const CurrentVersion = "2.30.0"
 
 // CurrentAppName 对外暴露的应用标识，必须与 fpk-package/manifest 的 appname 一致。
 //
@@ -378,6 +378,8 @@ func (s *Server) Router() http.Handler {
 				w.Header().Set("Expires", "0")
 			} else if strings.HasPrefix(path, "assets/") {
 				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+			} else {
+				setStaticImageCache(w, path)
 			}
 			fileServer.ServeHTTP(w, r)
 		})
@@ -389,6 +391,31 @@ func (s *Server) Router() http.Handler {
 	// 而 `authMiddleware` 是按 `r.URL.Path` 精确匹配 publicPaths（`/api/health` 等）
 	// 的 —— 不先剥，探活接口会被当成未知路径要求鉴权。见 gateway.go。
 	return stripGatewayPrefix(s.corsMiddleware(s.authMiddleware(mux)))
+}
+
+// setStaticImageCache 给 index.html / assets/ 之外的静态文件补缓存头。
+//
+// 为什么要有（2026-11-03 用户「应用图标有时能显示、有时不能」）：
+// 以前除了 index.html 与 assets/，其余静态文件**一个缓存头都不发**，
+// 于是每个浏览器/WebView 各自决定怎么缓存 favicon 与 logo —— 有的每次都重新拉，
+// 有的（尤其是飞牛微应用的内嵌 WebView）干脆用很久以前的那一份，
+// 表现就是「图标时好时坏、清了缓存才好」。
+//
+// 分三类，按「内容会不会变」定：
+//
+//	· 图片 / 字体 / svg：地址固定（favicon.png、logo.png）→ 只给 short，
+//	  必须配合前端 index.html 里的 ?v= 版本参数换地址，否则改了图用户看不到；
+//	· 其它静态资源：保守地用 no-cache，每次带 ETag 回来问一下，命中就 304。
+//
+// 这里只设 Cache-Control；Last-Modified/ETag/304 由 http.ServeContent
+// （http.FileServer 内部）按文件 mtime 自己发，不需要重复实现。
+func setStaticImageCache(w http.ResponseWriter, path string) {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".png", ".jpg", ".jpeg", ".webp", ".gif", ".ico", ".svg", ".woff", ".woff2", ".ttf":
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+	default:
+		w.Header().Set("Cache-Control", "no-cache")
+	}
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -526,9 +553,10 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 //
 // GET  /api/logs/config → { enabled, log_dir, effective_dir, log_file }
 // POST /api/logs/config body { enabled?, log_dir? }
-//   · enabled:true/false 开/关落盘；缺省 = 不改（老调用方只传 log_dir 照旧能用）
-//   · log_dir:传路径 = 用这个目录；传空串 = 回到默认位置（<数据目录>/logs）
-//   · 关掉落盘时 log_dir 仍然保存下来 —— 下次打开还是上次那个位置，不用重填
+//
+//	· enabled:true/false 开/关落盘；缺省 = 不改（老调用方只传 log_dir 照旧能用）
+//	· log_dir:传路径 = 用这个目录；传空串 = 回到默认位置（<数据目录>/logs）
+//	· 关掉落盘时 log_dir 仍然保存下来 —— 下次打开还是上次那个位置，不用重填
 //
 // 自定义目录的校验与下载/缓存目录同一条红线（绝对路径 + NAS 存储卷内），非法 400。
 // 默认位置（数据目录下）不经这条校验：那是应用自己的目录，不涉及用户音乐库授权。

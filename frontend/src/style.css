@@ -1724,3 +1724,17 @@ html[data-swiping='1'] [data-swipe-viewport] [data-swipe-track] {
 .sb-collapsed .sb-badge {
   opacity: 0;
 }
+
+/* ── 本地曲库搜索框（NasExplorer 的快捷搜索）────────────────────────────
+   2026-11-03：它是 input[type="search"]，WebKit（iPhone 上的 iframe 也一样）
+   会画一个原生的小叉号/放大镜，跟我们自己那颗「清空并收起」按钮叠在一起，
+   手机上两个叉挨着，点哪个都容易错。这里按控件类型全局收掉 ——
+   只影响 type=search 的原生装饰，不动其它输入框。 */
+input[type="search"]::-webkit-search-decoration,
+input[type="search"]::-webkit-search-cancel-button,
+input[type="search"]::-webkit-search-results-button,
+input[type="search"]::-webkit-search-results-decoration {
+  -webkit-appearance: none;
+  appearance: none;
+  display: none;
+}

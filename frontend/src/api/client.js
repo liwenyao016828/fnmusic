@@ -4,12 +4,66 @@ import { splitFrames, parseFrame } from '../services/assistantStream.js'
 // 所有请求都必须带这个前缀（写死 /api 会打到 fnOS 门户、全站 404）。见 basePath.js。
 import { withBase, API_BASE } from '../services/basePath.js'
 
+// ── NDJSON 公共件 ──
+//
+// 事件回调包装：记录出现过的事件类型（终态判定用），onEvent 异常不影响读取。
+function ndjsonEmitter(onEvent) {
+  const emitted = new Set()
+  const emit = (ev) => {
+    if (!ev || !ev.type) return
+    emitted.add(ev.type)
+    if (typeof onEvent === 'function') {
+      try {
+        onEvent(ev)
+      } catch (e) {
+        // 回调自己炸了不该影响读取；留给控制台
+        console.error('[NDJSON] onEvent failed', e)
+      }
+    }
+  }
+  return { emit, emitted }
+}
+
+// 从 fetch 响应体里逐行读 NDJSON：一行一个 JSON，收到即 emit。
+// 半个 JSON 只可能来自「服务端崩了」，如实报出来比静默吞掉好。
+async function pumpNDJSON(res, emit, label) {
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buf = ''
+
+  const handleLine = (line) => {
+    const text = line.trim()
+    if (!text) return
+    let ev
+    try {
+      ev = JSON.parse(text)
+    } catch (e) {
+      emit({ type: 'error', error: `${label}返回了无法解析的数据` })
+      return
+    }
+    emit(ev)
+  }
+
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buf += decoder.decode(value, { stream: true })
+    let idx
+    while ((idx = buf.indexOf('\n')) >= 0) {
+      handleLine(buf.slice(0, idx))
+      buf = buf.slice(idx + 1)
+    }
+  }
+  buf += decoder.decode()
+  if (buf.trim()) handleLine(buf)
+}
+
 // ── NDJSON 流 ──
 //
-// 有些接口（目前只有补全预览）是「跑着出结果」的：一行一个 JSON，服务端
-// 匹配完一首就推一条。用 axios 拿不到这种增量输出，只能走 fetch + 读 body。
+// 有些接口（补全预览、流式搜索）是「跑着出结果」的：一行一个 JSON，服务端
+// 出一批就推一条。用 axios 拿不到这种增量输出，只能走 fetch + 读 body。
 //
-// 约定：
+// 约定（两个入口一致）：
 //   · onEvent 每收一条就同步回调一次（不缓冲到结束）；
 //   · 正常收到 `done` / `cancelled` / `error` 事件、或流结束时由**服务端**说明
 //     结果；调用方不用自己拼终态；
@@ -20,19 +74,7 @@ import { withBase, API_BASE } from '../services/basePath.js'
 // `error` 事件的形式出现，这样界面只需一套收尾逻辑。
 async function streamNDJSON(path, payload = {}, opts = {}) {
   const { signal, onEvent } = opts
-  const emitted = new Set()
-  const emit = (ev) => {
-    if (!ev || !ev.type) return
-    emitted.add(ev.type)
-    if (typeof onEvent === 'function') {
-      try {
-        onEvent(ev)
-      } catch (e) {
-        // 回调自己炸了不该影响读取；留给控制台
-        console.error('[streamNDJSON] onEvent failed', e)
-      }
-    }
-  }
+  const { emit, emitted } = ndjsonEmitter(onEvent)
 
   try {
     const res = await fetch(withBase(`/api${path}`), {
@@ -55,36 +97,7 @@ async function streamNDJSON(path, payload = {}, opts = {}) {
       return
     }
 
-    const reader = res.body.getReader()
-    const decoder = new TextDecoder()
-    let buf = ''
-
-    const handleLine = (line) => {
-      const text = line.trim()
-      if (!text) return
-      let ev
-      try {
-        ev = JSON.parse(text)
-      } catch (e) {
-        // 半个 JSON 只可能来自「服务端崩了」，如实报出来比静默吞掉好
-        emit({ type: 'error', error: '预览流返回了无法解析的数据' })
-        return
-      }
-      emit(ev)
-    }
-
-    for (;;) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buf += decoder.decode(value, { stream: true })
-      let idx
-      while ((idx = buf.indexOf('\n')) >= 0) {
-        handleLine(buf.slice(0, idx))
-        buf = buf.slice(idx + 1)
-      }
-    }
-    buf += decoder.decode()
-    if (buf.trim()) handleLine(buf)
+    await pumpNDJSON(res, emit, '预览流')
 
     // 服务端正常结束却没发终态（比如连接被中间层掐了）：补一条，别让界面一直转
     if (!emitted.has('done') && !emitted.has('cancelled') && !emitted.has('error')) {
@@ -93,6 +106,49 @@ async function streamNDJSON(path, payload = {}, opts = {}) {
   } catch (e) {
     if (e && (e.name === 'AbortError' || signal?.aborted)) return // 调用方自己停的
     emit({ type: 'error', error: (e && e.message) || '预览流中断' })
+  }
+}
+
+/**
+ * GET 版流式搜索（/api/search/stream）。
+ *
+ * 为什么走流式：/api/search 要等全部平台跑完才返回单个 JSON，慢源（musicdl
+ * 外挂单源预算 120s）会把整个请求拖过前端 30s 超时 —— 2026-11-03 实测
+ * 「晴天」全源冷搜 107s+。流式版谁先到先推谁，整体 20s 封顶。
+ *
+ * 事件：{type:'meta',platforms:[..]} → 每源一条 {type:'partial',platform,list}
+ * （list 可为空 = 该源搜完 0 条）或 {type:'platform_timeout',platform} →
+ * {type:'done',total,timeout_platforms,elapsed_ms}。约定与 streamNDJSON 相同。
+ */
+async function streamSearch(keyword, { source = 'all', page = 1, signal } = {}, onEvent = () => {}) {
+  const { emit, emitted } = ndjsonEmitter(onEvent)
+  try {
+    const params = new URLSearchParams({ q: keyword, source, page: String(page) })
+    const res = await fetch(withBase(`/api/search/stream?${params.toString()}`), {
+      headers: { Accept: 'application/x-ndjson' },
+      signal,
+    })
+
+    if (!res.ok) {
+      let msg = `HTTP ${res.status}`
+      try {
+        const body = await res.json()
+        if (body && body.message) msg = body.message
+      } catch (e) {
+        /* 不是 JSON 就用状态码 */
+      }
+      emit({ type: 'error', error: msg })
+      return
+    }
+
+    await pumpNDJSON(res, emit, '搜索流')
+
+    if (!emitted.has('done') && !emitted.has('cancelled') && !emitted.has('error')) {
+      emit({ type: 'cancelled', reason: '搜索流连接提前结束，结果不完整' })
+    }
+  } catch (e) {
+    if (e && (e.name === 'AbortError' || signal?.aborted)) return // 调用方自己停的
+    emit({ type: 'error', error: (e && e.message) || '搜索流中断' })
   }
 }
 
@@ -340,6 +396,10 @@ export const SearchAPI = {
     api.get('/search', {
       params: { q: keyword, source, page, ...(pageSize > 0 ? { page_size: pageSize } : {}) },
     }).then(res => res.data),
+  // 流式搜索：逐平台 NDJSON 推送（meta / partial / platform_timeout / done），
+  // onEvent 逐事件回调；约定见 streamSearch 的注释。只服务界面渐进展示，
+  // 老调用方继续用上面的 search（契约不变）。
+  streamSearch,
   lyric: (source, songmid, title = '', singer = '', duration = 0, hash = '') => 
     api.get('/search/lyric', { params: { source, songmid, title, singer, duration, hash } }).then(res => res.data),
 }

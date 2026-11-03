@@ -94,6 +94,32 @@ export function createSearchPager(pageSize = SEARCH_PAGE_SIZE) {
     /** 露出缓冲里的下一批（不打后端）。缓冲空了就返回 [] */
     reveal,
 
+    /**
+     * 流式搜索：吃进一个源刚回来的一批（不推进 page、不判定停手），
+     * 返回要露出的新行（最多一页，其余进缓冲）。
+     *
+     * 与 start() 的区别：start 是「新搜索第一页」，push 是「同一个搜索里
+     * 某个源陆续到货」——重复调用没关系，ingest 按 key 去重；page 在首批
+     * 时记为 1，这样流结束后 loadMore 的「拉下一页」从第 2 页开始。
+     */
+    push(list) {
+      if (page === 0) page = 1
+      const fresh = ingest(Array.isArray(list) ? list : [])
+      buffer = buffer.concat(fresh)
+      return reveal()
+    },
+
+    /**
+     * 流式结束（done / 主动停止）：按收到的总新行数判定还有没有下一页。
+     * 不足一页 = 这已经是全部（loadMore 不再打后端）；流式期间 more 一直
+     * 是 true，所以缓冲见底时 loadMore 也不会提前去拉下一页 —— 那由
+     * 组件侧的 streamState.active 守住。
+     */
+    endStream() {
+      inflight = false
+      if (seen.size < pageSize) more = false
+    },
+
     /** 开始拉下一页；返回 false 表示现在不该拉（不要发请求） */
     beginFetch() {
       if (!more || inflight || buffer.length > 0) return false

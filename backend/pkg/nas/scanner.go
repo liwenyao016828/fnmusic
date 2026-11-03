@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"unicode/utf16"
 	"unicode/utf8"
 
@@ -662,7 +663,7 @@ func ExtractCover(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data, mimeType := extractCoverBytes(filePath)
+	data, mimeType := coverBytes(filePath)
 	if len(data) > 0 {
 		// 用内嵌字节算 ETag：文件没换就 304，换了立刻出新图。
 		// 以前固定 max-age=86400，用户补了封面后最长要等一天才看得到，
@@ -675,11 +676,115 @@ func ExtractCover(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("Content-Type", mimeType)
 		w.Header().Set("Cache-Control", "public, max-age=3600")
+		// 说明 Content-Length：既省一次 chunked，也让反代知道这是完整的一段。
+		w.Header().Set("Content-Length", itoa(len(data)))
 		_, _ = w.Write(data)
 		return
 	}
 
+	// 没有封面：**不能**让浏览器缓存这个 404。
+	// 以前这里什么都不发，某些 WebView 会把 404 记一阵子 —— 于是「补完封面
+	// 还是看不到」，只能靠换地址（?v=时间戳）破局。no-store 永远重新问一次。
+	w.Header().Set("Cache-Control", "no-store")
 	http.NotFound(w, r)
+}
+
+// ── 封面字节缓存 ──────────────────────────────────────────────────────────
+//
+// 为什么必须要有（2026-11-03 用户「看不到封面」）：
+// extractCoverBytes 每次都**把整个音频文件解析一遍**（FLAC 要扫完整条 PICTURE 块），
+// 而列表一屏就是几百张缩略图 —— 后端同时在解几十个 30MB 的文件，
+// 最慢的那几张会被前端当成失败（进而被永久判死）。缓存之后只有第一张要解析。
+//
+// 判据跟着文件走：路径 + size + mtime 全一致才算命中，所以补封面、换文件都会立刻失效，
+// 不需要再手动清缓存（以前只有 tags.go / downloader 会调用 InvalidateScanCache）。
+var coverCache = struct {
+	sync.Mutex
+	entries map[string]*coverCacheEntry
+	order   []string // 近似 LRU：命中时把 key 挪到末尾，淘汰从头部开始
+	bytes   int64
+}{entries: map[string]*coverCacheEntry{}}
+
+const (
+	coverCacheMaxBytes = 32 << 20 // 32MB：一张 3000×3000 的 PNG 就有 7MB，这里只装最热的几十张
+	coverCacheMaxItems = 256
+)
+
+type coverCacheEntry struct {
+	size  int64
+	mtime int64
+	data  []byte
+	mime  string
+}
+
+// coverBytes 是 extractCoverBytes 的带缓存版本（语义完全相同）。
+func coverBytes(filePath string) ([]byte, string) {
+	fi, err := os.Stat(filePath)
+	if err != nil || fi.IsDir() {
+		return nil, ""
+	}
+	key := filePath
+	size, mtime := fi.Size(), fi.ModTime().UnixNano()
+
+	coverCache.Lock()
+	if e := coverCache.entries[key]; e != nil && e.size == size && e.mtime == mtime {
+		touchCoverKey(key)
+		data, mime := e.data, e.mime
+		coverCache.Unlock()
+		return data, mime
+	}
+	coverCache.Unlock()
+
+	data, mime := extractCoverBytes(filePath)
+	if len(data) == 0 {
+		return nil, ""
+	}
+
+	coverCache.Lock()
+	if old := coverCache.entries[key]; old != nil {
+		coverCache.bytes -= int64(len(old.data))
+	} else {
+		coverCache.order = append(coverCache.order, key)
+	}
+	coverCache.entries[key] = &coverCacheEntry{size: size, mtime: mtime, data: data, mime: mime}
+	coverCache.bytes += int64(len(data))
+	for len(coverCache.order) > 1 &&
+		(coverCache.bytes > coverCacheMaxBytes || len(coverCache.order) > coverCacheMaxItems) {
+		oldest := coverCache.order[0]
+		coverCache.order = coverCache.order[1:]
+		if e := coverCache.entries[oldest]; e != nil && oldest != key {
+			coverCache.bytes -= int64(len(e.data))
+			delete(coverCache.entries, oldest)
+		}
+	}
+	coverCache.Unlock()
+	return data, mime
+}
+
+// touchCoverKey 把命中的 key 挪到 LRU 末尾（调用方已持锁）。
+func touchCoverKey(key string) {
+	for i, k := range coverCache.order {
+		if k == key {
+			coverCache.order = append(append(coverCache.order[:i:i], coverCache.order[i+1:]...), key)
+			return
+		}
+	}
+	coverCache.order = append(coverCache.order, key)
+}
+
+// itoa 小整数转字符串（避免为了一次 len() 引入 fmt 的格式化开销）
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	var buf [20]byte
+	i := len(buf)
+	for n > 0 {
+		i--
+		buf[i] = byte('0' + n%10)
+		n /= 10
+	}
+	return string(buf[i:])
 }
 
 // fnv32 给封面算一个廉价的指纹（只要变一点就不同即可，不要密码学强度）。

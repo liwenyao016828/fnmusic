@@ -24,6 +24,45 @@ test('SEARCH_PAGE_SIZE 是 30', () => {
   assert.equal(SEARCH_PAGE_SIZE, 30)
 })
 
+// ── 流式搜索（SearchView 逐源返回用 push + endStream）──
+
+test('push：逐源到货逐批露出，跨源去重，page 记为 1', () => {
+  const p = createSearchPager()
+  const r1 = p.push(songs(0, 20)) // wy 先回来 20 条
+  assert.equal(r1.length, 20)
+  assert.equal(p.page, 1)
+  const r2 = p.push(songs(20, 60)) // tx 又回来 40 条 → 露 30、存 10
+  assert.equal(r2.length, 30)
+  assert.equal(total(p), 10)
+  const r3 = p.push(songs(0, 20)) // wy 的重复行：不产生新歌，但会把缓冲里剩的 10 条露出来
+  assert.equal(r3.length, 10)
+  assert.equal(total(p), 0)
+})
+
+test('endStream：收到的总行数不足一页 → 没有下一页', () => {
+  const p = createSearchPager()
+  p.push(songs(0, 12)) // 12 < 30
+  p.endStream()
+  assert.equal(p.hasMore, false)
+})
+
+test('endStream：总数够了 → 还能走经典的 loadMore 拉下一页', () => {
+  const p = createSearchPager()
+  p.push(songs(0, 20))
+  p.push(songs(20, 40)) // 合计 40 ≥ 30
+  p.endStream()
+  assert.equal(p.hasMore, true)
+  assert.equal(p.canFetch, true) // 缓冲已见底时才允许打后端
+})
+
+test('endStream：缓冲里还有货时 hasMore 仍为 true（先露完再说）', () => {
+  const p = createSearchPager()
+  p.push(songs(0, 45))
+  p.endStream()
+  assert.equal(p.hasMore, true)
+  assert.equal(p.canFetch, false) // 缓冲有 15 条，先露
+})
+
 test('第一页露出 30 条，多的先收进缓冲，不打后端', () => {
   const p = createSearchPager()
   const rows = p.start(songs(0, 64))

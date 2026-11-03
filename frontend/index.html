@@ -3,7 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="referrer" content="no-referrer" />
-    <link rel="icon" type="image/png" href="/favicon.png" />
+    <!--
+      2026-11-03（用户「应用图标有时能显示、有时不能」）：
+        ① ?v= 是**换地址的开关** —— favicon.png 的地址固定，浏览器/WebView 会各自
+           缓很久；改了图标只要把 v 加一，所有端都会重新拉一次。
+        ② apple-touch-icon：iOS 的「添加到主屏幕」和 Safari 标签页用的是它，
+           不写就只能去抓 /apple-touch-icon.png（我们没这个文件）→ 图标时有时无。
+    -->
+    <link rel="icon" type="image/png" href="/favicon.png?v=1" />
+    <link rel="apple-touch-icon" href="/favicon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <!-- 顶栏玻璃色；Safari 地址栏与 PWA 标题栏跟随画布 -->
     <meta name="theme-color" content="#F3F3F3" />

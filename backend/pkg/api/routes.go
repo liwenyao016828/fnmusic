@@ -317,6 +317,8 @@ var routeTable = []routeSpec{
 
 	// 4. Search & Direct Audio Resolver
 	{Path: "/api/search", Handler: func(s *Server) http.HandlerFunc { return search.HandleSearch }},
+	// 流式版：逐平台 NDJSON 推送（界面「逐源返回」用），参数与 /api/search 一致
+	{Path: "/api/search/stream", Handler: func(s *Server) http.HandlerFunc { return search.HandleSearchStream }},
 	{Path: "/api/search/lyric", Handler: func(s *Server) http.HandlerFunc { return search.HandleLyric }},
 	{Path: "/api/music/qualities", Handler: func(s *Server) http.HandlerFunc { return search.HandleQualities }},
 	{
