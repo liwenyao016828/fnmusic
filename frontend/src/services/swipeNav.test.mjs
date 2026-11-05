@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   lockAxis, axisYields, rubberBand, decideCommit, velocityFrom, settleDuration,
-  isSwipeBlocked, resolveSwipeTarget, segmentOnEnter,
+  isSwipeBlocked, hasUsableHorizontalScroll, resolveSwipeTarget, segmentOnEnter,
   flattenRail, railIndexOf, splitRail, railNeighbors,
   springAt, springSettled, springOmegaFor, clampVelocity,
   SPRING_ZETA_TURN, SPRING_ZETA_BACK, SPRING_MAX_V, SPRING_MAX_MS,
@@ -93,6 +93,15 @@ test('isSwipeBlocked：输入类、range、横向滚动、播放器、显式 no-
     { tag: 'div', canScrollX: true }, { tag: 'div', inPlayer: true },
     { tag: 'div', inPlayer: true }, { tag: 'div', noDrag: true },
   ]) assert.equal(isSwipeBlocked(d), true, JSON.stringify(d))
+})
+
+test('横向滚动探测：祖先滑轨造成的假溢出不拦截，真横滑条仍让路', () => {
+  const base = { overflowX: 'auto', scrollWidth: 1170, clientWidth: 390, scrollLeft: 0 }
+  assert.equal(hasUsableHorizontalScroll({ ...base, probe: () => false }), false)
+  assert.equal(hasUsableHorizontalScroll({ ...base, probe: () => true }), true)
+  assert.equal(hasUsableHorizontalScroll({ ...base, scrollLeft: 8, probe: () => false }), true)
+  assert.equal(hasUsableHorizontalScroll({ ...base, overflowX: 'visible' }), false)
+  assert.equal(hasUsableHorizontalScroll({ ...base, scrollWidth: 390 }), false)
 })
 
 test('isSwipeBlocked：普通容器不阻止', () => {

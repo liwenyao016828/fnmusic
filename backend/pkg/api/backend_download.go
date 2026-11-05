@@ -148,7 +148,9 @@ func (s *Server) HandleBackendDownloadQueue(w http.ResponseWriter, r *http.Reque
 //	     "ids":["bd-..."]}
 //
 //	- pause / resume 不带 ids = 整队暂停/继续；带 ids = 单条（暂停会取消在途取音）。
-//	- stop/cancel：pending/paused/downloading → stopped（取消在途）。
+//	- stop/cancel：pending/paused/downloading → stopped（取消在途）；**不带 ids =
+//	  停止全部**（整队 stop_all：正在下载、等待、单独暂停的全部停掉；success/failed/
+//	  已 stopped 不动；刚提交、前端还没同步到的任务也在覆盖范围内）。
 //	- retry：failed/stopped/paused → pending。
 //	- remove：正在下载的拒绝删除（先 stop），其余可删。
 //	- clear_done：只清 success。clear_all：只清 success/failed/stopped。

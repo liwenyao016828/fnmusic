@@ -23,6 +23,7 @@ import { fail as failText, apiError } from './userMsg.js'
 import { logError, logInfo } from './appLog.js'
 import { pickAlreadyLocal } from './downloadDedup.js'
 import { fillPlatformOrder, pickSearchHit, nameOnlyFallbackAllowed } from './fillSource.js'
+import { producerMustStop, waitUnlessStopped } from './producerGate.js'
 import { downloadManager } from './downloadManager.js'
 import { backendDownload } from './backendDownload.js'
 import { markLoaded } from './viewCache.js'
@@ -171,6 +172,11 @@ async function loadMonitors() {
 const fillingKey = ref('')
 const fillProgress = ref('')
 const fillTimers = []
+/**
+ * 当前在跑的「排空/回写」定时器。`fillTimers` 只增不减（历史遗留），
+ * 真正能被停止收掉的集合是这个 —— 见 `clearFillTimers`。
+ */
+const stopWatchers = new Set()
 
 /** 补下载按钮的悬停说明：让用户知道这 N 首是怎么来的、要不要自己点 */
 function fillHint(row) {
@@ -246,8 +252,9 @@ async function enqueueSongs(items, platform, rowKey = '') {
 
   for (let i = 0; i < items.length; i++) {
     // 「停止」要能中止**正在入队的这一批** —— 逐首搜索是串行的，
-    // 不检查的话用户点完停止，队列还会继续涨一两分钟
-    if (isRowStopped(rowKey)) break
+    // 不检查的话用户点完停止，队列还会继续涨一两分钟。
+    // 判据走 `producerStopped`：行被停、或下载队列点了「停止全部」都算。
+    if (producerStopped(rowKey)) break
 
     const t = items[i]
 
@@ -270,7 +277,7 @@ async function enqueueSongs(items, platform, rowKey = '') {
       let hit = null
       for (const p of platforms) {
         // 「停止」要能中止正在入队的这一批：逐首多平台搜索更慢，更不能漏查
-        if (isRowStopped(rowKey)) break
+        if (producerStopped(rowKey)) break
         const res = await SearchAPI.search(keyword, p, 1)
         const list = res?.data?.list || []
         // 必须**确实是同一首**才入队（歌名归一后完全相同 + 歌手沾边 + 时长接近）。
@@ -337,7 +344,7 @@ async function fillRow(row, { auto = false, limit = 0 } = {}) {
 
     // 停止后不再往队列里塞。两个阶段之间也复查一次 —— 取待下载列表是网络请求，
     // 用户完全可能在这中间点了停止。
-    if (isRowStopped(row.key)) return { added, missed, already }
+    if (producerStopped(row.key)) return { added, missed, already }
 
     if (mon && row.pendingCount) {
       let tracks = await fetchPendingTracks(mon.id)
@@ -355,7 +362,7 @@ async function fillRow(row, { auto = false, limit = 0 } = {}) {
       }
     }
 
-    if (isRowStopped(row.key)) return { added, missed, already }
+    if (producerStopped(row.key)) return { added, missed, already }
 
     if (task && row.missingCount) {
       const items = task.last_result?.missing || []
@@ -404,7 +411,7 @@ async function fillRow(row, { auto = false, limit = 0 } = {}) {
     if (missed) logError('补下载', `${missed} 首未能加入下载队列`, '搜索无结果或接口报错')
 
     // ⭐ 队列一空就自动推一次 —— 用户不该为了「歌出现在飞牛歌单里」再点一次「立即执行」
-    if (willSync) watchQueueDrain(watching, () => autoPushRow(row))
+    if (willSync) watchQueueDrain(watching, () => autoPushRow(row), { rowKey: row.key })
 
     return { added, missed, already }
   } catch (e) {
@@ -461,6 +468,11 @@ function runKeyOf(row) {
  * 用户看到的就是「点了停止还在下」「停止后一会儿又开始推送」（2026-09-22 反馈）。
  *
  * 只在「重新开启」时移除；刷新页面后靠服务端的 enabled 兜底，不需要持久化。
+ *
+ * ⚠️ 它只覆盖**某一行**的停止。下载队列的「停止全部」是另一回事
+ * （2026-11-03 用户报障「停止全部后下一首仍继续推送下载」）：整队停止只停
+ * 已经进队列的歌，生产者下一刻还能再塞一批。所以所有生产者判定统一走
+ * `producerStopped()`：行被停 **或** 整条下载队列点了停止，都必须停。
  */
 const stoppedKeys = new Set()
 
@@ -469,9 +481,32 @@ function isRowStopped(key) {
   return !!key && stoppedKeys.has(key)
 }
 
+/** 这个生产者此刻是否必须停止（行被停，或整条下载队列点了「停止全部」） */
+function producerStopped(rowKey) {
+  return isRowStopped(rowKey) || downloadManager.producerStopped()
+}
+
 /** 曲目的稳定 key（用于「本次会话只自动试一次」） */
 function trackKey(t) {
   return `${t?.source || ''}:${t?.song_id || ''}:${t?.name || ''}`
+}
+
+/**
+ * 给一个「每 3 秒看一眼」的定时器装停止开关。
+ *
+ * 2026-11-03「停止全部后下一首仍继续」的另一半：`watchFillCompletion` /
+ * `watchQueueDrain` 的定时器只在**队列排空**时自己清掉，用户点「停止全部」
+ * 并不会让它们停 —— 排空回调照样触发 `autoPushRow`，然后重扫 + 90 秒后推送，
+ * 看起来就是「停完了又自己动」。所以点停止时要能把它们一起收掉。
+ */
+/** 收掉所有「排空/回写」定时器（停止全部时调用）。 */
+function clearFillTimers() {
+  for (const timer of stopWatchers) {
+    try { clearInterval(timer) } catch (_) {}
+  }
+  stopWatchers.clear()
+  // `fillTimers` 是历史上累加的数组，清空它免得每次停止都留下一串死引用
+  fillTimers.length = 0
 }
 
 /**
@@ -502,8 +537,15 @@ async function autoFillPending() {
   if (backendDownload.subscriptionsManaged.value === true) return
   for (const row of subscriptions.value) {
     // 被停止的行一律跳过 —— 服务端 enabled 也能拦住，但停止是**立即生效**的，
-    // 不能等下一轮 loadMonitors 刷回来（那一轮结束前用户已经看到队列还在涨）
-    if (isRowStopped(row.key)) continue
+    // 不能等下一轮 loadMonitors 刷回来（那一轮结束前用户已经看到队列还在涨）。
+    // 下载队列点了「停止全部」同样跳过（`producerStopped` 含这条），
+    // 整队「暂停全部」时也不再塞新的排队任务（暂停 ≠ 停止，但不该让队列继续涨）。
+    if (producerMustStop({
+      queueStopped: downloadManager.producerStopped(),
+      rowStopped: isRowStopped(row.key),
+      queuePaused: backendDownload.paused.value === true,
+      manual: false,
+    })) continue
     if (!row.download || !row.hasDownload) continue
     if (!row.baselineDone) continue
     // 「只接新轮次」：这一轮已经自动补过就不再碰（旧账请手点「补下载」）。
@@ -559,6 +601,12 @@ async function autoFillPending() {
 function watchFillCompletion(monitorID, pairs) {
   if (!pairs.length) return
   const timer = setInterval(async () => {
+    // 停止全部/行被停 → 这个回写器不该再跑（它只认「下完了」）
+    if (producerStopped()) {
+      stopWatchers.delete(timer)
+      clearInterval(timer)
+      return
+    }
     const done = []
     for (let i = pairs.length - 1; i >= 0; i--) {
       const { task, track } = pairs[i]
@@ -578,8 +626,12 @@ function watchFillCompletion(monitorID, pairs) {
       }
       loadMonitors()
     }
-    if (!pairs.length) clearInterval(timer)
+    if (!pairs.length) {
+      stopWatchers.delete(timer)
+      clearInterval(timer)
+    }
   }, 3000)
+  stopWatchers.add(timer)
   fillTimers.push(timer)
 }
 
@@ -591,20 +643,30 @@ function watchFillCompletion(monitorID, pairs) {
  * 中途暂停时，已经下完的那部分也该推上去，不能干等一个永远不会来的「全部完成」。
  * 所以 pending / resolving / downloading 三种状态一消失（成功、失败、暂停、被移除都算）就触发。
  */
-function watchQueueDrain(pairs, onDrained) {
+function watchQueueDrain(pairs, onDrained, { rowKey = '' } = {}) {
   const tasks = pairs.map((p) => p.task).filter(Boolean)
   if (!tasks.length) {
-    onDrained?.()
+    // 没有可等的任务时也必须过一遍停止判据：点了「停止全部」之后再开一批
+    // 自动推送，用户看到的就是「停完了还在动」
+    if (!producerStopped(rowKey)) onDrained?.()
     return
   }
   const timer = setInterval(() => {
+    // 停止全部/行被停 → 排空回调一律不触发（它绑的是 autoPushRow）
+    if (producerStopped(rowKey)) {
+      stopWatchers.delete(timer)
+      clearInterval(timer)
+      return
+    }
     const busy = tasks.some(
       (t) => t.status === 'pending' || t.status === 'resolving' || t.status === 'downloading',
     )
     if (busy) return
+    stopWatchers.delete(timer)
     clearInterval(timer)
     onDrained?.()
   }, 3000)
+  stopWatchers.add(timer)
   fillTimers.push(timer)
 }
 
@@ -622,7 +684,7 @@ function watchQueueDrain(pairs, onDrained) {
  */
 async function autoPushRow(row) {
   if (!row?.tasks?.length) return
-  if (isRowStopped(row.key)) return
+  if (producerStopped(row.key)) return
   // 等待期间用户可能把订阅停了 —— 「停止」的语义是「别跑了」，这时候不能再推
   const fresh = subscriptions.value.find((r) => r.key === row.key)
   if (!fresh || !fresh.fnos) return
@@ -632,12 +694,18 @@ async function autoPushRow(row) {
     // 重扫排不上不阻塞推送 —— 至少曲库里原有的歌能推上去
     logError('自动同步飞牛', '触发曲库重扫失败', e?.message || String(e))
   }
-  await new Promise((resolve) => setTimeout(resolve, AUTO_PUSH_SETTLE_MS))
+  // 等待本身也必须能被「停止」打断（2026-11-03「停止全部后下一首仍继续」）：
+  // 以前只在等之前和等之后各查一次，90 秒里点停止，这个定时器照样跑完再推。
+  const settled = await waitUnlessStopped(AUTO_PUSH_SETTLE_MS, {
+    stopped: () => producerStopped(row.key),
+    setTimeoutFn: setTimeout,
+  })
+  if (!settled) return
 
   // ⚠️ 必须**再查一次**：上面那次检查在 90 秒等待**之前**，用户完全可能在等待期间
   // 点了停止。少了这一次复查，用户看到的就是「停止后一会儿又开始推送」
   // （2026-09-22 真机反馈，就是这个定时器）。
-  if (isRowStopped(row.key)) return
+  if (producerStopped(row.key)) return
   const fresh2 = subscriptions.value.find((r) => r.key === row.key)
   if (!fresh2 || !fresh2.fnos) return
 
@@ -983,6 +1051,8 @@ export const pushEngine = {
   loadMonitors, loadPushTasks, loadFnosStatus, loadApiSourceCount, loadPushRuns, reloadAll,
   // fill
   fillRow, fillHint,
+  // 停止全部：收掉「排空/回写」定时器（生产者闸门的读取在 downloadManager 那侧）
+  clearFillTimers,
   // 行动作
   toggleCapability, stopPushOnly, runRow, removeRow, saveRowSettings,
   createLinkSubscriptions, createAccountTask, clearPushRuns,

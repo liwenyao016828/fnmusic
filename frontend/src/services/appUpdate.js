@@ -195,6 +195,12 @@ export function createAppUpdate({
   const proxyProbe = ref(null)
   // 正在测速（界面要能显示「正在测代理…」，否则用户以为按钮没反应）。
   const proxyProbing = ref(false)
+  // 已下载更新包探测（2026-11-02 第 1 项）：后端检查时会看 <数据目录>/updates/，
+  // 有现成的包就直接标出来。UpdateCard 据此把按钮文案换成「可直接安装」。
+  // 这两个 ref 漏挂进 return 会导致 UpdateCard 的 statusText computed 读
+  // downloaded.value 时抛 TypeError，整张卡片渲染失败、弹窗只剩标题。
+  const downloaded = ref(false)
+  const downloadedPath = ref('')
 
   let timer = null
   let polling = false
@@ -274,6 +280,8 @@ export function createAppUpdate({
     checkError.value = d.error
     checkSource.value = d.source || ''
     checkTried.value = Array.isArray(d.tried) ? d.tried : []
+    downloaded.value = d.downloaded
+    downloadedPath.value = d.downloadedPath
     // 后端在检查时顺手做了代理测速（第 6 项），结论直接拿来显示，
     // 不必再单独点一次「测速」。
     if (d.proxy) proxyProbe.value = d.proxy
@@ -651,6 +659,8 @@ export function createAppUpdate({
     installLogPath.value = ''
     proxyProbe.value = null
     proxyProbing.value = false
+    downloaded.value = false
+    downloadedPath.value = ''
     polling = false
     installRequested = false
     autoChecked = false
@@ -667,6 +677,7 @@ export function createAppUpdate({
     downloadPath, error, phase,
     installLog, installLogPath,
     proxyProbe, proxyProbing,
+    downloaded, downloadedPath,
     notice,
     check, startUpdate, pollOnce, installUpdate, stopPolling, startPolling,
     resumeIfActive, ensureChecked, ensureNotice, ackNotice, fetchInstallLog, probeProxy,

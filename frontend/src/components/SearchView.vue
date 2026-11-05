@@ -79,7 +79,7 @@
             榜单有自己的顶层导航段，不必在发现页再放第二个入口。
             说明性文案一律收进 title（悬浮可见），不常驻占位。
           -->
-          <div class="flex min-w-0 flex-col rounded-[var(--ys-radius-block)] border border-[var(--ys-border)] bg-white px-6 py-6 sm:px-[30px] sm:py-[26px]">
+          <div class="flex min-w-0 flex-col rounded-[var(--ys-radius-block)] border border-[var(--ys-border)] bg-white px-4 py-4 sm:px-[30px] sm:py-[26px]">
             <div class="flex items-start justify-between gap-3">
               <div class="min-w-0">
                 <div class="text-[12px] font-medium tracking-[0.01em] text-[var(--ys-text-aux)]">{{ heroEyebrow }}</div>
@@ -112,7 +112,7 @@
               状态映射见 services/qrLogin.js。
               曲目来自 GET /api/accounts/tracks —— 已归一化为可播放形状，点击即入列表，可播放/下载。
             -->
-            <div class="mt-4 grid grid-cols-2 gap-3 md:gap-4">
+            <div class="mt-4 grid grid-cols-1 min-[400px]:grid-cols-2 gap-3 md:gap-4">
               <div
                 v-for="p in recommendPlatforms" :key="p.id"
                 class="overflow-hidden rounded-[12px] border border-[var(--ys-border)] bg-[var(--ys-surface-sunken)]"
@@ -221,46 +221,7 @@
                 全角偏细的字形，粗细与描边对不上，是「不像原生控件」的直接原因。
               · 主播放键反转成**白底黑图标**（Apple Music 桌面的做法），整块只有这一个高对比焦点。
           -->
-          <div class="hidden items-center gap-4 rounded-[var(--ys-radius-block)] bg-[#0B0B0C] px-5 py-5 text-white shadow-[0_18px_48px_rgba(0,0,0,0.14)] md:flex">
-            <div class="grid h-[92px] w-[92px] shrink-0 place-items-center overflow-hidden rounded-[12px] bg-white/[0.06] text-white/30">
-              <img
-                v-if="currentSong?.cover"
-                :src="currentSong.cover"
-                alt=""
-                referrerpolicy="no-referrer"
-                class="h-full w-full object-cover"
-              />
-              <Disc3 v-else class="h-7 w-7" />
-            </div>
-            <div class="min-w-0 flex-1">
-              <small class="text-[11px] font-medium tracking-[0.02em] text-white/45">
-                {{ isPlaying ? '正在播放' : (currentSong ? '已暂停' : '待播放') }}
-              </small>
-              <h3 class="mb-0.5 mt-1 truncate text-[16px] font-semibold tracking-[-0.01em]">
-                {{ currentSong?.name || '还没有播放歌曲' }}
-              </h3>
-              <small class="block truncate text-[11px] text-white/45">
-                {{ currentSong ? (currentSong.singer || '未知歌手') : '挑一首歌开始吧' }}
-              </small>
-              <div class="mt-3 flex items-center gap-1.5">
-                <button
-                  @click="emit('prev')" :disabled="!currentSong" title="上一首"
-                  class="grid h-8 w-8 place-items-center rounded-full text-white/55 transition-colors hover:bg-white/10 hover:text-white disabled:opacity-30"
-                ><SkipBack class="h-4 w-4" fill="currentColor" /></button>
-                <button
-                  @click="emit('toggle-play')" :disabled="!currentSong" title="播放 / 暂停"
-                  class="grid h-10 w-10 place-items-center rounded-full bg-white text-black transition-transform hover:scale-[1.04] active:scale-95 disabled:bg-white/15 disabled:text-white/50 disabled:shadow-none"
-                >
-                  <Pause v-if="isPlaying" class="h-4 w-4" fill="currentColor" />
-                  <Play v-else class="ml-0.5 h-4 w-4" fill="currentColor" />
-                </button>
-                <button
-                  @click="emit('next')" :disabled="!currentSong" title="下一首"
-                  class="grid h-8 w-8 place-items-center rounded-full text-white/55 transition-colors hover:bg-white/10 hover:text-white disabled:opacity-30"
-                ><SkipForward class="h-4 w-4" fill="currentColor" /></button>
-              </div>
-            </div>
-          </div>
+          <DiscoverLyricPlayer class="hidden md:block" :song="currentSong" :playing="isPlaying" :lyric-data="lyricData" :trans-data="transData" :current-time="currentTime" :duration="duration" @seek="emit('seek', $event)" />
         </div>
       </div>
 
@@ -320,7 +281,7 @@
         同一份 toplists、同一个卡片网格、同一个注入开关，只是入口不同。
       -->
 
-      <div v-if="currentMode === 'discover' && isChartsSegment" class="max-w-[1500px] mx-auto px-4 py-4 pb-28 pb-dock sm:px-7 sm:py-6 sm:pb-24">
+      <div v-if="currentMode === 'discover' && isChartsSegment" class="max-w-[1500px] mx-auto px-4 py-4 ys-bottom-clear sm:px-7 sm:py-6">
         <!-- 榜单网格：**只**长在导航「榜单」段里。
              2026-10-18 用户口径：「去掉排行榜单和精选歌单（切换胶囊），发现页默认展示歌单」——
              发现页不再渲染这张网格，删掉 ChartManager.vue 后「榜单管理」收成这里一个折叠面板：
@@ -331,7 +292,7 @@
             @click="showInjectPanel = !showInjectPanel"
             :aria-expanded="showInjectPanel"
             title="勾选后这些榜单会以在线歌单出现在飞牛音乐里；只保留能播放的曲目，所以会比平台榜单短"
-            class="flex w-full items-center gap-x-2 gap-y-1 rounded-xl border border-[var(--ys-border)] bg-white px-3.5 py-2.5 text-left transition-colors hover:border-emerald-200"
+            class="flex w-full flex-wrap items-center gap-x-2 gap-y-1.5 rounded-xl border border-[var(--ys-border)] bg-white px-3 py-2.5 text-left transition-colors hover:border-emerald-200 sm:px-3.5"
           >
             <Trophy class="w-4 h-4 shrink-0 text-amber-500" />
             <span class="text-[12px] font-bold text-gray-800 whitespace-nowrap">排行榜单</span>
@@ -388,7 +349,7 @@
             >
               <input type="checkbox" :checked="uiInjectEnabled" :disabled="chartInjectBusy" @change="toggleUIInject" class="mt-0.5 shrink-0" />
               <span class="min-w-0 text-[11px] leading-snug text-gray-600">
-                <strong class="text-gray-700">同时重排飞牛自带的页面</strong>
+                <strong class="text-gray-700">在飞牛音乐显示 AI 面板</strong>
               </span>
             </label>
 
@@ -425,9 +386,9 @@
           <Loader2 class="w-8 h-8 animate-spin text-emerald-600 mb-2" />
           <p class="text-xs">正在载入权威榜单...</p>
         </div>
-        <div v-else class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        <div v-else class="grid gap-3" :class="chartGridClass">
           <div
-            v-for="chart in toplists" :key="chart.id"
+            v-for="chart in visibleToplists" :key="chart.id"
             @click="openChartDetail(chart)"
             class="relative bg-white rounded-xl border border-[var(--ys-border)] p-2.5 hover:border-emerald-200 hover:shadow-sm transition-all cursor-pointer flex items-center gap-3 group"
           >
@@ -487,15 +448,16 @@
             </div>
           </div>
         </div>
+        <ListPager label="榜单分页" :page="chartPage" :page-size="chartPageSize" :total="toplists.length" @change-page="p => changeDisplayPage('chart', p)" @change-size="n => changeDisplaySize('chart', n)" />
       </div>
 
       <!-- 2. 发现大厅 - 精选歌单网格（发现段的**默认也是唯一**的内容，不再有榜单/歌单切换） -->
-      <div v-else-if="currentMode === 'discover' && !isChartsSegment" class="max-w-[1500px] mx-auto px-4 py-4 pb-28 pb-dock sm:px-7 sm:py-6 sm:pb-24">
+      <div v-else-if="currentMode === 'discover' && !isChartsSegment" class="max-w-[1500px] mx-auto px-4 py-4 ys-bottom-clear sm:px-7 sm:py-6">
         <div v-if="isLoadingPlaylists" class="flex flex-col items-center justify-center py-20 text-gray-500">
           <Loader2 class="w-8 h-8 animate-spin text-emerald-600 mb-2" />
           <p class="text-xs">正在载入精选歌单...</p>
         </div>
-        <div v-else class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 sm:gap-3.5">
+        <div v-else class="grid gap-3 sm:gap-3.5" :class="playlistGridClass">
           <div
             v-for="pl in playlists" :key="pl.id"
             @click="openPlaylistDetail(pl)"
@@ -520,10 +482,14 @@
             </p>
           </div>
         </div>
+        <ListPager :sizes="[12, 24, 48]" label="发现歌单分页" :page="playlistPage" :page-size="playlistPageSize" :total="playlistTotal" :loading="isLoadingPlaylists" @change-page="p => changeDisplayPage('playlist', p)" @change-size="n => changeDisplaySize('playlist', n)" />
       </div>
 
       <!-- 3. 歌曲列表视图 (搜索结果 / 榜单详情 / 歌单详情 公用) -->
-      <div v-else class="max-w-[1500px] mx-auto px-4 py-4 pb-28 pb-dock sm:px-7 sm:py-6 sm:pb-24 space-y-3">
+      <div v-else class="flex min-h-0 flex-col" :class="currentMode === 'search' ? 'max-w-[1500px] mx-auto px-4 py-4 ys-bottom-clear sm:px-7 sm:py-6 space-y-3' : 'h-full'">
+        <!-- 详情页要参与父 flex 的高度分配：固定 h-full 会在头部卡片较高时按整屏算高，
+             把列表挤到只剩几行；flex-1 + min-h-0 才能让列表真正吃掉剩余空间。 -->
+        <template v-if="currentMode !== 'search'"><div class="mx-auto flex min-h-0 w-full max-w-[1500px] flex-1 flex-col gap-3 px-4 py-4 ys-bottom-clear-tight sm:px-7 sm:py-6">
         <!-- 头部导航与批量操作工具栏 -->
         <div class="bg-white rounded-xl border border-[var(--ys-border)] p-3.5">
           <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-2.5">
@@ -668,10 +634,10 @@
           <p class="text-xs text-gray-500 mt-1">请尝试更换关键词或在「音源管理」载入更多音源</p>
         </div>
 
-        <div v-else class="bg-white rounded-xl border border-[var(--ys-border)] divide-y divide-[var(--ys-border)] overflow-hidden">
+        <div v-else :ref="currentMode !== 'search' ? 'detailListEl' : undefined" class="bg-white rounded-xl border border-[var(--ys-border)] divide-y divide-[var(--ys-border)] overflow-hidden" :class="currentMode !== 'search' ? 'min-h-[220px] flex-1 overflow-y-auto overscroll-contain' : ''">
           <div
-            v-for="(song, idx) in activeSongList" :key="song.id || idx"
-            @click="playSong(song, idx)"
+            v-for="(song, idx) in visibleDetailSongs" :key="song.id || idx"
+            @click="playSong(song, currentMode === 'search' ? idx : (detailPage - 1) * detailPageSize + idx)"
             class="flex items-center gap-2.5 sm:gap-3 px-3 sm:px-4 py-2.5 hover:bg-emerald-50/40 cursor-pointer transition-colors group"
           >
             <!--
@@ -679,7 +645,7 @@
               ⚠️ 桌面是「悬停时把序号换成播放图标」，触屏没有 hover —— 手机上永远是序号，
               看不出这一行能点。所以触屏常显播放图标（序号在手机上本来也没用），桌面行为不变。
             -->
-            <span class="w-5 sm:w-6 text-center text-xs text-gray-300 font-mono group-hover:hidden hide-on-touch shrink-0">{{ idx + 1 }}</span>
+            <span class="w-5 sm:w-6 text-center text-xs text-gray-300 font-mono group-hover:hidden hide-on-touch shrink-0">{{ currentMode === 'search' ? idx + 1 : (detailPage - 1) * detailPageSize + idx + 1 }}</span>
             <div class="w-5 sm:w-6 hidden group-hover:flex show-on-touch-flex items-center justify-center shrink-0">
               <Play class="w-3.5 h-3.5 text-emerald-600 fill-current" />
             </div>
@@ -746,6 +712,11 @@
             </div>
           </div>
         </div>
+        <ListPager v-if="currentMode !== 'search'" class="ys-detail-pager shrink-0" label="歌单曲目分页" :page="detailPage" :page-size="detailPageSize" :total="activeSongList.length" @change-page="p => changeDisplayPage('detail', p)" @change-size="n => changeDisplaySize('detail', n)" />
+        </div></template>
+
+        <!-- 底部留白由 ys-bottom-clear / ys-bottom-clear-tight（读 `--pb-clear`）统一负责：
+             它只压缩列表可用高度，分页始终位于导航与播放条上方，不会像固定 h-full 那样上浮。 -->
 
         <!-- 触底自动加载的状态行：平时不说话，加载中/没有更多才露一句 -->
         <div
@@ -761,25 +732,6 @@
       </div>
     </div>
 
-    <!-- ── 轻量下载操作提示 Toast ── -->
-    <Teleport to="body">
-      <Transition
-        enter-active-class="transition-all duration-200 ease-out"
-        enter-from-class="opacity-0 translate-y-2 scale-95"
-        enter-to-class="opacity-100 translate-y-0 scale-100"
-        leave-active-class="transition-all duration-150 ease-in"
-        leave-from-class="opacity-100 translate-y-0 scale-100"
-        leave-to-class="opacity-0 translate-y-2 scale-95"
-      >
-        <div
-          v-if="toastMessage"
-          class="fixed bottom-22 left-1/2 -translate-x-1/2 z-[60] bg-gray-900/90 text-white text-xs px-4 py-2 rounded-full shadow-lg backdrop-blur-xs flex items-center gap-2 pointer-events-none"
-        >
-          <Check class="w-3.5 h-3.5 text-emerald-400" />
-          <span>{{ toastMessage }}</span>
-        </div>
-      </Transition>
-    </Teleport>
   </div>
 
   <!--
@@ -919,17 +871,24 @@
 <script setup>
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { markLoaded, isStale } from '../services/viewCache'
+// 详情数据（歌单/榜单曲目 + 首屏小请求）的进程内 TTL+LRU 缓存：
+// 修复「每次退出再进来都重新拉一遍」，见 services/detailCache.js 顶部说明。
+import * as detailCache from '../services/detailCache'
 import { SearchAPI, ChartsAPI, MonitorAPI, AccountAPI, PushAPI, ChartInjectAPI, ConfigAPI } from '../api/client'
 import { lxRuntime } from '../engine/lx-runtime'
 import { qualityLabel, isHighestQuality } from '../engine/quality'
 import { downloadManager } from '../services/downloadManager'
-import { loadPref, savePref, memGet, memSet, loadBool } from '../services/prefs'
+import { loadPref, savePref, memGet, memSet, loadBool, onPrefChange } from '../services/prefs'
+import { normalizeColumns, listColumnClass, LIST_COLUMNS_KEY } from '../services/listColumns'
 import QRCode from 'qrcode'
 import DownloadQualityModal from './DownloadQualityModal.vue'
 import InlineNotice from './InlineNotice.vue'
 import QrLoginModal from './QrLoginModal.vue'
 import SelectField from './SelectField.vue'
 import BrandMark from './BrandMark.vue'
+import DiscoverLyricPlayer from './DiscoverLyricPlayer.vue'
+import ListPager from './ListPager.vue'
+import { displayPage, normalizePageSize, clampPage } from '../services/displayPaging'
 import { onNavigate, currentView } from '../services/navBus'
 import {
   chartInject,
@@ -945,6 +904,7 @@ import {
   loadConfig as loadInjectConfig,
 } from '../services/chartInject'
 import { fail, apiError, describeError } from '../services/userMsg'
+import { ok as notifyOk, fail as notifyFail } from '../services/feedback'
 import { createSearchPager, SEARCH_PAGE_SIZE } from '../services/searchPaging'
 import {
   officialPlatform, setOfficialPlatform, ensureOfficialPlatform,
@@ -979,6 +939,10 @@ const props = defineProps({
   },
   // hero「正在播放」卡用（由 App.vue 传入）
   currentSong: Object,
+  lyricData: String,
+  transData: String,
+  currentTime: Number,
+  duration: Number,
   isPlaying: {
     type: Boolean,
     default: false,
@@ -998,7 +962,7 @@ const props = defineProps({
   segment: { type: String, default: 'discover' },
 })
 
-const emit = defineEmits(['play', 'play-all', 'update:play-mode', 'navigate', 'prev', 'next', 'toggle-play'])
+const emit = defineEmits(['play', 'play-all', 'update:play-mode', 'navigate', 'prev', 'next', 'toggle-play', 'seek'])
 
 
 // ── hero 问候语（参考 flow 的 .eyebrow + hero h1）──
@@ -1071,33 +1035,103 @@ const recommendPlatforms = computed(() =>
   }),
 )
 
+// ── 首屏小请求的 SWR（缓存优先，TTL 内一个请求都不发）──────────────────────────
+//
+// 为什么需要：`SwipePager` 里切视图 = 组件重建 = `onMounted` 再跑一遍，
+// 于是「账号列表 / 我的歌单 / 歌单分类」三个小请求每进一次页面就重发一次。
+// 这三样都是几十秒到几小时才变一次的东西，重进重拉纯属白烧。
+//
+// 与 `memGet/memSet` 的区别：那对是裸 Map（永不过期），适合「拉过就一直用」的字典；
+// 这里要「过期后台刷新」，所以走 detailCache（带 TTL + LRU）。
+
+/**
+ * 列表类数据（榜单列表 / 精选歌单网格）在会话内的复用期。
+ * 这两样原先存 `memGet` 但**永不过期** —— 一旦拉过，整个会话里 `watch(currentView)`
+ * 的 SWR 刷新都会被这个短路挡住，永远看不到平台侧的新歌单。
+ * 给它一个 5 分钟的复用期：期内一次都不重发，过期后后台刷新、界面照旧不动。
+ */
+const LIST_TTL = 5 * 60_000
+
+/**
+ * 有缓存先上屏 → TTL 内直接返回 → 过期了再用新结果原地替换（不闪骨架屏）。
+ *
+ * @param {string}   key     缓存 key（空串 = 不缓存）
+ * @param {string}   kind    detailCache 的 TTL 类别
+ * @param {Function} fetcher () => Promise<value|undefined>；返回 undefined = 没拿到，不写缓存
+ * @param {Function} apply   (value) => void，把结果灌进 ref
+ * @returns {Promise<void>}
+ */
+async function swr(key, kind, fetcher, apply) {
+  const cached = key ? detailCache.read(key) : undefined
+  if (cached && cached.value !== undefined) {
+    apply(cached.value)
+    if (detailCache.isFresh(key, kind)) return
+  }
+  const value = await fetcher()
+  if (value === undefined) return
+  if (key) detailCache.write(key, { value })
+  apply(value)
+}
+
 async function loadAccounts() {
   try {
-    const res = await AccountAPI.list()
-    if (res?.code === 200) {
-      accounts.value = res.data?.accounts || []
-    }
+    await swr(
+      detailCache.cacheKey('accounts', '', 'list'),
+      'accounts',
+      async () => {
+        const res = await AccountAPI.list()
+        // code 不对时当作「没拿到」：不要把空账号列表缓存 5 分钟
+        return res?.code === 200 ? (res.data?.accounts || []) : undefined
+      },
+      (list) => { accounts.value = list },
+    )
   } catch (_) {
     // 账号列表拉取失败不阻塞发现页
   }
 }
 
 async function loadRecommendPlaylists() {
-  recommendPlaylistsLoading.value = true
+  const key = detailCache.cacheKey('sources', '', 'netease+qq')
+  const cached = key ? detailCache.read(key) : undefined
+  const apply = (v) => {
+    if (!v) return
+    if (Array.isArray(v.netease)) recommendPlaylists.value.netease = v.netease
+    if (Array.isArray(v.qq)) recommendPlaylists.value.qq = v.qq
+  }
+  if (cached?.value) apply(cached.value)
+  // 缓存命中就别转 loading 圈了 —— 歌单已经在那儿了，再闪一下反而像在重新拉
+  recommendPlaylistsLoading.value = !cached?.value
+  if (cached?.value && detailCache.isFresh(key, 'sources')) return
   try {
     const [wy, qq] = await Promise.allSettled([
       PushAPI.sources('netease'),
       PushAPI.sources('qq'),
     ])
+    const value = {}
     if (wy.status === 'fulfilled' && wy.value?.code === 200) {
-      recommendPlaylists.value.netease = wy.value.data?.sources || []
+      value.netease = wy.value.data?.sources || []
     }
     if (qq.status === 'fulfilled' && qq.value?.code === 200) {
-      recommendPlaylists.value.qq = qq.value.data?.sources || []
+      value.qq = qq.value.data?.sources || []
+    }
+    // 两个平台都没拿到（比如都没登录）时不写缓存，下次进来还得试
+    if (Object.keys(value).length) {
+      detailCache.write(key, { value })
+      apply(value)
     }
   } finally {
     recommendPlaylistsLoading.value = false
   }
+}
+
+/**
+ * 账号态变了（登录成功 / 手动「刷新状态」/ 断开账号）→ 先作废账号相关缓存。
+ * 不作废的话，账号缓存 5 分钟内会把「刚登录」或「刚登出」盖住，看到的是旧状态。
+ */
+function invalidateAccountCaches() {
+  detailCache.drop(detailCache.cacheKey('accounts', '', 'list'))
+  detailCache.drop(detailCache.cacheKey('sources', '', 'netease+qq'))
+  detailCache.drop(detailCache.cacheKey('config', '', 'app'))
 }
 
 /** 拉取某平台的日推或歌单曲目，灌进歌曲列表直接可播可下 */
@@ -1160,6 +1194,7 @@ function platformOf(id) {
 async function refreshAccounts() {
   accountsLoading.value = true
   platformError.value = ''
+  invalidateAccountCaches()
   try {
     await loadAccounts()
     await loadRecommendPlaylists()
@@ -1209,6 +1244,8 @@ function startQrPolling() {
       if (shouldCloseAfterLogin(view)) {
         // 存盘成功才自动关 —— 「授权成功但保存失败」得让用户看清那句话
         setTimeout(closeQr, LOGIN_SUCCESS_CLOSE_MS)
+        // 刚登录成功：账号/歌单缓存必须作废，否则这 5 分钟里还显示「未连接」
+        invalidateAccountCaches()
         loadAccounts().then(loadRecommendPlaylists)
       }
     } catch (e) {
@@ -1245,6 +1282,8 @@ async function disconnectPlatform(p) {
     await AccountAPI.disconnect(p.id)
     accounts.value = accounts.value.filter((a) => a.provider !== p.id)
     recommendPlaylists.value = { ...recommendPlaylists.value, [p.id]: [] }
+    // 断开后别让账号/歌单缓存继续宣称「已连接」
+    invalidateAccountCaches()
     await loadAccounts()
   } catch (e) {
     platformError.value = fail('断开账号', e)
@@ -1255,6 +1294,12 @@ async function disconnectPlatform(p) {
 
 // 状态控制
 const currentMode = ref('discover') // 'discover' | 'chartDetail' | 'playlistDetail' | 'search'
+const listColumns = ref(normalizeColumns(loadPref(LIST_COLUMNS_KEY, '0')))
+const playlistGridClass = computed(() => listColumnClass(listColumns.value, 'grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5'))
+const chartGridClass = computed(() => listColumnClass(listColumns.value, 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3'))
+const stopListColumnsWatch = onPrefChange(LIST_COLUMNS_KEY, (value) => {
+  listColumns.value = normalizeColumns(value)
+})
 /**
  * 加载榜单 / 歌单 / 分享链接 / 推荐失败时的一句原因（显示在发现页，替代原来的 alert）。
  * 声明放在这里而不是文件末尾 —— 多个加载函数都要写它，位置靠前避免 TDZ 风险。
@@ -1447,6 +1492,43 @@ const currentPlaylistRef = ref(null)
 // 状态标记
 const isLoadingCharts = ref(false)
 const isLoadingPlaylists = ref(false)
+// 三个分页器各自记忆页容量；列表分页只切展示片，不改动完整曲目队列。
+const chartPage = ref(1)
+const chartPageSize = ref(normalizePageSize(loadPref('chart_page_size', 24)))
+const playlistPage = ref(1)
+const playlistPageSize = ref(Math.min(48, normalizePageSize(loadPref('playlist_page_size', 24))))
+const playlistTotal = ref(0)
+const detailPage = ref(1)
+const detailPageSize = ref(normalizePageSize(loadPref('detail_page_size', 24)))
+const detailListEl = ref(null)
+let playlistRequestId = 0
+const visibleToplists = computed(() => displayPage(toplists.value, chartPage.value, chartPageSize.value))
+const visibleDetailSongs = computed(() => currentMode.value === 'search' ? activeSongList.value : displayPage(activeSongList.value, detailPage.value, detailPageSize.value))
+function changeDisplayPage(kind, page) {
+  if (kind === 'chart') chartPage.value = clampPage(page, toplists.value.length, chartPageSize.value)
+  else if (kind === 'detail') {
+    detailPage.value = clampPage(page, activeSongList.value.length, detailPageSize.value)
+    if (detailListEl.value) detailListEl.value.scrollTop = 0
+  } else {
+    playlistPage.value = Math.max(1, page)
+    loadPlaylists(selectedCategory.value, selectedChartPlatform.value)
+    if (scrollEl.value) scrollEl.value.scrollTop = 0
+  }
+}
+function changeDisplaySize(kind, size) {
+  if (kind === 'chart') {
+    chartPageSize.value = size
+    chartPage.value = clampPage(chartPage.value, toplists.value.length, size)
+  } else if (kind === 'detail') {
+    detailPageSize.value = size
+    detailPage.value = clampPage(detailPage.value, activeSongList.value.length, size)
+  } else {
+    playlistPageSize.value = size
+    playlistPage.value = 1
+    loadPlaylists(selectedCategory.value, selectedChartPlatform.value)
+  }
+  savePref(`${kind}_page_size`, size)
+}
 const isLoadingDetail = ref(false)
 const isSearching = ref(false)
 
@@ -1473,6 +1555,12 @@ const scrollEl = ref(null) // 内容区滚动容器，触底判定挂在它身�
 // （pager.hasMore 仍是 true），收尾 endStream() 后才恢复经典的触底翻页。
 const streamState = ref({ active: false, platforms: [], arrived: {}, timeouts: [] })
 const searchAbort = ref(null)
+// 单曲下载前的音质选择（用户取消掉的只是「下载页面的默认音质设置」，不是这里）。
+// 2026-11-04 修：这两个 ref 在「搜索逐平台流式返回」那次重构里被连带删掉，
+// 但 downloadSingleSong / 模板里的 DownloadQualityModal 仍在使用 —— 点「下载歌曲到 NAS」
+// 会抛 ReferenceError: qualityTargetSong is not defined，界面毫无反应（音质弹窗永不出现）。
+const showQualityModal = ref(false)
+const qualityTargetSong = ref(null)
 const searchStatusText = computed(() => {
   const st = streamState.value
   if (!st.active) return ''
@@ -1572,18 +1660,27 @@ watch(sortedCategories, () => nextTick(measureCategories))
 let catResizeHandler = null
 
 async function loadPlaylistCategories(source = selectedChartPlatform.value) {
-  categoriesLoading.value = true
+  const key = detailCache.cacheKey('categories', source, 'list')
+  const hit = !!(key && detailCache.read(key))
+  // 缓存命中就不显示「分类加载中」的占位 —— 筛选条已经在那儿了，再闪一下像在重拉
+  categoriesLoading.value = !hit
   try {
-    const res = await ChartsAPI.playlistCategories(source)
-    const list = res?.code === 200 ? (res.data?.categories || []) : []
-    playlistCategories.value = list
-    // 当前选中的分类不在新平台里就回到第一个（通常是「全部」）
-    if (list.length && !list.some(c => c.id === selectedCategory.value)) {
-      selectedCategory.value = list[0].id
-    }
-    if (!list.length) {
-      playlistCategories.value = []
-    }
+    await swr(
+      key,
+      'categories',
+      async () => {
+        const res = await ChartsAPI.playlistCategories(source)
+        // 平台不支持分类时返回空数组，这也是有效答案（缓存住，别每次重问）
+        return res?.code === 200 ? (res.data?.categories || []) : undefined
+      },
+      (list) => {
+        playlistCategories.value = list
+        // 当前选中的分类不在新平台里就回到第一个（通常是「全部」）
+        if (list.length && !list.some(c => c.id === selectedCategory.value)) {
+          selectedCategory.value = list[0].id
+        }
+      },
+    )
   } catch (_) {
     // 拉不到分类不阻塞页面，只是不显示筛选条
     playlistCategories.value = []
@@ -1730,8 +1827,8 @@ const platformsWithMusicDL = computed(() => {
 
 /** 读一次配置，知道外挂音源开着没、开了哪几个平台。 */
 async function loadMusicDLPlatforms() {
-  try {
-    const cfg = await ConfigAPI.get()
+  // `/api/config` 每次 mount 读一遍纯属浪费（App.vue 也在读同一份），缓存 5 分钟
+  const apply = (cfg) => {
     const c = cfg?.config || cfg?.data || cfg || {}
     if (!c.musicdl_enabled) {
       musicdlPlatforms.value = []
@@ -1740,6 +1837,14 @@ async function loadMusicDLPlatforms() {
     musicdlPlatforms.value = Array.isArray(c.musicdl_sources) && c.musicdl_sources.length
       ? c.musicdl_sources
       : ['mg'] // 后端空名单 = 默认（只剩咪咕：千千/B站实测不可用）
+  }
+  try {
+    await swr(
+      detailCache.cacheKey('config', '', 'app'),
+      'accounts',
+      async () => (await ConfigAPI.get()) || undefined,
+      apply,
+    )
   } catch (_) {
     musicdlPlatforms.value = [] // 读不到就当没开（宁可少几个按钮，不要给点不通的）
   }
@@ -1749,6 +1854,8 @@ async function switchChartPlatform(pid) {
   // 值没变（点了同一个）也照样重拉一遍，当「刷新」用
   setOfficialPlatform(pid)
   toplists.value = []
+  chartPage.value = 1
+  playlistPage.value = 1
   playlists.value = []
   // 榜单段与发现段（歌单）都要跟着换 —— 两边的数据源都按平台分。
   loadToplists(pid)
@@ -1832,48 +1939,64 @@ function formatPlayCount(num) {
 async function loadToplists(platform = selectedChartPlatform.value) {
   const cacheKey = `toplists:${platform}`
   const cached = memGet(cacheKey)
-  if (cached) {
-    toplists.value = cached
-    return
+  // 命中就先上屏；TTL 内直接返回，过期了再往下走后台刷新（不清空列表，不闪）
+  if (cached && Array.isArray(cached.items)) {
+    toplists.value = cached.items
+    if (Date.now() - (cached.at || 0) < LIST_TTL) return
+  } else {
+    isLoadingCharts.value = true
+    toplists.value = []
   }
-
-  isLoadingCharts.value = true
-  toplists.value = []
   try {
-    const res = await ChartsAPI.toplists(platform)
+    // 发现段与榜单段各挂一份 SearchView，两边会并发拉同一份榜单列表 —— 合并成一次
+    const res = await detailCache.dedupe(cacheKey, () => ChartsAPI.toplists(platform))
     if (res.code === 200) {
       toplists.value = res.data || []
-      if (toplists.value.length) memSet(cacheKey, toplists.value)
+      if (toplists.value.length) memSet(cacheKey, { items: toplists.value, at: Date.now() })
     }
   } catch (e) {
     console.warn('Failed to load toplists:', e)
-    toplists.value = []
+    // 刷新失败时留着旧列表，别把已经看得见的榜单清空
+    if (!Array.isArray(toplists.value)) toplists.value = []
   } finally {
     isLoadingCharts.value = false
   }
 }
 
-async function loadPlaylists(cat = selectedCategory.value, platform = selectedChartPlatform.value) {
-  const cacheKey = `playlists:${platform}:${cat}`
+async function loadPlaylists(cat = selectedCategory.value, platform = selectedChartPlatform.value, page = playlistPage.value, size = playlistPageSize.value) {
+  const cacheKey = `playlists:${platform}:${cat}:${page}:${size}`
+  const requestId = ++playlistRequestId
   const cached = memGet(cacheKey)
-  if (cached) {
-    playlists.value = cached
-    return
+  // 命中就先上屏；TTL 内直接返回，过期了再后台刷新（网格与分页条都不动，不闪）
+  if (cached && Array.isArray(cached.items)) {
+    playlists.value = cached.items
+    playlistTotal.value = cached.total
+    isLoadingPlaylists.value = false
+    if (Date.now() - (cached.at || 0) < LIST_TTL) return
+  } else {
+    isLoadingPlaylists.value = true
+    playlists.value = []
   }
-
-  isLoadingPlaylists.value = true
-  playlists.value = []
   try {
-    const res = await ChartsAPI.playlists(cat, 1, 24, platform)
+    // 同上：并发两份 SearchView 时只发一次列表请求
+    const res = await detailCache.dedupe(cacheKey, () => ChartsAPI.playlists(cat, page, size, platform))
+    if (requestId !== playlistRequestId) return
     if (res.code === 200) {
       playlists.value = res.data || []
-      if (playlists.value.length) memSet(cacheKey, playlists.value)
+      // 部分平台不给 total：满页时至少露出下一页；末页按已知的最大下标计数。
+      playlistTotal.value = Number(res.total) > 0
+        ? Number(res.total)
+        : (page - 1) * size + playlists.value.length + (playlists.value.length >= size ? 1 : 0)
+      if (playlists.value.length) memSet(cacheKey, { items: playlists.value, total: playlistTotal.value, at: Date.now() })
+    } else {
+      playlistTotal.value = 0
     }
   } catch (e) {
     console.warn('Failed to load playlists:', e)
-    playlists.value = []
+    // 刷新失败时留着旧网格，别清空
+    if (requestId === playlistRequestId && !Array.isArray(playlists.value)) { playlists.value = []; playlistTotal.value = 0 }
   } finally {
-    isLoadingPlaylists.value = false
+    if (requestId === playlistRequestId) isLoadingPlaylists.value = false
   }
 }
 
@@ -1882,6 +2005,7 @@ function selectPlaylistCategory(cat) {
   savePref('playlist_category', cat)
   // 记一次使用 —— 「常用优先」排序靠它（见 sortedCategories）
   bumpCategoryUsage(cat)
+  playlistPage.value = 1
   loadPlaylists(cat, selectedChartPlatform.value)
 }
 
@@ -1905,8 +2029,134 @@ const offChartNav = onNavigate((view, payload) => {
 })
 onUnmounted(offChartNav)
 
+// ── 详情页装载（歌单 / 榜单 / 分享链接共用的唯一入口）────────────────────────
+//
+// 用户口径：「每次退出再进来都要重新拉一遍」。
+// 三个入口原先是各写一遍「activeSongList = [] → await 在线接口 → 再查已下载 →
+// 再查订阅」，所以一次重进 = 1 次在线请求 + 1 次已下载 POST + 1 次订阅 GET，
+// 而且列表必然先闪一下空白。这里统一收口成「缓存优先 + TTL 内不发请求 + 过期后台刷新」。
+
+const SUB_REFRESH_TTL = 60_000
+let subRefreshAt = 0
+let subRefreshKey = ''
+/** 当前详情页对应的缓存 key（订阅状态变化后要写回这条，见 refreshSubscription） */
+let currentDetailKey = ''
+
+/**
+ * 查订阅状态，但同一个歌单 60 秒内只问一次。
+ * 离开详情时 `watch(currentMode)` 会把 `subscription` 清空，所以**缓存命中的进入路径**
+ * 先用 detailCache 里存下的那份顶上（见 loadDetail），不会闪出「未订阅」。
+ */
+async function refreshSubscriptionThrottled(force = false) {
+  const key = subKey.value
+  if (!key) return
+  const now = Date.now()
+  if (!force && key === subRefreshKey && now - subRefreshAt < SUB_REFRESH_TTL) return
+  subRefreshKey = key
+  subRefreshAt = now
+  await refreshSubscription()
+}
+
+/**
+ * 已下载态（「本地」那半数据）：超过 TTL 才再 POST 一次 /api/download/check。
+ * `downloadManager` 里那张 downloadedMap 常驻（组件重建也不丢），所以重进详情
+ * 不必再问一遍 —— 68 首的歌单省掉的是一次很大的 payload。
+ */
+function syncDownloads(key, songs) {
+  if (!Array.isArray(songs) || !songs.length) return
+  if (key && detailCache.downloadFresh(key)) return
+  checkSongsDownloaded(songs)
+  if (key) detailCache.markDownloadChecked(key)
+}
+
+/**
+ * 详情页数据的唯一装载入口。
+ *
+ * @param {string}   key         detailCache 的 key（空串 = 不缓存，退化成老行为）
+ * @param {object}   meta        进入时先挂上的标题/封面（命中缓存时会被缓存里的覆盖）
+ * @param {Function} fetchSongs  () => Promise<res>，各入口自己的取数接口
+ * @param {Function} applyResult (res) => ({ songs, meta })，各入口特有的额外赋值也在这里做
+ * @param {Function} onCacheHit  (entry) => void，命中缓存时补做各入口特有的还原
+ * @param {string}   apiMsg      apiError 的兜底文案（'加载失败' / '解析失败'）
+ * @param {string}   logTag      操作日志标题
+ * @param {Function} logDetail   (res) => string，失败日志里附带的细节
+ */
+async function loadDetail({ key, meta, fetchSongs, applyResult, onCacheHit, apiMsg = '加载失败', logTag = '加载详情', logDetail }) {
+  const cached = key ? detailCache.read(key) : undefined
+  const hasCache = !!(cached && Array.isArray(cached.songs) && cached.songs.length)
+  currentDetailKey = key || ''
+
+  if (meta) currentDetailMeta.value = meta
+  loadError.value = ''
+
+  if (hasCache) {
+    // 缓存直接上屏：**不清空列表** → 不闪；分页停在上次看的那一页
+    activeSongList.value = cached.songs
+    if (cached.meta) currentDetailMeta.value = cached.meta
+    detailPage.value = clampPage(cached.page, cached.songs.length, detailPageSize.value)
+    isLoadingDetail.value = false
+    subscription.value = cached.subscription || null
+    if (onCacheHit) onCacheHit(cached)
+    syncDownloads(key, cached.songs)
+    // 还在 TTL 内 → 一个请求都不发（这才是「重进不再拉一遍」的修复点）
+    if (detailCache.isFresh(key)) return
+  } else {
+    isLoadingDetail.value = true
+    activeSongList.value = []
+  }
+
+  try {
+    const res = await fetchSongs()
+    const bad = apiError(res, apiMsg)
+    if (bad) {
+      if (hasCache) {
+        // 后台刷新失败：继续用缓存，别把用户从详情页踢回发现页
+        notifyFail(bad)
+        logWarn(logTag, bad, logDetail ? logDetail(res) : '')
+        return
+      }
+      currentMode.value = 'discover'
+      loadError.value = bad
+      logError(logTag, bad, logDetail ? logDetail(res) : '')
+      return
+    }
+    const applied = (await applyResult(res)) || {}
+    const songs = Array.isArray(applied.songs) ? applied.songs : []
+    if (!songs.length && hasCache) {
+      // 刷新回来却是空的（平台偶发空响应 / 临时风控）：保留缓存内容，别把列表清空
+      activeSongList.value = cached.songs
+      logWarn(logTag, '刷新返回 0 首，继续使用缓存')
+      return
+    }
+    activeSongList.value = songs
+    if (applied.meta) currentDetailMeta.value = applied.meta
+    if (key && songs.length) {
+      detailCache.write(key, {
+        songs,
+        meta: currentDetailMeta.value || null,
+        page: detailPage.value,
+        downloadAt: 0,
+      })
+    }
+    syncDownloads(key, songs)
+    await refreshSubscriptionThrottled(true)
+    // 订阅结果一起存下来：下次命中缓存先用它顶上，不至于闪「未订阅」
+    if (key && songs.length) detailCache.write(key, { ...(detailCache.read(key) || {}), subscription: subscription.value || null })
+  } catch (e) {
+    if (hasCache) {
+      notifyFail(fail(logTag, e))
+      return
+    }
+    currentMode.value = 'discover'
+    loadError.value = fail(logTag, e)
+  } finally {
+    if (!hasCache) isLoadingDetail.value = false
+  }
+}
+
 async function openChartDetail(chart) {
   currentMode.value = 'chartDetail'
+  detailPage.value = 1
   currentDetailMeta.value = {
     title: chart.name,
     desc: chart.update_frequency ? `更新频率：${chart.update_frequency}` : '官方排行榜单',
@@ -1926,31 +2176,20 @@ async function openChartDetail(chart) {
     link: '',
     name: chart.name || '',
   }
-  isLoadingDetail.value = true
-  activeSongList.value = []
-  loadError.value = ''
-  try {
-    const res = await ChartsAPI.chartDetail(chart.id, chart.source || selectedChartPlatform.value, chart.name)
-    const bad = apiError(res, '加载失败')
-    if (bad) {
-      currentMode.value = 'discover'
-      loadError.value = bad
-      logError('加载榜单曲目', bad, `code=${res?.code} message=${res?.message} chart=${chart.id}`)
-      return
-    }
-    activeSongList.value = res.data?.songs || []
-    checkSongsDownloaded(activeSongList.value)
-    await refreshSubscription()
-  } catch (e) {
-    currentMode.value = 'discover'
-    loadError.value = fail('加载榜单曲目', e)
-  } finally {
-    isLoadingDetail.value = false
-  }
+  await loadDetail({
+    key: detailCache.cacheKey('chart', chart.source || selectedChartPlatform.value, chart.id),
+    meta: currentDetailMeta.value,
+    apiMsg: '加载失败',
+    logTag: '加载榜单曲目',
+    logDetail: (res) => `code=${res?.code} message=${res?.message} chart=${chart.id}`,
+    fetchSongs: () => ChartsAPI.chartDetail(chart.id, chart.source || selectedChartPlatform.value, chart.name),
+    applyResult: (res) => ({ songs: res.data?.songs || [] }),
+  })
 }
 
 async function openPlaylistDetail(pl) {
   currentMode.value = 'playlistDetail'
+  detailPage.value = 1
   currentDetailMeta.value = {
     title: pl.title,
     desc: pl.creator ? `创建者：${pl.creator}` : (pl.description || '精选歌单'),
@@ -1963,27 +2202,15 @@ async function openPlaylistDetail(pl) {
     link: '',
     name: pl.title || '',
   }
-  isLoadingDetail.value = true
-  activeSongList.value = []
-  loadError.value = ''
-  try {
-    const res = await ChartsAPI.playlistDetail(pl.id, pl.source || selectedChartPlatform.value, pl.title)
-    const bad = apiError(res, '加载失败')
-    if (bad) {
-      currentMode.value = 'discover'
-      loadError.value = bad
-      logError('加载歌单曲目', bad, `code=${res?.code} message=${res?.message} playlist=${pl.id}`)
-      return
-    }
-    activeSongList.value = res.data?.songs || []
-    checkSongsDownloaded(activeSongList.value)
-    await refreshSubscription()
-  } catch (e) {
-    currentMode.value = 'discover'
-    loadError.value = fail('加载歌单曲目', e)
-  } finally {
-    isLoadingDetail.value = false
-  }
+  await loadDetail({
+    key: detailCache.cacheKey('playlist', pl.source || selectedChartPlatform.value, pl.id),
+    meta: currentDetailMeta.value,
+    apiMsg: '加载失败',
+    logTag: '加载歌单曲目',
+    logDetail: (res) => `code=${res?.code} message=${res?.message} playlist=${pl.id}`,
+    fetchSongs: () => ChartsAPI.playlistDetail(pl.id, pl.source || selectedChartPlatform.value, pl.title),
+    applyResult: (res) => ({ songs: res.data?.songs || [] }),
+  })
 }
 
 /**
@@ -1994,46 +2221,41 @@ async function openPlaylistDetail(pl) {
  */
 async function openPlaylistByLink(link) {
   currentMode.value = 'playlistDetail'
+  detailPage.value = 1
   currentDetailMeta.value = { title: '正在解析歌单链接…', desc: link, cover: '' }
   currentPlaylistRef.value = { id: '', source: '', link, name: '' }
-  isLoadingDetail.value = true
-  activeSongList.value = []
-  loadError.value = ''
-  try {
-    const res = await ChartsAPI.playlistDetailByUrl(link)
-    const bad = apiError(res, '解析失败')
-    if (bad) {
-      currentMode.value = 'discover'
-      loadError.value = bad
-      logError('解析歌单链接', bad, `code=${res?.code} message=${res?.message} link=${link}`)
-      return
-    }
-    const d = res.data || {}
-    activeSongList.value = d.songs || []
-    currentDetailMeta.value = {
-      title: d.name || d.title || '歌单',
-      desc: `来自分享链接 · ${activeSongList.value.length} 首`,
-      cover: d.cover || '',
-    }
-    currentPlaylistRef.value = {
-      id: '',
-      source: activeSongList.value[0]?.source || '',
-      link,
-      name: currentDetailMeta.value.title,
-    }
-    query.value = ''
-    checkSongsDownloaded(activeSongList.value)
-    await refreshSubscription()
-    if (!activeSongList.value.length) {
-      // 「解析成功但一首都没有」多半不是出错，而是歌单本身为空或需要登录 —— 说清楚即可
-      loadError.value = '这个歌单没有解析到曲目 —— 可能是空歌单，或它需要登录才能查看。'
-      logWarn('解析歌单链接', '解析到 0 首曲目', link)
-    }
-  } catch (e) {
-    currentMode.value = 'discover'
-    loadError.value = fail('解析歌单链接', e)
-  } finally {
-    isLoadingDetail.value = false
+  await loadDetail({
+    // 链接可能很长且带时效参数，原串直接当 key 即可（只在内存里）
+    key: detailCache.cacheKey('link', '', link),
+    meta: currentDetailMeta.value,
+    apiMsg: '解析失败',
+    logTag: '解析歌单链接',
+    logDetail: (res) => `code=${res?.code} message=${res?.message} link=${link}`,
+    fetchSongs: () => ChartsAPI.playlistDetailByUrl(link),
+    onCacheHit: (entry) => {
+      // 命中缓存：currentPlaylistRef 在函数开头被置成空壳了，按缓存里的曲目还原
+      const songs = entry.songs || []
+      currentPlaylistRef.value = {
+        id: '',
+        source: songs[0]?.source || '',
+        link,
+        name: entry.meta?.title || '歌单',
+      }
+      query.value = ''
+    },
+    applyResult: (res) => {
+      const d = res.data || {}
+      const songs = d.songs || []
+      const title = d.name || d.title || '歌单'
+      currentPlaylistRef.value = { id: '', source: songs[0]?.source || '', link, name: title }
+      query.value = ''
+      return { songs, meta: { title, desc: `来自分享链接 · ${songs.length} 首`, cover: d.cover || '' } }
+    },
+  })
+  if (!activeSongList.value.length) {
+    // 「解析成功但一首都没有」多半不是出错，而是歌单本身为空或需要登录 —— 说清楚即可
+    loadError.value = '这个歌单没有解析到曲目 —— 可能是空歌单，或它需要登录才能查看。'
+    logWarn('解析歌单链接', '解析到 0 首曲目', link)
   }
 }
 
@@ -2051,6 +2273,7 @@ async function handleSearch() {
   }
 
   currentMode.value = 'search'
+  detailPage.value = 1
   currentDetailMeta.value = {
     title: `搜索：“${q}”`,
     desc: '跨平台聚合检索',
@@ -2309,40 +2532,25 @@ function playAllSongs() {
 }
 
 // ── 下载与状态同步 ──
-const toastMessage = ref('')
-let toastTimer = null
-
-// 单曲下载前的音质选择（用户取消掉的只是「下载页面的默认音质设置」，不是这里）
-const showQualityModal = ref(false)
-const qualityTargetSong = ref(null)
-
-function showToast(msg) {
-  toastMessage.value = msg
-  if (toastTimer) clearTimeout(toastTimer)
-  toastTimer = setTimeout(() => {
-    toastMessage.value = ''
-  }, 2500)
-}
-
 function checkSongsDownloaded(songs) {
   downloadManager.checkSongsDownloaded(songs)
 }
 
 function downloadSingleSong(song) {
-  if (!props.activeSource?.id && song.source !== 'nas') {
+  if (!hasActiveSource.value && song.source !== 'nas') {
     // 页面上方本来就有「还没有可用的音源 → 导入音源」提示条，这里只需说明这次点击为什么没生效
-    showToast('下载需要先导入音源 —— 点上方「导入音源」')
+    notifyFail('下载需要先导入音源 —— 点上方「导入音源」')
     return
   }
   const blocked = downloadManager.enqueueBlockReason.value
   if (blocked) {
-    showToast(`后台下载当前不可用：${blocked}`)
+    notifyFail(`后台下载当前不可用：${blocked}`)
     return
   }
   // NAS 本地曲目不涉及在线音质，直接入队
   if (song.source === 'nas') {
     downloadManager.addSong(song, sourceIdFor(song.source), false)
-    showToast(`已将《${song.name}》加入后台下载队列`)
+    notifyOk(`已将《${song.name}》加入后台下载队列`)
     return
   }
   // 在线曲目：先让用户确认音质（档位来自官方协议的真实查询结果）
@@ -2357,13 +2565,13 @@ function onQualityConfirm({ quality, remember }) {
   if (!song) return
   const blocked = downloadManager.enqueueBlockReason.value
   if (blocked) {
-    showToast(`后台下载当前不可用：${blocked}`)
+    notifyFail(`后台下载当前不可用：${blocked}`)
     return
   }
   if (remember) downloadManager.setAllQuality(quality)
   downloadManager.addSong(song, sourceIdFor(song.source), false, quality)
   const tip = isHighestQuality(quality) ? '' : ` · ${qualityLabel(quality)}`
-  showToast(`已将《${song.name}》加入后台下载队列${tip}`)
+  notifyOk(`已将《${song.name}》加入后台下载队列${tip}`)
 }
 
 function batchDownloadAll() {
@@ -2371,18 +2579,18 @@ function batchDownloadAll() {
   if (!list.length) return
 
   if (!hasActiveSource.value && list.some(s => s.source !== 'nas')) {
-    showToast('批量下载需要先导入音源 —— 点上方「导入音源」')
+    notifyFail('批量下载需要先导入音源 —— 点上方「导入音源」')
     return
   }
 
   const blocked = downloadManager.enqueueBlockReason.value
   if (blocked) {
-    showToast(`后台下载当前不可用：${blocked}`)
+    notifyFail(`后台下载当前不可用：${blocked}`)
     return
   }
   // 批量：每首按自己的平台挑源（池有序 → 命中优先级最高的那个）
   downloadManager.addBatch(list, poolIds.value[0] || '', false, (song) => sourceIdFor(song.source))
-  showToast(`已添加 ${list.length} 首歌曲至后台下载队列`)
+  notifyOk(`已添加 ${list.length} 首歌曲至后台下载队列`)
 }
 
 onMounted(async () => {
@@ -2408,6 +2616,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  stopListColumnsWatch()
   if (catResizeHandler) window.removeEventListener('resize', catResizeHandler)
   scrollEl.value?.removeEventListener('scroll', maybeLoadMore)
   stopQrPolling()
@@ -2492,6 +2701,8 @@ watch(currentMode, (m) => {
     currentPlaylistRef.value = null
     subscription.value = null
     subNotice.value = ''
+    // 已经离开详情：别再拿新状态去写回上一张歌单的缓存条目
+    currentDetailKey = ''
   }
 })
 
@@ -2502,6 +2713,8 @@ async function refreshSubscription() {
   try {
     subscription.value = await findSubscription(subKey.value)
   } catch (_) { /* 忽略：按未订阅展示 */ }
+  // 订阅/取消订阅后这里拿到的才是真值 —— 写回缓存，下次进同一歌单直接显示对的状态
+  if (currentDetailKey) detailCache.markSubscription(currentDetailKey, subscription.value)
 }
 
 /**
@@ -2668,3 +2881,41 @@ async function createMonitorFromList() {
 }
 
 </script>
+
+<style scoped>
+/* 详情页分页：压缩触屏按钮与行距，列表继续占据剩余空间，
+   底部导航/播放条的避让统一交给容器的 .ys-bottom-clear*（见下方）。 */
+.ys-detail-pager { padding-top: 0.75rem; }
+@media (hover: none) and (pointer: coarse) {
+  .ys-detail-pager { gap: 0.5rem 0.75rem; padding-top: 0.75rem; }
+  .ys-detail-pager :deep(.ys-page-button) { min-width: 1.75rem; height: 1.75rem; }
+}
+
+/* ── 底部留白：给固定播放条（`PlayerBar` 是 `fixed bottom-0`）让位 ─────────────
+ *
+ * 用户口径：「Discover playlist 底部空白高度不对」。
+ * 根因：内容末端用 `style.css` 的 `.pb-dock`（触屏 `calc(5rem + var(--dock-h))`）
+ * 与 `pb-28 / sm:pb-24` 写死留白，但播放条**只在有歌时才渲染**
+ * （`PlayerBar.vue` 的 `hasPlayerBar = !collapsed && !!currentSong`）。
+ * 实测 1440×900 无播放时，分页条下方到卡片底部是整整 96px 纯空白；真机触屏
+ * 是 168px（后已收紧到 136px）而播放条实际只占 ≈128px —— 多出来的那几十 px
+ * 就是用户看到的「空白高度不对」。
+ *
+ * 改法：不写死高度，读 `--pb-clear`（由播放条按「自己现在到底占多少」维护，
+ * 没在播歌时置 0）。**fallback 等于当前的全局取值**（触屏 `5rem + dock`、
+ * 桌面 `pb-28/sm:pb-24`），所以在播放条接上这个变量之前，视觉与改动前完全一致，
+ * 也可随时回退。谁改了 `style.css` 的 `.pb-dock`，这三行 fallback 要同步改。
+ */
+.ys-bottom-clear { padding-bottom: var(--pb-clear, 7rem); }
+.ys-bottom-clear-tight { padding-bottom: var(--pb-clear, 1rem); }
+@media (min-width: 640px) {
+  .ys-bottom-clear { padding-bottom: var(--pb-clear, 6rem); }
+  .ys-bottom-clear-tight { padding-bottom: var(--pb-clear, 6rem); }
+}
+@media (hover: none) and (pointer: coarse) {
+  /* 与 style.css 里 `.pb-dock`（当前是 calc(5rem + var(--dock-h))）保持一致：
+     这两处谁改了数值，另一处必须同步，否则发现页会比别的视图多留一块空白。 */
+  .ys-bottom-clear,
+  .ys-bottom-clear-tight { padding-bottom: var(--pb-clear, calc(5rem + var(--dock-h))); }
+}
+</style>

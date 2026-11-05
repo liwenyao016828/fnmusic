@@ -89,7 +89,7 @@ async function streamNDJSON(path, payload = {}, opts = {}) {
       let msg = `HTTP ${res.status}`
       try {
         const body = await res.json()
-        if (body && body.error) msg = body.error
+        if (body && (body.error || body.msg || body.message)) msg = body.error || body.msg || body.message
       } catch (e) {
         /* 不是 JSON 就用状态码 */
       }
@@ -580,9 +580,14 @@ export const LogsAPI = {
    * 界面上的错误提示只留一句人话（见 services/userMsg.js），完整信息
    * （接口路径、堆栈、原始 message）通过这里进运行日志，用户在「日志」页就能查到，
    * 不必去开浏览器控制台。
+   *
+   * `at` 是浏览器侧的绝对时刻（RFC3339，带本地 offset，见 services/appLog.js 的
+   * stampISO）。后端只在它与自己时钟相差超过 1 分钟时才采用（见 applog.AddFrom）——
+   * 正常情况服务器时间才是权威，但反过来的场景真会发生：用户在一台时区设错的
+   * 机器上操作，浏览器时间与 NAS 差 8 小时，不看服务器时钟反而更接近用户以为的时刻。
    */
-  report: (level, message, source = 'frontend') =>
-    api.post('/logs', { source, level, message }, { timeout: 10000 }).then(res => res.data),
+  report: (level, message, at, source = 'frontend') =>
+    api.post('/logs', { source, level, message, at }, { timeout: 10000 }).then(res => res.data),
   /**
    * 一键导出运行日志（zip：日志 + 环境信息 + **脱敏后**的配置）。
    *

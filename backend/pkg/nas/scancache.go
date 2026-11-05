@@ -125,6 +125,23 @@ func loadScanCache(dir string) *scanCacheEntry {
 	return &cp
 }
 
+// dropMissingSongs 丢掉缓存里「磁盘上已经不存在」的行（幽灵行）。
+//
+// 缓存 TTL 72 小时，期间文件被谁删了缓存都不会知道（下载审计清理、用户在
+// 文件管理里删歌、外接盘拔掉……）。2026-11-04 用户报「本地曲库出现不该有的歌」：
+// 测试期下载的歌删掉后，scan_cache.json 里原样挂满 72 小时，点开就是 404。
+// 命中缓存时逐行 stat 一遍（本地 stat 很便宜，最坏单目录 5000 行），
+// 只保留真实存在的文件；整份都是幽灵行时由调用方作废缓存重扫。
+func dropMissingSongs(songs []LocalSong) []LocalSong {
+	out := make([]LocalSong, 0, len(songs))
+	for _, s := range songs {
+		if info, err := os.Stat(s.Path); err == nil && !info.IsDir() {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 // saveScanCache 写入目录扫描结果（异步落盘，失败静默——缓存丢了下次重扫即可）。
 //
 // st 是本次枚举的对账信息：只取「是否被上限截断」与告警文案一起存，

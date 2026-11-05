@@ -318,7 +318,7 @@
       if (mine[i].parentNode) mine[i].parentNode.removeChild(mine[i]);
     }
 
-    if (!menuItemAllowed() || !menuGUID) return;
+    if (!featOn('download') || !menuItemAllowed() || !menuGUID) return;
     var rec = index[menuGUID];
     // 明确知道是本地曲目 → 不插。认不出来（没旁听到接口）→ 插，让后端把关：
     // 后端只认自己发出去的 id，认不出会明确说「未登记」，不会误下别人的歌。
@@ -366,9 +366,49 @@
   var host = null, root = null, panel = null, toastEl = null, toastTimer = 0;
   var info = null;          // /api/info 的结果（版本、曲率地址）
   var infoState = 'idle';   // idle | ok | fail
+  // feats 是 /api/info 的 panel_features（面板四个功能块的显隐）。
+  // null = 还没读到（info 没回来，或老后端不给这个字段）→ 全按开算，
+  // 面板行为与没有这组开关时完全一致。
+  var feats = null;
   // savingQuality 防止连点两次档位胶囊发两条互相覆盖的写入。
   var savingQuality = false;
   var open = false;
+
+  // featOnWith 是显隐判定的**纯函数**版：给模块内 featOn 用，也给测试钩子
+  // 用（钩子只导出不碰模块状态的函数，见文件尾）。
+  //
+  // 「缺信息 = 开」是刻意的：老后端不给 panel_features、info 还没回来、
+  // 或 map 里缺某个键，都不能让功能凭空消失 —— 显隐开关只能收紧、不能
+  // 因为一次没拿到数据就把面板砍空。
+  function featOnWith(map, k) {
+    return !map || map[k] !== false;
+  }
+
+  function featOn(k) {
+    return featOnWith(feats, k);
+  }
+
+  // applyFeatures 按 feats 显隐面板各节。feats 为 null 时只做恢复（全显示）。
+  //
+  // 下载入口特殊：它不在面板里，在官方行菜单上 —— 所以「关掉」除了面板
+  // 层面的判断，还要把已经插出去的 .qulv-dl-item 立刻摘掉（下一次菜单
+  // 打开时 decorate() 会先清再判，这里管的是「正开着的那个菜单」）。
+  function applyFeatures() {
+    if (!panel) return;
+    var q = panel.__q;
+    if (q.secQuality) q.secQuality.hidden = !featOn('quality');
+    if (q.secJump) q.secJump.hidden = !featOn('jump');
+    if (q.secAssistant) q.secAssistant.hidden = !featOn('assistant');
+    var any = featOn('quality') || featOn('jump') || featOn('assistant') || featOn('download');
+    // 全关：留 header/footer + 一句提示，不给一个空壳面板。
+    if (q.secOff) q.secOff.hidden = any;
+    if (!featOn('download')) {
+      var mine = document.querySelectorAll('.' + MARK);
+      for (var i = 0; i < mine.length; i++) {
+        if (mine[i].parentNode) mine[i].parentNode.removeChild(mine[i]);
+      }
+    }
+  }
 
   function css() {
     return '' +
@@ -595,6 +635,14 @@
       '（需先在曲率「设置 → 账号连接 → AI 大模型」里配好）。'));
     p.appendChild(s4);
 
+    // ── 全关提示 ──
+    // 四个功能块（音质/跳转/助手/下载）全被关掉时，面板只剩 header/footer
+    // 会像坏了一样 —— 留一句人话。默认 hidden，applyFeatures 按需放开。
+    var soff = el('div', 'sec');
+    soff.hidden = true;
+    soff.appendChild(el('p', 'hint', '功能已关闭 —— 在「系统 → 飞牛音乐 AI 面板」里可以重新打开。'));
+    p.appendChild(soff);
+
     // ── 状态 ──
     var ft = el('div', 'ft');
     var dot = el('span', 'dot');
@@ -606,7 +654,8 @@
     p.__q = {
       ver: ver, go: go,
       dot: dot, state: state, chips: chips, chipBtns: {},
-      cmdin: cmdin, cmdsend: cmdsend, card: card
+      cmdin: cmdin, cmdsend: cmdsend, card: card,
+      secQuality: s1b, secJump: s2, secAssistant: s4, secOff: soff
     };
     return p;
   }
@@ -765,6 +814,9 @@
     if (!ensureHost()) return;
     open = true;
     place();
+    // 先按上一次拿到的功能开关显隐一次（没拿到过 = 全开），
+    // 再异步取新 info 修正 —— 别让刚关掉的功能在打开的一瞬闪出来。
+    applyFeatures();
     refreshInfo();
     refreshQuality();
     panel.classList.add('show');
@@ -772,11 +824,31 @@
   }
 
   function loadInfo() {
-    if (infoState === 'ok') return;
-    fetch(BASE + '/api/info', { credentials: 'same-origin' })
-      .then(function (res) { return res.json(); })
-      .then(function (body) {
-        var d = (body && (body.data || body)) || {};
+    // 每次**打开面板**都现取一次（不再用 infoState 缓存挡住）：
+    // 面板的功能显隐、音质偏好都跟着这份 info 走，后端改了配置要下次
+    // 打开面板就生效 —— 缓存一份旧 info，表现就是「关了还显示」。
+    // 面板每开一次才打一条请求，代价可以忽略。
+    //
+    // cache:'no-store'：这个端点**不允许**任何一层缓存留旧拷贝 ——
+    // 它的每一份旧值都意味着面板显示的状态是假的。
+    fetch(BASE + '/api/info', { credentials: 'same-origin', cache: 'no-store' })
+      .then(function (res) {
+        return res.json().catch(function () { return null; }).then(function (body) {
+          return { ok: res.ok, status: res.status, body: body };
+        });
+      })
+      .then(function (r) {
+        // HTTP 层或业务层失败：**不碰** info / feats —— 上一次拿到的（或
+        // 默认全开）继续生效。把错误响应当成功解析，会用垃圾值覆盖开关
+        // 状态，那比「显示旧状态」难查得多。
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        var env = r.body || {};
+        var code = env.code;
+        if (code !== undefined && code !== 0 && code !== 200) {
+          throw new Error('code ' + code);
+        }
+        // 正常是 {code:0,msg:'',data:{…}} 信封；老后端万一直给裸对象也兜住。
+        var d = (env.data && typeof env.data === 'object') ? env.data : env;
         info = {
           version: d.version || '',
           qulv_url: d.qulv_url || '',
@@ -784,11 +856,16 @@
           quality_options: d.quality_options || [],
           quality_editable: d.quality_editable !== false
         };
+        // panel_features：老后端不给这个字段 → 保持 null（全按开算）。
+        feats = (d.panel_features && typeof d.panel_features === 'object') ? d.panel_features : null;
         infoState = 'ok';
+        applyFeatures();
         refreshInfo();
         refreshQuality();
       })
       .catch(function () {
+        // 拿不到 info 时不动 feats —— 上一次拿到的显隐继续生效，
+        // 第一次就失败则保持全开。别把「没连上」误报成「被关了」。
         infoState = 'fail';
         refreshInfo();
       });
@@ -1128,6 +1205,10 @@
       harvest: harvest,
       mergeRecord: mergeRecord,
       describeSource: describeSource,
+      // 面板功能显隐判定：featOnWith 是纯函数（map 缺失/缺键 = 开），
+      // featOn 绑定当前模块状态、供控制台排查用。
+      featOn: featOn,
+      featOnWith: featOnWith,
       indexOf: function (g) { return index[g] || null; }
     };
   }

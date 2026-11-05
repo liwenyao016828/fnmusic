@@ -73,6 +73,24 @@ function stamp(d = new Date()) {
   return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
 }
 
+/**
+ * 带时区的绝对时刻（RFC3339，本地 offset），与后端 applog.Entry.Time 同一个口径。
+ *
+ * 为什么本地留存也要多存一个：`at` 只有「MM-DD HH:MM:SS」，**既没有年份也没有时区**。
+ * 用户换一台机器、换一个时区打开，或者跨年之后再看，`at` 就成了无法还原的墙钟数字。
+ * 保留 `at` 不动（旧数据、旧的显示逻辑、搜索都还依赖它），只新增字段 —— 与后端
+ * 「At 保留给旧客户端、Time 是新客户端唯一正确的来源」是同一套兼容策略。
+ */
+function stampISO(d = new Date()) {
+  const pad = (n, w = 2) => String(n).padStart(w, '0')
+  const off = -d.getTimezoneOffset() // 分钟，东为正
+  const sign = off >= 0 ? '+' : '-'
+  const abs = Math.abs(off)
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
+    `T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}` +
+    `${sign}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}`
+}
+
 function normLevel(l) {
   return l === 'warn' || l === 'error' ? l : 'info'
 }
@@ -109,8 +127,12 @@ export function logEvent(level, scope, message, detail) {
   load()
   const extra = describe(detail)
   const text = extra ? `${message} | ${extra}` : String(message ?? '')
+  const now = new Date()
   const e = {
-    at: stamp(),
+    at: stamp(now),
+    // 绝对时刻（带本地 offset）。at 没有年份和时区，跨年/换机器就还原不回来；
+    // 新增而不是替换 at，是为了不改变既有显示与搜索行为。
+    time: stampISO(now),
     level: normLevel(level),
     scope: String(scope || ''),
     message: clip(text, MAX_MSG),
@@ -120,10 +142,12 @@ export function logEvent(level, scope, message, detail) {
   persist()
 
   // 上报后端：fire-and-forget。后端不可用时本地已经留了一份，不打扰用户、也不再制造报错。
+  // 顺带把绝对时刻送过去 —— 否则浏览器时钟与 NAS 时钟不一致时（一个快 8 分钟、
+  // 一个慢 3 分钟很常见），两条来源的日志在同一个时间轴上根本对不齐。
   if (reporter) {
     const wire = e.scope ? `[${e.scope}] ${e.message}` : e.message
     try {
-      Promise.resolve(reporter(e.level, wire)).catch(() => {})
+      Promise.resolve(reporter(e.level, wire, e.time)).catch(() => {})
     } catch (_) {}
   }
   return e

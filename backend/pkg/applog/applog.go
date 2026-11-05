@@ -26,7 +26,10 @@ var logTimePrefix = regexp.MustCompile(`^\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2} `)
 
 // Entry 一条日志
 type Entry struct {
-	At      string `json:"at"`     // HH:MM:SS
+	// At 保留给旧客户端；新客户端必须使用带时区的 Time，不能把 NAS 的
+	// 系统时区（通常是 UTC）误当成用户浏览器所在时区。
+	At      string `json:"at"`
+	Time    string `json:"time"`   // RFC3339，含日期、秒与 UTC offset
 	Level   string `json:"level"`  // info / warn / error
 	Source  string `json:"source"` // backend / frontend
 	Message string `json:"message"`
@@ -90,6 +93,7 @@ func (b *Buffer) Add(message string) {
 	sink.write(now, level, SourceBackend, msg) // 落盘副本（未配置目录时是空操作，见 sink.go）
 	b.push(Entry{
 		At:      now.Format("15:04:05"),
+		Time:    now.Format(time.RFC3339),
 		Level:   level,
 		Source:  SourceBackend,
 		Message: msg,
@@ -101,6 +105,22 @@ func (b *Buffer) Add(message string) {
 // 与 Add 的区别：级别由调用方显式给出 —— 前端明确知道自己抛的是 error 还是 warn，
 // 不必靠关键词去猜；来源也由调用方指定，方便前端按「服务端 / 浏览器」筛选。
 func (b *Buffer) AddFrom(source, level, message string) {
+	b.AddFromAt(source, level, message, "")
+}
+
+// AddFromAt 同 AddFrom，但允许上报方带上自己算出的绝对时刻（RFC3339，带 offset）。
+//
+// at 可以为空。采用规则：
+//
+//   - 空 / 解析不了（含**不带 offset** 的墙上钟点）→ 用服务器时钟。
+//     服务器时间在绝大多数情况下才是权威；
+//   - 与服务器时钟相差 **不超过 clockSkewTolerance** → 仍用服务器时钟 ——
+//     同一条时间轴上混用两个时钟，会让相邻两条日志跳来跳去；
+//   - 相差超过容差 → 用上报方给的时刻。这**不是**为了纠正时区（时区早已由
+//     RFC3339 的 offset 表达清楚），而是为了另一种真实场景：用户机器的时区
+//     或时钟设错了，浏览器算出的绝对时刻与 NAS 差好几个小时，此时「我刚才点的」
+//     应该与这条日志对得上。
+func (b *Buffer) AddFromAt(source, level, message, at string) {
 	if level != "warn" && level != "error" {
 		level = "info"
 	}
@@ -115,13 +135,42 @@ func (b *Buffer) AddFrom(source, level, message string) {
 		msg = string(r[:maxMessageRunes]) + "…"
 	}
 	now := time.Now()
+	if t, ok := parseReportedTime(at); ok {
+		if d := t.Sub(now); d > clockSkewTolerance || d < -clockSkewTolerance {
+			now = t
+		}
+	}
 	sink.write(now, level, source, msg) // 落盘副本（未配置目录时是空操作，见 sink.go）
 	b.push(Entry{
 		At:      now.Format("15:04:05"),
+		Time:    now.Format(time.RFC3339),
 		Level:   level,
 		Source:  source,
 		Message: msg,
 	})
+}
+
+// clockSkewTolerance 上报方与服务器时钟的可容忍偏差。
+//
+// 一分钟：网络往返 + 两端 NTP 抖动远小于它，而任何真正的时钟/时区设置错误都远大于它
+// （最典型的就是整整 8 小时）。取太小会让正常的几秒偏差打乱时间线，
+// 取太大又会把「快 5 分钟」这种真实排障线索吃掉。
+const clockSkewTolerance = time.Minute
+
+// parseReportedTime 解析上报的绝对时刻。
+//
+// 只认带 offset 的 RFC3339：不带 offset 的串是「墙上钟点」，无从判断它属于哪个时区，
+// 拿来当绝对时刻只会制造新的错位。解析失败一律当作没给。
+func parseReportedTime(s string) (time.Time, bool) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return time.Time{}, false
+	}
+	t, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return t, true
 }
 
 // push 入队（含淘汰）

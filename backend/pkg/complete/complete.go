@@ -291,6 +291,12 @@ type ItemResult struct {
 	LyricRejected     bool   `json:"lyric_rejected,omitempty"`
 	LyricRejectReason string `json:"lyric_reject_reason,omitempty"`
 
+	// LyricMissing 勾了歌词、匹配也命中了，但**平台就是没给出歌词**（FetchLyric 返回空）。
+	// 与 LyricRejected（取到了但对不上、主动不写）分开记：前者是平台没有资源，
+	// 后者是我们不信任这份资源。以前这两种都只表现为「补歌词 0 首」，用户
+	// 完全看不出为什么勾了歌词却一首都没写成（2026-11-04 审查实测 29 首 0 首）。
+	LyricMissing bool `json:"lyric_missing,omitempty"`
+
 	// Cancelled 这一首**是因为任务被停止而没跑完**。
 	// 必须与「没搜到」（NoMatch）和「写入失败」（Failed）分开：
 	// 那两个是关于这首歌的结论，这个只是关于这次任务的结论 ——
@@ -310,9 +316,13 @@ type Summary struct {
 	TrackFilled int `json:"track_filled"`
 	DiscFilled  int `json:"disc_filled"`
 	// LyricRejected 歌词取到了但核验不通过、按「宁缺毋滥」没写入的数量
-	LyricRejected int          `json:"lyric_rejected"`
-	Failed        int          `json:"failed"`
-	Results       []ItemResult `json:"results"`
+	LyricRejected int `json:"lyric_rejected"`
+	// LyricMissing 勾了歌词、也匹配上了，但平台没给出歌词的数量。
+	// 与 LyricRejected 分开报：一个是「平台没有」，一个是「有但不敢用」。
+	// 不报这个数，用户勾了歌词却看到「补歌词 0 首」时无从判断是不是功能坏了。
+	LyricMissing int          `json:"lyric_missing"`
+	Failed       int          `json:"failed"`
+	Results      []ItemResult `json:"results"`
 	// Cancelled 因为任务被停止而**没跑**的曲目数（含已派发但中途放弃的）。
 	// 它不是失败，但也不代表「这批歌没问题」—— 用户需要知道还剩多少没做。
 	Cancelled int `json:"cancelled"`
@@ -352,9 +362,9 @@ func Run(ctx context.Context, targets []Target, opts Options, onProgress func(Pr
 	startedAt := time.Now()
 	plan := Resolve(ctx, targets, opts, nil)
 	sum := Execute(ctx, plan, opts, onProgress)
-	log.Printf("[COMPLETE] 任务结束：共 %d，匹配 %d，未匹配 %d，写歌词 %d，写封面 %d，写流派 %d，写年份 %d，失败 %d，已停止 %d，耗时 %s%s%s",
+	log.Printf("[COMPLETE] 任务结束：共 %d，匹配 %d，未匹配 %d，写歌词 %d，写封面 %d，写流派 %d，写年份 %d，平台无词 %d，失败 %d，已停止 %d，耗时 %s%s%s",
 		sum.Total, sum.Matched, sum.NoMatch, sum.LyricFilled, sum.CoverFilled,
-		sum.GenreFilled, sum.YearFilled, sum.Failed, sum.Cancelled,
+		sum.GenreFilled, sum.YearFilled, sum.LyricMissing, sum.Failed, sum.Cancelled,
 		briefSpan(time.Since(startedAt)), backupLog(sum), cancelledLog(ctx))
 	return sum
 }
@@ -868,6 +878,9 @@ func Execute(ctx context.Context, plan Plan, opts Options, onProgress func(Progr
 				if r.LyricRejected {
 					out.LyricRejected++
 				}
+				if r.LyricMissing {
+					out.LyricMissing++
+				}
 				// 「没搜到」不是「写入失败」：前者是正常结果（同名翻唱、纯音乐、小语种），
 				// 后者是真出问题。以前两者都计进 Failed，同一首会在汇总里出现两次。
 				if !r.OK && r.Matched {
@@ -953,6 +966,12 @@ func writeOne(ctx context.Context, it PlanItem, opts Options) ItemResult {
 				r.LyricRejectReason = v.Reason
 				lrc = ""
 			}
+		}
+		// 勾了歌词、也匹配上了，平台却没给出词：必须单独记一笔。
+		// 否则这一首在汇总里和「本来就有歌词、这次没勾」完全看不出区别，
+		// 用户只会看到「补歌词 0 首」而不知道为什么（2026-11-04 实测 29 首全 0）。
+		if lrc == "" && !r.LyricRejected {
+			r.LyricMissing = true
 		}
 		item.Lyric = lrc
 	}

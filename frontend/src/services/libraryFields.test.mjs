@@ -42,7 +42,7 @@ test('toggleFieldKey 增删各一次', () => {
   assert.deepEqual(toggleFieldKey(['lyric', 'year'], 'lyric'), ['year'])
 })
 
-test('planCells 只显示真的会写的字段与值', () => {
+test('planCells 区分确定写入的值与执行时才能确认的资源', () => {
   const cells = planCells({
     need_lyric: true,
     need_cover: false,
@@ -52,7 +52,7 @@ test('planCells 只显示真的会写的字段与值', () => {
     fill_genre: 'Pop 流行',
   })
   assert.deepEqual(cells, [
-    { k: '歌词', v: '平台版' },
+    { k: '歌词', v: '尝试补' },
     { k: '年份', v: 2003 },
     { k: '曲序', v: 3 },
     { k: '风格', v: 'Pop 流行' },

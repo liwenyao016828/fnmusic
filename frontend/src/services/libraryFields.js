@@ -47,16 +47,17 @@ export function toggleFieldKey(list, key) {
 }
 
 /**
- * 预览行「会写」列：只列这首**真的会写**的字段与将写入的值。
+ * 预览行列出本次计划尝试补的字段与已知的值。
  *
- * 歌词/封面要到执行阶段才取得到，所以只显示「要不要取」；
+ * 歌词/封面要到执行阶段才取得到，只能说「尝试补」；不能写成「会写」，
+ * 否则平台无资源时用户会把计划理解成写入保证。
  * 年份/曲序/光盘/风格在预览阶段就来自命中的那条曲目，能显示具体值。
  */
 export function planCells(item) {
   const it = item || {}
   const out = []
-  if (it.need_lyric) out.push({ k: '歌词', v: '平台版' })
-  if (it.need_cover) out.push({ k: '封面', v: '平台原图' })
+  if (it.need_lyric) out.push({ k: '歌词', v: '尝试补' })
+  if (it.need_cover) out.push({ k: '封面', v: '尝试补' })
   if (it.fill_year > 0) out.push({ k: '年份', v: it.fill_year })
   if (it.fill_track > 0) out.push({ k: '曲序', v: it.fill_track })
   if (it.fill_disc > 0) out.push({ k: '光盘', v: it.fill_disc })
@@ -79,6 +80,9 @@ export function summaryCells(summary, aiMatched = 0) {
     if (v) out.push({ k, v, color: 'text-emerald-600' })
   }
   if (s.no_match) out.push({ k: '没搜到', v: s.no_match, color: 'text-amber-600' })
+  // 「平台无词」：勾了歌词、也匹配上了，但平台没给出词。
+  // 不单列这一项时，用户看到「补歌词 0 首」只会怀疑功能坏了（2026-11-04 实测 29 首全 0）。
+  if (s.lyric_missing) out.push({ k: '平台无词', v: s.lyric_missing, color: 'text-amber-600' })
   if (s.failed) out.push({ k: '写入失败', v: s.failed, color: 'text-rose-500' })
   if (aiMatched) out.push({ k: 'AI 判断匹配', v: aiMatched, color: 'text-violet-600' })
   return out

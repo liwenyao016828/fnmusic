@@ -86,9 +86,9 @@
             enterkeyhint="search"
             @focus="onSearchFocus"
             @keydown.esc.prevent="collapseSearch({ escape: true })"
-            class="ys-barsearch__input w-full bg-transparent text-[13px] font-semibold text-white/90 placeholder:text-white/45 focus:outline-none"
+            class="ys-barsearch__input w-full bg-transparent text-[13px] font-medium text-white/95 placeholder:text-white/75 focus:outline-none"
           />
-          <small class="block truncate text-[11px] text-white/35">也可以直接粘贴歌单链接 · Enter 搜索</small>
+          <small class="ys-barsearch__hint block truncate text-[11px] text-white/75">也可以直接粘贴歌单链接 · Enter 搜索</small>
         </span>
         <button
           type="submit"
@@ -376,6 +376,7 @@ const emit = defineEmits([
 
 /** 播放条是否在展示（非折叠、有歌）——决定搜索按钮是「右下角固定」还是「胶囊右侧副岛」。 */
 const hasPlayerBar = computed(() => !props.collapsed && !!props.currentSong)
+
 /* 2026-10-29 用户：「收缩和播放条再增加点间距」（收缩 = 左侧栏折叠后的竖条）
    → 播放条整行在左侧栏收缩态再往右让一点，避免贴到旁边的图标列。
    用 margin-left 而不是 padding：行本身已经 mx-auto 居中，加 margin 会同步把整行往右推。
@@ -389,6 +390,13 @@ const contentInsetClass = computed(() => (props.sidebarCollapsed ? 'ml-12' : '')
 // 豁免两条件：输入框聚焦、有词未提交（trim 后判）。判据全在 shouldCollapseSearch。
 const searchQuery = ref('')
 const searchOpen = ref(false)
+
+// 列表只为真实存在的固定播放条留白；搜索副岛展开时播放条不占位。
+watch([hasPlayerBar, searchOpen], ([visible, searching]) => {
+  document.documentElement.style.setProperty('--pb-clear', visible && !searching ? 'var(--pb-clear-on)' : '0px')
+}, { immediate: true })
+onUnmounted(() => document.documentElement.style.removeProperty('--pb-clear'))
+
 const searchInputRef = ref(null)
 const searchBoxRef = ref(null)
 const searchIconRef = ref(null)
@@ -648,6 +656,34 @@ watch(volume, (val) => { emit('volume-change', parseFloat(val)); if (val > 0) is
 /* 系统减弱动效：只淡入淡出，不做缩放 */
 @media (prefers-reduced-motion: reduce) {
   .ys-volpop { transition: none; }
+}
+
+/* 搜索沿用播放器玻璃令牌与胶囊；没有封面压暗层时用面板底色托住白字。 */
+.ys-barsearch {
+  background: var(--ys-panel);
+  border-radius: 9999px;
+  box-shadow: var(--ys-shadow);
+  color: var(--ys-text-on-dark);
+  font-family: inherit;
+}
+.ys-barsearch--focusable:focus-within,
+.ys-barsearch--focused {
+  border-color: var(--ys-glass-line-strong) !important;
+  box-shadow: var(--ys-shadow) !important;
+}
+.ys-barsearch__input {
+  color: var(--ys-text-on-dark);
+  line-height: 1.5;
+  letter-spacing: 0.01em;
+}
+.ys-barsearch__input::placeholder {
+  color: rgb(255 255 255 / 0.78);
+  opacity: 1;
+}
+.ys-barsearch__hint {
+  margin-top: 2px;
+  line-height: 1.5;
+  letter-spacing: 0.01em;
 }
 
 /* ── 副岛（2026-10-29）：播放条右侧那颗搜索按钮 ──

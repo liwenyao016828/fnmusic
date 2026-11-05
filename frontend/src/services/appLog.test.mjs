@@ -120,3 +120,37 @@ test('clearLocalLog 清空', () => {
   assert.equal(localLogCount(), 0)
   assert.deepEqual(logEntries(), [])
 })
+
+test('新条目带 time（RFC3339、带本地 offset），at 保持旧格式不变', () => {
+  clearLocalLog()
+  const e = logError('时区', '本地 22 点的操作')
+  // at 老格式不动：旧展示与搜索行为不能变
+  assert.match(e.at, /^\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/)
+  // time 必须能被 Date.parse 还原出「刚才」这个绝对时刻（±1 分钟）
+  assert.match(e.time, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|[+-]\d{2}:\d{2})$/)
+  const d = new Date(e.time)
+  assert.ok(Math.abs(d.getTime() - Date.now()) < 60_000, `time 与当前时刻偏差过大：${e.time}`)
+})
+
+test('上报通道收到第三个参数（浏览器绝对时刻）', () => {
+  clearLocalLog()
+  const seen = []
+  setLogReporter((level, message, time) => seen.push({ level, message, time }))
+  logError('推送', '失败')
+  assert.equal(seen.length, 1)
+  assert.match(seen[0].time, /^\d{4}-\d{2}-\d{2}T/, 'reporter 应拿到 time 参数')
+  setLogReporter(null)
+})
+
+test('stampISO 的 offset 与本机时区一致（本地正分钟即可还原）', () => {
+  // 用 logEvent 产生的真实条目校验：解析回 Date 后，其 UTC 毫秒与本地字段
+  // 拼出来的时刻应当一致 —— 即 offset 没写反（+08 写成 -08 会差 16 小时）
+  clearLocalLog()
+  const e = logInfo('x', 'y')
+  const d = new Date(e.time)
+  const p = (n) => String(n).padStart(2, '0')
+  const rebuilt = Date.parse(
+    `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}T${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}Z`,
+  )
+  assert.ok(Math.abs(rebuilt - d.getTime()) < 1000)
+})

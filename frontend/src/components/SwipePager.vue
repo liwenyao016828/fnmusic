@@ -17,7 +17,7 @@
   <div
     ref="viewportRef"
     data-swipe-viewport
-    class="relative min-w-0 flex-1 overflow-hidden"
+    class="relative min-h-0 min-w-0 flex-1 overflow-hidden"
     :class="dragging ? 'select-none' : ''"
     @touchstart="onTouchStart"
     @touchmove="onTouchMove"
@@ -59,7 +59,7 @@
             class="min-h-0 flex-1 overflow-hidden"
             data-rail-level="inner"
           >
-            <div class="flex h-full" data-swipe-track :style="innerTrackStyle">
+            <div class="flex h-full" data-swipe-track :style="innerStyleFor(id)">
               <div
                 v-for="seg in innerRowFor(id)"
                 :key="id + ':' + seg"
@@ -83,7 +83,7 @@
 import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import {
   lockAxis, axisYields, rubberBand, decideCommit, velocityFrom, settleDuration,
-  isSwipeBlocked, resolveSwipeTarget,
+  isSwipeBlocked, hasUsableHorizontalScroll, resolveSwipeTarget,
   flattenRail, railIndexOf, railNeighbors,
   springAt, springSettled, springOmegaFor, clampVelocity,
   SPRING_ZETA_TURN, SPRING_ZETA_BACK, SPRING_MAX_MS,
@@ -100,6 +100,8 @@ const props = defineProps({
    */
   segment: { type: String, default: '' },
   innerSegs: { type: Object, default: () => ({}) },
+  /** 每页自己的分段记忆（由父组件维护），用于非当前页保留已挂载内容 */
+  lastSegments: { type: Object, default: () => ({}) },
 })
 const emit = defineEmits(['update:current', 'update:segment'])
 
@@ -222,10 +224,9 @@ function innerTrackEl() {
   //   内层轨道因此不动，只有整页在动（＝用户看到的「子导航没加入切换」）。
   //   现在直接拿 ref 指向的那个容器，再用 :scope 限定到它自己的直接子轨道。
   //   取不到（还没渲染）就返回 null，交给调用方跳过这一帧。
-  const holders = innerRailRef.value
-  const holder = Array.isArray(holders) ? holders[0] : holders
-  if (!holder) return null
-  return holder.querySelector(':scope > [data-swipe-track]')
+  const page = Array.from(trackRef.value?.children || [])
+    .find((el) => el.dataset.swipePage === props.current)
+  return page?.querySelector('[data-rail-level="inner"] > [data-swipe-track]') || null
 }
 
 function stopInnerSpring() {
@@ -286,15 +287,27 @@ function innerSegsOf(view) {
  * 别的页面在滑到位之前看不见，等它变成当前页时再装滑轨也不晚。
  */
 function innerHasRail(view) {
-  return view === props.current && innerSegsOf(view).length > 1
+  return innerSegsOf(view).length > 1
 }
 
 function innerRowFor(view) {
-  return innerHasRail(view) ? innerRow.value : []
+  return innerSegsOf(view)
+}
+
+/** 非当前页的分段轨保持在自己的位置；切页不能把它的内容卸载掉。 */
+function innerStyleFor(view) {
+  const segments = innerSegsOf(view)
+  const current = view === props.current ? props.segment : props.lastSegments?.[view]
+  const index = Math.max(0, segments.indexOf(current || segments[0]))
+  return {
+    width: `${(segments.length || 1) * 100}%`,
+    transform: `translate3d(${-index * (pageWidth.value || 0)}px, 0, 0)`,
+  }
 }
 
 function innerIdleFor(view, seg) {
-  return innerHasRail(view) ? innerIsIdlePage(seg) : false
+  if (view !== props.current) return true
+  return innerIsIdlePage(seg)
 }
 
 /**
@@ -507,7 +520,22 @@ function describeTarget(el) {
       editable: node.isContentEditable,
       // ⚠️ 不要只看 overflowX：竖向滚动容器的 overflowX 计算值也是 auto（见 swipeNav.js 的说明）。
       //    只有"内容真的比容器宽"才算横滑区，才让路。
-      canScrollX: (cs.overflowX === 'auto' || cs.overflowX === 'scroll') && node.scrollWidth > node.clientWidth + 1,
+      canScrollX: hasUsableHorizontalScroll({
+        overflowX: cs.overflowX,
+        scrollWidth: node.scrollWidth,
+        clientWidth: node.clientWidth,
+        scrollLeft: node.scrollLeft,
+        probe: () => {
+          // 只探测 1px，并同步恢复：宽滑轨造成的假溢出不会移动，真正的分类横滑条会。
+          const behavior = node.style.scrollBehavior
+          node.style.scrollBehavior = 'auto'
+          node.scrollLeft = 1
+          const canScroll = node.scrollLeft > 0
+          node.scrollLeft = 0
+          node.style.scrollBehavior = behavior
+          return canScroll
+        },
+      }),
       inPlayer: !!(node.closest && node.closest('.ys-player, .ys-ambient')),
       noDrag: !!(node.classList && node.classList.contains('swipe-no-drag')),
     })) return true

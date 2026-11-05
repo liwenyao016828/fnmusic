@@ -318,25 +318,39 @@ func ScanSongs(w http.ResponseWriter, r *http.Request) {
 	// 缓存按目录落盘在数据目录 scan_cache.json，重新打开/刷新浏览器仍在。
 	if r.URL.Query().Get("refresh") != "1" {
 		if cached := loadScanCache(dir); cached != nil {
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"code":      200,
-				"message":   "ok",
-				"dir":       dir,
-				"songs":     cached.Songs,
-				"total":     cached.Total,
-				"cached":    true,
-				"truncated": cached.Truncated,
-				"warnings":  orEmpty(cached.Warnings),
-				"data": map[string]interface{}{
+			// 命中缓存也要防「幽灵行」：磁盘上已被删掉的文件不能继续出现在曲库
+			// （2026-11-04 用户报「本地曲库出现不该有的歌」）。丢掉不存在的行、
+			// 回写瘦身后的缓存；连一行都不剩时整份作废，往下当场重扫——
+			// 「全军覆没」往往意味着目录换了内容，不能拿空列表糊弄 72 小时。
+			songs := dropMissingSongs(cached.Songs)
+			if len(songs) > 0 || len(cached.Songs) == 0 {
+				if len(songs) != len(cached.Songs) {
+					saveScanCache(dir, songs, dirwalk.Stats{
+						LimitHit: cached.Truncated,
+						Warnings: cached.Warnings,
+					})
+				}
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{
+					"code":      200,
+					"message":   "ok",
 					"dir":       dir,
-					"songs":     cached.Songs,
-					"total":     cached.Total,
+					"songs":     songs,
+					"total":     len(songs),
 					"cached":    true,
 					"truncated": cached.Truncated,
 					"warnings":  orEmpty(cached.Warnings),
-				},
-			})
-			return
+					"data": map[string]interface{}{
+						"dir":       dir,
+						"songs":     songs,
+						"total":     len(songs),
+						"cached":    true,
+						"truncated": cached.Truncated,
+						"warnings":  orEmpty(cached.Warnings),
+					},
+				})
+				return
+			}
+			InvalidateScanCache(dir)
 		}
 	}
 

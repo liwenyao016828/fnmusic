@@ -130,6 +130,14 @@ type Config struct {
 	// `handlePageShell` **根本不认领**文档请求，官方页面由接管层的反向代理
 	// 逐字节原样透传 —— 这是「注入把官方页弄坏了」时的一键退路。
 	UIInjectEnabled func() bool
+	// UIPanelFeatures 返回注入面板四个功能块（quality / assistant / jump /
+	// download）的显隐状态，现取；nil = 一律视为全开（老调用方兼容）。
+	//
+	// 为什么是函数：与上面同一个道理 —— 用户在曲率设置里关掉某块，**下一次
+	// 打开面板**就该看不到它，而不是重启应用。拦截层把它原样放进 /api/info
+	// 的 panel_features（见 qulvbridge.go handleQulvInfo），显隐由注入脚本做：
+	// 关掉的只是面板上的 widget，服务端路由与曲率助手本体都不动。
+	UIPanelFeatures func() map[string]bool
 	// PlaybackQuality 返回**试听**的音质偏好（"auto" / "lossless" / "320k" / "128k"），
 	// 现取；nil 或返回空 = auto（见 pkg/online 的 PlaybackLadder）。
 	//
@@ -469,6 +477,7 @@ type Interceptor struct {
 	chartEnabled func() bool
 	chartSize    func(chartID string) int
 	uiInject     func() bool
+	panelFeats   func() map[string]bool
 	localAPI     string
 
 	statsMu sync.Mutex
@@ -576,6 +585,8 @@ func New(cfg Config) *Interceptor {
 	i.chartEnabled = cfg.ChartPlaylistsEnabled
 	// 页面注入开关：同样是现取（设置里关掉立刻生效，官方页面立刻回到原样）。
 	i.uiInject = cfg.UIInjectEnabled
+	// 面板功能开关：现取（nil = 没接线 = 全开，老调用方兼容）。
+	i.panelFeats = cfg.UIPanelFeatures
 
 	// 启动时重建虚拟 id 登记表：虚拟 id 是确定性哈希，所以把磁盘上出现过的
 	// 曲目描述符重放一遍就恢复了全部映射。

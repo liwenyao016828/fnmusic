@@ -238,6 +238,11 @@ func nowISO() string {
 	return time.Now().Format("2006-01-02T15:04:05")
 }
 
+// nowStamp 返回当前时刻的 RFC3339 时间戳（带时区偏移）
+func nowStamp() string {
+	return time.Now().Format(time.RFC3339)
+}
+
 func trackStoreKey(monitorID, source, songID string) string {
 	return monitorID + "|" + source + "|" + songID
 }
@@ -633,7 +638,7 @@ func (s *Store) StartRun(monitorID string, baseline bool) *Run {
 	r := &Run{
 		ID:        fmt.Sprintf("run_%d", time.Now().UnixNano()),
 		MonitorID: monitorID,
-		StartedAt: nowISO(),
+		StartedAt: nowStamp(),
 		Status:    "running",
 		Baseline:  baseline,
 	}
@@ -653,7 +658,7 @@ func (s *Store) FinishRun(r *Run) {
 	defer s.mu.Unlock()
 	for _, existing := range s.data.Runs {
 		if existing.ID == r.ID {
-			existing.FinishedAt = nowISO()
+			existing.FinishedAt = nowStamp()
 			existing.Status = r.Status
 			existing.Found = r.Found
 			existing.NewItems = r.NewItems
@@ -696,7 +701,7 @@ func (s *Store) RecoverRunningRuns() int {
 	for _, r := range s.data.Runs {
 		if r.Status == "running" {
 			r.Status = "error"
-			r.FinishedAt = nowISO()
+			r.FinishedAt = nowStamp()
 			r.Message = "服务重启，任务中断"
 			n++
 		}

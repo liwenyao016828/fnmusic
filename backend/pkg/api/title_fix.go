@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -95,11 +96,20 @@ func (s *Server) HandleTitleFixScan(w http.ResponseWriter, r *http.Request) {
 	dirClean := strings.TrimSuffix(filepath.ToSlash(dir), "/")
 	out := make([]titleFixItem, 0, limit)
 	total := 0
+	stale := 0
 	for _, e := range entries {
 		if dirClean != "" && e.Path != dirClean && !strings.HasPrefix(filepath.ToSlash(e.Path), dirClean+"/") {
 			continue
 		}
 		if reason := suspiciousTitle(e.Title, e.Artist, e); reason != "" {
+			// 索引里的路径可能已经不存在了（文件被删/改名/移走，索引还没重扫）。
+			// 这种条目扫出来必然修不了 —— 真点「AI 修复」只会得到
+			// 「备份原文件失败：no such file or directory」（2026-11-04 审查实测）。
+			// 只在**已判定可疑**的少量条目上做一次 Stat，代价可忽略。
+			if _, err := os.Stat(e.Path); err != nil {
+				stale++
+				continue
+			}
 			total++
 			if len(out) < limit {
 				out = append(out, titleFixItem{
@@ -114,6 +124,9 @@ func (s *Server) HandleTitleFixScan(w http.ResponseWriter, r *http.Request) {
 			"dir": dir, "total": total, "items": out, "truncated": total > len(out),
 			// AI 没配置时界面要能说清「不是我扫不到，是你没配 AI」
 			"ai_ready": s.aiReady(),
+			// stale：索引里有、但磁盘上已经没有的条目数（已从清单里剔除）。
+			// 界面要说明这件事 —— 否则用户会觉得「之前扫出来 2 首，现在只剩 1 首」很怪。
+			"stale": stale,
 		},
 	})
 }

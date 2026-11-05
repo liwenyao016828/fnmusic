@@ -266,6 +266,30 @@ test('itemText 把菜单项里的空白压掉（用来比对标签）', () => {
   assert.equal(ui.itemText(null), '');
 });
 
+// ── 飞牛音乐注入面板功能 ─────────────────────────────────────────────────
+
+test('面板功能只有显式 false 才关闭；缺 info 或缺键保持向后兼容', () => {
+  const ui = load();
+  const keys = ['quality', 'assistant', 'jump', 'download'];
+  for (const features of [null, undefined, {}]) {
+    for (const key of keys) assert.equal(ui.featOnWith(features, key), true);
+  }
+  const features = { quality: false, download: false };
+  assert.equal(ui.featOnWith(features, 'quality'), false);
+  assert.equal(ui.featOnWith(features, 'download'), false);
+  assert.equal(ui.featOnWith(features, 'assistant'), true);
+  assert.equal(ui.featOnWith(features, 'jump'), true);
+});
+
+test('注入面板每次打开重新读取 info，并防止旧缓存或失败响应覆盖状态', () => {
+  assert.ok(source.includes("fetch(BASE + '/api/info', { credentials: 'same-origin', cache: 'no-store' })"));
+  assert.ok(!source.includes("if (infoState === 'ok') return;"));
+  assert.ok(source.includes("if (!r.ok) throw new Error('HTTP ' + r.status)"));
+  assert.ok(source.includes('q.secAssistant.hidden = !featOn'));
+  assert.ok(source.includes("if (!featOn('download') || !menuItemAllowed() || !menuGUID) return;"));
+  assert.ok(source.includes('系统 → 飞牛音乐 AI 面板'));
+});
+
 // ── 偏好 ────────────────────────────────────────────────────────────────
 
 test('menuItemAllowed 默认开，只有显式存过 0 才关', () => {

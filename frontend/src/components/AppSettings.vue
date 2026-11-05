@@ -184,6 +184,57 @@
         <NameRulesPanel />
       </DisclosureSection>
 
+      <!-- 这里设置的是飞牛音乐官方页面中注入的面板，不是曲率自己的 AI 助手。
+           曲率助手的模型、执行模式和能力仍在「账号连接 / 助手」里设置。 -->
+      <DisclosureSection
+        :open="openKey === 'injectedpanel'"
+        @toggle="toggleSection('injectedpanel')"
+        :summary="injectedPanelSummary"
+        :icon="Sparkles"
+        title="飞牛音乐 AI 面板"
+        hint="设置飞牛音乐页面里的曲率 AI 面板：是否显示面板，以及面板中保留哪些功能。曲率自己的 AI 助手不受这里影响。"
+      >
+        <InlineNotice :text="injectedPanelError || chartInject.error.value" tone="error" log-link />
+        <div class="divide-y divide-[var(--ys-border)] rounded-xl border border-[var(--ys-border)] bg-white px-3">
+          <div class="flex items-start justify-between gap-3 py-3">
+            <div class="min-w-0">
+              <div class="flex items-center gap-2">
+                <span class="text-[13px] font-medium text-[var(--ys-text)]">在飞牛音乐显示 AI 面板</span>
+                <span class="rounded-full border px-1.5 py-0.5 text-[10px]" :class="injectedPanelEnabled ? 'border-emerald-200 bg-emerald-50 text-emerald-600' : 'border-[var(--ys-border)] text-gray-500'">{{ injectedPanelEnabled ? '已开启' : '已关闭' }}</span>
+              </div>
+              <p class="mt-0.5 text-[11px] leading-relaxed text-[var(--ys-text-muted)]">关闭后飞牛音乐官方页面不再注入面板，不改动其他接管功能。</p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-label="在飞牛音乐显示 AI 面板"
+              :aria-checked="injectedPanelEnabled ? 'true' : 'false'"
+              :disabled="chartInject.busy"
+              class="relative h-6 w-11 shrink-0 rounded-full transition-colors disabled:opacity-50"
+              :class="injectedPanelEnabled ? 'bg-emerald-600' : 'bg-black/[0.12]'"
+              @click="toggleInjectedPanel"
+            ><span class="absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform" :class="injectedPanelEnabled ? 'translate-x-5' : ''" /></button>
+          </div>
+          <div v-for="feature in injectedPanelFeatures" :key="feature.key" class="flex items-start justify-between gap-3 py-3">
+            <div class="min-w-0">
+              <div class="text-[13px] font-medium text-[var(--ys-text)]">{{ feature.label }}</div>
+              <p class="mt-0.5 text-[11px] leading-relaxed text-[var(--ys-text-muted)]">{{ feature.desc }}</p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              :aria-label="feature.label"
+              :aria-checked="feature.enabled ? 'true' : 'false'"
+              :disabled="injectedPanelSaving || !injectedPanelEnabled"
+              class="relative h-6 w-11 shrink-0 rounded-full transition-colors disabled:opacity-50"
+              :class="feature.enabled ? 'bg-emerald-600' : 'bg-black/[0.12]'"
+              @click="toggleInjectedFeature(feature.key)"
+            ><span class="absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform" :class="feature.enabled ? 'translate-x-5' : ''" /></button>
+          </div>
+        </div>
+        <p class="mt-2 text-[11px] leading-relaxed text-[var(--ys-text-muted)]">保存后刷新飞牛音乐页面生效；已打开的面板可在下次展开时读取功能设置。默认全部开启。</p>
+      </DisclosureSection>
+
       <!-- ⑧ 存储目录 -->
       <DisclosureSection
         :open="openKey === 'dirs'"
@@ -590,6 +641,40 @@
         </div>
       </DisclosureSection>
 
+      <!-- ⑨ 列表显示（2026-11-04 新增：网格列表每行几张卡）
+           偏好键 fn_list_columns（服务端 ui_prefs.json 优先，localStorage 兜底，
+           与 nas_page_size 同口径）。消费方是发现页歌单和榜单卡片网格，
+           见 services/listColumns.js。本地曲库是曲目表格，不在本项范围内。 -->
+      <DisclosureSection
+        :open="openKey === 'listdisplay'"
+        @toggle="toggleSection('listdisplay')"
+        :summary="listDisplaySummary"
+        :icon="LayoutGrid"
+        title="列表显示"
+        hint="发现歌单和榜单的卡片网格每行显示几张。选「自动」按屏幕宽度响应式排布；选定列数后各屏宽都按它排。"
+      >
+        <div class="grid gap-2 sm:grid-cols-3">
+          <button
+            v-for="o in columnOptions"
+            :key="o.value"
+            type="button"
+            class="rounded-xl border p-3 text-left transition"
+            :class="listColumnsValue === o.value
+              ? 'border-emerald-500/40 bg-[var(--ys-accent-soft)]'
+              : 'border-[var(--ys-border)] bg-white hover:border-[var(--ys-border-strong)]'"
+            :title="o.desc"
+            @click="saveListColumnsPref(o.value)"
+          >
+            <div class="text-[13px] font-medium text-[var(--ys-text)]">{{ o.label }}</div>
+            <div class="mt-1 text-[11px] leading-relaxed text-[var(--ys-text-muted)]">{{ o.desc }}</div>
+          </button>
+        </div>
+        <p class="mt-3 text-[11px] leading-relaxed text-[var(--ys-text-muted)]">
+          只影响卡片网格，不影响歌单详情里的曲目列表（那是单列行）。改完立即生效，
+          各页面下次渲染即按新列数排。
+        </p>
+      </DisclosureSection>
+
       <!-- 版本更新：检查 GitHub Release、下载 fpk、自动安装。后端执行，前端只展示状态。 -->
       <UpdateCard />
 
@@ -641,10 +726,13 @@ import PageShell from './PageShell.vue'
 import DisclosureSection from './DisclosureSection.vue'
 // 2026-10-29：命名解析规则从「补全整理 → 歌名修复」搬来（配置不是操作）
 import NameRulesPanel from './NameRulesPanel.vue'
-import { AudioLines, ChevronDown, ChevronUp, Download, FileAudio, FileSearch, FolderCog, Info, Palette, Route } from 'lucide-vue-next'
+import { AudioLines, ChevronDown, ChevronUp, Download, FileAudio, FileSearch, FolderCog, Info, LayoutGrid, Palette, Route, Sparkles } from 'lucide-vue-next'
 import { ConfigAPI, DownloadAPI, LogsAPI, AppAPI, ChartInjectAPI, SourcesAPI, QualityAPI, DEFAULT_AUTO_DOWNLOAD_CHANNELS } from '../api/client'
 import { QUALITY_MODE_OPTIONS, normalizeQualityMode } from '../services/qualityOverride'
 import { THEMES, loadTheme, setTheme } from '../services/theme'
+// 列表显示列数：纯逻辑（选项/归一化/类串），读写偏好在这边做（node --test 不加载 prefs）
+import { COLUMN_OPTIONS, DEFAULT_COLUMNS, LIST_COLUMNS_KEY, normalizeColumns, columnSummary } from '../services/listColumns'
+import { loadPref, savePref } from '../services/prefs'
 import { fail, apiError } from '../services/userMsg'
 import { logInfo } from '../services/appLog'
 import InlineNotice from './InlineNotice.vue'
@@ -653,6 +741,8 @@ import UpdateCard from './UpdateCard.vue'
 import ApiModal from './ApiModal.vue'
 import { chooseDirectory, detectTrimHost, openAppSetting } from '../services/trimHost'
 import { lastPick, loadAuthStatus, refreshAuthStatus, shouldPrompt } from '../services/fnosAuth'
+import { chartInject, setUIInject } from '../services/chartInject'
+import { normalizeUIPanelFeatures } from '../services/uiPanelFeatures'
 
 /** 条款弹窗由 App.vue 持有（openDisclaimer），这里只负责把「想看条款」这件事报上去。 */
 const emit = defineEmits(['open-disclaimer'])
@@ -693,6 +783,61 @@ const qualitySummary = computed(() => {
   const o = qualityOptions.find((x) => x.value === qualityValue.value)
   return o ? o.label : '跟随页面设置'
 })
+
+/* ── 飞牛音乐注入面板（不是曲率自己的 AI 助手）────────────────────
+   总开关与榜单段共用同一模块，两个入口看到的状态始终一致；
+   子功能只发单个配置键，不覆盖用户同时修改的其他设置。 */
+const injectedPanelSaving = ref(false)
+const injectedPanelError = ref('')
+const injectedPanelEnabled = computed(() => chartInject.uiInject.value)
+const injectedPanelFeatures = computed(() => normalizeUIPanelFeatures(cfgRaw.value || {}))
+const injectedPanelSummary = computed(() => {
+  const off = injectedPanelFeatures.value.filter(feature => !feature.enabled).length
+  return `${injectedPanelEnabled.value ? '面板已开启' : '面板已关闭'} · ${injectedPanelFeatures.value.length - off} 项功能`
+})
+async function toggleInjectedPanel() {
+  injectedPanelError.value = ''
+  await setUIInject(!injectedPanelEnabled.value)
+  if (chartInject.error.value) injectedPanelError.value = chartInject.error.value
+  else flash(injectedPanelEnabled.value ? '飞牛音乐 AI 面板已开启，刷新飞牛音乐页面生效' : '飞牛音乐 AI 面板已关闭，刷新飞牛音乐页面生效')
+}
+async function toggleInjectedFeature(key) {
+  if (injectedPanelSaving.value) return
+  const feature = injectedPanelFeatures.value.find(item => item.key === key)
+  if (!feature) return
+  const before = cfgRaw.value
+  injectedPanelSaving.value = true
+  injectedPanelError.value = ''
+  cfgRaw.value = { ...before, [feature.configKey]: !feature.enabled }
+  try {
+    const res = await ConfigAPI.save({ [feature.configKey]: !feature.enabled })
+    const bad = apiError(res)
+    if (bad) throw new Error(bad)
+    cfgRaw.value = res?.data || cfgRaw.value
+    logInfo('设置', `飞牛音乐面板：${feature.label} → ${!feature.enabled ? '开启' : '关闭'}`)
+    flash('面板功能已保存，刷新飞牛音乐页面生效')
+  } catch (e) {
+    cfgRaw.value = before
+    injectedPanelError.value = fail('保存飞牛音乐面板设置', e)
+  } finally {
+    injectedPanelSaving.value = false
+  }
+}
+
+/* ── 列表显示（列数，2026-11-04）──────────────────────────────────────
+   偏好 fn_list_columns：字符串口径（与 nas_page_size 同款），
+   归一化/类串在 services/listColumns.js（纯逻辑，node --test 可测）。 */
+const columnOptions = COLUMN_OPTIONS
+const listColumnsValue = ref(normalizeColumns(loadPref(LIST_COLUMNS_KEY, String(DEFAULT_COLUMNS)), DEFAULT_COLUMNS))
+const listDisplaySummary = computed(() => columnSummary(listColumnsValue.value))
+function saveListColumnsPref(value) {
+  const n = normalizeColumns(value, DEFAULT_COLUMNS)
+  if (n === listColumnsValue.value) return
+  listColumnsValue.value = n
+  savePref(LIST_COLUMNS_KEY, String(n))
+  logInfo('设置', `列表列数 → ${n === 0 ? '自动' : `${n} 列`}`)
+}
+
 
 const namingSummary = computed(() => {
   const o = namingOptions.find((x) => x.value === namingValue.value)
@@ -1039,6 +1184,9 @@ const exportTitle = '打包日志、环境信息与配置（凭据已抹除）�
 
 onMounted(() => {
   load()
+  // 与榜单段的页面注入总开关读同一份配置，不在系统页另存副本。
+  // 列数偏好是本地的，进页面时已随 prefs 种子化，无需再拉。
+  chartInject.load()
   // 主题可能在别的设备上改过（服务端偏好优先），进设置页时同步一次显示。
   themeId.value = loadTheme()
   // 2026-10-31：预探一次宿主桥接，点「浏览盘位选择」时就不用现等握手。

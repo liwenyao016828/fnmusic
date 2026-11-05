@@ -62,10 +62,10 @@
           -->
           <button
             v-if="completeStep === 2"
-            :disabled="previewing || completing || !selectedFields.length"
-            :title="completeHint + (selectedFields.length ? '' : '（先在字段里勾要补的项）')"
+            :disabled="(!previewing && (completing || !selectedFields.length))"
+            :title="previewing ? '断开匹配（服务端立刻停止，已出的行会留着，但这份清单不完整、不能写入）' : completeHint + (selectedFields.length ? '' : '（先在字段里勾要补的项）')"
             class="ys-btn ys-btn-primary ys-press"
-            @click="startPreview"
+            @click="previewing ? stopPreview() : startPreview()"
           >{{ previewing ? '停止预览' : '预览要写的内容' }}</button>
           <button
             type="button"
@@ -173,21 +173,19 @@
             </span>
             <span class="flex shrink-0 items-center gap-2">
               <!--
-                2.3（2026-10-27）：注释里写的是「暂停 / 继续 / 停止」，模板只有「停止 / 重新预览」——
+                2.3（2026-10-27）：注释里写的是「暂停 / 继续 / 停止」，模板只有「停止 / 重新预览」。
                 现在把话术对齐成三个各自说清的动作：
-                  · 暂停 = 断开流（服务端立刻取消，不再打外网），已出的行**保留**，但这份清单不能用
-                  · 继续 = 从第一首重新匹配（后端不支持断点续传，别假装能接上）
+                  · 停止 = 断开流（服务端立刻取消，不再打外网），已出的行**保留**，但这份清单不能用
+                  · 重新预览 = 从第一首重新匹配（后端不支持断点续传，别假装能接上）
                   · 收起 = 只把这块收起来，不影响任何状态
-                原来叫「停止」容易被理解成「就停在这儿、之后能接着跑」，而那做不到。
+
+                2026-11-04 审查：原来这里有「暂停」，卡头有「停止预览」，两个按钮其实是同一个动作
+                （都调 stopPreview），两套说法让人以为「暂停」能续跑。现在**只留卡头一个停止入口**
+                （卡头按钮在预览时就是「停止预览」），面板里只放「重新预览 / 收起」，
+                避免同屏出现两个同义按钮。
               -->
               <button
-                v-if="previewState === 'running'"
-                class="rounded-full border border-[var(--ys-border)] bg-white px-3 py-1 text-[11px] text-[var(--ys-text-muted)] transition-colors hover:text-[var(--ys-text)]"
-                title="断开后服务端立刻停止匹配，已出的行会留着，但这份清单不完整、不能写入"
-                @click="stopPreview"
-              >暂停</button>
-              <button
-                v-else
+                v-if="previewState !== 'running'"
                 class="ys-btn ys-btn-sm ys-btn-primary ys-press"
                 :title="previewRows.length ? '从第一首重新匹配；现在这份列表会被清空' : '开始逐条匹配'"
                 @click="startPreview"
@@ -212,7 +210,7 @@
                 <tr>
                   <th class="px-2 py-1.5 text-left font-medium">文件</th>
                   <th class="px-2 py-1.5 text-left font-medium">匹配到</th>
-                  <th class="px-2 py-1.5 text-left font-medium">会写</th>
+                  <th class="px-2 py-1.5 text-left font-medium">计划补</th>
                 </tr>
               </thead>
               <tbody>
@@ -273,7 +271,7 @@
               这份清单不完整，不能执行 —— 重新预览一次
             </span>
             <span v-else-if="previewState === 'idle'" class="text-[11px] text-[var(--ys-text-aux)]">
-              已暂停，结果不完整；要继续请点「重新预览」（会从第一首重来）
+              已停止，结果不完整；要继续请点「重新预览」（会从第一首重来）
             </span>
           </div>
         </div>
@@ -447,7 +445,8 @@
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="it in lyricItems" :key="it.path" class="border-t border-[var(--ys-border)]">
+                <template v-for="it in lyricItems" :key="it.path">
+                  <tr class="border-t border-[var(--ys-border)]">
                   <td class="w-10 px-1.5 py-1.5 align-top">
                     <label v-if="!it.written" class="flex h-8 w-8 cursor-pointer items-center justify-center">
                       <input type="checkbox" :checked="it.selected" @change="toggleLyric(it)" />
@@ -496,6 +495,7 @@
                     <pre class="max-h-56 overflow-auto overscroll-contain whitespace-pre-wrap break-all rounded-[8px] border border-[var(--ys-border)] bg-white p-2 font-mono text-[10.5px] leading-relaxed text-[var(--ys-text-muted)]">{{ lyricPreviewText(it) }}</pre>
                   </td>
                 </tr>
+                </template>
               </tbody>
             </table>
           </div>
@@ -2100,6 +2100,9 @@ async function scanTitleFix() {
     saveTitleFix()
     if (!titleFixItems.value.length) flash('没扫到歌名可疑的曲目')
     else if (!titleFixAiReady.value) flash(`扫到 ${titleFixItems.value.length} 首，但还没配置 AI 大模型 —— 修不了`, true)
+    // 索引里还在、磁盘上已经没有的条目后端已剔除（否则「AI 修复」只会报备份失败）。
+    // 但这件事必须说出来：用户看到「上次 2 首、这次 1 首」会以为扫描结果飘了。
+    if (d.stale) flash(`另有 ${d.stale} 首在索引里但磁盘上已不存在（多半是删了/改名了），已跳过 —— 跑一次「扫描」可以清掉这些旧记录`)
     loadTitleFixRecords().catch(() => {})
   } catch (e) {
     flash(failText('扫描歌名', e), true)
@@ -2694,7 +2697,7 @@ const aiMatchedCount = computed(() => _aiMatchedCount(completeJob.value?.summary
 // 三个状态要分清，界面话术不能混：
 //   running —— 还在跑，条目继续往列表里加
 //   done    —— 跑完并拿到了 plan_id，可以「确认写入」
-//   idle    —— 用户中途暂停了（或流断了）：**没有 plan_id**，这份清单不完整
+//   idle    —— 用户中途停止了（或流断了）：**没有 plan_id**，这份清单不完整
 // 所以「能不能写」只看 planId，不看列表里有几行。
 const previewState = ref('idle') // idle | running | done
 const previewRows = ref([])
@@ -2702,13 +2705,15 @@ const previewMeta = ref({ done: 0, total: 0, matched: 0 })
 const previewPlanId = ref('')
 const previewDir = ref('')
 
-// 「暂停」= 断开流（服务端立刻取消，不再打外网），已出的行留着但**不能用**；
-// 「继续」就是重新发一次流（后端没有断点续传，所以是从第一首重来，按钮文案照实写）。
+// 「停止预览」= 断开流（服务端立刻取消，不再打外网），已出的行留着但**不能用**；
+// 「重新预览」就是重新发一次流（后端没有断点续传，所以是从第一首重来，按钮文案照实写）。
 // 刻意不做「挂起连接」的假暂停，理由见 client.js 里 streamNDJSON 的注释。
 let previewAbort = null
 
-const previewOpen = computed(() => previewing.value || previewState.value === 'running' || previewState.value === 'done')
-const previewHeading = computed(() => (previewState.value === 'done' ? '预览完成（还没有动过文件）' : '预览已暂停'))
+const previewOpen = computed(
+  () => previewing.value || previewState.value === 'running' || previewState.value === 'done' || previewRows.value.length > 0,
+)
+const previewHeading = computed(() => (previewState.value === 'done' ? '预览完成（还没有动过文件）' : '预览已停止'))
 const previewMatchedCount = computed(() => previewRows.value.filter((r) => r.matched).length)
 const previewPercent = computed(() => {
   const { done, total } = previewMeta.value
@@ -2735,13 +2740,21 @@ function resetPreviewState() {
   previewPlanId.value = ''
 }
 
-/** 停止预览（也算「暂停」）：断开连接，服务端立刻不再派发新曲目 */
+/** 停止预览：断开连接，服务端立刻不再派发新曲目（已出的行保留，但不能写入） */
 function stopPreview() {
   if (previewAbort) {
     try {
       previewAbort.abort()
     } catch (_) { /* 已断开就无所谓 */ }
   }
+  // 2026-11-04 审查：以前这里只 abort，状态由 startPreview 的收尾分支改 ——
+  // 那一支把 previewState 置回 'idle' 且清空了面板（预览块 v-if 不含 idle），
+  // 于是「停止」在用户眼里等于「刚才跑出来的十几行全没了」。
+  // 现在自己收尾：面板留着、已出的行留着，明确标成不完整。
+  previewing.value = false
+  if (previewState.value === 'running') previewState.value = 'idle'
+  // 计划只跑了一半，plan_id 一定不能留（否则用户会以为能拿这份不完整的清单去写）
+  previewPlanId.value = ''
 }
 
 function closePreview() {
@@ -2819,6 +2832,7 @@ async function startPreview() {
   )
 
   if (previewAbort === ctrl) previewAbort = null
+  else return // 已经开始了新一轮（或已被 stopPreview 收尾）：这轮的终态不该再改界面
   previewing.value = false
 
   // 用户自己停的：保留已出的行，明确告诉它这份不完整
@@ -2848,12 +2862,20 @@ async function executeComplete() {
   const pid = previewPlanId.value
   if (!pid) return flash('预览已失效，请重新预览', true)
 
+  // 按钮上写的是「确认写入 N 首」（N = 匹配到的首数），后端回的是计划条目数（含没匹配上的）。
+  // 两个数字对不上时用户会以为点错了，所以这里按同一个口径说清楚。
+  const matched = previewMatchedCount.value
+  const total = previewRows.value.length
   previewPlanId.value = ''
   try {
     const res = await TidyAPI.executeComplete(pid)
     completeJob.value = res?.data
-    flash(res?.message || '已开始写入')
-    logInfo('补全写入', `已开始写入（计划 ${pid}）`)
+    flash(
+      matched && matched !== total
+        ? `已开始写入 ${total} 首（其中匹配到 ${matched} 首，没匹配上的会记成「没搜到」）`
+        : (res?.message || '已开始写入'),
+    )
+    logInfo('补全写入', `已开始写入（计划 ${pid}，匹配 ${matched}/${total}）`)
     startCompletePolling()
     // 计划已消费，面板收起（进度接棒显示在下面的补全卡片里）
     resetPreviewState()

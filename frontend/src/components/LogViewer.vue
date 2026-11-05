@@ -64,6 +64,10 @@
         <input v-model="autoRefresh" type="checkbox" class="" />
         自动刷新（5 秒）
       </label>
+      <label v-if="tab === 'server'" class="flex items-center gap-1.5 pb-2 text-[11px] text-gray-500">
+        <input v-model="onlyFailed" type="checkbox" class="" />
+        只看失败
+      </label>
       <label v-else-if="tab === 'task'" class="ml-auto flex items-center gap-1.5 pb-2 text-[11px] text-gray-500">
         <input v-model="onlyFailed" type="checkbox" class="" />
         只看失败
@@ -76,13 +80,49 @@
 
     <!-- 运行日志（后端 + 前端上报，同一时间轴） -->
     <div v-if="tab === 'server'" class="overflow-hidden rounded-[var(--ys-radius-block)] border border-[var(--ys-border)] bg-white">
+      <!-- 写盘/轮转失败：从 /api/logs 的 disk_error 透出，不能只在导出包里才看得见 -->
+      <p v-if="serverDiskError" class="border-b border-rose-200 bg-rose-50 px-3 py-2 text-[12px] text-rose-700">
+        日志写盘失败：{{ serverDiskError }}（内存里的记录不受影响；请检查设置里的日志存储目录）
+      </p>
+      <!-- 筛选条：级别 / 来源 / 关键字。2000 条缓冲里找一条失败记录，
+           没有筛选等于没有日志。筛选只作用于已加载的最近 500 条（见页脚说明）。 -->
+      <div class="flex flex-wrap items-center gap-2 border-b border-[var(--ys-border)] bg-[var(--ys-surface-sunken)] px-3 py-2">
+        <input
+          v-model="logQuery"
+          type="search"
+          placeholder="搜索日志内容 / 来源 / 时间…"
+          class="min-w-[180px] flex-1 rounded-[6px] border border-[var(--ys-border)] bg-white px-2 py-1 text-[12px] text-[var(--ys-text)] outline-none focus:border-[var(--ys-accent)]"
+        />
+        <select
+          v-model="levelFilter"
+          class="rounded-[6px] border border-[var(--ys-border)] bg-white px-2 py-1 text-[12px] text-[var(--ys-text)]"
+        >
+          <option v-for="o in levelOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
+        </select>
+        <select
+          v-model="sourceFilter"
+          class="rounded-[6px] border border-[var(--ys-border)] bg-white px-2 py-1 text-[12px] text-[var(--ys-text)]"
+        >
+          <option v-for="o in sourceOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
+        </select>
+        <button
+          v-if="filterActive"
+          class="rounded-[6px] px-2 py-1 text-[12px] text-[var(--ys-text-muted)] hover:bg-black/[0.03] hover:text-[var(--ys-text)]"
+          @click="resetFilters"
+        >清除筛选</button>
+      </div>
       <p v-if="!serverEntries.length" class="m-3 rounded-xl border border-dashed border-[var(--ys-border)] bg-[var(--ys-surface-sunken)] py-12 text-center text-[12px] text-gray-500">
         还没有日志 —— 后端启动信息、请求与报错都会出现在这里
       </p>
+      <p v-else-if="!visibleServer.length" class="m-3 rounded-xl border border-dashed border-[var(--ys-border)] bg-[var(--ys-surface-sunken)] py-12 text-center text-[12px] text-gray-500">
+        当前筛选条件下没有匹配的日志 —— 试试放宽级别 / 来源，或清空搜索词
+      </p>
       <template v-else>
         <div class="max-h-[620px] divide-y divide-[var(--ys-border)] overflow-y-auto">
-          <div v-for="(e, i) in serverEntries" :key="i" class="flex items-start gap-3 px-4 py-2">
-            <span class="shrink-0 pt-0.5 font-mono text-[11px] text-gray-500">{{ e.at }}</span>
+          <div v-for="(e, i) in visibleServer" :key="i" class="flex items-start gap-3 px-4 py-2">
+            <!-- 显示浏览器本地时间（含日期），不再直显 NAS 的 UTC 墙钟。
+                 title 里保留后端原始 RFC3339，便于与导出包逐行对照。 -->
+            <span class="shrink-0 pt-0.5 font-mono text-[11px] text-gray-500" :title="e.time || e.at">{{ serverTime(e) }}</span>
             <span
               class="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium"
               :class="levelClass(e.level)"
@@ -91,7 +131,7 @@
               class="shrink-0 rounded px-1.5 py-0.5 text-[10px]"
               :class="sourceClass(e.source)"
               :title="e.source === 'frontend' ? '由网页端上报（你刚才的操作）' : '服务端自身产生'"
-            >{{ sourceLabel(e.source) }}</span>
+            >{{ sourceText(e.source) }}</span>
             <span
               class="min-w-0 flex-1 break-all font-mono text-[12px] leading-relaxed"
               :class="e.level === 'error' ? 'text-rose-700' : (e.level === 'warn' ? 'text-amber-700' : 'text-gray-700')"
@@ -99,12 +139,14 @@
           </div>
         </div>
         <p class="border-t border-[var(--ys-border)] px-4 py-2 text-[11px] text-gray-500">
-          共 {{ serverTotal }} 条 ·
+          显示 {{ visibleServer.length }} / 已加载 {{ serverEntries.length }} 条 · 缓冲共 {{ serverTotal }} 条 ·
+          <span v-if="filterActive" class="text-amber-700">筛选只在已加载的最近 500 条内进行，更早的匹配请用「导出」查全量 · </span>
           <span v-if="serverLogFile" class="break-all text-gray-500">
-            这里只显示最近 500 条；全部记录已落盘到 {{ serverLogFile }}（按 20MB 轮转，重启不清空）
+            落盘 {{ serverLogFile }}（按 20MB 轮转，重启不清空；导出包内含当前与上一代文件）
           </span>
           <span v-else>未开启落盘：只保留在内存里，重启应用即清空（可在设置里打开）</span>
-          · <span class="text-gray-500">「前端」= 网页端上报的操作报错</span>
+          · <span class="text-gray-500">「清空」只清内存视图，不删除落盘文件</span>
+          · <span class="text-gray-500">时间为浏览器本地时区，悬停可看原始时间戳</span>
         </p>
       </template>
     </div>
@@ -138,7 +180,7 @@
       <template v-else>
         <div class="max-h-[620px] divide-y divide-[var(--ys-border)] overflow-y-auto">
           <div v-for="(e, i) in visibleLocal" :key="i" class="flex items-start gap-3 px-4 py-2">
-            <span class="shrink-0 pt-0.5 font-mono text-[11px] text-gray-500">{{ e.at }}</span>
+            <span class="shrink-0 pt-0.5 font-mono text-[11px] text-gray-500" :title="e.time || e.at">{{ localTime(e) }}</span>
             <span
               class="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium"
               :class="levelClass(e.level)"
@@ -166,6 +208,8 @@ import { markLoaded, isStale } from '../services/viewCache'
 import { currentView, segmentOf } from '../services/navBus'
 import { LogsAPI, MonitorAPI, PushAPI } from '../api/client'
 import { logEntries, clearLocalLog } from '../services/appLog'
+import { tsOfServer, fmtLocalDateTime, fmtServerDateTime, entryTimeText } from '../services/logTime'
+import { LEVEL_OPTIONS, collectSources, matchesQuery, serverEntryMatches, sourceText } from '../services/logFilter'
 import { fail as failText } from '../services/userMsg'
 import { fail as notifyFail } from '../services/feedback'
 import PageShell from './PageShell.vue'
@@ -174,6 +218,9 @@ const tab = ref('server')
 const loading = ref(false)
 const autoRefresh = ref(true)
 const onlyFailed = ref(false)
+const logQuery = ref('')
+const levelFilter = ref('all')
+const sourceFilter = ref('all')
 const exporting = ref(false)
 // 清空的两步确认（见模板）：以前这里还有一个 window.confirm()，是全项目最后一处
 // 原生弹窗——已经统一成「就在原地再点一次」。
@@ -183,6 +230,8 @@ const serverEntries = ref([])
 const serverTotal = ref(0)
 // 落盘文件路径（设置里配置了「日志存储位置」时非空）——页脚提示日志同时写到了哪里
 const serverLogFile = ref('')
+// 最近一次写盘/轮转失败原因（后端 GET /api/logs 的 disk_error），空串 = 正常
+const serverDiskError = ref('')
 const taskRuns = ref([])
 const localEntries = ref([])
 
@@ -192,15 +241,29 @@ const tabs = computed(() => [
   { id: 'local', name: '操作日志', count: localEntries.value.length || '' },
 ])
 
-const visibleTaskRuns = computed(() =>
-  onlyFailed.value ? taskRuns.value.filter((r) => !r.ok) : taskRuns.value,
-)
+const visibleTaskRuns = computed(() => taskRuns.value.filter((r) =>
+  (!onlyFailed.value || !r.ok) && matchesQuery(logQuery.value, r.name, r.kind, r.detail, r.at),
+))
 
 // 本地留存是时间正序，界面按「新的在上」显示
 const visibleLocal = computed(() => {
   const list = localEntries.value.slice().reverse()
-  return onlyFailed.value ? list.filter((e) => e.level === 'error') : list
+  return list.filter((e) => (!onlyFailed.value || e.level === 'error')
+    && matchesQuery(logQuery.value, e.message, e.scope, e.level))
 })
+
+const levelOptions = LEVEL_OPTIONS
+// 来源选项跟着实际数据走（后端还有 api / nas / library / downloader 等来源）
+const sourceOptions = computed(() => collectSources(serverEntries.value))
+const filterActive = computed(() =>
+  logQuery.value.trim() !== '' || levelFilter.value !== 'all' || sourceFilter.value !== 'all' || onlyFailed.value,
+)
+function resetFilters() {
+  logQuery.value = ''
+  levelFilter.value = 'all'
+  sourceFilter.value = 'all'
+  onlyFailed.value = false
+}
 
 function levelLabel(l) {
   if (l === 'error') return '错误'
@@ -214,28 +277,39 @@ function levelClass(l) {
   return 'bg-[var(--ys-surface-sunken)] text-gray-500'
 }
 
-/** 日志来源：后端自身 / 网页端上报 */
-function sourceLabel(s) {
-  return s === 'frontend' ? '前端' : '后端'
-}
-
+/** 日志来源显示名（backend / frontend 之外还有 api / nas / library 等） */
 function sourceClass(s) {
   return s === 'frontend' ? 'bg-blue-50 text-blue-600' : 'bg-[var(--ys-surface-sunken)] text-gray-500'
 }
 
-/** 把秒级 / 毫秒级时间戳或 ISO 字符串统一成毫秒数，便于排序 */
-function tsOf(v) {
-  if (!v) return 0
-  if (typeof v === 'number') return v > 1e12 ? v : v * 1000
-  const t = Date.parse(v)
-  return Number.isNaN(t) ? 0 : t
+/** 把秒级 / 毫秒级时间戳或时间字符串统一成毫秒数，便于排序（见 services/logTime.js） */
+function fmtTime(v) {
+  // 任务日志两列并排，时间戳保持紧凑的「日期 + 时分秒」；无法解析时回退原文。
+  // 保留这个包装是为了让「展示格式」在组件内只定义一处；任务日志的两组来源
+  // 都走 fmtServerDateTime（旧 monitor 记录是 naive UTC 墙钟，push 是 Unix 秒）。
+  return fmtServerDateTime(v)
 }
 
-function fmtTime(v) {
-  const ms = tsOf(v)
-  if (!ms) return String(v || '')
-  return new Date(ms).toLocaleTimeString('zh-CN', { hour12: false })
+// 服务端新条目带 RFC3339 的 time（含时区），必须显示浏览器本地时间，
+// 不能直显 NAS 的 UTC 墙钟（差 8 小时）。at 仅是没有新字段的旧数据兜底。
+function serverTime(e) {
+  return entryTimeText(e)
 }
+
+// 操作日志同理：新条目带 time（见 services/appLog.js 的 stampISO）→ 完整本地
+// 日期时间；旧留存只有 "MM-DD HH:MM:SS"（浏览器本地墙钟、无年份）→ 原样显示。
+function localTime(e) {
+  return entryTimeText(e)
+}
+
+const visibleServer = computed(() => serverEntries.value.filter((e) =>
+  serverEntryMatches(e, {
+    level: levelFilter.value,
+    source: sourceFilter.value,
+    onlyFailed: onlyFailed.value,
+    query: logQuery.value,
+  }),
+))
 
 async function loadServer() {
   try {
@@ -245,6 +319,7 @@ async function loadServer() {
     serverEntries.value = (res?.data?.entries || []).slice().reverse()
     serverTotal.value = res?.data?.total ?? serverEntries.value.length
     serverLogFile.value = res?.data?.log_file || ''
+    serverDiskError.value = res?.data?.disk_error || ''
   } catch (_) {
     // 后端不可用时静默：日志页本身不该再制造报错
   }
@@ -286,9 +361,11 @@ async function loadTasks() {
       if (r.new_items) counts.push(`新增 ${r.new_items}`)
       if (r.downloaded) counts.push(`下载 ${r.downloaded}`)
       if (r.failed) counts.push(`失败 ${r.failed}`)
+      // 旧运行记录是不带 offset 的 UTC 墙钟（见 services/logTime.js 的 tsOfServer），
+      // 必须按 UTC 解析再换算本地，否则北京用户看到的时间比实际早 8 小时。
       out.push({
-        ts: tsOf(r.started_at),
-        at: fmtTime(r.started_at),
+        ts: tsOfServer(r.started_at),
+        at: fmtServerDateTime(r.started_at),
         kind: '推送到曲库',
         name: r.monitor_name || nameById.get(r.monitor_id) || r.monitor_id || '监控任务',
         ok: r.status === 'ok' || r.status === 'success',
@@ -307,9 +384,11 @@ async function loadTasks() {
       if (res.matched) counts.push(`匹配 ${res.matched} 首`)
       if (res.added) counts.push(`入歌单 ${res.added} 首`)
       if (res.missing) counts.push(`缺 ${res.missing} 首`)
+      // push 的 started_at 是 Unix 秒（绝对时刻明确），走通用的 fmtTime 即可；
+      // 但旧数据万一混进来的是 naive ISO，fmtServerDateTime 按 UTC 解析也不会错。
       out.push({
-        ts: tsOf(r.started_at),
-        at: fmtTime(r.started_at),
+        ts: tsOfServer(r.started_at),
+        at: fmtServerDateTime(r.started_at),
         kind: '推送到飞牛歌单',
         name: r.task_name || r.task_id || '同步任务',
         ok: r.status === 'success',

@@ -463,6 +463,17 @@ func (q *Queue) runOne(it Item) {
 	// 保证「刚领取就被暂停」也能取消。
 	q.mu.Lock()
 	q.inflight[it.ID] = cancel
+	// 领取（claimNext）与登记之间有个微小窗口：这条已标成 downloading，但取消
+	// 句柄还没进 inflight —— 若用户恰好在这个窗口点了暂停/停止（含「停止全部」），
+	// Apply 改了状态却收不到要取消的连接。不补这个检查，刚领取就被停的任务会
+	// 照常取音下完，结束后还把用户的状态覆盖成 success/failed。
+	if idx := q.indexLocked(it.ID); idx < 0 || q.items[idx].Status != StatusDownloading {
+		delete(q.inflight, it.ID)
+		q.mu.Unlock()
+		cancel()
+		q.logf("[BACKEND-DL] 刚领取即被暂停/停止，不取音：%s - %s", it.Singer, it.Name)
+		return
+	}
 	q.mu.Unlock()
 
 	res, err := q.fetch(ctx, it)
@@ -825,7 +836,11 @@ func migrateStatus(s string) (string, bool) {
 
 // Apply 执行一个控制动作。返回受影响（真的改变）的条数。
 //
-// pause/resume 不带 ids 时作用于整队（暂停位）；其余动作必须给 ids。
+// pause/resume 不带 ids 时作用于整队（暂停位）；stop/cancel 不带 ids 时是
+// **整队停止**（前端「停止全部」的契约）：队列里所有 pending/downloading/paused
+// 原子地全部停止并收掉在途连接，success/failed/stopped 终态不动，整队暂停位
+// 保持不变 —— 停完之后下一首不得开跑；retry_failed 不带 ids 重试全部失败项。
+// 其余动作必须给 ids。
 // 单条暂停/停止会取消在途取音（ctx），并保留状态 —— worker 稍后回来看到
 // 状态已是 paused/stopped 就不会覆盖。正在下载的歌**不可能**被标成 success：
 // 取消后的半文件是下载器的 .part（可续传），不是成品。
@@ -910,7 +925,17 @@ func (q *Queue) Apply(action string, ids []string) (int, error) {
 		}
 
 	case ActionStop, ActionCancel:
-		hit = byIDs(ids, func(idx int) (bool, string) {
+		// 空 ids = 整队停止（前端「停止全部」）：队列里所有 pending/downloading/paused
+		// 原子地全部停止，**不是**只停当前这条、下一首继续开跑。整队状态与逐条
+		// 停止在同一个锁段里完成，用户刚提交、前端还没同步到的任务也在覆盖范围内。
+		targets := ids
+		if len(targets) == 0 {
+			targets = make([]string, 0, len(q.items))
+			for i := range q.items {
+				targets = append(targets, q.items[i].ID)
+			}
+		}
+		hit = byIDs(targets, func(idx int) (bool, string) {
 			switch q.items[idx].Status {
 			case StatusPending, StatusPaused, StatusDownloading:
 				if c, ok := q.inflight[q.items[idx].ID]; ok {

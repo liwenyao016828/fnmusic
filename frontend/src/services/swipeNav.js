@@ -218,6 +218,18 @@ export function velocityFrom(samples, now, windowMs = 120) {
  *
  * @param {{tag?:string,type?:string,editable?:boolean,canScrollX?:boolean,inPlayer?:boolean,noDrag?:boolean}} desc
  */
+/**
+ * 这个元素自己真的能横向滚动吗？
+ * overflow-y:auto 会把 overflow-x 的计算值也变成 auto；当祖先是宽滑轨时，
+ * 它的 scrollWidth 还会包含视口外的内容。只有 scrollLeft 真能动才让路。
+ */
+export function hasUsableHorizontalScroll({ overflowX, scrollWidth = 0, clientWidth = 0, scrollLeft = 0, probe } = {}) {
+  if (!['auto', 'scroll'].includes(overflowX)) return false
+  if (scrollWidth <= clientWidth + 1) return false
+  if (scrollLeft > 0) return true
+  return typeof probe === 'function' ? probe() === true : true
+}
+
 export function isSwipeBlocked(desc) {
   if (!desc || typeof desc !== 'object') return false
   if (desc.noDrag) return true // 显式标了 .swipe-no-drag

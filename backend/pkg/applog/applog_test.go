@@ -3,6 +3,7 @@ package applog
 import (
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 )
 
@@ -180,5 +181,98 @@ func TestAddFromTruncatesLongMessage(t *testing.T) {
 	}
 	if !utf8.ValidString(got[0].Message) {
 		t.Error("按字符截断后必须仍是合法 UTF-8（不能把多字节字符切一半）")
+	}
+}
+
+// Entry.Time 必须是**带时区的绝对时刻**（RFC3339）。旧实现只有 at="15:04:05"，
+// 前端直接显示 → NAS（UTC）上比用户本地慢 8 小时，且跨天完全不可读。
+func TestAddSetsRFC3339Time(t *testing.T) {
+	b := New(10)
+	b.Add("服务端日志")
+	e := b.Recent(0)[0]
+	if e.Time == "" {
+		t.Fatal("Entry.Time 不应为空")
+	}
+	parsed, err := time.Parse(time.RFC3339, e.Time)
+	if err != nil {
+		t.Fatalf("Entry.Time 应为 RFC3339，实际 %q：%v", e.Time, err)
+	}
+	if d := time.Since(parsed); d < -time.Minute || d > time.Minute {
+		t.Errorf("Entry.Time 应接近当前时刻，偏差 %s", d)
+	}
+	// 同一时刻在 at 里只有时分秒，date 部分必须能从 Time 里还原出来。
+	if !strings.HasPrefix(e.Time, parsed.Format("2006-01-02")) {
+		t.Errorf("Time 应含日期，实际 %q", e.Time)
+	}
+}
+
+func TestAddFromSetsRFC3339Time(t *testing.T) {
+	b := New(10)
+	b.AddFrom(SourceFrontend, "warn", "前端告警")
+	e := b.Recent(0)[0]
+	if _, err := time.Parse(time.RFC3339, e.Time); err != nil {
+		t.Fatalf("AddFrom 的 Entry.Time 应为 RFC3339，实际 %q：%v", e.Time, err)
+	}
+}
+
+// AddFromAt：浏览器带上的绝对时刻，偏差超过容差才被采用。
+//
+// 用户 2026-11-03 口径「本地 22 点日志显示 14 点」的另一半防线：
+// 前端上报的 at 必须带 offset，且只有真正差得多（时钟/时区设错）才信它。
+func TestAddFromAtUsesReportedTimeWhenSkewed(t *testing.T) {
+	b := New(10)
+	// 浏览器在 +08:00，NAS 是 UTC：同一个真实事件，浏览器算的绝对时刻与
+	// 服务器「此刻」相差 8 小时（> 1 分钟容差）→ 采用浏览器时刻。
+	at := time.Now().Add(8 * time.Hour).Format(time.RFC3339)
+	b.AddFromAt(SourceFrontend, "warn", "时钟差 8 小时", at)
+	e := b.Recent(0)[0]
+	parsed, err := time.Parse(time.RFC3339, e.Time)
+	if err != nil {
+		t.Fatalf("Entry.Time 应为 RFC3339，实际 %q：%v", e.Time, err)
+	}
+	if d := parsed.Sub(time.Now().Add(8 * time.Hour)); d < -2*time.Minute || d > 2*time.Minute {
+		t.Errorf("应采用浏览器上报的时刻（约 8 小时后），实际偏差 %s（entry=%s）", d, e.Time)
+	}
+}
+
+func TestAddFromAtIgnoresSmallSkew(t *testing.T) {
+	b := New(10)
+	// 几秒的偏差（网络往返级别）不该换时钟 —— 时间轴要稳定
+	at := time.Now().Add(5 * time.Second).Format(time.RFC3339)
+	b.AddFromAt(SourceFrontend, "warn", "只差 5 秒", at)
+	e := b.Recent(0)[0]
+	parsed, _ := time.Parse(time.RFC3339, e.Time)
+	if d := parsed.Sub(time.Now()); d < -2*time.Minute || d > 2*time.Minute {
+		t.Errorf("小偏差应仍用服务器时钟，实际偏差 %s（entry=%s）", d, e.Time)
+	}
+}
+
+func TestAddFromAtRejectsNaiveAndGarbage(t *testing.T) {
+	// 不带 offset 的墙上钟点、垃圾串、空串 → 一律当没给（用服务器时钟，且不报错）
+	for _, bad := range []string{"2026-11-03T22:00:00", "not-a-time", ""} {
+		b := New(10)
+		b.AddFromAt(SourceFrontend, "error", "坏的 at", bad)
+		e := b.Recent(0)[0]
+		parsed, err := time.Parse(time.RFC3339, e.Time)
+		if err != nil {
+			t.Fatalf("at=%q：Entry.Time 仍应为 RFC3339，实际 %q：%v", bad, e.Time, err)
+		}
+		if d := parsed.Sub(time.Now()); d < -2*time.Minute || d > 2*time.Minute {
+			t.Errorf("at=%q：应忽略坏值用服务器时钟，实际 %s", bad, e.Time)
+		}
+	}
+}
+
+// 老调用方（AddFrom 三参）必须照旧能用 —— api/nas/library 等十几处后端内部上报
+// 不带浏览器时刻，走的都是这条兼容路径。
+func TestAddFromStillWorks(t *testing.T) {
+	b := New(10)
+	b.AddFrom(SourceFrontend, "warn", "老路径")
+	e := b.Recent(0)[0]
+	if e.Source != SourceFrontend || e.Level != "warn" {
+		t.Errorf("AddFrom 兼容路径字段不符：%+v", e)
+	}
+	if _, err := time.Parse(time.RFC3339, e.Time); err != nil {
+		t.Errorf("AddFrom 也应产出 RFC3339 Time：%v", err)
 	}
 }

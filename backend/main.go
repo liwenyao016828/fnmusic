@@ -189,6 +189,10 @@ func main() {
 			// 页面注入的一键退路（见 pkg/intercept/pageshell.go）：关掉之后
 			// 官方页面由接管层反向代理逐字节原样透传，与没做注入时完全一致。
 			UIInjectEnabled: func() bool { return cfgMgr.Get().InjectUIEnabled() },
+			// 注入面板四个功能块的显隐（quality/assistant/jump/download）。
+			// 现取：每次打开面板 / 每次菜单弹出，拦截层都重新问一遍配置，
+			// 关掉的功能下一次打开面板就消失，不用重启应用。
+			UIPanelFeatures: func() map[string]bool { return cfgMgr.Get().UIPanelFeatures() },
 			// 试听的音质偏好（见 pkg/intercept/playback_quality.go）。现取：
 			// 在飞牛页面里点了切换，**下一首歌**就按新档位取，不用重启应用。
 			PlaybackQuality: func() string { return cfgMgr.Get().PlaybackQuality },

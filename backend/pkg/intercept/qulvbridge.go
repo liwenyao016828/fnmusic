@@ -96,6 +96,30 @@ func (i *Interceptor) handleQulvUIJS(w http.ResponseWriter, r *http.Request) boo
 	return true
 }
 
+// panelFeatures 返回面板四个功能块的**实际生效**状态，给 /api/info 用。
+//
+// 三道防线，全是为了「旧东西不坏」：
+//   - Config 没接线（老调用方 / 测试 harness）→ 全开，面板行为与从前一样；
+//   - hook 返回了 nil → 同上；
+//   - hook 返回的 map 缺某个键 → 该键按开算 —— 配置层新加键、调用方漏升级，
+//     表现应该是「多显示一个功能」，而不是「功能凭空消失」。
+//
+// 为什么不缓存：hook 是现取的（见 Config.UIPanelFeatures），缓存一份就等于
+// 「改完要重启」。
+func (i *Interceptor) panelFeatures() map[string]bool {
+	all := map[string]bool{"quality": true, "assistant": true, "jump": true, "download": true}
+	if i.panelFeats == nil {
+		return all
+	}
+	got := i.panelFeats()
+	for k := range all {
+		if on, ok := got[k]; ok && !on {
+			all[k] = false
+		}
+	}
+	return all
+}
+
 // handleQulvInfo 把「只有后端知道的事」交给注入脚本。
 //
 // 现在只有两件：应用版本号（面板上显示，也方便对着截图确认装的是哪一版），
@@ -111,6 +135,9 @@ func (i *Interceptor) handleQulvInfo(w http.ResponseWriter, r *http.Request) boo
 		"quality_options":  playbackQualityOptions,
 		"quality_ladder":   online.PlaybackLadder,
 		"quality_editable": i.cfg.SetPlaybackQuality != nil,
+		// 面板四个功能块的显隐（quality/assistant/jump/download）。脚本拿它
+		// 关 widget；缺这个字段的老脚本/新后端各按自己的默认（全开）走。
+		"panel_features": i.panelFeatures(),
 	})
 	return true
 }

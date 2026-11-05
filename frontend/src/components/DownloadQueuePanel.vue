@@ -12,7 +12,7 @@
         · ⋯：全部恢复 / 重试失败 / 停止全部 / 一键清除记录（下载设置已搬成工具栏上的齿轮按钮）
         · 勾选了任务才浮出底部操作条（清除选中 / 全选当前筛选）
     -->
-    <div class="flex shrink-0 flex-col gap-2 border-b border-[var(--ys-border)] bg-white px-3 py-2.5 sm:px-4">
+    <div class="ys-download-toolbar flex shrink-0 flex-col gap-2 border-b border-[var(--ys-border)] bg-white px-3 py-2.5 sm:px-4">
       <!--
         2026-10-25 用户：「下载-队列-去掉目录选择。移除三小点下拉框，全部恢复、重试失败、
         停止全部、去除记录都移出来。并根据屏幕大小适配图标与文字精简效果。」
@@ -23,7 +23,7 @@
         **队列页不再有目录入口**：落盘目录在「系统 → 设置 → 存储目录」唯一一处修改，
         这里连只读路径也不摆了 —— 用户点名「去掉目录选择」，留着只读路径仍会让人误以为能点。
       -->
-      <div class="flex min-w-0 flex-col gap-y-1.5 sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-2">
+      <div class="flex min-w-0 flex-col gap-y-1.5">
         <!--
           筛选分段控件（沉底轨道 + 白色药丸）。
           2026-11-01（用户）：「下载页面（全部，下载中，已暂停，已停止…）这几个在移动端要
@@ -51,7 +51,7 @@
           </button>
         </div>
 
-        <div class="flex shrink-0 items-center justify-end gap-0.5">
+        <div class="ys-download-actions flex min-w-0 flex-wrap items-center justify-end gap-0.5">
           <!--
             队列的「暂停 / 继续」合成**一个常显的切换按钮**：此刻能做什么就画什么。
             用户 2026-10-25：「下载页面我怎么看到的还是没有继续的三角形图标」——
@@ -74,19 +74,15 @@
           </button>
 
           <span class="mx-0.5 h-4 w-px bg-[var(--ys-border)]" aria-hidden="true"></span>
-          <!--
-            原来藏在右侧「⋯」里的四件事，现在摆在明面上。
-            自适应两级：≥lg 图标 + 文字（lg 以下空间紧，中屏也只剩图标，
-            档位比上一版（sm 就出文字）后移一档，避免 640–900px 区间文字挤爆）。
-          -->
+          <!-- 文字按工具栏实际宽度分三档；失败高亮不改变按钮占位。 -->
           <button
             v-for="act in queueActions" :key="act.id"
             type="button"
             :disabled="act.disabled"
-            :title="act.hint || act.label"
+            :title="act.hint ? `${act.label}：${act.hint}` : act.label"
             :aria-label="act.label"
             :class="[
-              'ys-press flex items-center gap-1 rounded-full px-1.5 py-1.5 text-[11.5px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-35 lg:px-2 lg:gap-1.5',
+              'ys-download-action ys-press flex shrink-0 items-center justify-center gap-1 whitespace-nowrap rounded-full px-2 py-1.5 text-[11.5px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-35',
               act.highlight
                 ? 'text-emerald-600 hover:bg-emerald-50'
                 : act.danger
@@ -96,15 +92,8 @@
             @click="onQueueMenu(act.id)"
           >
             <component :is="act.icon" class="h-4 w-4 shrink-0" :stroke-width="1.9" />
-            <!--
-              ⚠️ Issue #8 真正的坑在这里（2026-10-25 复测才发现）。
-              以前这一行是写死的 `hidden lg:inline`：小于 1024px 时**所有**批量按钮
-              都只剩一个图标。用户在手机（420px）上看到的是四个无字圆形图标，
-              自然一直在问「一键重试到底做了没有」—— 功能是好的，只是没有字。
-              现在：`act.highlight`（失败数 > 0 的重试失败）**任何宽度都出文字**，
-              因为它正是用户要找的那个按钮；其余按钮维持 lg 起出文字，窄屏靠 aria-label。
-            -->
-            <span :class="act.highlight ? 'inline' : 'hidden lg:inline'">{{ act.label }}</span>
+            <span class="ys-download-action__full" aria-hidden="true">{{ act.label }}</span>
+            <span class="ys-download-action__short" aria-hidden="true">{{ act.short }}</span>
           </button>
         </div>
       </div>
@@ -229,7 +218,7 @@
       也没法批量暂停。现在**所有行都能勾**，能不能暂停/停止由选中后浮出的批量条按状态决定。
     -->
     <div
-      v-for="(task, rowIndex) in filteredTasks"
+      v-for="(task, rowIndex) in pagedTasks"
       :key="task.id"
       :class="[
         'group flex items-center gap-3 rounded-[12px] border bg-white p-3 transition-all select-none cursor-pointer',
@@ -245,7 +234,7 @@
         没有这一列数字，用户输 11-200 时无从对照。
       -->
       <span class="w-7 shrink-0 text-center font-mono text-[11px] text-gray-300 tabular-nums">
-        {{ rowIndex + 1 }}
+        {{ (page - 1) * pageSize + rowIndex + 1 }}
       </span>
 
       <!-- 选中状态指示：所有行都有（2026-10-25 #4 起在跑/排队的行也能勾）；绿勾 = 已选，灰圈 = 可点但未选 -->
@@ -510,6 +499,17 @@
       </div>
     </div>
   </div>
+
+  <ListPager
+    label="下载任务分页"
+    :page="page"
+    :page-size="pageSize"
+    :sizes="DOWNLOAD_PAGE_SIZES"
+    :total="filteredTasks.length"
+    class="shrink-0 bg-white px-3 pb-2 sm:px-4"
+    @change-page="changePage"
+    @change-size="changePageSize"
+  />
   </div>
 
   <!--
@@ -593,6 +593,9 @@ import { backendDownload } from '../services/backendDownload.js'
 import RangeSelectBar from './RangeSelectBar.vue'
 import { pickByIndexes } from '../services/rangeSelect'
 import { explainFailure } from '../services/failureBadge'
+import { loadPref, savePref } from '../services/prefs'
+import { displayPage, normalizePageSize, clampPage } from '../services/displayPaging'
+import ListPager from './ListPager.vue'
 import { ok as notifyOk, warn as notifyWarn } from '../services/feedback'
 import {
   X, RotateCw, Trash2, Check,
@@ -603,6 +606,10 @@ import {
 const props = defineProps({
   activeSource: Object
 })
+
+const DOWNLOAD_PAGE_SIZES = [12, 24, 48, 96]
+const pageSize = ref(normalizePageSize(loadPref('download_page_size', 24)))
+const page = ref(1)
 
 /**
  * 后台能力提示：只在前端**得说话**的时候才显示（正常情况下整行不占位）。
@@ -676,9 +683,10 @@ function onToggleQueue() {
  * 数量为 0 时禁用而不是隐藏 —— 按钮位置固定，用户才不会觉得「少了一项」。
  */
 const queueActions = computed(() => [
-  { id: 'resumeStopped', label: '全部恢复', icon: RotateCw, disabled: stoppedCount.value === 0, hint: `继续 ${stoppedCount.value} 首已停止的任务（重新排队）` },
+  { id: 'resumeStopped', label: '全部恢复', short: '恢复', icon: RotateCw, disabled: stoppedCount.value === 0, hint: `继续 ${stoppedCount.value} 首已停止的任务（重新排队）` },
   {
     id: 'retryFailed',
+    short: '重试',
     // Issue #8：用户要的是「一键重试」**能看见**。失败时标签直接带数字，
     // 不再只靠悬停提示；同时加 emerald 高亮，与旁边灰按钮区分开。
     label: downloadManager.failedCount.value > 0 ? `重试失败（${downloadManager.failedCount.value}）` : '重试失败',
@@ -691,6 +699,7 @@ const queueActions = computed(() => [
   },
   {
     id: 'redownload',
+    short: '重下',
     // 2026-10-30 用户：「右边原来的去掉全选的位置,改为重新下载」。
     // 这里原来是「全选当前」（已移到列表上方的「按序号选」那一行），
     // 空出来的位置放「重新下载」：把已完成的任务用当前音质策略再要一遍，
@@ -702,8 +711,8 @@ const queueActions = computed(() => [
       ? `把勾选的 ${selectedDoneCount.value} 首已完成任务用当前音质重新下载（盘上那份不会被更差的覆盖）`
       : '先在左侧勾选已完成的歌曲，再点这里用当前音质重新下载',
   },
-  { id: 'stopAll', label: '停止全部', icon: Square, danger: true, disabled: downloadManager.activeCount.value + downloadManager.pausedCount.value === 0, hint: '停掉正在下载与排队中的任务（已完成的不受影响）' },
-  { id: 'clearRecords', label: '清除记录', icon: Eraser, danger: true, disabled: terminalCount.value === 0, hint: `清除已完成 / 失败 / 已停止的 ${terminalCount.value} 条记录` },
+  { id: 'stopAll', label: '停止全部', short: '停止', icon: Square, danger: true, disabled: downloadManager.activeCount.value + downloadManager.pausedCount.value === 0, hint: '停掉正在下载与排队中的任务（已完成的不受影响）' },
+  { id: 'clearRecords', label: '清除记录', short: '清除', icon: Eraser, danger: true, disabled: terminalCount.value === 0, hint: `清除已完成 / 失败 / 已停止的 ${terminalCount.value} 条记录` },
 ])
 
 /**
@@ -1154,4 +1163,42 @@ const filteredTasks = computed(() => {
   }
   return order
 })
+
+const pagedTasks = computed(() => displayPage(filteredTasks.value, page.value, pageSize.value))
+
+function changePage(nextPage) {
+  page.value = clampPage(nextPage, filteredTasks.value.length, pageSize.value)
+}
+
+function changePageSize(nextSize) {
+  const next = Number(nextSize)
+  if (!DOWNLOAD_PAGE_SIZES.includes(next)) return
+  pageSize.value = next
+  savePref('download_page_size', next)
+  page.value = 1
+}
+
+watch(currentFilter, () => {
+  page.value = 1
+})
+
+watch([() => filteredTasks.value.length, pageSize], () => {
+  page.value = clampPage(page.value, filteredTasks.value.length, pageSize.value)
+})
 </script>
+
+<style scoped>
+/* 依据内容区而非视口切换，侧栏与抽屉中也保留足够空间。 */
+.ys-download-toolbar { container-type: inline-size; }
+.ys-download-action { min-width: 32px; min-height: 32px; }
+.ys-download-action__full,
+.ys-download-action__short { display: none; }
+@container (min-width: 420px) {
+  .ys-download-action__short { display: inline; }
+}
+@container (min-width: 760px) {
+  .ys-download-action { gap: 6px; }
+  .ys-download-action__short { display: none; }
+  .ys-download-action__full { display: inline; }
+}
+</style>

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"testing/fstest"
 
+	"fn-lx-player/pkg/applog"
 	"fn-lx-player/pkg/config"
 )
 
@@ -18,6 +19,9 @@ import (
 //
 // index.html 必须始终 no-store（换版本要立刻生效），图标类给短缓存（配合 ?v=）。
 
+// NewServer 会按默认配置启用「全局单例」的日志落盘（见 server.go 的启动恢复），
+// 用例结束必须还原，否则 TestLogsExportZipEndToEnd 看到的就不是「未启用」状态了。
+// 尤其 go test -shuffle=on 时这个先后关系会随机翻出来。
 func newStaticServer(t *testing.T) *Server {
 	t.Helper()
 	mgr, err := config.NewConfigManager(t.TempDir(), 8898)
@@ -30,7 +34,9 @@ func newStaticServer(t *testing.T) *Server {
 		"assets/app-abc123.js": &fstest.MapFile{Data: []byte("console.log(1)")},
 		"robots.txt":           &fstest.MapFile{Data: []byte("User-agent: *")},
 	}
-	return NewServer(mgr, nil, fsys)
+	s := NewServer(mgr, nil, fsys)
+	t.Cleanup(func() { _ = applog.EnableFile("") })
+	return s
 }
 
 // 鉴权在测试里统一关掉：这一组测的是静态缓存头与 SPA 回落，

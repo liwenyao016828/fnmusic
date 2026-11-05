@@ -89,6 +89,10 @@ export function useLyricGaps(deps) {
       at.value = Math.floor(Date.now() / 1000)
       autoFilled.value = quiet
       save()
+      // 索引里还在、磁盘上已经没有的条目后端已剔除。这件事要说出来 ——
+      // 否则用户看到清单条数比上次少会以为扫描不稳（2026-11-04 审查实测）。
+      const stale = Number(res.data?.stale) || 0
+      if (stale) flash(`另有 ${stale} 首在索引里但磁盘上已不存在（多半删了/改名了），已跳过 —— 跑一次「扫描」可以清掉旧记录`)
       if (!list.length && !quiet) flash('这个目录里的歌都有歌词了')
     } catch (e) {
       flash(failText('扫描缺歌词', e), true)

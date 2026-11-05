@@ -40,7 +40,7 @@ import (
 )
 
 // CurrentVersion 应用版本号。发布新版本时与 fpk-package/manifest 的 version 同步修改。
-const CurrentVersion = "2.30.0"
+const CurrentVersion = "2.31.0"
 
 // CurrentAppName 对外暴露的应用标识，必须与 fpk-package/manifest 的 appname 一致。
 //
@@ -482,9 +482,8 @@ func (s *Server) handleUIPrefs(w http.ResponseWriter, r *http.Request) {
 // GET    /api/logs?limit=200   读取最近若干条
 // DELETE /api/logs             清空
 //
-// 日志默认只存内存（见 pkg/applog），重启即清空 —— 默认不落盘，
-// 避免日志里可能出现的路径与令牌长期留在 NAS 磁盘上；
-// 用户设置过「日志存储位置」时另有一份落盘副本（见 handleLogsConfig 与 sink.go）。
+// 内存环形缓冲只保留最近若干条；默认同时落盘到应用数据目录的 logs/，
+// 按大小自动轮转、重启后仍可排查。用户可在设置中关闭落盘或更换目录。
 func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	switch r.Method {
@@ -503,22 +502,23 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		entries := applog.Default().Recent(limit)
-		// log_file：当前落盘文件路径，空 = 用户关掉了落盘（默认是开的）。
-		// hint 要按实际情况给：以前这里写死「只保留在内存里，重启即清空」，
-		// 落盘开着的时候那句话是**错的**，会让人以为不用管备份/导出。
-		logFile := applog.FilePath()
-		hint := "日志只保留在内存里，重启应用即清空。"
-		if logFile != "" {
-			hint = "内存里留最近 " + strconv.Itoa(applog.Default().Len()) + " 条，同时落盘到 " + logFile + "（按大小自动轮转，重启不清空）。"
+		disk := applog.Status()
+		hint := "日志只保留在内存里,重启应用即清空。"
+		if disk.Enabled && disk.Path != "" {
+			hint = "内存里留最近 " + strconv.Itoa(applog.Default().Len()) + " 条，同时落盘到 " + disk.Path + "（按大小自动轮转，重启不清空）。"
 		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{
 			"code": 200, "message": "ok",
 			"data": map[string]interface{}{
-				"entries":  entries,
-				"count":    len(entries),
-				"total":    applog.Default().Len(),
-				"log_file": logFile,
-				"hint":     hint,
+				"entries":      entries,
+				"count":        len(entries),
+				"total":        applog.Default().Len(),
+				"log_file":     disk.Path,
+				"hint":         hint,
+				"disk_enabled": disk.Enabled,
+				"disk_path":    disk.Path,
+				"disk_size":    disk.Size,
+				"disk_error":   disk.LastErr,
 			},
 		})
 	case http.MethodDelete:
@@ -532,6 +532,9 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 			Source  string `json:"source"`
 			Level   string `json:"level"`
 			Message string `json:"message"`
+			// At 浏览器侧的绝对时刻（RFC3339，带 offset）。可省：老客户端不传，
+			// 后端就用服务器时钟。与服务器时钟相差超过 1 分钟才采用（见 applog.AddFromAt）。
+			At string `json:"at"`
 		}
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil {
 			errJSON(w, http.StatusBadRequest, "请求体不是合法 JSON")
@@ -541,7 +544,7 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 			errJSON(w, http.StatusBadRequest, "message 不能为空")
 			return
 		}
-		applog.Default().AddFrom(req.Source, req.Level, req.Message)
+		applog.Default().AddFromAt(req.Source, req.Level, req.Message, req.At)
 		writeJSON(w, http.StatusOK, map[string]interface{}{"code": 200, "message": "ok"})
 	default:
 		errJSON(w, http.StatusMethodNotAllowed, "Method not allowed")

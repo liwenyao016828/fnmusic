@@ -256,8 +256,12 @@ html[data-theme='gray'] {
 /* 手机底部标签栏：只在触屏出现。判定统一用 hover:none + pointer:coarse
    （与全站其他触屏分支一致，不用屏宽 —— 窄桌面窗口不该长出手机导航）。 */
 .mobile-dock { display: none; }
+:root { --pb-clear-on: 5.25rem; }
 @media (hover: none) and (pointer: coarse) {
-  :root { --dock-h: calc(56px + var(--safe-bottom)); }
+  :root {
+    --dock-h: calc(56px + var(--safe-bottom));
+    --pb-clear-on: calc(5rem + var(--dock-h));
+  }
   .mobile-dock { display: block; }
   /* 播放条根容器的 pb-safe 与 --dock-h 里的安全区重复（抬升量已含 safe-bottom），
       触屏下归零，避免播放条与标签栏之间凭空多一条 Home 指示条高度的缝。 */
@@ -270,10 +274,10 @@ html[data-theme='gray'] {
    --dock-base 是元素自己的原始 bottom（搜索图标移动端 8px、sm 12px），用任意属性传入。 */
 .ys-dock-lift { bottom: calc(var(--dock-base, 0px) + var(--dock-h)); }
 
-/* 页面底部留白：触屏下在原有 7rem（pb-28）之上再加 --dock-h，给底部标签栏让位。
-   只写进触屏分支 —— 桌面的 pb-28 / sm:pb-24 原样保留，不受影响。 */
+/* 页面底部留白：触屏下预留播放条高度并叠加底部标签栏。
+   原来 7rem + dock = 168px，实际播放条 + dock 约 128px，分页后多出一块空白。 */
 @media (hover: none) and (pointer: coarse) {
-  .pb-dock { padding-bottom: calc(7rem + var(--dock-h)); }
+  .pb-dock { padding-bottom: var(--pb-clear, var(--pb-clear-on)); }
 }
 
 /* ── 灵动岛融合态：两半合成一条胶囊，接缝处不能有断层（2026-10-28 用户口径）──

@@ -120,6 +120,10 @@ function safeParse(raw) {
 function noteLocalChange(key) {
   pushQueue.set(key, store.get(key))
   schedulePush()
+  // 同页其它组件也需要立即响应（例如列表列数）。跨标签页仍由 storage 事件处理。
+  if (typeof window !== 'undefined') {
+    try { window.dispatchEvent(new CustomEvent('fn-pref-change', { detail: { key: key.slice(PREFIX.length), value: store.get(key) } })) } catch (_) {}
+  }
 }
 
 // ── 字符串偏好 ──
@@ -188,6 +192,16 @@ export function saveCache(key, data) {
     try { localStorage.setItem(k, s) } catch (_) {}
   }
   noteLocalChange(k)
+}
+
+/** 监听当前标签页内的偏好变更，返回取消订阅函数 */
+export function onPrefChange(key, callback) {
+  if (typeof window === 'undefined') return () => {}
+  const handler = (event) => {
+    if (!key || event.detail?.key === key) callback(event.detail?.value)
+  }
+  window.addEventListener('fn-pref-change', handler)
+  return () => window.removeEventListener('fn-pref-change', handler)
 }
 
 // ── 进程内（模块级）缓存 ──

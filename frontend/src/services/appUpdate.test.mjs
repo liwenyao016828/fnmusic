@@ -88,6 +88,25 @@ test('check 成功后填充卡片状态并记录检查时间', async () => {
   assert.deepEqual(calls, ['/api/app/update/check'])
 })
 
+test('更新卡片可读取已下载状态，检查结果同步并可重置', async () => {
+  let payload = { ...CHECK_PAYLOAD, downloaded: true, downloaded_path: '/updates/app.fpk' }
+  const c = createAppUpdate({ fetchImpl: async () => ok(payload) })
+  assert.equal(c.downloaded.value, false)
+  assert.equal(c.downloadedPath.value, '')
+  await c.check()
+  assert.equal(c.downloaded.value, true)
+  assert.equal(c.downloadedPath.value, '/updates/app.fpk')
+  payload = CHECK_PAYLOAD
+  await c.check()
+  assert.equal(c.downloaded.value, false)
+  assert.equal(c.downloadedPath.value, '')
+  payload = { ...CHECK_PAYLOAD, downloaded: true, downloaded_path: '/updates/app.fpk' }
+  await c.check()
+  c.resetForTests()
+  assert.equal(c.downloaded.value, false)
+  assert.equal(c.downloadedPath.value, '')
+})
+
 test('静默 check 遇到 404 不抛错，只在卡片留一行可操作提示', async () => {
   const c = createAppUpdate({
     fetchImpl: async () => reply({ code: 404, message: 'not found' }, 404),

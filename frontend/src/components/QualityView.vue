@@ -648,7 +648,9 @@ async function startQualityScan() {
       else stopQualityPolling()
       pruneQSelection()
     } else {
-      qErrorText.value = apiError(res, '发起音质扫描')
+      qErrorText.value = res?.data?.available === false
+        ? '取音通道未就绪：当前后端未接入曲库取音通道（开发预览或未接管飞牛音乐时常见）。本环境无法扫描，不是曲库有问题；请在已接管飞牛音乐的应用实例中使用。'
+        : apiError(res, '发起音质扫描')
     }
   } catch (e) {
     // 后端接口还没上线 / 网络失败：横幅说清即可，不白屏、不抛未捕获错误

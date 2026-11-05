@@ -17,10 +17,12 @@ import { ConfigAPI, DownloadAPI, NasAPI } from '../api/client.js'
 import { qualityModeTarget } from './qualityOverride.js'
 import { qualityLabel, isHighestQuality } from '../engine/quality.js'
 import { logError, logInfo } from './appLog.js'
+import { notify } from './feedback.js'
 import { platformName } from './libraryFields.js'
 import { fail, apiError } from './userMsg.js'
 import { loadBool, savePref } from './prefs.js'
 import { backendDownload } from './backendDownload.js'
+import { createProducerGate } from './producerGate.js'
 import {
   MIGRATION_FLAG,
   MIGRATION_BATCH_SIZE,
@@ -196,15 +198,18 @@ function noteFinalState(t) {
   const singer = t.song?.singer ? ' — ' + t.song.singer : ''
   if (t.status === 'success') {
     // 用户最关心三件事：到底存哪儿了、是哪个音源给的、实际拿到什么档位
-    logInfo(
-      '下载完成',
-      `《${title}》${singer} · ${qualityLabel(t.resolvedQuality || t.quality)} · ${t.resolvedSource ? platformName(t.resolvedSource) : '未知来源'}`
-        + `${t.resolvedSourceDetail ? ` · ${t.resolvedSourceDetail}` : ''}`
-        + `${t.resolvedSource && t.platform && t.resolvedSource !== t.platform ? `（原歌曲：${platformName(t.platform)}）` : ''}`,
-      t.path || '',
-    )
+    const detail = `${qualityLabel(t.resolvedQuality || t.quality)} · ${t.resolvedSource ? platformName(t.resolvedSource) : '未知来源'}`
+      + `${t.resolvedSourceDetail ? ` · ${t.resolvedSourceDetail}` : ''}`
+      + `${t.resolvedSource && t.platform && t.resolvedSource !== t.platform ? `（原歌曲：${platformName(t.platform)}）` : ''}`
+    logInfo('下载完成', `《${title}》${singer} · ${detail}`, t.path || '')
+    notify(`下载成功：《${title}》${singer}`, { level: 'ok' })
   } else {
-    logError('下载失败', `《${title}》${singer}：${t.error || '未知原因'}`, `tries=${t.attempts || 0} quality=${t.quality || ''}`)
+    const reason = t.error || '未知原因'
+    // 失败提示通道同时写日志；在这里提供详情，避免同一终态重复记录。
+    notify(`下载失败：《${title}》${singer}：${reason}`, {
+      level: 'fail', goLogs: true, scope: '下载失败',
+      detail: `tries=${t.attempts || 0} quality=${t.quality || ''} path=${t.path || ''}`,
+    })
   }
 }
 
@@ -638,6 +643,15 @@ const resumeTask = (id) => runAction('resume', [id])
 const cancelTask = (id) => runAction('stop', [id])
 
 /**
+ * 生产者闸门：「停止全部」关，用户主动继续/重试/重新下载时开。
+ *
+ * 见 `services/producerGate.js` 的说明 —— 后端整队停止只覆盖「已经进队列的」，
+ * 生产者（订阅自动补下载 / 补下载 / 批量执行）下一刻还能再塞一批进去，
+ * 那才是「停止全部后下一首仍继续」的真正来源。
+ */
+const producerGate = createProducerGate()
+
+/**
  * 按 id 批量暂停 / 停止（2026-10-25 #4 新增）。
  *
  * 以前只有整队操作（`pauseAll` 是后端不带 ids 的整队开关，`stopAll` 停的是**全部**
@@ -701,11 +715,59 @@ async function resumeAll() {
 }
 
 async function resumeStopped() {
+  // 用户主动要把停掉的任务放回队列 —— 生产者闸门一并打开，
+  // 否则「停止全部」之后订阅的自动补下载会永远停在那里，只能刷新页面才恢复。
+  reopenProducers()
   return runAction('resume', tasks.value.filter(t => t.status === 'stopped' || t.status === 'paused').map(t => t.id))
 }
 
 async function stopAll() {
-  return runAction('stop', tasks.value.filter(t => ['pending', 'downloading', 'paused'].includes(t.status)).map(t => t.id))
+  // 后端「整队停止」契约：空 ids 停掉队列里所有 pending/downloading/paused，
+  // 不依赖当前浏览器的 tasks 快照（可能尚未同步完整），否则下一首会继续开跑。
+  // 绕过 runAction 的空数组检查，直接发给后端。
+  //
+  // ⚠️ 只发后端动作**不够**（2026-11-03 用户反馈「停止全部后下一首仍继续推送下载」）：
+  // 队列里的歌是订阅/补下载一批批塞进来的，后端停掉的是「已经进队列的」，
+  // 生产者下一刻还能再塞一批。所以这里同时把生产者闸门关上 —— `pushEngine`
+  // 正在逐首搜索的那一批看到闸门就会停，批次 ticker 也不会再开下一批。
+  // 生产者闸门 `producerGate` 是同一条链的「上半段」，两段必须一起关。
+  producerGate.close('stop_all')
+  cancelProducers()
+  lastActionError.value = ''
+  try {
+    return await backendDownload.act('stop', [])
+  } catch (e) {
+    lastActionError.value = e?.userMessage || e?.message || '停止失败'
+    logError('停止全部下载', lastActionError.value)
+    throw e
+  }
+}
+
+/** 生产者（订阅自动补下载 / 补下载 / 批量执行）此刻是否必须停止入队。 */
+function producerStopped() {
+  return producerGate.isClosed()
+}
+
+/**
+ * 停止全部时收掉生产者侧的「排空 / 回写」定时器。
+ *
+ * 用动态 import 而不是顶部静态 import：`pushEngine` 自己就 import 了
+ * `downloadManager`，静态 import 会形成循环（ESM 能容忍，但依赖求值顺序，
+ * 这个项目已经因为模块初始化顺序白屏过一次，见 downloadManager.init.test.mjs）。
+ * 停止是低频动作，动态 import 命中模块缓存，代价可以忽略。
+ */
+function cancelProducers() {
+  import('./pushEngine.js')
+    .then((m) => m.pushEngine?.clearFillTimers?.())
+    .catch(() => {})
+}
+
+/**
+ * 开生产者闸门。只在用户**主动**要重新下的时候调用 ——
+ * 「停止全部」是整条下载队列的停止，不该永远锁死后面的「继续」「重试」「重新下载」。
+ */
+function reopenProducers() {
+  producerGate.open()
 }
 
 async function stopByRow(rowKey) {
@@ -714,6 +776,8 @@ async function stopByRow(rowKey) {
 }
 
 async function retryAllFailed() {
+  // 「重试失败」是用户主动要再下：开生产者闸门（见 resumeStopped 的说明）
+  reopenProducers()
   lastActionError.value = ''
   try {
     return await backendDownload.retryFailed()
@@ -779,6 +843,8 @@ async function resubmitTasks(list, quality = '') {
 async function redownloadTasksByIds(ids) {
   const list = (Array.isArray(ids) ? ids : []).map(taskById).filter(Boolean)
   if (!list.length) return 0
+  // 用户主动重下：开生产者闸门（见 resumeStopped 的说明）
+  reopenProducers()
   const receipt = await resubmitTasks(list)
   // 后端对同 client_id 的终态任务会回 existing:true，added 里仍算一条，
   // 因此这里直接数 added 就是「真正重新排队了几首」。
@@ -1185,6 +1251,12 @@ export const downloadManager = {
   open,
   close,
   toggle,
+
+  // 给生产者（pushEngine）查的停止闸门：「停止全部」关，继续/重试/重下开。
+  // 只读判断走 producerStopped()，开闸只能走用户动作（不经 UI 直接开会让
+  // 「停止全部」失去意义）。
+  producerStopped,
+  producerGateReason: () => producerGate.reason(),
 
   // 质量
   QUALITY_OPTIONS,

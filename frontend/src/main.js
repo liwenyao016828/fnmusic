@@ -14,7 +14,7 @@ const app = createApp(App)
 
 // 前端日志上报通道：界面上的报错只留一句人话，完整信息走这里进后端运行日志，
 // 用户在「日志」页就能查到（约定与实现见 services/appLog.js）。
-setLogReporter((level, message) => LogsAPI.report(level, message))
+setLogReporter((level, message, time) => LogsAPI.report(level, message, time))
 
 // 提示没给 scope 时，用「当前页面名」当日志 scope。
 // 为什么放这里而不是 feedback.js 自己引 navBus：navBus 反向 import 了 feedback，

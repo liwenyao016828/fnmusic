@@ -23,6 +23,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -102,6 +103,7 @@ func (s *Server) HandleLibraryLyricGaps(w http.ResponseWriter, r *http.Request) 
 	}
 	index := s.libraryIndex()
 	all := make([]lyricGapItem, 0, 64)
+	stale := 0
 	for _, e := range index.List() {
 		if !strings.HasPrefix(e.Path, resolved+"/") && e.Path != resolved {
 			continue
@@ -114,8 +116,18 @@ func (s *Server) HandleLibraryLyricGaps(w http.ResponseWriter, r *http.Request) 
 		if e.TagReadAt == 0 {
 			needLyric, _, terr := tidy.NeedsTidy(e.Path)
 			if terr != nil || !needLyric {
+				// terr 非空多半是文件已经不在了（索引过期）：不能列进清单 ——
+				// 列进去只会让「查找歌词 / 写入」对一条不存在的路径白跑一趟。
+				if terr != nil {
+					stale++
+				}
 				continue
 			}
+		}
+		// 索引里 has_lyric=false 且已读过标签：仍要确认文件还在（删了/改名后索引没重扫）
+		if _, err := os.Stat(e.Path); err != nil {
+			stale++
+			continue
 		}
 		all = append(all, lyricGapItem{
 			Path:   e.Path,
@@ -154,6 +166,9 @@ func (s *Server) HandleLibraryLyricGaps(w http.ResponseWriter, r *http.Request) 
 			"limit":     limit,
 			"items":     all[offset:end],
 			"truncated": end < len(all),
+			// stale：索引里有、磁盘上已不存在的条目数（已剔除）。
+			// 界面要说出来，否则用户看到清单条数变少会以为扫描不稳。
+			"stale": stale,
 		},
 	})
 }

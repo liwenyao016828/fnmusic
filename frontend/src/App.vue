@@ -359,6 +359,7 @@
         :current="currentView"
         :segment="segmentOf(currentView)"
         :inner-segs="innerSegsMap"
+        :last-segments="segState"
         @update:current="v => goView(v)"
         @update:segment="v => setSegment(currentView, v)"
       >
@@ -411,6 +412,10 @@
               :play-mode="playMode"
               :current-song="currentSong"
               :is-playing="isPlaying"
+              :lyric-data="lyricData"
+              :trans-data="transData"
+              :current-time="currentTime"
+              :duration="duration"
               @update:play-mode="val => playMode = val"
               @play="playSong"
               @play-all="playAllSongs"
@@ -418,6 +423,7 @@
               @prev="playPrev"
               @next="playNext"
               @toggle-play="togglePlay"
+              @seek="onSeek"
               :bar-query="barSearchQuery"
               :bar-search-nonce="barSearchNonce"
             />
@@ -433,6 +439,10 @@
               :play-mode="playMode"
               :current-song="currentSong"
               :is-playing="isPlaying"
+              :lyric-data="lyricData"
+              :trans-data="transData"
+              :current-time="currentTime"
+              :duration="duration"
               @update:play-mode="val => playMode = val"
               @play="playSong"
               @play-all="playAllSongs"
@@ -440,6 +450,7 @@
               @prev="playPrev"
               @next="playNext"
               @toggle-play="togglePlay"
+              @seek="onSeek"
               :bar-query="barSearchQuery"
               :bar-search-nonce="barSearchNonce"
             />
@@ -1818,9 +1829,15 @@ async function onAudioError(e) {
   if (!src || src === window.location.href || src.endsWith('/api/player/stream?url=')) return
 
   const song = currentSong.value
-  if (!song || song.source === 'nas') return
+  if (!song) return
 
   console.warn('[AUDIO] Audio playback error detected for:', song?.name, 'src:', src, e)
+  if (song.source === 'nas') {
+    isPlaying.value = false
+    feedbackFail('本地文件播放失败，可能已移动、删除或目录未授权，请刷新曲库')
+    logError('本地播放', `无法播放《${song.title || song.name || '未知曲目'}》`, song.path || src)
+    return
+  }
 
   // 如果后端代理流播放出错，尝试直接降级播放原始直链 URL
   if (src.includes('/api/player/stream') && currentRawUrl && currentRawUrl !== src) {

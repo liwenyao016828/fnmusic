@@ -256,6 +256,20 @@ type AppConfig struct {
 	// 官方页面回到**逐字节原样**（由接管层的反向代理透传）。
 	// nil = 开。读它请走 InjectUIEnabled()，别自己判 nil。
 	UIInjectEnabled *bool `json:"ui_inject_enabled,omitempty"`
+	// 下面四个是注入面板里各功能块的独立开关（默认全开）。它们只控制**面板
+	// 上看得见的 widget**：试听音质节、曲率助手节、打开曲率按钮、行菜单的
+	// 「下载到曲率」入口 —— 总开关仍是上面的 ui_inject_enabled（关了连脚本
+	// 都不注入，这四个自然无从谈起）。
+	//
+	// ⚠️ 特意**不**把它们登记进 feature_switch.go 的开关目录：那个目录会
+	// 暴露给曲率助手当「可切换开关」，而助手这块本身就在被控制的范围内
+	// —— 让它能切自己的显隐是把两个圈子搅在一起。这四个由配置 / API 直改。
+	// nil = 开（老后端没这个字段时也当开，见 UIPanelFeatures()）。
+	// 读它们请走 UIPanelFeatures()，别自己判 nil。
+	UIPanelQualityEnabled   *bool `json:"ui_panel_quality_enabled,omitempty"`
+	UIPanelAssistantEnabled *bool `json:"ui_panel_assistant_enabled,omitempty"`
+	UIPanelJumpEnabled      *bool `json:"ui_panel_jump_enabled,omitempty"`
+	UIPanelDownloadEnabled  *bool `json:"ui_panel_download_enabled,omitempty"`
 	// MusicDLEnabled 是 musicdl sidecar 的开关（**默认关**）。
 	//
 	// 打开后曲率会：①在数据目录里建一个 Python venv 并装 musicdl 那套依赖
@@ -923,6 +937,22 @@ func (a AppConfig) InjectUIEnabled() bool {
 	return a.UIInjectEnabled == nil || *a.UIInjectEnabled
 }
 
+// UIPanelFeatures 返回注入面板四个功能块的**实际生效**状态（key → on）。
+//
+// 这是面板开关唯一的读取口径：拦截层把这份 map 原样放进 /api/info，
+// 注入脚本按它显隐各节。三态规则与其它开关一致 —— nil = 没设置过 = 开，
+// 所以老配置文件（没有这四个键）读出来就是全开，面板行为不变。
+//
+// 缺哪个 key 都不会：map 恒含 quality / assistant / jump / download 四键。
+func (a AppConfig) UIPanelFeatures() map[string]bool {
+	return map[string]bool{
+		"quality":   a.UIPanelQualityEnabled == nil || *a.UIPanelQualityEnabled,
+		"assistant": a.UIPanelAssistantEnabled == nil || *a.UIPanelAssistantEnabled,
+		"jump":      a.UIPanelJumpEnabled == nil || *a.UIPanelJumpEnabled,
+		"download":  a.UIPanelDownloadEnabled == nil || *a.UIPanelDownloadEnabled,
+	}
+}
+
 // DefaultPlatformPriority 是用户没设置时的主力平台顺序。
 var DefaultPlatformPriority = []string{"wy", "tx"}
 
@@ -1054,8 +1084,8 @@ func (cm *ConfigManager) load() {
 			cm.config.DownloadDir = cm.config.DefaultNasDir
 		}
 		// 日志落盘（2026-11-01 补登记）。两个字段都是「给了才改」：nil = 文件里没这个键
-	// → 保持原值。⚠️ 这条以前**整段不存在**，字段在结构体里、接口也在用，但
-	// load 不读回，重启后一律当成「没配置」。见 AppConfig.LogDir 上的说明。
+		// → 保持原值。⚠️ 这条以前**整段不存在**，字段在结构体里、接口也在用，但
+		// load 不读回，重启后一律当成「没配置」。见 AppConfig.LogDir 上的说明。
 		if c.LogDir != nil {
 			v := *c.LogDir
 			cm.config.LogDir = &v
@@ -1148,6 +1178,24 @@ func (cm *ConfigManager) load() {
 			v := *c.UIInjectEnabled
 			cm.config.UIInjectEnabled = &v
 		}
+		// 注入面板四个功能开关（用户 2026-11-04）。⚠️ 与下面那条同样的规矩：
+		// load 与 Update **两处都要登记** —— 漏一处就是「改完能用、重启变回默认」。
+		if c.UIPanelQualityEnabled != nil {
+			v := *c.UIPanelQualityEnabled
+			cm.config.UIPanelQualityEnabled = &v
+		}
+		if c.UIPanelAssistantEnabled != nil {
+			v := *c.UIPanelAssistantEnabled
+			cm.config.UIPanelAssistantEnabled = &v
+		}
+		if c.UIPanelJumpEnabled != nil {
+			v := *c.UIPanelJumpEnabled
+			cm.config.UIPanelJumpEnabled = &v
+		}
+		if c.UIPanelDownloadEnabled != nil {
+			v := *c.UIPanelDownloadEnabled
+			cm.config.UIPanelDownloadEnabled = &v
+		}
 		// 收藏自动下载（v2.1.92 新增）。⚠️ 与下面那条同样的规矩：load 与 Update
 		// **两处都要登记** —— 只写一处就是「改完能用、重启变回默认」或「改了没生效」。
 		if c.FavAutoDownload != nil {
@@ -1225,9 +1273,10 @@ func (cm *ConfigManager) DataDir() string {
 // EffectiveLogDir 返回**当前生效**的日志落盘目录；空串 = 不落盘。
 //
 // 这是「日志到底写不写、写到哪」的唯一判据，启动恢复与设置页都要走它：
-//   · LogDiskOn() 为假（用户明确关掉了）→ 空串；
-//   · 用户自定义了目录 → 用那个目录；
-//   · 都没设置 → <数据目录>/logs（开箱即落盘，重启不丢）。
+//
+//	· LogDiskOn() 为假（用户明确关掉了）→ 空串；
+//	· 用户自定义了目录 → 用那个目录；
+//	· 都没设置 → <数据目录>/logs（开箱即落盘，重启不丢）。
 //
 // 默认落在数据目录里而不是 NAS 音乐目录，是因为后者要用户先授权（
 // downloader.ValidateNasDir 会拦），而「日志该落盘」这件事不该被授权流程堵住。
@@ -1431,6 +1480,24 @@ func (cm *ConfigManager) Update(c AppConfig) error {
 	if c.UIInjectEnabled != nil {
 		v := *c.UIInjectEnabled
 		cm.config.UIInjectEnabled = &v
+	}
+	// 注入面板四个功能开关：nil = 不动（patch 里没这个键就不能动它）。
+	// ⚠️ load 路径有同一组登记 —— 只写这里就是「重启弹回默认」。
+	if c.UIPanelQualityEnabled != nil {
+		v := *c.UIPanelQualityEnabled
+		cm.config.UIPanelQualityEnabled = &v
+	}
+	if c.UIPanelAssistantEnabled != nil {
+		v := *c.UIPanelAssistantEnabled
+		cm.config.UIPanelAssistantEnabled = &v
+	}
+	if c.UIPanelJumpEnabled != nil {
+		v := *c.UIPanelJumpEnabled
+		cm.config.UIPanelJumpEnabled = &v
+	}
+	if c.UIPanelDownloadEnabled != nil {
+		v := *c.UIPanelDownloadEnabled
+		cm.config.UIPanelDownloadEnabled = &v
 	}
 	// 收藏自动下载：nil = 不动（patch 里没这个键就不能动它）。
 	if c.FavAutoDownload != nil {

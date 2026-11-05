@@ -91,7 +91,6 @@
     <div class="space-y-3">
 
     <!-- 操作结果提示（删除等单条动作）：失败时带「查看日志」入口，逐首原因在日志里 -->
-    <InlineNotice :text="embedNotice" :tone="embedOk ? 'ok' : 'error'" />
 
     <!--
       ── 当前目录 + 快速切换（2026-10-26 用户两条要求合到一起）──
@@ -342,16 +341,16 @@
             <!--
               2026-10-26 分页改造：循环 pagedSongs（当前页切片），
               但「#」列与 playSong 的队列位置都要用**全局序号**
-              ((page-1)*PAGE_SIZE + idx) —— 队列来自 sortedSongs 全量，
+              ((page-1)*pageSize + idx) —— 队列来自 sortedSongs 全量，
               传页内序号会让「下一首」播错歌。
             -->
             <tr 
               v-for="(song, idx) in pagedSongs" 
               :key="song.path"
-              @dblclick="playSong(song, (page - 1) * PAGE_SIZE + idx)"
+              @dblclick="playSong(song, (page - 1) * pageSize + idx)"
               class="group cursor-pointer transition-colors hover:bg-black/[0.02]"
             >
-              <td class="py-3 px-2 sm:px-3 text-center text-gray-500 font-mono">{{ (page - 1) * PAGE_SIZE + idx + 1 }}</td>
+              <td class="py-3 px-2 sm:px-3 text-center text-gray-500 font-mono">{{ (page - 1) * pageSize + idx + 1 }}</td>
               <td class="py-3 px-3 sm:px-4 flex items-center gap-2.5 sm:gap-3 min-w-0">
                 <div class="relative w-8 h-8 sm:w-9 sm:h-9 rounded-lg overflow-hidden bg-[var(--ys-surface-sunken)] border border-[var(--ys-border)] shrink-0 flex items-center justify-center">
                   <!-- 2026-11-01：封面地址**按 path 现算**，不再只信后端那份相对地址。
@@ -409,7 +408,7 @@
               <td class="py-3 px-3 sm:px-4 text-center">
                 <div class="flex items-center justify-center gap-1">
                   <button 
-                    @click.stop="playSong(song, (page - 1) * PAGE_SIZE + idx)"
+                    @click.stop="playSong(song, (page - 1) * pageSize + idx)"
                     class="grid h-7 w-7 place-items-center rounded-[8px] text-[var(--ys-text-aux)] transition-colors hover:bg-[var(--ys-accent-soft)] hover:text-[var(--ys-accent)]"
                     title="立即播放"
                   >
@@ -451,51 +450,15 @@
         </table>
         </div>
 
-        <!--
-          分页条（用户 2026-10-26：「本地曲库列表增加页数」）。
-          目录上千首时一屏放不下，每页 100 首、页脚给「上一页 / 页码 / 下一页」。
-          页码按当前页前后各 1 格、首尾页必留的方式铺开，多的用 … 省略。
-        -->
-        <div
-          v-if="pageCount > 1"
-          class="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 border-t border-[var(--ys-border)] px-3 py-2 text-xs text-gray-500"
-        >
-          <button
-            @click="page = Math.max(1, page - 1)"
-            :disabled="page <= 1"
-            aria-label="上一页"
-            class="grid h-7 w-7 place-items-center rounded-lg border border-[var(--ys-border)] bg-white text-gray-600 transition-colors hover:bg-[var(--ys-surface-hover)] disabled:opacity-40 disabled:hover:bg-white"
-          >
-            <ChevronLeft class="w-4 h-4" />
-          </button>
-
-          <span class="px-1 font-mono text-[11px]">{{ page }} / {{ pageCount }}</span>
-          <span class="hidden text-gray-300 sm:inline">·</span>
-          <span class="hidden text-gray-500 sm:inline">共 {{ filteredSongs.length }} 首</span>
-
-          <template v-for="(p, i) in pageButtons" :key="i">
-            <span v-if="p === '…'" class="px-1 text-gray-300">…</span>
-            <button
-              v-else
-              @click="page = p"
-              :aria-label="`第 ${p} 页`"
-              :aria-current="p === page ? 'page' : undefined"
-              class="grid h-7 min-w-[28px] place-items-center rounded-lg border border-[var(--ys-border)] bg-white px-1.5 font-mono transition-colors hover:bg-[var(--ys-surface-hover)]"
-              :class="p === page ? 'border-black bg-black font-semibold text-white hover:bg-black' : 'text-gray-600'"
-            >
-              {{ p }}
-            </button>
-          </template>
-
-          <button
-            @click="page = Math.min(pageCount, page + 1)"
-            :disabled="page >= pageCount"
-            aria-label="下一页"
-            class="grid h-7 w-7 place-items-center rounded-lg border border-[var(--ys-border)] bg-white text-gray-600 transition-colors hover:bg-[var(--ys-surface-hover)] disabled:opacity-40 disabled:hover:bg-white"
-          >
-            <ChevronRight class="w-4 h-4" />
-          </button>
-        </div>
+        <ListPager
+          label="本地曲库分页"
+          :page="page"
+          :page-size="pageSize"
+          :sizes="NAS_PAGE_SIZES"
+          :total="filteredSongs.length"
+          @change-page="changePage"
+          @change-size="changePageSize"
+        />
       </div>
     </div>
     </div>
@@ -790,12 +753,15 @@ import {
 } from '../services/nasView'
 import {
   RotateCw, Folder, FolderOpen, Play, X, Search, Check,
-  HardDrive, CornerLeftUp, ChevronRight, ChevronLeft, ChevronUp, ChevronDown, Loader2,
+  HardDrive, CornerLeftUp, ChevronRight, ChevronUp, ChevronDown, Loader2,
   Image as ImageIcon, Trash2, Eye, EyeOff
 } from 'lucide-vue-next'
 import InlineNotice from './InlineNotice.vue'
+import ListPager from './ListPager.vue'
+import { displayPage, normalizePageSize, clampPage } from '../services/displayPaging'
 import { describeError } from '../services/userMsg'
 import { logError, logInfo } from '../services/appLog'
+import { ok as notifyOk, fail as notifyFail } from '../services/feedback'
 import { deleteOutcome, normalizeScanSongs, withoutPath } from '../services/nasDelete'
 
 const emit = defineEmits(['play'])
@@ -829,7 +795,8 @@ function persistSort() {
 // 目录上千首时一屏放不下：每页 PAGE_SIZE 首，页脚翻页；搜索框默认收起，只留一颗放大镜图标。
 // 三者的关系是单向的：songs（扫描结果）→ sortedSongs（排序）→ filteredSongs（搜索过滤）
 // → pagedSongs（当前页切片）。表格只渲染 pagedSongs，但播放队列仍是全量 sortedSongs。
-const PAGE_SIZE = 100
+const NAS_PAGE_SIZES = [24, 48, 96]
+const pageSize = ref(normalizePageSize(loadPref('nas_page_size', 96)))
 
 const searchOpen = ref(false)
 const searchText = ref('')
@@ -865,33 +832,21 @@ const filteredSongs = computed(() => {
   })
 })
 
-const pageCount = computed(() => Math.max(1, Math.ceil(filteredSongs.value.length / PAGE_SIZE)))
-
-// 当前页码（从 1 起）
+// 当前页码（从 1 起）；分页只影响展示，不改变完整播放队列。
 const page = ref(1)
+const pagedSongs = computed(() => displayPage(filteredSongs.value, page.value, pageSize.value))
 
-const pagedSongs = computed(() => {
-  const start = (page.value - 1) * PAGE_SIZE
-  return filteredSongs.value.slice(start, start + PAGE_SIZE)
-})
+function changePage(nextPage) {
+  page.value = clampPage(nextPage, filteredSongs.value.length, pageSize.value)
+}
 
-/**
- * 页码条：首尾页必留，当前页前后各 1 格，其余用 … 跳过。
- * 例如 1 … 5 6 7 … 20 —— 页数多的时候不用横向滚一整排数字。
- */
-const pageButtons = computed(() => {
-  const total = pageCount.value
-  const cur = page.value
-  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1)
-  const out = [1]
-  const from = Math.max(2, cur - 1)
-  const to = Math.min(total - 1, cur + 1)
-  if (from > 2) out.push('…')
-  for (let p = from; p <= to; p++) out.push(p)
-  if (to < total - 1) out.push('…')
-  out.push(total)
-  return out
-})
+function changePageSize(nextSize) {
+  const next = Number(nextSize)
+  if (!NAS_PAGE_SIZES.includes(next)) return
+  pageSize.value = next
+  savePref('nas_page_size', next)
+  page.value = 1
+}
 
 // 关键词 / 排序方向 / 新的扫描结果都会改变可见歌曲集合 —— 变化时回到第 1 页，
 // 否则用户搜完还停在第 5 页，看到的是过滤前的旧页码（很可能空着）。
@@ -901,8 +856,8 @@ watch([searchText, () => sortState.value, () => songs.value], () => {
 
 // 重扫回来歌曲变少时，页码可能已经超出最后一页 —— 钳回最后一页，
 // 否则页脚上一页/下一页都失效，列表空白。
-watch(pageCount, (total) => {
-  if (page.value > total) page.value = total
+watch([() => filteredSongs.value.length, pageSize], () => {
+  page.value = clampPage(page.value, filteredSongs.value.length, pageSize.value)
 })
 
 /** 点表头：同一列切升降序，换列则用该列默认方向。 */
@@ -967,7 +922,7 @@ const deletingPaths = ref([])
  */
 async function deleteSong(song) {
   if (!song || typeof song.path !== 'string' || !song.path) {
-    showEmbedNotice('这首歌没有可删除的文件路径', false)
+    notifyFail('这首歌没有可删除的文件路径', { scope: '本地曲库' })
     return
   }
   if (deletingPaths.value.includes(song.path)) return
@@ -980,40 +935,28 @@ async function deleteSong(song) {
     //   现在一律以 deleteOutcome（services/nasDelete.js，有单测）的执行结果为准：
     //   只有真删掉才动列表；失败就把行留在原处并说出原因。
     const out = deleteOutcome(res)
+    const title = song.title || song.name || song.filename || '未知歌曲'
+    const singer = song.artist || song.singer || ''
     if (!out.ok) {
-      showEmbedNotice(`删除失败：${out.message}`, false)
-      logError('删除本地文件失败', `${song.path} | ${out.message}`)
+      notifyFail(`删除《${title}》失败：${out.message}`, { scope: '删除本地文件', detail: `${title}${singer ? ` — ${singer}` : ''} | ${song.path} | ${out.message}` })
       return
     }
     songs.value = withoutPath(songs.value, song.path)
     dropFromScanCache(song.path)
-    // 删成功也记一条：用户时报「点了删除没任何变化」时，日志里得能看出到底有没有走到后端
-    logInfo('删除本地文件', `已${out.mode === 'delete' ? '删除' : '挪进回收站'} ${song.path}`)
-    showEmbedNotice(`已${out.mode === 'delete' ? '删除' : '挪进回收站'}「${song.title || song.filename}」${out.mode === 'delete' ? '' : '，可在数据快照里恢复'}`, true)
+    const action = out.mode === 'delete' ? '删除' : '挪进回收站'
+    // 人与日志都先认歌名；完整路径保留在日志详情中，不再取代歌名。
+    logInfo('删除本地文件', `已${action}《${title}》${singer ? ` — ${singer}` : ''}`, song.path)
+    notifyOk(`已${action}《${title}》${out.mode === 'delete' ? '' : '，可在数据快照里恢复'}`)
   } catch (e) {
-    showEmbedNotice(describeError(e, '删除失败'), false)
-    logError('删除本地文件失败', e)
+    const title = song.title || song.name || song.filename || '未知歌曲'
+    notifyFail(`删除《${title}》失败：${describeError(e)}`, { scope: '删除本地文件', detail: `${song.path} | ${describeError(e)}` })
   } finally {
     deletingPaths.value = deletingPaths.value.filter((p) => p !== song.path)
   }
 }
 
-// ── 操作结果提示 ──
-// 2026-10-26 用户要求移除「批量内嵌歌词」按钮后，这里只剩删除等单条动作在用；
-// 提示条本身留着：失败时它带「查看日志」入口，逐首原因在日志里。
-const embedNotice = ref('')
-/** 上一条提示是成功还是失败（决定配色，失败时带「查看日志」入口） */
-const embedOk = ref(true)
-let noticeTimer = null
-
-// 失败提示留得久一点：手机上扫一眼就走开了，4 秒太短，回来时提示已经消失
-// （2026-11-03 用户「删除歌曲时…也没有提示」—— 失败原因既没留下也没处可看）。
-function showEmbedNotice(text, ok = true) {
-  embedOk.value = ok
-  embedNotice.value = text
-  if (noticeTimer) clearTimeout(noticeTimer)
-  noticeTimer = setTimeout(() => { embedNotice.value = '' }, ok ? 4000 : 12000)
-}
+// 删除、扫描等操作结果统一走 FeedbackHost 的底部瞬时提示（services/feedback）。
+// 错误日志仍保留完整路径与 describeError detail，不把技术堆栈塞进提示条。
 
 // ── 更换封面 ──
 //
@@ -1236,16 +1179,17 @@ function applyScanView(view) {
   scanWarnings.value = view.warnings
 }
 
-async function scanFolder(dir, refresh = false) {
-  if (!dir) return
+async function scanFolder(dir, refresh = false, revalidate = false) {
+  if (!dir) return false
 
   const cacheKey = scanCacheKey(dir)
-  if (!refresh) {
+  // 过期重进要绕开本会话的裸 Map；服务端会校验文件是否仍存在，不必深度重扫。
+  if (!refresh && !revalidate) {
     const cached = memGet(cacheKey)
     if (cached) {
       applyScanView(scanViewOfCache(cached))
       currentDir.value = dir
-      return
+      return true
     }
   }
 
@@ -1258,14 +1202,16 @@ async function scanFolder(dir, refresh = false) {
       // 把「扫描时的方向键」也存上，删除之后才能就地改写缓存而不是整棵作废
       memSet(cacheKey, { ...scanCachePayload(view), dir })
       savePref('nas_dir', dir)
+      return true
     }
   } catch (err) {
     // 2026-11-03：以前失败只进日志 —— 界面上什么都不发生，用户以为点了没反应。
-    showEmbedNotice(`扫描「${dir}」失败：${describeError(err)}`, false)
+    notifyFail(`扫描「${dir}」失败：${describeError(err)}`, { scope: '本地曲库', detail: describeError(err) })
     logError('扫描曲库目录', `扫描 ${dir} 失败`, describeError(err))
   } finally {
     isScanning.value = false
   }
+  return false
 }
 
 function switchDir(dir) {
@@ -1363,8 +1309,7 @@ function playAllNasSongs() {
 
 onMounted(async () => {
   await loadDirectories()
-  await scanFolder(currentDir.value, false)
-  markLoaded('nas')
+  if (await scanFolder(currentDir.value, false)) markLoaded('nas')
 })
 
 // 常驻页面：切回来时如果数据超过 TTL（或下载/整理把它标成过期了）就重读当前目录。
@@ -1375,6 +1320,7 @@ watch(currentView, (v) => {
   if (v !== 'library') return
   if (!isStale('nas')) return
   loadDirectories()
-  loadBrowse(currentDir.value).finally(() => markLoaded('nas'))
+  // 这里要刷新曲库列表，不是目录选择器的浏览数据；后者不会更新 songs。
+  scanFolder(currentDir.value, false, true).then(ok => { if (ok) markLoaded('nas') })
 })
 </script>
