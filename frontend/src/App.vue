@@ -490,6 +490,14 @@
             />
           </div>
         </template>
+        <template #inner-tidy-organize>
+          <div class="grid h-full grid-cols-1">
+            <OrganizeView
+              v-if="segMounted('tidy', 'organize')"
+              v-show="segmentOf('tidy') === 'organize'"
+            />
+          </div>
+        </template>
         <template #inner-tidy-records>
           <TidyView class="h-full" segment="records" />
         </template>
@@ -885,6 +893,7 @@ import DownloadDirModal from './components/DownloadDirModal.vue'
 import LibraryManager from './components/LibraryManager.vue'
 import TidyView from './components/TidyView.vue'
 import QualityView from './components/QualityView.vue'
+import OrganizeView from './components/OrganizeView.vue'
 import PushManager from './components/PushManager.vue'
 import DownloadHub from './components/DownloadHub.vue'
 import ApiModal from './components/ApiModal.vue'
@@ -912,6 +921,7 @@ import {
 } from './services/navBus'
 import { VIEWS, NAV_GROUPS, MOBILE_TAB_IDS, viewsOfGroup, segmentsOf, defaultSegment, resolveRoute } from './services/navViews'
 import { fail as feedbackFail } from './services/feedback'
+import { pickSearchHit } from './services/fillSource'
 import { invalidate } from './services/viewCache'
 import { logError, logInfo, logWarn } from './services/appLog'
 import { qualityLabel } from './engine/quality.js'
@@ -921,7 +931,7 @@ import {
   Wand2, Send, Download, ListMusic, ListPlus, CloudDownload,
   MoreHorizontal, X, Loader2, AlertTriangle, Search, ArrowRight,
   Sparkles, Copy, ScanSearch, History, Gauge, ArrowUpCircle, Wrench,
-  Github, PanelLeftOpen, PanelLeftClose, Globe, Volume2,
+  FolderTree, Github, PanelLeftOpen, PanelLeftClose, Globe, Volume2,
 } from 'lucide-vue-next'
 import { sidebarStatusItems } from './services/libraryView'
 import { pushNavBadge, navLabelWithBadge } from './services/sidebarBadges'
@@ -1134,7 +1144,7 @@ const NAV_ICONS = { search: Compass, library: Library, tidy: Wand2, push: Send, 
 // 用户 2026-10-26：「下载-歌单更名为歌单导入，图标也修改下」——原来的 ListOrdered（三横线带序号的清单）
 // 看起来像「有序列表」而不是「往队列里加东西」，换成 ListPlus（清单 + 加号），
 // 正是「粘链接进来、整单加进下载队列」这个动作。
-const SEGMENT_ICONS = { discover: Compass, charts: Trophy, queue: ListMusic, playlist: ListPlus, autodl: CloudDownload, logs: ScrollText, settings: Settings, complete: Sparkles, repair: Wrench, dedupe: Copy, audit: ScanSearch, records: History, quality: Gauge }
+const SEGMENT_ICONS = { discover: Compass, charts: Trophy, queue: ListMusic, playlist: ListPlus, autodl: CloudDownload, logs: ScrollText, settings: Settings, complete: Sparkles, repair: Wrench, dedupe: Copy, audit: ScanSearch, records: History, quality: Gauge, organize: FolderTree }
 
 const navItems = VIEWS.map((v) => ({ ...v, icon: NAV_ICONS[v.id] }))
 
@@ -1597,22 +1607,31 @@ async function playSong(songOrPayload) {
           const query = `${cleanName} ${song.singer || ''}`.trim()
           const searchRes = await SearchAPI.search(query, altP, 1)
           const candidates = searchRes?.data?.list || searchRes?.list || []
-          
-          for (let i = 0; i < Math.min(candidates.length, 3); i++) {
-            if (resolvedUrl || thisSession !== currentSessionId) break
-            const cand = candidates[i]
-            try {
-              const matchResult = await lxRuntime.getMusicUrl(sourceId, altP, cand, '128k')
-              if (matchResult?.url && /^https?:/.test(matchResult.url) && !isFakeOrNoticeAudio(matchResult.url)) {
-                resolvedUrl = matchResult.url
-                resolvedHeaders = matchResult.headers || {}
-                altHit = { platform: altP, name: cand.name, singer: cand.singer || '', quality: '128k' }
-                console.log(`[PLAY] 智能跨源匹配成功 [${altP.toUpperCase()}]:`, cand.name, cand.singer, resolvedUrl)
-                fetchLyrics(sourceId, altP, cand, thisSession)
-                break
-              }
-            } catch (_) {}
+
+          // M4：只认同版录音。以前的写法是「前三条里谁取链成功就播谁」——
+          // 搜「晴天」可能把翻唱、Live、铃声版全当候选，取链成功≠是同一首歌。
+          // 这里用 pickSearchHit（歌名归一相等 + 歌手沾边 + 时长容差）先筛，
+          // 筛不中就换下一个平台，宁可不播也不播错歌。
+          const cand = pickSearchHit(candidates, {
+            name: song.name,
+            artist: song.singer || '',
+            duration: Number(song.duration || song.interval || 0) || 0,
+          }, altP)
+          if (!cand) {
+            console.log(`[PLAY] 跨源 [${altP.toUpperCase()}] 没有同版候选，跳过`)
+            continue
           }
+          try {
+            const matchResult = await lxRuntime.getMusicUrl(sourceId, altP, cand, song.quality || '320k')
+            if (matchResult?.url && /^https?:/.test(matchResult.url) && !isFakeOrNoticeAudio(matchResult.url)) {
+              resolvedUrl = matchResult.url
+              resolvedHeaders = matchResult.headers || {}
+              altHit = { platform: altP, name: cand.name, singer: cand.singer || '', quality: song.quality || '320k' }
+              console.log(`[PLAY] 智能跨源匹配成功 [${altP.toUpperCase()}]:`, cand.name, cand.singer, resolvedUrl)
+              fetchLyrics(sourceId, altP, cand, thisSession)
+              break
+            }
+          } catch (_) {}
         } catch (e) {
           console.warn(`[PLAY] 跨源检索 [${altP}] 异常:`, e)
         }

@@ -206,17 +206,21 @@ func (f *fakeAllTiers) ResolveAtTier(ctx context.Context, id, tier string) (*onl
 // CRC 校验判它是坏 FLAC（同一首的无损直链本身就是坏的）。这种失败换条无损
 // 直链没意义，换档才有救 —— 320K 是另一条编码链路。
 
-// isCorruptFLAC 判定：downloadFailure 带 error_code=flac_corrupt 要认得出，
+// isCorruptLossless 判定：downloadFailure 带 error_code=flac_corrupt 要认得出，
 // 老格式（纯文本含「坏流」）也要认得出，普通错误不能误判。
 func TestIsCorruptFLACClassifies(t *testing.T) {
 	df := &downloadFailure{msg: "下载失败：坏流", errCode: "flac_corrupt"}
-	if !isCorruptFLAC(df) {
+	if !isCorruptLossless(df) {
 		t.Fatal("error_code=flac_corrupt 必须判定为坏流")
 	}
-	if isCorruptFLAC(&downloadFailure{msg: "下载失败：403", errCode: ""}) {
+	// 其它无损容器（结构校验不过）也要算坏流，否则不会降档重试
+	if !isCorruptLossless(&downloadFailure{msg: "下载失败：坏流", errCode: "lossless_corrupt"}) {
+		t.Fatal("error_code=lossless_corrupt 必须判定为坏流")
+	}
+	if isCorruptLossless(&downloadFailure{msg: "下载失败：403", errCode: ""}) {
 		t.Fatal("普通下载失败不能判成坏流")
 	}
-	if isCorruptFLAC(context.Canceled) {
+	if isCorruptLossless(context.Canceled) {
 		t.Fatal("无关错误不能判成坏流")
 	}
 }

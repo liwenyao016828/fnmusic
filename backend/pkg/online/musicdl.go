@@ -400,6 +400,7 @@ func (m *MusicDL) Resolve(ctx context.Context, queries []MusicDLQuery) (map[stri
 			Format:  strings.ToLower(strings.TrimSpace(it.Ext)),
 			Size:    it.FileSize,
 			Expires: time.Time{}, // sidecar 不给过期时间：直链当场用，不缓存太久（见 Pool 的 TTL）
+			Headers: MediaHeaders(it.Headers),
 		}
 	}
 	return out, nil

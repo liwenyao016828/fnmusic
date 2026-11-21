@@ -11,6 +11,7 @@ import (
 
 	"fn-lx-player/pkg/account"
 	"fn-lx-player/pkg/fnos"
+	"fn-lx-player/pkg/online"
 )
 
 // errFnosUnavailable 飞牛音乐不可用（非飞牛环境、未读到令牌、或服务未运行）。
@@ -23,6 +24,10 @@ type Runner struct {
 	// localIndex 本地曲库快照（可为 nil）。定时/手动推送都要带上它，
 	// 否则「本地早就下好了」的曲目会被一路判成「缺失」，前端再下一遍。
 	localIndex func() []LocalTrack
+	// onlineSink 把「曲库里没有 / 版本不同」的曲目写成在线条目，
+	// 这样飞牛页面里显示的是完整歌单（用户 2026-11-21 的要求）。
+	// 可为 nil —— 为 nil 时只报警告，不写在线条目。
+	onlineSink func(playlistGUID string, tracks []online.Track) (int, error)
 	stop       chan struct{}
 	done       chan struct{}
 }
@@ -43,6 +48,16 @@ func NewRunner(store *Store, accounts *account.Store) *Runner {
 // 就等于永远停在注入那一刻。
 func (r *Runner) SetLocalIndex(fn func() []LocalTrack) {
 	r.localIndex = fn
+}
+
+// SetOnlineSink 注入「在线条目写入通道」。
+//
+// 没有这个通道时，推送只能把曲库命中的曲目写进官方歌单，剩下的进 Missing，
+// 飞牛页面里就只能看到已下载的那部分（用户 2026-11-21 报的「99 首只显示 32 首」）。
+// 注入后，曲库里没有 / 版本不同的曲目会作为在线条目写进共享桶，
+// 由拦截层在歌单列表里一并显示，页面看到的是完整歌单。
+func (r *Runner) SetOnlineSink(fn func(playlistGUID string, tracks []online.Track) (int, error)) {
+	r.onlineSink = fn
 }
 
 // Execute 执行一个任务：拉取源曲目 → 推送到飞牛歌单。
@@ -142,10 +157,15 @@ func (r *Runner) doExecute(t Task) (*Result, error) {
 		FnosGUID:  t.FnosGUID,
 		CoverURL:  src.CoverURL,
 		SyncCover: t.SyncCover,
+		// 平台：在线条目要靠它才能把源曲目转成可播的在线条目（wy/tx）。
+		Platform: src.Platform,
 		// 保留期：把策略与「此前推送过哪些」一并传入，清理只在这个范围内进行
 		RetentionMode: t.RetentionMode,
 		RetentionDays: t.RetentionDays,
 		Pushed:        t.PushedTracks,
+		// 在线条目写入通道：把曲库里没有 / 版本不同的曲目写成在线条目，
+		// 飞牛页面才会显示完整歌单（用户 2026-11-21 的要求）。
+		OnlineSink: r.onlineSink,
 		// 本地曲库索引：**必须**带上（2026-11-01 修，issue #11）。
 		// 漏了它的后果不是「少个字段」：本地早就下好的歌会一路被判「缺失」，
 		// 推送结果里的「本地命中」恒为 0，前端据此再下一遍 —— 而预览路径一直

@@ -220,6 +220,19 @@ type Config struct {
 	// 注意它是**启动时定死的回环地址**，不接受请求里的任何 host ——
 	// 这是这条通道不引入 SSRF 面的原因。
 	LocalAPI string
+	// LocalToken 是本机后端要求的 API Token（启动时读一次 `FN_API_TOKEN`）。
+	//
+	// # 为什么回环也要凭据（2026-11-20 修正）
+	//
+	// 以前这里的注释写的是「后端 AUTH 中间件对本机/内网地址免校验」，那只在
+	// `lan` / `none` 两种鉴权模式下成立。用户一旦设了 `FN_API_TOKEN`（或
+	// `FN_AUTH_MODE=token`），`/api/charts/detail` 之类接口对 127.0.0.1 同样
+	// 要求 `X-API-Token` —— 于是这条没带凭据的回环请求被 401，榜单拉回来是空的，
+	// 而「空榜不注入」，症状就是**榜单卡片静默消失、日志里一个字都没有**。
+	//
+	// 让回环请求带上自己的 token，比「放行 127.0.0.1」更稳：不改鉴权策略，
+	// 以后再加回环调用也不会踩同一个坑（newLocalRequest 统一加头）。
+	LocalToken string
 	// Revision 是注入脚本标签上的版本串（应用版本号）。
 	//
 	// 只用来「对着页面源码能看出这行脚本是哪个版本发的」，以及参与缓存打破。
@@ -479,6 +492,17 @@ type Interceptor struct {
 	uiInject     func() bool
 	panelFeats   func() map[string]bool
 	localAPI     string
+	// localToken 本机后端在 token 模式下的 API Token（见 Config.LocalToken）。
+	localToken string
+
+	// chartLogMu / chartDisabledSeen：「榜单注入总开关是关的」这条日志只记一次。
+	//
+	// 为什么要专门管这个：enabledChartRefs 在**每次**取歌单列表时都会走到，
+	// 逐次记会把日志刷满；而完全不记就是 2026-11-20 真机那次现场 ——
+	// 用户说「榜单注入失效了」，日志 12 万行里一个相关字符都没有，
+	// 最后只能靠 curl /api/config 才发现总开关是 false。
+	chartLogMu        sync.Mutex
+	chartDisabledSeen bool
 
 	statsMu sync.Mutex
 	stats   map[string]int
@@ -573,6 +597,9 @@ func New(cfg Config) *Interceptor {
 	}
 	// 本机后端基地址：去掉可能的尾斜杠，免得拼出 `//api/...`。
 	i.localAPI = strings.TrimRight(strings.TrimSpace(cfg.LocalAPI), "/")
+	// token 模式（设了 FN_API_TOKEN）下，本机回环**同样**要凭据 —— 见
+	// newLocalRequest 的说明。留空表示后端不需要凭据（lan / none 模式）。
+	i.localToken = strings.TrimSpace(cfg.LocalToken)
 	// 榜单内容：默认走本机回环（`/api/charts/detail`），测试可注入替身。
 	i.chartFetch = cfg.ChartDetail
 	if i.chartFetch == nil {

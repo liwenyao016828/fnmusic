@@ -381,6 +381,27 @@ type AppConfig struct {
 	// 指向路径 = 指定。三态的理由与 CoverEmbed 完全一样：只有两态的话，
 	// 用户一旦设过自定义目录就再也回不到默认值了。
 	CacheDir *string `json:"cache_dir,omitempty"`
+
+	// ── 文件夹整理（2026-11-20 用户：「整理的结构样式（目录层级、命名格式）可由用户自行修改」）──
+	//
+	// OrganizeDirTemplate 是**目录模板**（相对整理根目录，用 "/" 分层），
+	// OrganizeFileTemplate 是**文件名模板**（不含扩展名）。占位符见 pkg/organize：
+	// {artist} {album} {title} {track} {disc} {year} {genre}，数字可零填充 {track:02d}。
+	//
+	// ⚠️ 用指针不是洁癖：**空目录模板是合法取值**（= 不建目录、全部平铺），
+	// 用 string 的话「非空才写」的合并规则会让它永远回不到平铺 —— 与 CacheDir /
+	// DownloadQualityOverride 同一个坑。nil = 没设置过（用默认「歌手 / 专辑 / 曲目」），
+	// 指向空串 = 显式平铺。
+	OrganizeDirTemplate *string `json:"organize_dir_template,omitempty"`
+	// OrganizeFileTemplate 空串有明确语义（文件名模板为空就没得算），
+	// 所以读的时候走 OrganizeTemplate()，别自己判空再各写一份回退。
+	OrganizeFileTemplate *string `json:"organize_file_template,omitempty"`
+	// OrganizeNumberUnknown 是否给**没有曲序**的歌按同专辑内的出现顺序补序号。
+	//
+	// nil = 关（默认）：乱编的序号比没有序号更误导 —— 曲序是要写进文件名、
+	// 以后还要靠它排序的，猜错就是错一辈子。用户在预览里看清「哪些歌没有曲序」
+	// 之后再决定要不要打开。
+	OrganizeNumberUnknown *bool `json:"organize_number_unknown,omitempty"`
 }
 
 // ActiveIDs 返回启用池（有序）。**旧配置**（只有单值 active_source_id）自动升成单元素池。
@@ -1235,6 +1256,23 @@ func (cm *ConfigManager) load() {
 			v := *c.CacheDir
 			cm.config.CacheDir = &v
 		}
+		// 文件夹整理的结构样式（v2.32.0 新增）。
+		// ⚠️ **load 与 Update 两处都要登记** —— 只写一处就是「界面上改完能用、
+		// 重启后模板自己变回默认」（LogDir 踩过的坑）。
+		// 三个字段都是指针三态：nil = 没设置过（用 pkg/organize 的默认），
+		// 指向空串 = 显式平铺（目录模板），以便用户能改回「不建目录」。
+		if c.OrganizeDirTemplate != nil {
+			v := *c.OrganizeDirTemplate
+			cm.config.OrganizeDirTemplate = &v
+		}
+		if c.OrganizeFileTemplate != nil {
+			v := *c.OrganizeFileTemplate
+			cm.config.OrganizeFileTemplate = &v
+		}
+		if c.OrganizeNumberUnknown != nil {
+			v := *c.OrganizeNumberUnknown
+			cm.config.OrganizeNumberUnknown = &v
+		}
 		// musicdl sidecar（v2.1.83 新增）。
 		// ⚠️ 与上面那条同样的规矩：**load 与 Update 两处都要登记**。只写 Update
 		// 就是「界面上改了能用、重启后自己变回默认」；只写 load 就是「改了没生效」。
@@ -1536,6 +1574,20 @@ func (cm *ConfigManager) Update(c AppConfig) error {
 	if c.CacheDir != nil {
 		v := *c.CacheDir
 		cm.config.CacheDir = &v
+	}
+	// 文件夹整理的结构样式（v2.32.0 新增）：与 load() 里那条**必须成对**，
+	// 缺一处就是「改完不生效」或「重启后被默认值覆盖」。
+	if c.OrganizeDirTemplate != nil {
+		v := *c.OrganizeDirTemplate
+		cm.config.OrganizeDirTemplate = &v
+	}
+	if c.OrganizeFileTemplate != nil {
+		v := *c.OrganizeFileTemplate
+		cm.config.OrganizeFileTemplate = &v
+	}
+	if c.OrganizeNumberUnknown != nil {
+		v := *c.OrganizeNumberUnknown
+		cm.config.OrganizeNumberUnknown = &v
 	}
 	// musicdl sidecar（v2.1.83 新增）：nil = 不动，空切片 = 回到默认平台名单。
 	// ⚠️ 开关是 nil 三态：patch 里没这个键就不能动它（否则「保存别的设置」会把

@@ -10,6 +10,7 @@ package push
 import (
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"path/filepath"
 	"sort"
@@ -19,6 +20,7 @@ import (
 
 	"fn-lx-player/pkg/fnos"
 	"fn-lx-player/pkg/match"
+	"fn-lx-player/pkg/online"
 	"fn-lx-player/pkg/security"
 )
 
@@ -58,6 +60,15 @@ type ItemResult struct {
 	// LocalDuration / SourceDuration 只有版本存疑时才填，给界面说明差异在哪。
 	LocalDuration  int `json:"local_duration,omitempty"`
 	SourceDuration int `json:"source_duration,omitempty"`
+	// Online 这一条是不是以「在线条目」的形式显示在飞牛歌单里。
+	//
+	// 用户 2026-11-21：「我需要飞牛页面的歌单显示完整的歌单，已在曲库的就播放
+	// 曲库的（同一首歌的不同版本，显示歌单的版本而非已有版本），不在曲库的就
+	// 显示在线」。所以「曲库里没有」以及「曲库里有但不是同一版」这两类，
+	// 都会作为在线条目出现在歌单里 —— 歌单因此是**完整**的。
+	Online bool `json:"online,omitempty"`
+	// OnlineReason 在线显示的原因（给界面一句话说明）。
+	OnlineReason string `json:"online_reason,omitempty"`
 }
 
 // Result 一次推送的结果。
@@ -108,6 +119,19 @@ type Result struct {
 	RevivedTitles []string `json:"revived_titles,omitempty"`
 	// PushedTotal 本轮结束时推送清单（Pushed）的总条数。
 	PushedTotal int `json:"pushed_total,omitempty"`
+
+	// ── 在线条目（曲库里没有的那部分） ──
+
+	// Online 本轮作为「在线条目」显示在飞牛歌单里的曲目数。
+	//
+	// 这些歌**在飞牛页面里看得见、点得动**，只是还没进本地曲库。
+	Online int `json:"online,omitempty"`
+	// OnlineItems 这几首的明细（干跑时也有，方便界面先预览）。
+	OnlineItems []ItemResult `json:"online_items,omitempty"`
+	// OnlineAdded 实际写进歌单的在线条目数（可能被「用户删过」的黑名单挡掉）。
+	OnlineAdded int `json:"online_added,omitempty"`
+	// OnlineWarning 在线条目写入失败的原因（不影响已完成的推送结果）。
+	OnlineWarning string `json:"online_warning,omitempty"`
 }
 
 // Options 推送选项。
@@ -135,6 +159,16 @@ type Options struct {
 	// 用户 2026-10-23 的原话：「同一个歌单里的歌曲，我提前下载了，然后同步该歌单。
 	// 怎么没有匹配该歌曲？可否增加功能，对现有的本地曲库的歌曲索引。」
 	LocalIndex func() []LocalTrack
+
+	// Platform 源平台（wy / tx）。给定时 / 订阅推送用。
+	//
+	// 「曲库里没有的那几首」要作为**在线条目**显示在飞牛歌单里，就必须知道这歌
+	// 的平台与平台 id —— 在线播放靠「平台 + 平台 id」去取直链。
+	Platform string
+	// OnlineSink 把在线条目写进飞牛歌单（按歌单 guid 分区的共享桶）。
+	//
+	// nil = 不写（老的调用方只推曲库里有的那些）。
+	OnlineSink func(playlistGUID string, tracks []online.Track) (int, error)
 }
 
 // LocalTrack 是本地曲库里的一个文件（由调用方从 library.Index 转好再传进来，
@@ -161,6 +195,82 @@ const (
 	// 但 Reason 说清「本地有另一版」，界面据此给两个按钮。
 	SourceLocalVersionDiff = "local_version_diff"
 )
+
+// SourceOnline = 这一条以「在线条目」的形式显示在飞牛歌单里。
+//
+// 两种情况会用它：曲库里根本没有这一版；曲库里有同名但**不是同一版**
+// （用户要的是歌单这一版，曲库那版不顶替）。
+const SourceOnline = "online"
+
+// versionDiffReason 判断两个时长是否说明「不是同一版本」，返回原因（空串 = 同一版本）。
+//
+// 容差与 match.RejectReason 一致：固定 10 秒、或原曲时长的 15%，取大者。
+// 时长未知（0）时不猜版本 —— 宁可按同一版处理，也不要把同一首歌拆成两条。
+func versionDiffReason(srcSec, otherSec int) string {
+	if srcSec <= 0 || otherSec <= 0 {
+		return ""
+	}
+	tol := match.DurationToleranceAbs
+	if r := int(math.Round(float64(srcSec) * match.DurationToleranceRatio)); r > tol {
+		tol = r
+	}
+	if diff := srcSec - otherSec; diff > tol || diff < -tol {
+		return fmt.Sprintf("这一版 %d 秒 / 那版 %d 秒", srcSec, otherSec)
+	}
+	return ""
+}
+
+// onlineTrackFor 把源曲目转成在线条目。
+//
+// 返回 nil 表示这歌**没法**作为在线条目显示：不知道平台，或没有平台 id
+// （没有 id 就取不到直链）。这种情况只能留在「待下载」里 —— 显示一首点开
+// 没声音的歌比不显示更糟。
+func onlineTrackFor(opts Options, t Track) *online.Track {
+	platform := strings.ToLower(strings.TrimSpace(opts.Platform))
+	// 兼容调用方传平台名而不是平台码（在线解析器只认 wy / tx）。
+	switch platform {
+	case "netease", "网易云", "网易云音乐":
+		platform = "wy"
+	case "qq", "qqmusic", "腾讯", "QQ音乐":
+		platform = "tx"
+	}
+	id := strings.TrimSpace(t.SongID)
+	if platform == "" || id == "" {
+		return nil
+	}
+	return &online.Track{
+		Platform:   platform,
+		PlatformID: id,
+		Title:      strings.TrimSpace(t.Name),
+		Artists:    splitArtists(t.Artist),
+		Album:      strings.TrimSpace(t.Album),
+		Duration:   t.Duration,
+		CoverURL:   strings.TrimSpace(t.Cover),
+	}
+}
+
+// splitArtists 把「歌手1, 歌手2」拆成数组。
+func splitArtists(s string) []string {
+	parts := strings.FieldsFunc(s, func(r rune) bool {
+		return r == ',' || r == '，' || r == '、' || r == '/' || r == ';'
+	})
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if v := strings.TrimSpace(p); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// markOnline 标记这一条将以在线条目显示在歌单里。
+func markOnline(item *ItemResult, ot *online.Track, reason string) {
+	if item == nil || ot == nil {
+		return
+	}
+	item.Online = true
+	item.OnlineReason = reason
+}
 
 // PushTracks 把曲目推送到飞牛音乐歌单。
 //
@@ -197,6 +307,9 @@ func PushTracks(m *fnos.Music, tracks []Track, opts Options) (*Result, error) {
 		// localPath 本地文件命中（飞牛曲库没有、但用户盘上有）。
 		// 这种曲目**不进 Missing**：歌已经有了，不该再让前端下一次。
 		localPath string
+
+		// online 这条要以「在线条目」的形式显示在歌单里（非 nil 时有效）。
+		online *online.Track
 	}
 	outcomes := make([]outcome, len(tracks))
 	{
@@ -216,6 +329,19 @@ func PushTracks(m *fnos.Music, tracks []Track, opts Options) (*Result, error) {
 				found, score, ok := matchInLibrary(m, src)
 				item := ItemResult{Name: t.Name, Artist: t.Artist, Score: round2(score)}
 				if ok {
+					// 版本判定：曲库里那一版与歌单这一版时长差得多 → 不是同一版。
+					//
+					// 用户 2026-11-21：「同一首歌的不同版本，显示歌单的版本而非已有版本」。
+					// 所以曲库里那个别的版本**不顶替**歌单这一版 —— 歌单这一版走在线条目。
+					if diff := versionDiffReason(t.Duration, found.Duration); diff != "" {
+						item.Source = SourceOnline
+						item.Reason = "曲库里是另一个版本（" + diff + "）"
+						item.FnosTitle = found.Name
+						ot := onlineTrackFor(opts, t)
+						markOnline(&item, ot, "曲库里是另一个版本，按歌单这一版显示")
+						outcomes[i] = outcome{item: item, online: ot}
+						return
+					}
 					item.Matched = true
 					item.Source = SourceFnos
 					item.FnosTrackGUID = found.ID
@@ -236,7 +362,11 @@ func PushTracks(m *fnos.Music, tracks []Track, opts Options) (*Result, error) {
 						item.Reason = diff
 						item.LocalDuration = loc.Duration
 						item.SourceDuration = t.Duration
-						outcomes[i] = outcome{item: item}
+						// 本地是另一个版本 —— 按歌单这一版显示（在线），本地那一版不顶替。
+						// Source 仍留 local_version_diff：界面靠它显示「用本地这版 / 换版本」的选择。
+						ot := onlineTrackFor(opts, t)
+						markOnline(&item, ot, "本地是另一个版本，按歌单这一版显示")
+						outcomes[i] = outcome{item: item, online: ot}
 						return
 					}
 					item.Matched = true
@@ -246,7 +376,9 @@ func PushTracks(m *fnos.Music, tracks []Track, opts Options) (*Result, error) {
 					return
 				}
 				item.Reason = "飞牛曲库和本地曲库都没有这首歌"
-				outcomes[i] = outcome{item: item}
+				ot := onlineTrackFor(opts, t)
+				markOnline(&item, ot, "曲库里还没有，已按在线显示")
+				outcomes[i] = outcome{item: item, online: ot}
 			}(i)
 		}
 		wg.Wait()
@@ -258,8 +390,16 @@ func PushTracks(m *fnos.Music, tracks []Track, opts Options) (*Result, error) {
 	// localPending 记录「本地命中、待收编」的曲目在 res.Items 里的下标，
 	// 供第 4.5 步扫描后收编进歌单。
 	localPending := make([]int, 0)
+	// onlineTracks / onlineItems 收集「要走在线显示」的曲目：
+	// 曲库里没有这一版，或者曲库里有的是另一个版本（用户要歌单这一版）。
+	var onlineTracks []online.Track
+	var onlineItems []ItemResult
 	for _, o := range outcomes {
 		res.Items = append(res.Items, o.item)
+		if o.online != nil {
+			onlineTracks = append(onlineTracks, *o.online)
+			onlineItems = append(onlineItems, o.item)
+		}
 		if o.guid == "" {
 			// 本地已有也算「这首歌不缺」—— 不进 Missing，否则前端会当成待下载再下一遍。
 			if o.localPath != "" {
@@ -276,6 +416,9 @@ func PushTracks(m *fnos.Music, tracks []Track, opts Options) (*Result, error) {
 		}
 	}
 	res.Matched = len(matched)
+
+	res.Online = len(onlineTracks)
+	res.OnlineItems = onlineItems
 
 	// 3. 干跑：只回报匹配结果
 	if opts.DryRun {
@@ -352,6 +495,26 @@ func PushTracks(m *fnos.Music, tracks []Track, opts Options) (*Result, error) {
 	}
 	res.Added = len(toAdd)
 	res.AlreadyPresent = len(matched) - len(toAdd)
+
+	// 4.6 把「曲库里没有 / 版本不同」的曲目作为**在线条目**写进歌单。
+	//
+	// 用户 2026-11-21：「我需要飞牛页面的歌单显示完整的歌单，已在曲库的就播放
+	// 曲库的，不在曲库的就显示在线」。没有这一步，飞牛页面里就只能看到曲库里
+	// 已有的那几十首 —— 源歌单 99 首、页面只显示 32 首就是这么来的。
+	//
+	// 写失败只记警告：官方那部分已经写好了，不能因为在线条目失败就整轮报错。
+	if len(onlineTracks) > 0 {
+		if opts.OnlineSink == nil {
+			res.OnlineWarning = "未配置在线条目写入通道，这几首暂时只显示在曲率面板里"
+		} else {
+			added, err := opts.OnlineSink(guid, onlineTracks)
+			if err != nil {
+				res.OnlineWarning = "在线条目写入失败: " + err.Error()
+			} else {
+				res.OnlineAdded = added
+			}
+		}
+	}
 
 	// 4.5 收编「本地已有」的曲目（2026-10-24 用户：「推送歌单的时候发现本地有
 	// 歌曲是在该歌单里，就替换原有在线播放」）。

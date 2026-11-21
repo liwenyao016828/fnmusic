@@ -113,6 +113,7 @@ func fetchPublicNeteasePlaylist(id string) (*Source, error) {
 		Title:    raw.Result.Name,
 		CoverURL: strings.Replace(raw.Result.CoverImgUrl, "http://", "https://", 1),
 		Owner:    raw.Result.Creator.Nickname,
+		Platform: "wy",
 	}
 	for _, t := range raw.Result.Tracks {
 		names := make([]string, 0, len(t.Artists))
@@ -152,7 +153,7 @@ func fetchPublicQQPlaylist(disstid string) (*Source, error) {
 		return nil, fmt.Errorf("这个 QQ 歌单没有曲目（可能是空歌单，或需要登录才能查看）")
 	}
 
-	out := &Source{ID: pl.ID, Title: pl.Name, CoverURL: pl.Cover}
+	out := &Source{ID: pl.ID, Title: pl.Name, CoverURL: pl.Cover, Platform: "tx"}
 	for _, s := range pl.Songs {
 		artist := strings.Join(s.Singers, ", ")
 		if artist == "" {

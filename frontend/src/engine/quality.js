@@ -6,7 +6,9 @@
  */
 
 // 音质从高到低（highest 模式的降级阶梯）
-export const QUALITY_LADDER = ['flac24bit', 'flac', '320k', '192k', '128k']
+// hires 在 flac24bit 与 flac 之间：它本质是高规格无损，排在 320k 之前是
+// 显然错的（A 源只有 128k 时不该遮住 B 源的 hires）。
+export const QUALITY_LADDER = ['flac24bit', 'hires', 'flac', '320k', '192k', '128k']
 
 // 展示用标签
 export const QUALITY_LABELS = {

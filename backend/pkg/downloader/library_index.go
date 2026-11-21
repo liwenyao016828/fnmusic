@@ -30,6 +30,7 @@ import (
 
 	"fn-lx-player/pkg/applog"
 	"fn-lx-player/pkg/audioext"
+	"fn-lx-player/pkg/flacok"
 	"fn-lx-player/pkg/library"
 	"fn-lx-player/pkg/match"
 	"fn-lx-player/pkg/namefmt"
@@ -50,9 +51,12 @@ const (
 	// 所以歌名这一项单独再卡一道。
 	libraryMatchMinTitle = 0.85
 
-	// libraryMinAudioBytes 目录查重（findExistingAudio）与索引查重共用的体积下限。
+	// libraryMinAudioBytes 目录查重（findExistingAudio）与索引查重共用的大文件体积下限。
 	// 低于它的多半是损坏文件、占位文件或极短的试听片段。
 	libraryMinAudioBytes = 500 * 1024
+
+	// librarySmallAudioBytes 小文件的下限：低于它的连音频头都读不完整，一律不算「已有」。
+	librarySmallAudioBytes = 32 * 1024
 
 	// libraryMaxDurationProbes 一次查重最多探测几条候选的真实时长。
 	//
@@ -263,6 +267,44 @@ func libraryUpgradable(song SongPayload, path string) (bool, string) {
 	return true, fmt.Sprintf("已存在 %s（%s），本次 %s 可原地升级", filepath.Base(path), cur, song.Quality)
 }
 
+// libraryFileIsAudio 判断盘上的文件「像一首真歌」，作为查重的第二道判据。
+//
+// 只按体积判（老规矩：低于 500KB 一律不算「已有」）会同时冤枉两种文件：
+//   - **短歌**：30 秒的 128K mp3 约 480KB，铃声 / 彩蛋 / 几十秒的前奏都在 500KB 以下，
+//     会被当成「曲库里没有这首」而一遍一遍重复下载；
+//   - **下载失败留下的半截文件**：体积够但根本不是音频。
+//
+// 现在的口径：大文件照旧（≥500KB 就认，容器不认识也不拦，避免误伤 dsf/dff/aiff 这类
+// 少见的容器）；小文件必须**文件头是认识的音频容器**，flac 还额外过一次逐帧校验
+// （小文件读全量很便宜），半截的 flac 不会被当成「已有」。
+func libraryFileIsAudio(path string, size int64) bool {
+	if size >= libraryMinAudioBytes {
+		return true
+	}
+	if size < librarySmallAudioBytes {
+		return false
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	head := make([]byte, 16)
+	n, err := f.Read(head)
+	if n <= 0 && err != nil {
+		return false
+	}
+	ext := SniffAudioExt(head[:n])
+	if ext == "" {
+		return false
+	}
+	if ext == "flac" {
+		// 头是合法 flac 不代表文件是完整的：逐帧校验一下（小文件很快）。
+		return flacok.ValidateFile(path) == nil
+	}
+	return true
+}
+
 // libraryEntryUsable 判断索引里的这一条能不能作为「已有文件」的候选。
 //
 // 失效路径在这里被**静默跳过**：索引是异步扫描出来的，用户删文件、拔移动硬盘、
@@ -286,7 +328,7 @@ func libraryEntryUsable(e library.Entry) bool {
 		return false
 	}
 	// 索引里的体积可能与盘上不一致（文件被截断/替换过）：以盘上为准再判一次。
-	return fi.Size() >= libraryMinAudioBytes
+	return libraryFileIsAudio(p, fi.Size())
 }
 
 // logStaleLibraryPath 同一条失效路径每个进程只记一次（见 staleLogged 的说明）。

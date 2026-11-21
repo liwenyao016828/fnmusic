@@ -57,6 +57,39 @@ func bumpTrackCounts(list []any, counts map[string]int) {
 	}
 }
 
+// mergeOnlinePlaylistItems 合并「用户自己加的在线条目」与「订阅歌单写进来的共享条目」。
+//
+// 两段可能有同一个 guid（用户手动加过一首，订阅歌单里也有），只保留先出现的那个
+// （用户加的在前），避免飞牛页面出现同一首歌两行。
+func mergeOnlinePlaylistItems(userItems, sharedItems []online.PlaylistItem) []online.PlaylistItem {
+	if len(sharedItems) == 0 {
+		return userItems
+	}
+	out := make([]online.PlaylistItem, 0, len(userItems)+len(sharedItems))
+	seen := make(map[string]bool, len(userItems)+len(sharedItems))
+	for _, group := range [][]online.PlaylistItem{userItems, sharedItems} {
+		for _, it := range group {
+			if it.GUID == "" || seen[it.GUID] {
+				continue
+			}
+			seen[it.GUID] = true
+			out = append(out, it)
+		}
+	}
+	return out
+}
+
+// playlistTrackCounts 返回「用户自己加的在线条目数 + 订阅歌单的共享条目数」。
+//
+// 官方返回的 trackCount 只算官方曲目，界面显示的是歌单总数，所以要把两段都补回去。
+func (i *Interceptor) playlistTrackCounts(r *http.Request) map[string]int {
+	counts := i.store.PlaylistTrackCounts(i.userKey(r))
+	for guid, n := range i.store.SharedPlaylistTrackCounts() {
+		counts[guid] += n
+	}
+	return counts
+}
+
 // handlePlaylistList 接管 `GET /music/api/v1/playlist/list`。
 //
 // 两件事：
@@ -78,7 +111,7 @@ func (i *Interceptor) handlePlaylistList(w http.ResponseWriter, r *http.Request)
 		writeRaw(w, raw, status, ct)
 		return true
 	}
-	bumpTrackCounts(asSlice(data["list"]), i.store.PlaylistTrackCounts(i.userKey(r)))
+	bumpTrackCounts(asSlice(data["list"]), i.playlistTrackCounts(r))
 
 	if virtual := i.vPlaylistCards(r); len(virtual) > 0 {
 		official := asSlice(data["list"])
@@ -122,7 +155,7 @@ func (i *Interceptor) handlePlaylistDetail(w http.ResponseWriter, r *http.Reques
 	if guid == "" {
 		guid = firstString(data, "guid", "id")
 	}
-	extra := i.store.PlaylistTrackCounts(i.userKey(r))[guid]
+	extra := i.playlistTrackCounts(r)[guid]
 	if extra > 0 {
 		base := asInt(data["trackCount"])
 		if base == 0 {
@@ -148,7 +181,7 @@ func (i *Interceptor) handlePlaylistBatchDetail(w http.ResponseWriter, r *http.R
 		writeRaw(w, raw, status, ct)
 		return true
 	}
-	bumpTrackCounts(asSlice(data["list"]), i.store.PlaylistTrackCounts(i.userKey(r)))
+	bumpTrackCounts(asSlice(data["list"]), i.playlistTrackCounts(r))
 	obj["data"] = data
 	writeJSON(w, http.StatusOK, obj)
 	return true
@@ -189,7 +222,10 @@ func (i *Interceptor) handlePlaylistTrackList(w http.ResponseWriter, r *http.Req
 		officialTotal = len(official)
 	}
 
-	items := i.store.PlaylistTracks(i.userKey(r), playlistGUID)
+	items := mergeOnlinePlaylistItems(
+		i.store.PlaylistTracks(i.userKey(r), playlistGUID),
+		i.store.SharedPlaylistTracks(playlistGUID),
+	)
 	merged := make([]any, 0, len(official)+len(items))
 	merged = append(merged, official...)
 
@@ -377,6 +413,11 @@ func (i *Interceptor) handlePlaylistRemoveTrack(w http.ResponseWriter, r *http.R
 			})
 			return true
 		}
+		// 订阅歌单的在线条目在**共享桶**里，也要一起删 —— 而且删了要记住，
+		// 否则下一轮订阅推送又把这首歌塞回来（用户明确删过的东西不该复活）。
+		if _, err := i.store.RemoveSharedPlaylistTracks(playlistGUID, online); err != nil {
+			i.logf("[INTERCEPT] 删共享歌单条目失败 %s：%v", playlistGUID, err)
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"code": 0, "msg": "", "data": nil})
 	return true
@@ -408,6 +449,10 @@ func (i *Interceptor) handlePlaylistDelete(w http.ResponseWriter, r *http.Reques
 	if playlistGUID != "" {
 		if err := i.store.DropPlaylist(i.userKey(r), playlistGUID); err != nil {
 			i.logf("[INTERCEPT] 清在线歌单条目失败 %s：%v", playlistGUID, err)
+		}
+		// 订阅歌单的共享条目也要级联清掉。
+		if err := i.store.DropSharedPlaylist(playlistGUID); err != nil {
+			i.logf("[INTERCEPT] 清共享歌单条目失败 %s：%v", playlistGUID, err)
 		}
 	}
 	writeRaw(w, rawResp, status, ct)

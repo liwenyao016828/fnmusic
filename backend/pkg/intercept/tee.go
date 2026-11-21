@@ -713,7 +713,7 @@ func (i *Interceptor) resumeInto(ctx context.Context, t online.Track, part strin
 	if err != nil {
 		return 0, false
 	}
-	applyMediaHeaders(req, t, fmt.Sprintf("bytes=%d-", written))
+	applyMediaHeaders(req, t, fmt.Sprintf("bytes=%d-", written), res)
 	resp, err := mediaClient.Do(req)
 	if err != nil {
 		return 0, false

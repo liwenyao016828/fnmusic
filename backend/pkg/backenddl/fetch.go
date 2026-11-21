@@ -462,7 +462,7 @@ func NewFetcher(cfg FetcherConfig) Fetcher {
 			// 坏流降档要能**逐级**走完 320k → 128k：只降一次时，若 320k 那条
 			// 恰好也是同一批转码产物（同样损坏）就整首失败，而 128k 往往是
 			// 另一条编码链路、完好可用。
-			if isCorruptFLAC(derr) && !downgraded && cfg.modeAllowsLower() {
+			if isCorruptLossless(derr) && !downgraded && cfg.modeAllowsLower() {
 				// 先看计划里有没有**已经探好的**低档候选（通常有：计划在探测阶段
 				// 就把 320k/128k 都收进来了）。有就直接用它，不必再解析一次 ——
 				// 这也是「最高音质失败 → 自动切下一档」最省事的执行面。
@@ -502,7 +502,7 @@ func NewFetcher(cfg FetcherConfig) Fetcher {
 						return res2, nil
 					}
 					failures = append(failures, fmt.Sprintf("%s/%s：%v", fb.channel, firstNonEmpty(fb.tier, "?"), derr2))
-					if !isCorruptFLAC(derr2) {
+					if !isCorruptLossless(derr2) {
 						// 降档后已不是坏流（403/限流之类）：再降档也没用，收手。
 						break
 					}
@@ -1752,8 +1752,12 @@ func absInt(v int) int {
 }
 
 // downloadFailure 带机器可读的 error_code（downloader.SongResult.ErrorCode）。
-// 目前唯一会出现的码是 "flac_corrupt"（下载到的 FLAC 帧 CRC 校验不过）——
-// 这种失败换条直链重试没意义（同一首的无损直链是坏的），但**换档**有救：
+// 会出现的码：
+//   - "flac_corrupt"：下载到的 FLAC 帧 CRC 校验不过；
+//   - "lossless_corrupt"：其它无损容器（WAV/M4A/WavPack/APE）结构校验不过，
+//     比如文件被截断、块链长度对不上。
+//
+// 这类失败换条直链重试没意义（同一首的无损直链是坏的），但**换档**有救：
 // 同一首歌的 320K 是另一条编码链路，通常完好。
 type downloadFailure struct {
 	msg     string
@@ -1762,14 +1766,17 @@ type downloadFailure struct {
 
 func (e *downloadFailure) Error() string { return e.msg }
 
-// isCorruptFLAC 判断一次下载失败是不是「无损坏流」。
-func isCorruptFLAC(err error) bool {
+// isCorruptLossless 判断一次下载失败是不是「无损文件是坏流」。
+//
+// 命名从 isCorruptFLAC 改成 isCorruptLossless：现在不只 FLAC 会坏流，
+// 其它无损容器也会做结构校验（pkg/audiok），坏流的原因码是 lossless_corrupt。
+func isCorruptLossless(err error) bool {
 	if err == nil {
 		return false
 	}
 	var df *downloadFailure
 	if errors.As(err, &df) {
-		return df.errCode == "flac_corrupt"
+		return df.errCode == "flac_corrupt" || df.errCode == "lossless_corrupt"
 	}
 	// 兜底：老版本下载接口只回文本。字符串匹配保持向后兼容。
 	return strings.Contains(err.Error(), "无损文件是坏流")

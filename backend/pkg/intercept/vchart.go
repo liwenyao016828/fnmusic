@@ -114,8 +114,16 @@ func parseVChartRef(key string) (vChartRef, bool) {
 // 总开关（`i.chartEnabled`）在最前面判：关掉时**连读都不读名单**就返回空。
 // 名单本身照旧留在配置里，用户下次打开总开关时勾选原样还在。
 func (i *Interceptor) enabledChartRefs() []vChartRef {
-	if i.chartEnabled != nil && !i.chartEnabled() {
-		return nil
+	if i.chartEnabled != nil {
+		if !i.chartEnabled() {
+			i.noteChartDisabled()
+			return nil
+		}
+		// 开关重新打开：把「已经记过关掉」的标记清掉，
+		// 将来再关掉时还能在日志里留下一条线索。
+		i.chartLogMu.Lock()
+		i.chartDisabledSeen = false
+		i.chartLogMu.Unlock()
 	}
 	if i.chartList == nil {
 		return nil
@@ -135,6 +143,23 @@ func (i *Interceptor) enabledChartRefs() []vChartRef {
 		out = append(out, ref)
 	}
 	return out
+}
+
+// noteChartDisabled 记一条「榜单注入被关掉了」的日志（同一种状态只记一次）。
+//
+// 刻意不做「每次请求都记」：取歌单列表是高频动作，逐次记会把日志淹掉。
+// 只记状态变化的那一刻 —— 用户翻日志时能看到「什么时候关的」，而不是
+// 面对一个「从某天起就再也没出现过」的空白。
+func (i *Interceptor) noteChartDisabled() {
+	i.chartLogMu.Lock()
+	first := !i.chartDisabledSeen
+	i.chartDisabledSeen = true
+	i.chartLogMu.Unlock()
+	if !first {
+		return
+	}
+	i.logf("[INTERCEPT] 榜单注入总开关是关的（chart_playlists_enabled=false）：" +
+		"已勾选的榜单不会出现在飞牛音乐的歌单列表里。要恢复请到「搜索 → 榜单注入」重新启用，或 POST /api/config {\"chart_playlists_enabled\":true}")
 }
 
 // chartPlaylist 生成一条榜单歌单。
@@ -160,6 +185,11 @@ func (i *Interceptor) chartPlaylist(ctx context.Context, ref vChartRef) vPlaylis
 	}
 	tracks = dedupeTracks(tracks)
 	if len(tracks) == 0 {
+		// 空榜不注入是**刻意**的（宁可少一张卡片，也不要一张点进去什么都没有的卡片），
+		// 但必须留痕：这条分支以前一声不响，用户看到的就是「榜单卡片不见了」，
+		// 无从判断是「上游挂了」还是「自己关掉了」。
+		// 负面结果有 5 分钟缓存（vChartNegTTL），所以这条日志最多每榜每 5 分钟一条。
+		i.logf("[INTERCEPT] 榜单 %s 取回 0 首，本次不注入", ref.key())
 		return vPlaylist{}
 	}
 	limit := i.chartSizeFor(ref.key())
@@ -269,7 +299,7 @@ func (i *Interceptor) chartDetailViaLocalAPI(ctx context.Context, source, id str
 		return "", "", nil, errors.New("本机曲率后端地址未知（未接线 LocalAPI）")
 	}
 	endpoint := i.localAPI + "/api/charts/detail?source=" + urlQueryEscape(source) + "&id=" + urlQueryEscape(id)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	req, err := i.newLocalRequest(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return "", "", nil, err
 	}

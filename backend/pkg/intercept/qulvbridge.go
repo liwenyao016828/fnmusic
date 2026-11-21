@@ -248,7 +248,7 @@ func (i *Interceptor) handleQulvCommand(w http.ResponseWriter, r *http.Request) 
 // 为什么不在 handleQulvCommand 里重新序列化：请求体原样转发，语义就是
 // 「面板说什么，后端就收到什么」—— 中间少一次转换，就少一处两边形状对不上的可能。
 func (i *Interceptor) postLocalAPIRaw(ctx context.Context, path string, raw []byte) ([]byte, int, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, i.localAPI+path, bytes.NewReader(raw))
+	req, err := i.newLocalRequest(ctx, http.MethodPost, i.localAPI+path, bytes.NewReader(raw))
 	if err != nil {
 		return nil, 0, err
 	}
@@ -433,14 +433,15 @@ func (i *Interceptor) postLocalAPI(ctx context.Context, path string, payload any
 	if err != nil {
 		return nil, 0, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, i.localAPI+path, bytes.NewReader(raw))
+	req, err := i.newLocalRequest(ctx, http.MethodPost, i.localAPI+path, bytes.NewReader(raw))
 	if err != nil {
 		return nil, 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	// 回环请求免鉴权（后端的 AUTH 中间件对本机/内网地址免校验），所以这里
-	// 不复制客户端的任何凭据 —— 注入脚本那边也不需要持有 token。
+	// 凭据由 newLocalRequest 统一加（token 模式下回环同样要 X-API-Token，
+	// 见 pkg/intercept/loopback.go）—— 注入脚本那边不需要持有 token，
+	// 客户端带进来的凭据也不会被转发给后端。
 	client := &http.Client{Timeout: qulvDownloadTimeout}
 	resp, err := client.Do(req)
 	if err != nil {

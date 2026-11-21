@@ -175,6 +175,10 @@ func main() {
 			// 先到这里，再由拦截层转给本机后端（见 pkg/intercept/qulvbridge.go）。
 			// 用回环地址，且**不接受请求里的 host** —— 这条通道不引入 SSRF 面。
 			LocalAPI: fmt.Sprintf("http://127.0.0.1:%d", *port),
+			// token 模式（设了 FN_API_TOKEN / FN_AUTH_MODE=token）下，本机回环
+			// 同样要凭据：不带就是 401 → 榜单取回空 → 卡片静默消失。
+			// 统一由 intercept 的 newLocalRequest 加头（见 pkg/intercept/loopback.go）。
+			LocalToken: api.APIToken(),
 			// 注入脚本标签上的版本串（见 pkg/intercept/pageshell.go）：
 			// 对着官方页面源码就能看出「这行脚本是哪个版本发的」。
 			Revision: api.CurrentVersion,
@@ -367,6 +371,11 @@ func main() {
 	// 「nil 接收者」的方法，一调用就 panic（2026-10-21 真机踩过：
 	// dev 后端没开接管，点一下扫描接口就是 500 + 一段 nil dereference）。
 	if ic != nil {
+		// 订阅/注入歌单显示完整清单：推送时把「曲库里没有 / 版本不同」的
+		// 曲目写成在线条目（共享桶，按歌单 guid 分区），拦截层读歌单时并进官方段。
+		// 没接管时 ic 是 nil —— 此时不写在线条目，推送照常只写曲库命中的曲目。
+		server.SetPushOnlineSink(ic.AddSharedPlaylistTracks)
+
 		server.SetQuality(
 			ic.StartQualityScan,
 			ic.QualityScanStatus,

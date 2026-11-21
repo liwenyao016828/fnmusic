@@ -188,7 +188,7 @@ function fillHint(row) {
         : `${row.pendingCount} 首待下载。没勾「下载到本地曲库」，需要点这里手动下`,
     )
   }
-  if (row.missingCount) parts.push(`${row.missingCount} 首曲库里还没有（飞牛歌单推不上去）`)
+  if (row.missingCount) parts.push(`${row.missingCount} 首曲库里还没有（已按在线显示在飞牛歌单里，可补下载到本地）`)
   return parts.join('；')
 }
 

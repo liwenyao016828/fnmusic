@@ -105,7 +105,7 @@ func (i *Interceptor) proxyMedia(w http.ResponseWriter, r *http.Request, t onlin
 		})
 		return
 	}
-	applyMediaHeaders(req, t, r.Header.Get("Range"))
+	applyMediaHeaders(req, t, r.Header.Get("Range"), res)
 	resp, err := mediaClient.Do(req)
 	if err != nil {
 		i.logf("[INTERCEPT] 拉取媒体失败 %s：%v", t.RealID(), err)
@@ -115,6 +115,15 @@ func (i *Interceptor) proxyMedia(w http.ResponseWriter, r *http.Request, t onlin
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
+
+	// 直链死了（M3）：403/404 说明缓存里这条 URL 已经被 CDN 收回 ——
+	// 解析成功不等于现在还能取。清掉这条缓存，让下一次播放重新解析拿新链，
+	// 而不是在接下来的 5 分钟里反复拿同一条死链。响应仍按原样透传，
+	// 客户端会自己重试，重试时就是新链了。
+	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusNotFound {
+		i.pool.Invalidate(t.Platform, t.PlatformID)
+		i.logf("[INTERCEPT] 直链已失效（HTTP %d），已清解析缓存待重解析：%s", resp.StatusCode, t.RealID())
+	}
 
 	// 只回传对客户端有意义的头。逐跳头、以及 CDN 自己的 cookie/set-cookie
 	// 都不该泄给官方客户端。
@@ -160,11 +169,27 @@ func (i *Interceptor) proxyMedia(w http.ResponseWriter, r *http.Request, t onlin
 // 两个调用方必须完全一致，所以只有这一份：播放那条流（proxyMedia，Range 原样
 // 转发）与后台续传（tee.go 的 resumeInto，Range 是要补的那一段）。少一个头就
 // 会被 CDN 的防盗链挡在外面，而那种失败看起来像「源站偶尔抽风」。
-func applyMediaHeaders(req *http.Request, t online.Track, rng string) {
-	req.Header.Set("User-Agent", online.DesktopUA)
+//
+// res 是解析结果：脚本给了 Referer/User-Agent 时**优先用它的**，没给就回落到
+// 平台默认 Referer 与统一 UA。探活和取流必须用同一份头 —— 否则会出现
+// 「探活过了、播放 403」这种看起来随机、其实只是头不一致的故障（M1）。
+func applyMediaHeaders(req *http.Request, t online.Track, rng string, res *online.Resolved) {
+	ua := online.DesktopUA
+	if h := res; h != nil && h.Headers != nil {
+		if v := strings.TrimSpace(h.Headers["user-agent"]); v != "" {
+			ua = v
+		}
+	}
+	ref := mediaReferer(t.Platform)
+	if h := res; h != nil && h.Headers != nil {
+		if v := strings.TrimSpace(h.Headers["referer"]); v != "" {
+			ref = v
+		}
+	}
+	req.Header.Set("User-Agent", ua)
 	req.Header.Set("Accept", "*/*")
 	// 部分 CDN 会按 Referer 做防盗链，带上来源站的地址。
-	if ref := mediaReferer(t.Platform); ref != "" {
+	if ref != "" {
 		req.Header.Set("Referer", ref)
 	}
 	// **必须**带 Range：进度条拖动、边听边存的中断续传都靠它。

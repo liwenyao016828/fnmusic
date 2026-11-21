@@ -3,6 +3,7 @@ package intercept
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"testing"
 
@@ -231,5 +232,33 @@ func TestLxResolverDowngradesByMeasuredSize(t *testing.T) {
 	// 容器也跟着档位走：记 flac 而盘上是 mp3，就是用户骂的那个「说好的无损」
 	if res.Format != "mp3" {
 		t.Fatalf("降档后 Format 该跟着变 mp3，得到 %q", res.Format)
+	}
+}
+
+// 宿主没起 / 超时 ≠ 这首歌不能听。
+//
+// 以前 ResolveAtTier 把所有错误都改成 ErrNotPlayable，于是「node 进程刚崩」
+// 会让池把这条曲目记成「不可播」5 分钟 —— 用户重试多少次都没用，看起来像
+// 「突然一大批歌都听不了」。现在这类环境错误走 ErrTransient，不进负缓存。
+func TestLxErrorForPoolSeparatesTransientFromUnplayable(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want error
+	}{
+		{"宿主没起", fmt.Errorf("%w（loading）", lxnode.ErrNotRunning), online.ErrTransient},
+		{"上下文超时", context.DeadlineExceeded, online.ErrTransient},
+		{"连接被拒", errors.New("Post \"http://127.0.0.1:9999/resolve\": dial tcp 127.0.0.1:9999: connect: connection refused"), online.ErrTransient},
+		{"读超时", errors.New("read tcp 127.0.0.1:1->2: i/o timeout"), online.ErrTransient},
+		{"宿主 502", errors.New("502 Bad Gateway"), online.ErrTransient},
+		{"脚本说没版权", errors.New("歌曲无版权"), online.ErrNotPlayable},
+		{"脚本说需要 VIP", errors.New("need vip"), online.ErrNotPlayable},
+		{"空错误", nil, online.ErrNotPlayable},
+	}
+	for _, c := range cases {
+		got := lxErrorForPool(c.err)
+		if got != c.want {
+			t.Errorf("%s: 期望 %v，实际 %v", c.name, c.want, got)
+		}
 	}
 }

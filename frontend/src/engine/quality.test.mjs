@@ -22,8 +22,8 @@ test('isHighestQuality: 空值与 highest 都表示自动最高音质', () => {
   assert.equal(isHighestQuality('flac'), false)
 })
 
-test('音质阶梯顺序为 flac24bit > flac > 320k > 192k > 128k', () => {
-  assert.deepEqual(QUALITY_LADDER, ['flac24bit', 'flac', '320k', '192k', '128k'])
+test('音质阶梯顺序为 flac24bit > hires > flac > 320k > 192k > 128k', () => {
+  assert.deepEqual(QUALITY_LADDER, ['flac24bit', 'hires', 'flac', '320k', '192k', '128k'])
 })
 
 test('highest: 取各音源宣称音质的并集，并按阶梯排序', () => {
@@ -49,9 +49,12 @@ test('highest: 音源未上报 qualitys 时回退到保底阶梯', () => {
   assert.deepEqual(buildQualityTiers('highest', [[]]), ['flac', '320k', '128k'])
 })
 
-test('highest: 非标准音质档位追加到标准阶梯之后兜底', () => {
+test('highest: hires 按阶梯位置排序（不再被当自定义档甩到末尾）', () => {
   const tiers = buildQualityTiers('highest', [['128k', 'hires', 'flac']])
-  assert.deepEqual(tiers, ['flac', '128k', 'hires'])
+  assert.deepEqual(tiers, ['hires', 'flac', '128k'])
+  // 真正的非标准档（如 jymaster/sky）仍追加到末尾兜底
+  const custom = buildQualityTiers('highest', [['128k', 'sky']])
+  assert.deepEqual(custom, ['128k', 'sky'])
 })
 
 test('固定音质: 只尝试该档位，不受音源声明影响', () => {

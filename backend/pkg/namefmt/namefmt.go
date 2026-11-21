@@ -15,6 +15,7 @@ package namefmt
 import (
 	"strings"
 	"sync/atomic"
+	"unicode/utf8"
 )
 
 // 支持的两种书写方向。
@@ -65,14 +66,56 @@ func Current() string {
 // IsTitleArtist 报告当前是否「歌名在前」。
 func IsTitleArtist() bool { return Current() == TitleArtist }
 
+// MaxBaseBytes 是文件名主干（不含扩展名、不含 " (2)" 这类去重后缀）的字节上限。
+//
+// 为什么必须有一个总上限：filename.Sanitize 是**逐段**截到 180 字节的，歌手和
+// 歌名各占满 180，中间再加 " - "，主干就接近 370 字节；加上扩展名和去重后缀，
+// 已经越过多数文件系统的 255 字节上限（ext4/FUSE/NTFS 同名），表现为
+// ENAMETOOLONG —— 这首歌**每次下载都失败**，而且 .part 残件按同一个名字生成，
+// 永远清不掉（2026-11-20 审计 M1）。
+//
+// 180 字节的预算给扩展名（.flac）、去重后缀（" (12)" ~ 5 字节）和收尾留足余量。
+const MaxBaseBytes = 180
+
+// Clamp 把字符串按字节截到上限，且不切断 UTF-8 字符。
+//
+// 切在半个汉字上会得到乱码文件名（扫库时再被当非法 UTF-8 洗成 _），
+// 所以这里按 rune 边界回退；顺手把截断处留下的 " - " 尾巴去掉。
+func Clamp(s string, maxBytes int) string {
+	if maxBytes <= 0 || len(s) <= maxBytes {
+		return s
+	}
+	cut := s[:maxBytes]
+	for len(cut) > 0 && !utf8.ValidString(cut) {
+		cut = cut[:len(cut)-1]
+	}
+	cut = strings.TrimSpace(cut)
+	cut = strings.TrimSpace(strings.TrimRight(cut, "-"))
+	return cut
+}
+
 // Build 按当前方向拼出文件名主干（**不含扩展名**）。
 //
 // 两个入参都应已经过调用方的非法字符清洗（见 downloader.sanitizeFilename）。
+// 结果按 MaxBaseBytes 再夹一次总长（见上面的说明）。
+//
+// 有一边为空时**不拼分隔符**：老写法会拼出 "- 歌名" 这种带前导破折号的名字，
+// 扫库时再被当成「歌名是 "- 歌名"」，界面上一眼看过去像是坏文件。
 func Build(artist, title string) string {
-	if IsTitleArtist() {
-		return title + sep + artist
+	artist = strings.TrimSpace(artist)
+	title = strings.TrimSpace(title)
+	var s string
+	switch {
+	case artist == "":
+		s = title
+	case title == "":
+		s = artist
+	case IsTitleArtist():
+		s = title + sep + artist
+	default:
+		s = artist + sep + title
 	}
-	return artist + sep + title
+	return Clamp(s, MaxBaseBytes)
 }
 
 // Parse 从文件名主干（不含扩展名）拆回歌手与歌名，与 Build 严格互逆。

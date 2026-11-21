@@ -22,7 +22,7 @@
 | **后端依赖** | **已引入第三方依赖**（`modernc.org/sqlite v1.36.1`，纯 Go）。旧版「零依赖」规则已作废，见 §2 规则二 |
 | **前端依赖** | vue / vite / tailwindcss / axios / lucide-vue-next / crypto-js / buffer / qrcode |
 | **打包** | `bash scripts/build.sh`，**不需要 fnpack** |
-| **当前版本** | `2.31.0`（代码与 manifest 已同步，见 §7） |
+| **当前版本** | `2.32.0`（代码与 manifest 已同步，见 §7） |
 | **应用内更新** | `backend/pkg/appupdate` + `frontend/src/components/UpdateCard.vue`：查 GitHub Release → 流式下载到 `<数据目录>/updates/` → 执行 `/tmp/yinshu-update/apply-update.sh`。**v2.28.2 起回到「卸载旧版 → 安装新版」的老办法**（`appcenter-cli stop` → `uninstall` → `install-fpk` → 按 `/api/app/version` 版本验收）：v2.28.0 的「就地升级」在真机上被应用中心拦下（安装任务返回 10030 参数异常），而老办法只要 fpk 里**没有卸载向导**就能跑通 —— 所以 v2.28.1 起 `fpk-package/wizard/uninstall` 已删除。⚠️ 若要再给 fpk 加卸载向导，必须同时保证「应用内更新」这条路仍能卸载（带向导时应用中心命令行拒绝卸载且返回码仍是 0，见 §1.4.1）。**安装这一跳在开发机上无法验证**（没有 `appcenter-cli`、没有 `/var/apps/`），真机第一次用要盯着 log。 |
 | **文件名体检** | `backend/pkg/nas/health.go`：扫出非法 UTF-8 / 控制字符 / 首尾空格 / 0 字节音频 / `.part` 残留 / 权限 000 等条目（它们会让 fnOS 整层目录报「未知错误」）。修复接口**只收 `id`（路径字节的 base64url）不收 path** —— 非法 UTF-8 的名字过一次 JSON 就变成 U+FFFD，传 path 必然找不到文件；服务端在最近 8 次扫描缓存里回查。 |
 | **自动发布** | 功能完成并验证后由 DSH 提交、推送 main；GitHub Actions 校验四处版本 → 前端构建 → 后端/前端/洛雪测试 → FPK 自检 → 新版本 Release + SHA256。已有版本不覆盖；不自动部署 NAS。不用 git hook 自动暂存工作区。 |
@@ -1317,7 +1317,10 @@ restore(preflight)
 **为什么走回环而不是直接调 `pkg/charts`**：那边四个平台的详情抓取都是
 「解析完直接写 `http.ResponseWriter`」，要拿数据得把四个函数拆成「取数 + 写响应」两半 ——
 那是重写几百行解析代码的风险，而回环成本只是一次本机请求，解析代码只留一份。
-（`pkg/api/routes.go` 的三个 charts 接口**没有鉴权中间件**，所以回环不用带凭据。）
+（回环请求由 `pkg/intercept/loopback.go` 的 `newLocalRequest` 统一构造：
+`FN_API_TOKEN` / token 模式下必须带 `X-API-Token`。**别再照抄「charts 接口没有鉴权
+中间件、回环不用带凭据」这句老话** —— 那是 `pkg/api/middleware.go` 加鉴权之前的情形；
+token 模式下 127.0.0.1 一样要凭据，漏带头就是 401 → 空榜 → 卡片静默消失。v2.32.0 修。）
 
 四条约定的口径：
 
@@ -3100,6 +3103,24 @@ intercept.go:544        return i.legacyUserKey
 
 **可重跑的验收**：`scripts/nas-acceptance.mjs`（跑法与上面这些纪律的落地写法见 §7.x）。
 
+### 4.20 整理 / 下载 / 取链 / 推送的十五条新规矩（v2.32.0，改动这几条链路前先读）
+
+1. **搬文件与下文件要互斥。** `backend/pkg/fslock` 是唯一的协调点：下载走 `Shared()`（可并发），整理 / 撤销走 `TryExclusive(3s)`，拿不到就回 409 让用户等下载完。别在别处另造一套锁 —— 语义是**不对称**的：整理怕「正在写的文件被搬走」，下载不怕别的下载。
+2. **落地必须排他。** `backend/pkg/downloader/install.go` 的 `installFileExclusive` 用 `os.Link` 抢占目标名（`os.Rename` 会静默覆盖别人刚下好的同名歌）；同名冲突靠 `allocateUniquePath` 换名重试。`.part` 临时名是**确定性**的（为续传），所以写入前必须 `lockPart(path)` 串行化，否则同一首歌并发下载会字节交错、写出一首坏 MP3。
+3. **文件名要按总长截断。** `filename.Sanitize` 各自截 180 字节，但「歌手 - 歌名」拼起来会翻倍，超过 255 字节内核直接 `ENAMETOOLONG`。拼完必须过 `namefmt.Clamp(base, namefmt.MaxBaseBytes)`。
+4. **撤销记录要在动文件之前落盘。** `organize.PlannedJournal(plan)` 先写出反向清单，再 `Apply`；成功的执行结果随后覆盖它。否则中途崩溃/断电，那批文件就再也回不去了。
+5. **回环请求要带凭据。** 见 §4.x 顶部那条：所有 `127.0.0.1` 自调用一律走 `pkg/intercept/loopback.go` 的 `newLocalRequest`（token 模式下它补 `X-API-Token`）。
+6. **「暂时拿不到」不等于「这首歌不能听」。** `online.ErrTransient`（宿主没起 / 超时 / 5xx）不进负缓存，`ErrNotPlayable`（无版权 / 收费）才进。洛雪这边的翻译在 `intercept/lxresolve.go` 的 `lxErrorForPool` —— 判错方向就是「一次网络抖动 = 这首歌 5 分钟播不了」。
+7. **手动批量操作之后要立刻重扫。** 用 `fnos.ScheduleLibraryRescanNow()`（跳过 10 分钟最小间隔、只这一次），普通下载仍用 `ScheduleLibraryRescan()`。整理刚搬完几百个文件却在飞牛里看不到，就是这条用错了。
+8. **无损文件要过结构校验才能入库。** FLAC 走 `pkg/flacok`（逐帧 CRC）；其它无损容器（WAV / M4A / WavPack / APE）走 `pkg/audiok`（块链、atom 链的自洽性检查，**不解码** —— 本项目零第三方依赖，不引入解码器）。校验不过 → 删掉 .part、报 `lossless_corrupt` → 上层按「坏流」降档重试（`pkg/backenddl` 的 `isCorruptLossless` 认 `flac_corrupt` 与 `lossless_corrupt` 两个码）。别把「扩展名对得上」当成「文件是好的」。
+9. **跨源兜底要按**实际**档位挑，不是按候选顺序。** 候选是按「声明」音质排序的（`sortByPreference` 看的是 `UnifiedSong.Quality`），但声明 ≠ 真能拿到这个档 —— 外挂源经常标着 flac、实际只给 128k。`resolvePlaybackFallback` 逐个候选解析、取**实际**档位最高的那个，只有拿到阶梯顶端才提前收手（否则每次播放都要多等十几秒）。「能播」永远优先于「音质高」：所有候选都失败就是失败。
+10. **专辑封面（目录里的 cover.jpg）跟着专辑目录搬。** `pkg/organize` 的 `associateDirCovers`：目录里的 `cover.*` / `folder.*` 属于**整个目录**，只有当该目录的歌**全部**被搬走、且属于**同一个专辑**时才跟着搬，落到目标专辑目录并**保持原文件名**（一个专辑一张封面）；归属不明或目标已有不同图片时保留原样并在方案里说明。这与 §5.3「绝不写目录级 cover.jpg」不矛盾：那条说的是**刮削时写**（会让整个文件夹显示同一张图），这条是**搬运用户已有的文件**。
+11. **查重不能只看体积。** `pkg/downloader` 的 `libraryFileIsAudio`：≥500KB 照旧算「已有」；**小于 500KB 的小文件必须有认识的音频容器头**（flac 再过一次 `flacok` 逐帧校验），才算「已有」。老口径（低于 500KB 一律不算）会让几十秒的短歌、铃声、彩蛋被当成「曲库里没有」而一遍遍重复下载；而只看体积又会把下载失败留下的半截文件当成已有 —— 两个都要防。
+12. **撤销记录是一条链，不是一条。** `pkg/organize` 的撤销文件存 `{"runs":[...]}`（旧版单条格式照样能读）。执行前写计划版、成功后 `ReplaceLastJournal` 覆盖它、一条都没搬成则 `DropLastJournal`；撤销走 `PopJournal` 摘掉最后一批，更早的批次留着，用户可以一轮一轮往回撤。**直接改这个文件的格式要同时照顾旧格式兼容**。
+13. **没有歌手时不要拼分隔符。** `namefmt.Build` 有一边为空就只留另一边 —— 老写法会拼出 `- 歌名`，扫库再被当成「歌名是 "- 歌名"」，界面上一眼像坏文件。
+14. **推送歌单的「在线补显」走共享桶，不占官方曲目位。** `pkg/push` 的 `PushTracks` 现在把「曲库里没有 / 版本不同」的曲目交给 `Options.OnlineSink`（`pkg/intercept` 的 `AddSharedPlaylistTracks`），写进 `pkg/online` 的共享桶 `playlist_tracks/_shared.json`（按歌单 guid 分区）。**为什么是共享桶**：服务端后台任务没有请求上下文，拿不到凭据指纹（`userKey`），只能按 guid 全局分区；歌单 guid 全局唯一所以不会串味。`intercept` 侧 `handlePlaylistTrackList` 把官方段、用户在线段、共享在线段三层合并（官方在前），计数与 remove/delete 都级联共享段。**版本语义**：曲库命中但时长差超过 `max(10s, 15%)` → 不写官方歌单、按歌单那一版走在线（`SourceOnline`）；本地版本对不上 → 同样走在线但保留 `local_version_diff` 源标记（前端「用本地这版/换版本」的 UI 靠它）。**OnlineSink 写失败只记 `OnlineWarning`，不废掉已完成的官方推送**。没有接管（ic==nil）时 sink 为空，行为退回「只写曲库命中曲目」。
+15. **在线补显的曲目假 guid 是确定性的。** `registry.Put` 返回 `FakeID()=md5(Salt+"online:<plat>:<id>")` —— 同一首歌重复推送、或重启服务，guid 不变，所以共享桶天然幂等；用户在飞牛页面手动删掉在线条目会被 `RemoveSharedPlaylistTracks` 记进 Removed 名单，下轮推送不会加回来（与官方曲目的「手动删掉不再加回」同语义）。
+
 ## 5. 业务规则（改之前请先理解）
 
 ### 5.1 版本过滤与匹配打分（`pkg/match`）
@@ -3133,7 +3154,7 @@ cover 翻唱 重制 remaster 重混 mashup 8d 环绕 铃声 ringtone`
 
 ### 5.3 刮削规则（`pkg/tidy`）
 
-- **绝不写目录级 `cover.jpg`** —— 会让整个文件夹显示同一张图（有专门测试锁定）
+- **绝不写目录级 `cover.jpg`** —— 会让整个文件夹显示同一张图（有专门测试锁定）。注意：整理时**搬运**目录里已有的 `cover.jpg` 是另一回事（见 §4.20 第 10 条），那不是「写」，是「搬用户自己的文件」
 - 只写逐曲同名封面图（`.jpg`/`.png`）
 - 默认**不覆盖**已有歌词/封面，需显式开启
 - 仅支持 MP3 / FLAC（`pkg/tags` 的能力范围），其他格式**明确报错**而不是静默失败

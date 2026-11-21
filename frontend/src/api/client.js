@@ -776,6 +776,39 @@ export const TidyAPI = {
   removeNameRule: (id) => api.delete('/library/name-rules', { params: { id } }).then(res => res.data),
 }
 
+// ── 文件夹整理（后端 pkg/organize，v2.32.0）──
+//
+// 「把歌按歌手 / 专辑 / 曲目搬进文件夹」这件事分五步走，因为**移动文件不可逆**：
+//
+//	presets  内置样式 + 生效中的模板 + 上次整理能否撤销
+//	plan     预演：算出每首歌会去哪、哪些会撞车（**只读**）
+//	apply    执行：后端**自己重算一遍**再搬（不信任这里传的旧方案），留撤销记录
+//	template 记住这次用的样式（空串=平铺，是合法值 —— 所以不能走 POST /config，
+//	         那边空串会被当成「没传」）
+//	undo     撤回最近一次整理（逆序搬回）
+//
+// 请求体字段（plan / apply / template 共用）：dir / dir_template / file_template /
+// number_unknown / max_depth。模板字段**不传** = 按配置里存的算。
+// 搬文件是重活：整库上万首可能要几分钟，超时按长任务放宽（对齐 QualityAPI.replace）。
+const ORGANIZE_LONG_TIMEOUT = 10 * 60 * 1000
+
+export const OrganizeAPI = {
+  presets: () => api.get('/organize/presets').then(res => res.data?.data || {}),
+  // 只渲染「按这个模板搬完长什么样」：拿后端内置的一条示例（周杰伦 - 双截棍）。
+  // 界面不该逼用户去理解 {artist}/{album} 这种占位符 —— 直接给他看成品路径。
+  sample: (payload) => api.post('/organize/sample', payload || {}).then(res => res.data),
+  plan: (payload) => api.post('/organize/plan', payload, { timeout: ORGANIZE_LONG_TIMEOUT }).then(res => res.data),
+  apply: (payload) => api.post('/organize/apply', payload, { timeout: ORGANIZE_LONG_TIMEOUT }).then(res => res.data),
+  undo: () => api.post('/organize/undo', {}, { timeout: ORGANIZE_LONG_TIMEOUT }).then(res => res.data),
+  journal: () => api.get('/organize/journal').then(res => res.data?.data || {}),
+  saveTemplate: (dirTemplate, fileTemplate, numberUnknown) =>
+    api.post('/organize/template', {
+      dir_template: dirTemplate,
+      file_template: fileTemplate,
+      number_unknown: !!numberUnknown,
+    }).then(res => res.data),
+}
+
 // AI 大模型
 export const AIAPI = {
   getConfig: () => api.get('/ai/config').then(res => res.data),

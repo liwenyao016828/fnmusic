@@ -378,7 +378,7 @@ class LxRuntime {
             if (!v || typeof v !== 'object') continue
             platforms[k] = v
             qualityMap[k] = (Array.isArray(v.qualitys) && v.qualitys.length)
-              ? v.qualitys.map(String)
+              ? v.qualitys.map((q) => String(q || '').trim().toLowerCase()).filter(Boolean)
               : ['128k']
           }
 
@@ -662,7 +662,7 @@ class LxRuntime {
           // 上游直接回 `{"errorcode":-46628,"errormsg":"file not exist"}`。
           // 不校验的话这里会认为取链成功 → 播放器再去拉就 404 ——
           // 用户看到「无法在线播放」，界面上却没有任何提示，也看不出坏在哪一环。
-          const reachable = await this._verifyPlayable(res.url)
+          const reachable = await this._verifyPlayable(res.url, res.headers)
           if (!reachable.ok) {
             throw new Error(`音源返回的地址取不到音频（${reachable.note || '上游拒绝'}）`)
           }
@@ -711,7 +711,7 @@ class LxRuntime {
 
       // 探针也要校验地址可达性 —— 否则「测速通过」是假的：
       // 音源能返回一个地址，不代表这个地址能取到音频。
-      const reachable = await this._verifyPlayable(res.url)
+      const reachable = await this._verifyPlayable(res.url, res.headers)
       if (!reachable.ok) {
         const latencyMs = Math.round(
           (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0
@@ -769,10 +769,14 @@ class LxRuntime {
    * 网络抖动而不可用 —— 那种情况下宁可让播放器去试，
    * 也不要因为「校验不了」而拒掉一个本来能播的地址。
    */
-  async _verifyPlayable(url) {
+  // headers 是脚本给的媒体头（白名单 Referer/User-Agent）：探活必须和播放用同一份，
+  // 否则会出现「探活过了、播放 403」这种头不一致的故障。浏览器不能自定义 UA，
+  // 但 Referer 可以直接透传给后端的 /api/player/check。
+  async _verifyPlayable(url, headers = {}) {
     if (!url || !/^https?:/i.test(url)) return { ok: false, note: '地址格式无效' }
+    const referer = headers?.referer || headers?.Referer || ''
     try {
-      const res = await PlayerAPI.check(url)
+      const res = await PlayerAPI.check(url, referer)
       if (res?.code === 200 && res?.data && typeof res.data.ok === 'boolean') {
         return { ok: res.data.ok, note: res.data.note || '' }
       }

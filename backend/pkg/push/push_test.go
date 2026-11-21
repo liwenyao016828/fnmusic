@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"fn-lx-player/pkg/fnos"
+	"fn-lx-player/pkg/online"
 )
 
 // fakeMusic 起一个假飞牛音乐服务，返回可直接用于 PushTracks 的客户端。
@@ -50,6 +51,112 @@ func jsonHandler(payload map[string]any) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(payload)
+	}
+}
+
+// 曲库里没有的曲目 → 走 OnlineSink 写成在线条目，飞牛页面显示完整歌单。
+func TestPushTracksWritesMissingAsOnline(t *testing.T) {
+	var gotGUID string
+	var gotTracks []online.Track
+	m := fakeMusic(t, map[string]http.HandlerFunc{
+		"/music/api/v1/playlist/list": jsonHandler(okBody([]map[string]any{{"guid": "pl-1", "name": "目标"}})),
+		"/music/api/v1/search/track": jsonHandler(okBody([]map[string]any{
+			{"guid": "x-1", "title": "完全不相干的歌名", "artist": "另一个人"},
+		})),
+		"/music/api/v1/track/playlist-detail/list": jsonHandler(okBody([]map[string]any{})),
+		"/music/api/v1/playlist/add-track":         jsonHandler(okBody(nil)),
+	})
+
+	res, err := PushTracks(m, []Track{
+		{Name: "晴天", Artist: "周杰伦", Duration: 269, SongID: "123", Cover: "http://c"},
+	}, Options{
+		Title:    "目标",
+		Platform: "wy",
+		OnlineSink: func(guid string, tracks []online.Track) (int, error) {
+			gotGUID = guid
+			gotTracks = tracks
+			return len(tracks), nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotGUID != "pl-1" || len(gotTracks) != 1 {
+		t.Fatalf("OnlineSink got guid=%q tracks=%d; want pl-1 / 1", gotGUID, len(gotTracks))
+	}
+	if gotTracks[0].PlatformID != "123" || gotTracks[0].Title != "晴天" {
+		t.Fatalf("online track = %+v", gotTracks[0])
+	}
+	if res.Online != 1 || res.OnlineAdded != 1 {
+		t.Fatalf("result online=%d added=%d; want 1/1: %+v", res.Online, res.OnlineAdded, res)
+	}
+	if !res.Items[0].Online {
+		t.Fatal("item should be marked online")
+	}
+}
+
+// 曲库里同名但是另一个版本 → 也走在线，不顶替歌单这一版。
+func TestPushTracksWritesVersionDiffAsOnline(t *testing.T) {
+	var gotTracks []online.Track
+	m := fakeMusic(t, map[string]http.HandlerFunc{
+		"/music/api/v1/playlist/list": jsonHandler(okBody([]map[string]any{{"guid": "pl-1", "name": "目标"}})),
+		"/music/api/v1/search/track": jsonHandler(okBody([]map[string]any{
+			{"guid": "t-1", "title": "晴天", "artist": "周杰伦", "duration": 180}, // 差 89 秒
+		})),
+		"/music/api/v1/track/playlist-detail/list": jsonHandler(okBody([]map[string]any{})),
+		"/music/api/v1/playlist/add-track":         jsonHandler(okBody(nil)),
+	})
+	res, err := PushTracks(m, []Track{
+		{Name: "晴天", Artist: "周杰伦", Duration: 269, SongID: "123"},
+	}, Options{
+		Title:    "目标",
+		Platform: "wy",
+		OnlineSink: func(guid string, tracks []online.Track) (int, error) {
+			gotTracks = tracks
+			return len(tracks), nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(gotTracks) != 1 {
+		t.Fatalf("OnlineSink tracks=%d; want 1", len(gotTracks))
+	}
+	if res.Items[0].Source != SourceOnline || !res.Items[0].Online {
+		t.Fatalf("item = %+v; want source=online online=true", res.Items[0])
+	}
+	if res.Added != 0 {
+		t.Fatalf("版本不同的曲目不该写进官方歌单: added=%d", res.Added)
+	}
+}
+
+// 干跑不调 OnlineSink（DryRun return 在写在线之前）
+func TestPushTracksDryRunDoesNotWriteOnline(t *testing.T) {
+	called := false
+	m := fakeMusic(t, map[string]http.HandlerFunc{
+		"/music/api/v1/playlist/list":              jsonHandler(okBody([]map[string]any{{"guid": "pl-1", "name": "目标"}})),
+		"/music/api/v1/search/track":               jsonHandler(okBody([]map[string]any{})),
+		"/music/api/v1/track/playlist-detail/list": jsonHandler(okBody([]map[string]any{})),
+	})
+	res, err := PushTracks(m, []Track{
+		{Name: "晴天", Artist: "周杰伦", Duration: 269, SongID: "123"},
+	}, Options{
+		Title:    "目标",
+		Platform: "wy",
+		DryRun:   true,
+		OnlineSink: func(guid string, tracks []online.Track) (int, error) {
+			called = true
+			return len(tracks), nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if called {
+		t.Error("DryRun 不应写在线条目")
+	}
+	if res.Online != 1 || len(res.OnlineItems) != 1 {
+		t.Fatalf("干跑也应统计在线条目: %+v", res)
 	}
 }
 

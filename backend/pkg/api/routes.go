@@ -215,6 +215,16 @@ var routeTable = []routeSpec{
 	{Path: "/api/duplicates", Handler: func(s *Server) http.HandlerFunc { return s.HandleDuplicates }},
 	{Path: "/api/duplicates/resolve", Handler: func(s *Server) http.HandlerFunc { return s.HandleDuplicatesResolve }},
 
+	// 文件夹整理（v2.32.0）：按「歌手 / 专辑 / 曲目」把曲库重新组织成目录树，
+	// 同名封面与歌词跟着音频一起改名、一起搬。plan 只读预演，apply 才动盘，undo 撤销。
+	{Path: "/api/organize/presets", Handler: func(s *Server) http.HandlerFunc { return s.HandleOrganizePresets }},
+	{Path: "/api/organize/sample", Handler: func(s *Server) http.HandlerFunc { return s.HandleOrganizeSample }},
+	{Path: "/api/organize/template", Handler: func(s *Server) http.HandlerFunc { return s.HandleOrganizeTemplate }},
+	{Path: "/api/organize/plan", Handler: func(s *Server) http.HandlerFunc { return s.HandleOrganizePlan }},
+	{Path: "/api/organize/apply", Handler: func(s *Server) http.HandlerFunc { return s.HandleOrganizeApply }},
+	{Path: "/api/organize/undo", Handler: func(s *Server) http.HandlerFunc { return s.HandleOrganizeUndo }},
+	{Path: "/api/organize/journal", Handler: func(s *Server) http.HandlerFunc { return s.HandleOrganizeJournal }},
+
 	// 2.10 AI 大模型
 	{Path: "/api/ai/config", Handler: func(s *Server) http.HandlerFunc { return s.HandleAIConfig }},
 	{Path: "/api/ai/usage", Handler: func(s *Server) http.HandlerFunc { return s.HandleAIUsage }},

@@ -26,6 +26,43 @@ type Resolved struct {
 	// exhigh（320k mp3）—— 不报错、不给 null，只把 level 改写回来。所以档位只有
 	// 回读才算数，界面也据此如实显示（「请求无损、实际 320k」不该被说成无损）。
 	Tier string
+
+	// Headers 是解析器随直链一起给出的**媒体头**，只透传白名单里的两项：
+	// Referer 与 User-Agent。其余头（Cookie、签名之类）一律丢弃 ——
+	// 只有白名单项会进到取媒体的请求里，见 intercept.applyMediaHeaders。
+	//
+	// 为什么要有：很多 CDN 的防盗链是**按来源站校验**的，脚本给的直链配的头
+	// 和默认值不一致时，探活与取流会拿不同 UA/Referer 去敲同一个链接 ——
+	// 探活通过了、播放却 403，症状像「源站抽风」。统一从解析结果带着走。
+	Headers map[string]string
+}
+
+// MediaHeaders 从原始头表里抽出允许透传的媒体头。
+//
+// 键名大小写不敏感（CDN 端不区分）；两个白名单头都没有时返回 nil，
+// 调用方就该回落到默认值，而不是塞空 map。
+func MediaHeaders(raw map[string]string) map[string]string {
+	if len(raw) == 0 {
+		return nil
+	}
+	out := map[string]string{}
+	for k, v := range raw {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			continue
+		}
+		// 归一成标准写法（小写键），调用方一律按 "referer" / "user-agent" 查。
+		switch strings.ToLower(k) {
+		case "referer":
+			out["referer"] = v
+		case "user-agent":
+			out["user-agent"] = v
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // ErrNotPlayable 表示平台**明确**说这条曲目不可播（收费 / 无版权 / 地区限制）。
@@ -37,6 +74,17 @@ var ErrNotPlayable = errors.New("曲目在该平台不可播放")
 
 // ErrNoResolver 表示该平台没有注册解析器。
 var ErrNoResolver = errors.New("该平台没有可用的直链解析器")
+
+// ErrTransient 表示「这次没拿到直链，但这不是这首歌的结论」——
+// 宿主没起、请求超时、连接被重置、上游 5xx 都属于这一类。
+//
+// 它和 ErrNotPlayable 的差别只在**要不要记住**：
+//   - 上层（Ladder / 候选链）对它和 ErrNotPlayable 一样**立刻放弃当前候选**，
+//     不要拿同一批脚本再问三档 —— 那只是把等待乘三，拿到的还是同样的失败；
+//   - 但池**不许**把它写进负缓存。以前洛雪宿主一超时（或 node 进程刚好没起），
+//     这条曲目就会被记成「不可播」5 分钟：用户重试多少次都没用，只能等缓存过期，
+//     表现是「刚才还能听，突然整整 5 分钟全都是播放失败」。
+var ErrTransient = errors.New("音源暂时取不到直链，稍后重试")
 
 // Resolver 解析某个平台的一条曲目。
 //
@@ -99,6 +147,17 @@ type Pool struct {
 	mu        sync.RWMutex
 	resolvers map[string]Resolver
 	cache     map[string]cacheEntry
+	// inflight 记录**正在解析中**的同键请求（M2：同键并发合并）。
+	// cache 只护「已完成的结论」；没有它，同一首歌被并发问 3 次就会打出
+	// 3 次上游请求 —— 既浪费配额，也可能触发限流。这里让后来者等第一个的结果。
+	inflight map[string]*inflightCall
+}
+
+// inflightCall 是一次在途解析。done 关闭后 res/err 就可读。
+type inflightCall struct {
+	done chan struct{}
+	res  *Resolved
+	err  error
 }
 
 type cacheEntry struct {
@@ -116,6 +175,7 @@ func NewPool(resolvers ...Resolver) *Pool {
 	p := &Pool{
 		resolvers: make(map[string]Resolver, len(resolvers)),
 		cache:     make(map[string]cacheEntry, 256),
+		inflight:  make(map[string]*inflightCall, 16),
 	}
 	for _, r := range resolvers {
 		if r != nil {
@@ -218,6 +278,43 @@ func (p *Pool) ResolveBypassingLadderCache(ctx context.Context, platform, platfo
 	return nil, ErrTierUnavailable
 }
 
+// doResolve 在缓存未命中时执行解析，并合并同键的并发请求（singleflight）。
+//
+// 第一个到达的成为 leader：建一个 call 放进 inflight，真正去打解析器；
+// 同键后到的变成 follower：等 leader 的 done 关闭，直接拿它的结果。
+// 这样一首歌同时被播放 + 下载 + 边听边存问到时，只打一次上游。
+//
+// resolve 是真正的解析动作，由调用方闭包提供（Resolve 与 ResolveTier 各自的逻辑不同）。
+func (p *Pool) doResolve(ctx context.Context, key string, resolve func() (*Resolved, error)) (*Resolved, error) {
+	// 注册或认领在途请求。注意 ctx 只由 leader 使用 —— follower 等的是
+	// leader 的结果，不能因为自己先取消就把 leader 的结果丢掉。
+	p.mu.Lock()
+	if call, ok := p.inflight[key]; ok {
+		p.mu.Unlock()
+		select {
+		case <-call.done:
+			return call.res, call.err
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	call := &inflightCall{done: make(chan struct{})}
+	p.inflight[key] = call
+	p.mu.Unlock()
+
+	// leader：无论成功失败都要收尾 —— 关闭 done 并摘掉 inflight，
+	// 否则 follower 会永远卡住、后续请求也一直认领这个死 call。
+	res, err := resolve()
+	p.store(key, res, err)
+
+	p.mu.Lock()
+	call.res, call.err = res, err
+	delete(p.inflight, key)
+	close(call.done)
+	p.mu.Unlock()
+	return res, err
+}
+
 // Resolve 解析一条曲目，带缓存。
 func (p *Pool) Resolve(ctx context.Context, platform, platformID string) (*Resolved, error) {
 	if platformID == "" {
@@ -228,16 +325,15 @@ func (p *Pool) Resolve(ctx context.Context, platform, platformID string) (*Resol
 		return res, miss
 	}
 
-	p.mu.RLock()
-	r, ok := p.resolvers[platform]
-	p.mu.RUnlock()
-	if !ok {
-		return nil, ErrNoResolver
-	}
-
-	res, err := r.Resolve(ctx, platformID)
-	p.store(key, res, err)
-	return res, err
+	return p.doResolve(ctx, key, func() (*Resolved, error) {
+		p.mu.RLock()
+		r, ok := p.resolvers[platform]
+		p.mu.RUnlock()
+		if !ok {
+			return nil, ErrNoResolver
+		}
+		return r.Resolve(ctx, platformID)
+	})
 }
 
 // ResolveMany 批量解析同一平台的一批曲目，只返回能解析出的那些。
@@ -357,14 +453,52 @@ func (p *Pool) fromCache(key string) (res *Resolved, hit bool, miss error) {
 func (p *Pool) store(key string, res *Resolved, err error) {
 	switch {
 	case err == nil && res != nil:
+		// 短效直链按它自己的过期时间缓存（M3）：CDN 签名 URL 可能只有
+		// 几分钟寿命，固定 5 分钟会把死链当好链继续发。平台没说过期时间
+		// 才用默认 TTL。
+		ttl := resolveCacheTTL
+		if !res.Expires.IsZero() {
+			// 留 10% 余量：宁可早过期重新解析，也不要拿着临界链去敲 CDN。
+			life := time.Until(res.Expires)
+			if life > 0 && life < ttl {
+				ttl = life - life/10
+			}
+		}
 		p.mu.Lock()
-		p.cache[key] = cacheEntry{res: res, expire: time.Now().Add(resolveCacheTTL)}
+		p.cache[key] = cacheEntry{res: res, expire: time.Now().Add(ttl)}
 		p.mu.Unlock()
 	case errors.Is(err, ErrNotPlayable), errors.Is(err, ErrTierUnavailable):
+		// 只把**稳定结论**写进负缓存：平台明确说没版权、或明确没有这一档。
 		p.mu.Lock()
 		p.cache[key] = cacheEntry{err: err, expire: time.Now().Add(resolveNegTTL)}
 		p.mu.Unlock()
+	default:
+		// 其它错误（含 ErrTransient：宿主没起 / 超时 / 5xx）**一律不缓存**。
+		// 把它们记住的代价是「一次网络抖动 = 这首歌 5 分钟不能听」，
+		// 而重算一次的成本只是多打一次请求。
 	}
+}
+
+// Invalidate 丢掉一条（或一整档）缓存结论，下次解析重新打上游。
+//
+// 什么时候用（M3）：媒体拉流失败（403/404）说明缓存里的直链已经死了 ——
+// 那条 URL 是 CDN 按分钟签发的，解析成功不代表现在还能取。不清掉的话，
+// 接下来 5 分钟里每次重试都拿同一条死链，用户看到的是「重试也没用」。
+// tier 为空时清掉该曲目的**所有**档位缓存（普通 Resolve 的键没有档位后缀）。
+func (p *Pool) Invalidate(platform, platformID string) {
+	if platformID == "" {
+		return
+	}
+	prefix := platform + "\x00" + platformID
+	p.mu.Lock()
+	for key := range p.cache {
+		// 键形如 platform\x00id 或 platform\x00id\x00tier —— 前缀匹配两种。
+		if key == prefix || strings.HasPrefix(key, prefix+"\x00") {
+			delete(p.cache, key)
+		}
+	}
+	delete(p.inflight, prefix)
+	p.mu.Unlock()
 }
 
 // ResolveTier 按**指定档位**解析一条曲目，带缓存（缓存键含档位）。
@@ -391,27 +525,27 @@ func (p *Pool) ResolveTier(ctx context.Context, platform, platformID, tier strin
 	}
 
 	tr, canTier := r.(TierResolver)
-	if !canTier || tier == "" {
-		res, err := r.Resolve(ctx, platformID)
-		if err == nil && res != nil {
-			res.Tier = tierFromResolved(res)
+	return p.doResolve(ctx, key, func() (*Resolved, error) {
+		if !canTier || tier == "" {
+			res, err := r.Resolve(ctx, platformID)
+			if err == nil && res != nil {
+				res.Tier = tierFromResolved(res)
+			}
+			return res, err
 		}
-		p.store(key, res, err)
-		return res, err
-	}
 
-	res, err := tr.ResolveAtTier(ctx, platformID, tier)
-	if err == nil && res != nil {
-		// 平台回读的档位是权威值；它没回读（老实现）就用码率/容器推断兜。
-		if res.Tier == "" {
-			res.Tier = tierFromResolved(res)
+		res, err := tr.ResolveAtTier(ctx, platformID, tier)
+		if err == nil && res != nil {
+			// 平台回读的档位是权威值；它没回读（老实现）就用码率/容器推断兜。
+			// 两个都推不出来时**保持空**而不是补请求档（S4）：把请求档当结果档
+			// 报出去，界面会显示「拿到 flac」而实际可能是被静默降级的 128k ——
+			// 空档位由调用方如实显示「档位未知」，比谎报好。
+			if res.Tier == "" {
+				res.Tier = tierFromResolved(res)
+			}
 		}
-		if res.Tier == "" {
-			res.Tier = tier
-		}
-	}
-	p.store(key, res, err)
-	return res, err
+		return res, err
+	})
 }
 
 // ResolveLadder 按 tiers 从高到低依次尝试，返回**第一个拿到**的结果。
@@ -441,7 +575,9 @@ func (p *Pool) ResolveLadder(ctx context.Context, platform, platformID string, t
 			err = ErrTierUnavailable
 		}
 		lastErr = err
-		if errors.Is(err, ErrNotPlayable) || errors.Is(err, ErrNoResolver) {
+		// ErrTransient 与 ErrNotPlayable 的唯一区别在池里（不进负缓存），
+		// 对阶梯来说都是「换档也没用」。
+		if errors.Is(err, ErrNotPlayable) || errors.Is(err, ErrNoResolver) || errors.Is(err, ErrTransient) {
 			return nil, err
 		}
 		if ctx.Err() != nil {

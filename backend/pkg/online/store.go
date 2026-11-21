@@ -354,6 +354,10 @@ func (s *Store) AllTracks() []Track {
 		}
 	}
 	for _, name := range listJSON(s.sub("playlist_tracks")) {
+		// 共享桶（订阅歌单）单独处理 —— 它有自己的文件格式（带 removed 名单）。
+		if filepath.Base(name) == sharedPlaylistFileName {
+			continue
+		}
 		var f playlistFile
 		if readJSON(name, &f) == nil {
 			for _, bucket := range f.Items {
@@ -362,6 +366,9 @@ func (s *Store) AllTracks() []Track {
 				}
 			}
 		}
+	}
+	for _, t := range s.sharedTracks() {
+		add(t)
 	}
 	for _, name := range listJSON(s.sub("play_history")) {
 		var f historyFile

@@ -2,7 +2,9 @@ package intercept
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
 	"strings"
 
 	"fn-lx-player/pkg/lxnode"
@@ -148,9 +150,57 @@ func (r lxResolver) ResolveAtTier(ctx context.Context, platformID, tier string) 
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		return nil, online.ErrNotPlayable
+		return nil, lxErrorForPool(err)
 	}
 	return res, nil
+}
+
+// lxErrorForPool 把洛雪的各种失败归成池能理解的两种结论。
+//
+// 以前这里把**所有**错误都改成 ErrNotPlayable，于是「宿主没起」（node 崩了、
+// 刚重启还在加载）和「宿主超时」也被当成「这首歌不可播」，被池负缓存 5 分钟：
+// 用户重试多少次都没用，看起来像「突然一大批歌都不能听了」。
+//
+// 现在分成两类：
+//   - 宿主没起 / 超时 / 连接失败 → ErrTransient（不进负缓存，稍后重试即可）
+//   - 宿主正常返回但没有可用直链 → ErrNotPlayable（稳定结论，可以记住）
+func lxErrorForPool(err error) error {
+	if lxErrorIsTransient(err) {
+		return online.ErrTransient
+	}
+	return online.ErrNotPlayable
+}
+
+// lxErrorIsTransient 判断这次失败是不是「环境问题」而非「这首曲目不行」。
+//
+// 只看两类证据：一是哨兵/类型（宿主没起、net.Error、上下文超时），
+// 二是宿主回的错误文本里那些明确的传输层措辞。脚本自己说「无版权 / 需要 VIP」
+// 这类结论不在此列 —— 那是真结论，应当被记住。
+func lxErrorIsTransient(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, lxnode.ErrNotRunning) ||
+		errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, context.Canceled) {
+		return true
+	}
+	var ne net.Error
+	if errors.As(err, &ne) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	for _, s := range []string{
+		"timeout", "超时", "deadline exceeded",
+		"connection refused", "connection reset", "broken pipe",
+		"no such host", "i/o timeout", "unexpected eof", "eof",
+		"dial tcp", "502 bad gateway", "503 service unavailable",
+	} {
+		if strings.Contains(msg, s) {
+			return true
+		}
+	}
+	return false
 }
 
 // ResolveBatch 实现 online.Resolver：**逐条**解析。

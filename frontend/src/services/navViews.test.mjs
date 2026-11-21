@@ -96,7 +96,11 @@ test('辅助函数与注册表一致', () => {
   // 补全整理的顶部分段（2026-10-21 用户口径：功能从右上角 ⋯ 升为常驻分段）
   // 2026-10-29 分类重排：按用户心智分四段 —— 补全（缺东西）/ 修复（东西不对）/
   // 音质（换音频文件）/ 快照（怕出事）；「文件名解析 / 命名解析」搬去设置。
-  assert.deepEqual(segmentsOf('tidy').map((s) => s.id), ['complete', 'repair', 'quality', 'records'])
+  // 2026-11-20 新增「归类」（文件夹整理）：它改的是文件位置，不是补齐也不是修错，
+  // 所以独立成段，排在音质之后；「快照」仍留最后作兜底。
+  assert.deepEqual(segmentsOf('tidy').map((s) => s.id), ['complete', 'repair', 'quality', 'organize', 'records'])
+  // 归类段可直达（深链 / 刷新后停在原地）
+  assert.deepEqual(resolveRoute('tidy', 'organize'), { view: 'tidy', segment: 'organize', unknown: false })
   assert.equal(defaultSegment('tidy'), 'complete')
   // 老入口 'complete' 照旧落到整理页的补全段
   assert.equal(resolveRoute('complete').view, 'tidy')

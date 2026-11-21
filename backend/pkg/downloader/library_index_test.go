@@ -543,3 +543,58 @@ func TestDurationMismatch(t *testing.T) {
 		}
 	}
 }
+
+// TestShortAudioCountsAsExisting 短歌也要算「已有」。
+//
+// 30 秒的 128K mp3 约 480KB，低于老的 500KB 体积门槛，过去的查重一律当「曲库里没有」，
+// 于是同一首短歌会被一遍一遍下载。现在小文件改看文件头：头是认识的音频容器就算已有。
+func TestShortAudioCountsAsExisting(t *testing.T) {
+	dir := t.TempDir()
+	base := "歌手 - 短歌"
+
+	// 100KB 的合法 mp3（ID3 头）—— 体积低于 500KB，但确实是音频。
+	short := filepath.Join(dir, base+".mp3")
+	head := append([]byte("ID3"), 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00)
+	body := make([]byte, 100*1024)
+	copy(body, head)
+	if err := os.WriteFile(short, body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := findExistingAudio(dir, base)
+	if !ok {
+		t.Fatal("短歌（100KB 的合法 mp3）应被识别为已下载")
+	}
+	if got != short {
+		t.Errorf("命中路径 = %q, 期望 %q", got, short)
+	}
+}
+
+// TestShortJunkNotCountedAsExisting 小文件但不是音频 → 不算「已有」。
+func TestShortJunkNotCountedAsExisting(t *testing.T) {
+	dir := t.TempDir()
+	base := "歌手 - 垃圾"
+
+	junk := filepath.Join(dir, base+".mp3")
+	if err := os.WriteFile(junk, make([]byte, 100*1024), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := findExistingAudio(dir, base); ok {
+		t.Error("体积够但内容不是音频的文件不应被视为已下载")
+	}
+}
+
+// TestTinyFileNotCountedAsExisting 太小、连头都读不全 → 不算「已有」。
+func TestTinyFileNotCountedAsExisting(t *testing.T) {
+	dir := t.TempDir()
+	base := "歌手 - 极小"
+
+	tiny := filepath.Join(dir, base+".mp3")
+	body := make([]byte, 1024)
+	copy(body, []byte("ID3"))
+	if err := os.WriteFile(tiny, body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := findExistingAudio(dir, base); ok {
+		t.Error("小于下限的文件不应被视为已下载")
+	}
+}

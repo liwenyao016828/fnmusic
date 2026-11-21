@@ -155,13 +155,16 @@ func (s *Server) HandleFnosPlaylists(w http.ResponseWriter, r *http.Request) {
 type fnosPushTrack = push.Track
 
 type fnosPushRequest struct {
-	Title       string          `json:"title"`
-	Description string          `json:"description"`
-	CoverURL    string          `json:"cover_url"`
-	FnosGUID    string          `json:"fnos_guid"`
-	SyncCover   bool            `json:"sync_cover"`
-	DryRun      bool            `json:"dry_run"`
-	Tracks      []fnosPushTrack `json:"tracks"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	CoverURL    string `json:"cover_url"`
+	FnosGUID    string `json:"fnos_guid"`
+	SyncCover   bool   `json:"sync_cover"`
+	DryRun      bool   `json:"dry_run"`
+	// Platform 源曲目所在的在线平台（wy / tx）。
+	// 曲库里没有 / 版本不同的曲目会按这个平台写成在线条目，飞牛页面才显示完整歌单。
+	Platform string          `json:"platform"`
+	Tracks   []fnosPushTrack `json:"tracks"`
 }
 
 // HandleFnosPush 把一批曲目推送为飞牛音乐歌单
@@ -207,6 +210,8 @@ func (s *Server) HandleFnosPush(w http.ResponseWriter, r *http.Request) {
 		FnosGUID:    strings.TrimSpace(req.FnosGUID),
 		SyncCover:   req.SyncCover,
 		DryRun:      req.DryRun,
+		Platform:    req.Platform,
+		OnlineSink:  s.pushOnlineSink,
 		// 本地曲库兜底：用户「先下载、再同步歌单」时，这些歌不该被报成缺（2026-10-23）
 		LocalIndex: s.localTrackSnapshot(),
 	})

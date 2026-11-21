@@ -17,8 +17,18 @@ import (
 
 	"fn-lx-player/pkg/account"
 	"fn-lx-player/pkg/fnos"
+	"fn-lx-player/pkg/online"
 	"fn-lx-player/pkg/push"
 )
+
+// SetPushOnlineSink 注入「在线条目写入通道」（由 main.go 接拦截层的 AddSharedPlaylistTracks）。
+//
+// 推送任务在后台跑，没有 HTTP 请求上下文、拿不到当前用户的凭据指纹，所以在线条目
+// 按歌单 guid 存进共享桶（见 pkg/online/store_shared.go）。拦截层读歌单曲目时会
+// 把共享段并进官方段，飞牛页面因此能看到完整歌单。
+func (s *Server) SetPushOnlineSink(fn func(playlistGUID string, tracks []online.Track) (int, error)) {
+	s.pushOnlineSink = fn
+}
 
 // pushSources 列出可作为来源的账号歌单（含「每日推荐」）。
 // 两个平台返回的字段名不同，这里统一成 {kind,id,name,cover_url,count}。
@@ -103,6 +113,10 @@ func (s *Server) pushPreview(task push.Task) (*push.Result, error) {
 		CoverURL:  src.CoverURL,
 		SyncCover: false, // 预览不写封面
 		DryRun:    true,
+		// 平台：让预览也能标出「这几首会按在线显示在歌单里」。
+		Platform: src.Platform,
+		// 预览是 DryRun，不会真写在线条目（T8 在 DryRun return 之后）。
+		OnlineSink: s.pushOnlineSink,
 		// 预览也要算上本地曲库：否则预览说「缺 3 首」、真推时说「本地都有」，
 		// 用户会以为这两个按钮做的事不一样。
 		LocalIndex: s.localTrackSnapshot(),

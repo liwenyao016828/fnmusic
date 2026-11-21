@@ -59,22 +59,63 @@ type fbEntry struct {
 	expire time.Time
 }
 
-// resolvePlaybackFallback 逐个试兜底候选，返回第一条**真的解析出直链**的。
+// resolvePlaybackFallback 在兜底候选里挑**能播且音质最好**的那条。
+//
+// # 顺序：音质优先，不是「谁排前面听谁的」
+//
+// 候选来自 rankedSources（acquire.go），已经按优先级排过序 —— 但那个顺序是
+// 「哪个源更可能找到同一首歌」，不是「哪个源音质更好」。早期实现是「按顺序
+// 试，**第一条解析成功就返回**」，于是：排在前面那个源只有 128k，后面那个源
+// 有无损，也永远听不到无损。
+//
+// 上游（proxy/app.py:4171 起的 _LX_URL_INFLIGHT 与 app.py 的兜底顺序）是
+// 「质量 → 脚本 → 平台」：先在所有候选里找最高档，找不到再降一档。所以这里
+// 改成：逐个候选解析，**记下目前最好的那档**，只有当某个候选给出的档位已经
+// 到达阶梯顶端时才提前收手（避免每次都白问后面几个源，多等十几秒）。
+//
+// 「能播」永远优先于「音质高」：候选全都失败就是失败，不会因为追求无损
+// 而让一首本来能听的歌变成「播不了」。
 func (i *Interceptor) resolvePlaybackFallback(ctx context.Context, t online.Track) (online.Track, *online.Resolved, bool) {
 	cands := i.playbackFallbacks(ctx, t)
+	if len(cands) == 0 {
+		return online.Track{}, nil, false
+	}
+	tiers := i.playbackTiers()
+	topTier := ""
+	if len(tiers) > 0 {
+		topTier = tiers[0]
+	}
+
+	var bestTrack online.Track
+	var bestRes *online.Resolved
+	bestRank := -1
+	haveBest := false
 	for _, c := range cands {
 		if ctx.Err() != nil {
-			return online.Track{}, nil, false
+			break
 		}
-		res, err := i.pool.ResolveLadder(ctx, c.Platform, c.PlatformID, i.playbackTiers())
+		res, err := i.pool.ResolveLadder(ctx, c.Platform, c.PlatformID, tiers)
 		if err != nil || res == nil {
 			continue
 		}
-		i.logf("[INTERCEPT] 试听跨源兜底：%s/%s 取不到 → %s/%s（%s）",
-			t.Platform, t.PlatformID, c.Platform, c.PlatformID, playbackTierOf(res, c))
-		return c, res, true
+		tier := playbackTierOf(res, c)
+		rank := online.TierRank(tier)
+		// 档位认不出来（rank = -1）也算数 —— 能播就比播不了强，
+		// 所以用 haveBest 单独记「有没有解出来」，不拿 rank 当存在性。
+		if !haveBest || rank > bestRank {
+			bestTrack, bestRes, bestRank, haveBest = c, res, rank, true
+		}
+		// 已经拿到阶梯顶端的档位 → 后面几个候选不可能更好，收手。
+		if topTier != "" && rank >= online.TierRank(topTier) {
+			break
+		}
 	}
-	return online.Track{}, nil, false
+	if bestRes == nil {
+		return online.Track{}, nil, false
+	}
+	i.logf("[INTERCEPT] 试听跨源兜底：%s/%s 取不到 → %s/%s（%s）",
+		t.Platform, t.PlatformID, bestTrack.Platform, bestTrack.PlatformID, playbackTierOf(bestRes, bestTrack))
+	return bestTrack, bestRes, true
 }
 
 // playbackFallbacks 返回这首歌的兜底候选（已按优先级排序、可能有缓存）。

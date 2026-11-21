@@ -107,8 +107,8 @@ func unsynchsafe(b []byte) int {
 	return int(b[0]&0x7F)<<21 | int(b[1]&0x7F)<<14 | int(b[2]&0x7F)<<7 | int(b[3]&0x7F)
 }
 
-// buildID3v2Tag 依据 Metadata 生成完整 ID3v2.3 标签字节
-func buildID3v2Tag(meta Metadata) []byte {
+// buildID3v2Frames 生成受管帧（不含标签头）。
+func buildID3v2Frames(meta Metadata) []byte {
 	var frames bytes.Buffer
 
 	if v := strings.TrimSpace(meta.Title); v != "" {
@@ -146,11 +146,20 @@ func buildID3v2Tag(meta Metadata) []byte {
 		frames.Write(id3Frame("TPOS", asciiTextFrameBody(strconv.Itoa(meta.Disc))))
 	}
 
-	body := frames.Bytes()
+	return frames.Bytes()
+}
+
+// wrapID3v2Tag 给一组帧加上 ID3v2.3 标签头。
+func wrapID3v2Tag(frames []byte) []byte {
 	header := make([]byte, 0, id3HeaderSize)
 	header = append(header, 'I', 'D', '3', id3VersionMajor, 0x00, 0x00)
-	header = append(header, synchsafe(len(body))...)
-	return append(header, body...)
+	header = append(header, synchsafe(len(frames))...)
+	return append(header, frames...)
+}
+
+// buildID3v2Tag 依据 Metadata 生成完整 ID3v2.3 标签字节（只含受管帧）。
+func buildID3v2Tag(meta Metadata) []byte {
+	return wrapID3v2Tag(buildID3v2Frames(meta))
 }
 
 // writeID3v2 写入 MP3 标签（原子替换）
@@ -171,17 +180,126 @@ func writeID3v2(path string, meta Metadata) error {
 		}
 	}
 
-	tag := buildID3v2Tag(meta)
 	return atomicRewrite(path, func(src *os.File) ([]byte, error) {
+		// ⚠️ 旧标签里**我们不管理**的帧要原样保留（TPE2 专辑艺术家、TCOM 作曲、
+		// COMM 备注、TXXX 自定义、POPM 评分、UFID…）。原来的策略是「丢掉整个旧
+		// ID3、只重建受管帧」，等于每次写歌词 / 封面都顺手把作曲、专辑艺术家、
+		// 备注清空 —— 静默且事后不可恢复（2026-11-20 审计 M9）。
+		extra, err := readUnmanagedID3Frames(src)
+		if err != nil {
+			return nil, err
+		}
 		rest, err := skipExistingID3(src)
 		if err != nil {
 			return nil, err
 		}
+		tag := wrapID3v2Tag(append(buildID3v2Frames(meta), extra...))
 		out := make([]byte, 0, len(tag)+len(rest))
 		out = append(out, tag...)
 		out = append(out, rest...)
 		return out, nil
 	})
+}
+
+// managedID3Frames 是我们自己写、允许被覆盖的帧。
+// 不在这个集合里的帧写入时一律原样搬运。
+var managedID3Frames = map[string]bool{
+	"TIT2": true, // 歌名
+	"TPE1": true, // 歌手
+	"TALB": true, // 专辑
+	"TCON": true, // 风格
+	"USLT": true, // 歌词
+	"APIC": true, // 封面
+	"TYER": true, // 年份（v2.3）
+	"TDRC": true, // 年份（v2.4）
+	"TRCK": true, // 曲序
+	"TPOS": true, // 碟序
+}
+
+// readUnmanagedID3Frames 读出旧标签里需要保留的帧，并把文件偏移复位到 0。
+//
+// 只处理结构清楚的 v2.3 / v2.4 普通帧；v2.2（6 字节帧头）、带
+// unsynchronisation / extended header / footer 的标签一律不保留（宁可不迁移，
+// 也不要把解析错的字节写进用户文件）。带压缩/加密/分组标志的帧也跳过。
+func readUnmanagedID3Frames(src *os.File) ([]byte, error) {
+	reset := func() error {
+		_, err := src.Seek(0, io.SeekStart)
+		return err
+	}
+	head := make([]byte, id3HeaderSize)
+	n, err := io.ReadFull(src, head)
+	if err != nil || n < id3HeaderSize || !bytes.Equal(head[:3], []byte("ID3")) {
+		if rerr := reset(); rerr != nil {
+			return nil, rerr
+		}
+		return nil, nil
+	}
+	ver := head[3]
+	flags := head[5]
+	size := unsynchsafe(head[6:10])
+	if (ver != 3 && ver != 4) || size <= 0 || flags&0xC0 != 0 {
+		if rerr := reset(); rerr != nil {
+			return nil, rerr
+		}
+		return nil, nil
+	}
+	body := make([]byte, size)
+	if _, err := io.ReadFull(src, body); err != nil {
+		if rerr := reset(); rerr != nil {
+			return nil, rerr
+		}
+		return nil, nil
+	}
+	if err := reset(); err != nil {
+		return nil, err
+	}
+	return filterUnmanagedFrames(body, ver), nil
+}
+
+// filterUnmanagedFrames 从标签体里挑出「不受我们管理、且结构可直接搬运」的帧。
+func filterUnmanagedFrames(body []byte, ver byte) []byte {
+	var keep bytes.Buffer
+	for i := 0; i+id3HeaderSize <= len(body); {
+		id := string(body[i : i+4])
+		if id[0] == 0 { // 填充区（全 0）
+			break
+		}
+		if !isID3FrameID(id) {
+			break
+		}
+		var fsize int
+		if ver == 4 {
+			fsize = unsynchsafe(body[i+4 : i+8])
+		} else {
+			fsize = int(binary.BigEndian.Uint32(body[i+4 : i+8]))
+		}
+		if fsize <= 0 && id != "APIC" || i+id3HeaderSize+fsize > len(body) {
+			break
+		}
+		total := id3HeaderSize + fsize
+		// 带压缩 / 加密 / 分组 / 数据长度指示的帧：原样搬运会把标志位一起带过去，
+		// 但我们不解这些标志，读方可能解不开，直接跳过更安全。
+		if body[i+8]&0xE0 != 0 || body[i+9]&0xC0 != 0 {
+			i += total
+			continue
+		}
+		if !managedID3Frames[id] {
+			keep.Write(body[i : i+total])
+		}
+		i += total
+	}
+	return keep.Bytes()
+}
+
+// isID3FrameID 判断 4 字节帧 ID 是否合法（大写字母或数字）。
+func isID3FrameID(id string) bool {
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		if !(c >= 'A' && c <= 'Z' || c >= '0' && c <= '9') {
+			return false
+		}
+	}
+	return true
 }
 
 // skipExistingID3 跳过文件头部已有的 ID3v2 标签，返回其后（音频）全部数据。

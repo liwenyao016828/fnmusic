@@ -47,6 +47,7 @@ type RescanScheduler struct {
 	debounce  time.Duration
 	minGap    time.Duration
 	lastRun   time.Time
+	forceNext bool         // 下一次执行跳过 minGap（用户手动触发时用，见 ScheduleNow）
 	statePath string       // 非空则把 lastRun 落盘（见 SetStatePath）
 	scan      func() error // 便于测试注入
 }
@@ -131,6 +132,28 @@ func (s *RescanScheduler) Schedule() {
 	s.timer = time.AfterFunc(s.debounce, s.run)
 }
 
+// ScheduleNow 请求一次「尽快执行、不等最小间隔」的重扫。
+//
+// 只给**用户手动触发**的批量操作（文件夹整理这类一次搬几百个文件的动作）用：
+// 走普通 Schedule 的话，整理完最多要等 10 分钟 minGap + 30 秒 debounce 才能被
+// 飞牛发现，用户在飞牛音乐里看到的是「整理完歌全不见了」。
+// 节流本来是防「批量下载把全量扫描打成连续跑」，而人手点一次整理天然不可能高频，
+// 所以这一次跳过 minGap 是安全的；debounce 仍然保留（合并连点）。
+func (s *RescanScheduler) ScheduleNow() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.forceNext = true
+	if s.timer != nil {
+		s.timer.Stop()
+	}
+	// 手动操作给一个短静默期就够：让同一批的多次调用合并，又不至于让用户干等
+	d := s.debounce
+	if d > 3*time.Second {
+		d = 3 * time.Second
+	}
+	s.timer = time.AfterFunc(d, s.run)
+}
+
 // Stop 取消尚未执行的扫描（进程退出时调用）。
 func (s *RescanScheduler) Stop() {
 	s.mu.Lock()
@@ -143,8 +166,12 @@ func (s *RescanScheduler) Stop() {
 
 func (s *RescanScheduler) run() {
 	s.mu.Lock()
+	// 手动触发（ScheduleNow）允许这一次无视最小间隔；跑完就复位，
+	// 下一次回到常规节流，避免把这个口子变成常态。
+	forced := s.forceNext
+	s.forceNext = false
 	// 距上次实际执行太近：推迟到满足最小间隔再跑，而不是直接丢弃
-	if wait := s.minGap - time.Since(s.lastRun); wait > 0 {
+	if wait := s.minGap - time.Since(s.lastRun); !forced && wait > 0 {
 		s.timer = time.AfterFunc(wait, s.run)
 		s.mu.Unlock()
 		return
@@ -175,6 +202,14 @@ var defaultRescan = NewRescanScheduler(0, 0)
 // 真正的扫描在 debounce 之后执行，不会阻塞调用方。
 func ScheduleLibraryRescan() {
 	defaultRescan.Schedule()
+}
+
+// ScheduleLibraryRescanNow 请求一次尽快执行的重扫（跳过最小间隔）。
+//
+// 用在用户手动触发的批量搬动之后（文件夹整理 apply / undo）：
+// 正常 Schedule 可能要等 10 分钟才扫，用户会以为整理把歌弄丢了。
+func ScheduleLibraryRescanNow() {
+	defaultRescan.ScheduleNow()
 }
 
 // StopLibraryRescan 停止尚未执行的扫描（进程退出时调用）。

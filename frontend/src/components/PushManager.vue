@@ -1044,7 +1044,7 @@ function rowSummary(row, withError = true) {
  */
 function rowNote(row) {
   if (row.hasDownload && !row.baselineDone) return '首次检查未完成'
-  if (row.missingCount) return `飞牛缺 ${row.missingCount} 首`
+  if (row.missingCount) return `在线补显 ${row.missingCount} 首`
   if (row.removedCount) return `已删不补 ${row.removedCount}`
   if (row.revivedCount) return `已恢复 ${row.revivedCount}`
   return ''
@@ -1053,7 +1053,8 @@ function rowNote(row) {
 /** chip 的悬停说明：把被压缩掉的细节还回来 */
 function rowNoteTitle(row) {
   if (row.hasDownload && !row.baselineDone) return '第一次检查还没跑完。跑完就会开始记录「以后新增了哪些歌」'
-  if (row.missingCount) return `飞牛歌单里有 ${row.missingCount} 首在本地曲库找不到`
+  if (row.missingCount)
+    return `有 ${row.missingCount} 首本地曲库还没有，已在飞牛歌单里按在线显示（点「待下载」可补到本地）`
   if (row.removedCount) {
     const list = (row.removedTitles || []).join('\n')
     return `这些歌你从飞牛歌单里删过，同步时不会再自动加回：\n${list || `${row.removedCount} 首`}`

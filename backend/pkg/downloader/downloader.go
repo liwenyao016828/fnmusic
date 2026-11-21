@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"fn-lx-player/pkg/namefmt"
 	"io"
 	"log"
 	"net/http"
@@ -18,11 +17,14 @@ import (
 
 	"fn-lx-player/pkg/applog"
 	"fn-lx-player/pkg/audioext"
+	"fn-lx-player/pkg/audiok"
 	"fn-lx-player/pkg/config"
 	"fn-lx-player/pkg/filename"
 	"fn-lx-player/pkg/flacok"
 	"fn-lx-player/pkg/fnos"
+	"fn-lx-player/pkg/fslock"
 	"fn-lx-player/pkg/library"
+	"fn-lx-player/pkg/namefmt"
 	"fn-lx-player/pkg/nas"
 	"fn-lx-player/pkg/search"
 	"fn-lx-player/pkg/security"
@@ -363,6 +365,12 @@ func (d *Downloader) HandleDownloadSong(w http.ResponseWriter, r *http.Request) 
 // maxDownloadBytes 单曲下载体积上限，防止异常大流写满磁盘
 const maxDownloadBytes = 300 << 20 // 300MB
 
+// ErrCorruptLossless 标记「下载到的无损文件是坏流」这类失败（FLAC 及其它容器）。
+//
+// 上层（pkg/backenddl）看到它就知道：换条同档直链重试没意义（同一首的无损
+// 直链本身是坏的），但**换档**有救 —— 320K 是另一条编码链路，通常完好。
+var ErrCorruptLossless = errors.New("下载到的无损文件是坏流")
+
 // ErrCorruptFLAC 标记「下载到的 FLAC 是坏流」这类失败。
 //
 // 单独留一个哨兵错误，是因为调用方需要能认出它并**自动换档重下**
@@ -396,6 +404,10 @@ var ErrNoDownloadDir = errors.New("还没有被授权访问任何目录，请先
 // 用户来问的那条。外壳只在一个地方收口，起手记「要下什么」，收手记「结果如何」。
 func (d *Downloader) downloadSingleSong(song SongPayload) (*SongResult, error) {
 	startedAt := time.Now()
+	// 曲库闸门的**共享**一侧：多个下载可以并行，但整理（排他）期间要等它收工，
+	// 避免「整理刚确认目标名是空的，下载正好在这一刻写进去」这种撞车（审计 M8）。
+	releaseLib := fslock.Shared()
+	defer releaseLib()
 	// 直链只记域名：音源直链带 token/签名，整条写进日志等于把下载凭据落到 qulv.log
 	//（2026-11-01 用户口径）。域名够用来分辨「是哪家 CDN 在 403」。
 	url := song.URL
@@ -490,6 +502,9 @@ func (d *Downloader) downloadInner(song SongPayload) (*SongResult, error) {
 	if d := strings.TrimSpace(song.DestBase); d != "" {
 		base = d
 	}
+	// 主干总长兜底（见 pkg/namefmt.MaxBaseBytes）：DestBase 来自调用方，
+	// 也可能带回过长的名字，所以覆盖完之后再夹一次。
+	base = namefmt.Clamp(base, namefmt.MaxBaseBytes)
 	if dd := strings.TrimSpace(song.DestDir); dd != "" {
 		destDir = dd
 		if err := os.MkdirAll(destDir, 0755); err != nil {
@@ -582,6 +597,10 @@ func (d *Downloader) downloadInner(song SongPayload) (*SongResult, error) {
 	// 临时文件命名基于「目标基名」，而不是随机名：这样同一个任务重试时
 	// 能找回上次的 .part 继续下载，避免大文件每次断线都从头再来。
 	tmpPath := partialPath(destDir, base, song)
+	// 同一个 .part 同时只能有一个写入者：并发写同一份字节流会交错，
+	// FLAC 有 CRC 能挡、坏 MP3 会被当成好文件入库（见 install.go 的说明）。
+	unlockPart := lockPart(tmpPath)
+	defer unlockPart()
 	if err := os.MkdirAll(filepath.Dir(tmpPath), 0o755); err != nil {
 		return nil, fmt.Errorf("创建下载目录失败: %w", err)
 	}
@@ -744,6 +763,15 @@ func (d *Downloader) downloadInner(song SongPayload) (*SongResult, error) {
 		ext = sniffExtFromFile(tmpPath)
 	}
 	if ext == "" {
+		// 魔数认不出时先问 Content-Type，最后才退回 mp3。
+		// 直接猜 mp3 会把 AAC（ADTS）之类存成 .mp3，播放器按错容器解就是「下载
+		// 成功但播不了」；而现在 ADTS / WMA / AIFF 都进了魔数表，剩下的未知容器
+		// 极罕见，退回 mp3 只是不让这种边缘情况把下载彻底卡死。
+		ext = extFromContentType(resp.Header.Get("Content-Type"))
+	}
+	if ext == "" {
+		log.Printf("[DOWNLOAD] 认不出音频容器（Content-Type=%q），按 mp3 落盘：%s - %s",
+			resp.Header.Get("Content-Type"), song.Singer, song.Name)
 		ext = "mp3"
 	}
 	// ── 入库前的最后校验 ──
@@ -768,23 +796,62 @@ func (d *Downloader) downloadInner(song SongPayload) (*SongResult, error) {
 			}, fmt.Errorf("%w: %v", ErrCorruptFLAC, verr)
 		}
 	}
+	// 其它无损容器没有解码器可逐帧验，但**结构**能验：WAV 的 data 块长度、
+	// M4A 的 atom 链、WavPack 的块链、APE 的头部长度。截断流与自相矛盾的
+	// 文件在这里被挡住，不会带着「下载成功但播不了」的假象进库。
+	// 失败同样按「坏流」处理：上层（pkg/backenddl）会降档重试。
+	if ext != "flac" {
+		if verr := audiok.Validate(tmpPath, ext); verr != nil {
+			_ = os.Remove(tmpPath)
+			return &SongResult{
+				SongName:  song.Name,
+				Singer:    song.Singer,
+				Status:    "failed",
+				Quality:   song.Quality,
+				Error:     "下载到的无损文件是坏流（" + verr.Error() + "），可降到 320K 重试",
+				ErrorCode: "lossless_corrupt",
+			}, fmt.Errorf("%w: %v", ErrCorruptLossless, verr)
+		}
+	}
 
 	finalPath := allocateUniquePath(destDir, base, ext)
 	// 替换场景要「接管」目标名，而不是在旁边生成 `xxx (1).flac`：
 	//   - 扩展名没变（128k mp3 → 320k mp3）→ 直接覆盖原文件（rename 原子替换）；
 	//   - 扩展名变了（mp3 → flac）→ 用同名换扩展名，随后删掉旧的（下面 replacePath 那段）；
 	//   - 目标名被别人占着（极少）→ 退回 allocateUniquePath 的结果，宁可有影子文件也不覆盖别人的。
+	overwriteOK := false
 	if replacePath != "" {
 		want := filepath.Join(destDir, base+"."+ext)
 		if strings.EqualFold(filepath.ToSlash(want), filepath.ToSlash(replacePath)) {
 			finalPath = want
+			overwriteOK = true // 覆盖这份旧文件是用户点的「升级音质」，属于意图之内
 		} else if _, serr := os.Stat(want); serr != nil {
 			finalPath = want
 		}
 	}
-	if err := os.Rename(tmpPath, finalPath); err != nil {
-		_ = os.Remove(tmpPath)
-		return nil, fmt.Errorf("保存最终文件失败: %w", err)
+	if overwriteOK {
+		if err := os.Rename(tmpPath, finalPath); err != nil {
+			_ = os.Remove(tmpPath)
+			return nil, fmt.Errorf("保存最终文件失败: %w", err)
+		}
+	} else {
+		// 独占安装：预演与落地之间目标名被别人占了就换个名字，绝不覆盖。
+		for attempt := 0; ; attempt++ {
+			ierr := installFileExclusive(tmpPath, finalPath)
+			if ierr == nil {
+				_ = os.Remove(tmpPath)
+				break
+			}
+			if !errors.Is(ierr, os.ErrExist) {
+				_ = os.Remove(tmpPath)
+				return nil, fmt.Errorf("保存最终文件失败: %w", ierr)
+			}
+			if attempt >= 8 {
+				_ = os.Remove(tmpPath)
+				return nil, fmt.Errorf("保存最终文件失败: 目标名一直被占用（%s）", filepath.Base(finalPath))
+			}
+			finalPath = allocateUniquePath(destDir, base, ext)
+		}
 	}
 
 	// 升级路径：新文件已就位，删掉那份旧的有损文件。
@@ -1060,9 +1127,16 @@ func detectAudioExtByMagic(head []byte) string {
 		return "flac"
 	case bytes.HasPrefix(head, []byte("ID3")):
 		return "mp3"
+	// ADTS AAC：0xFFF 同步字 + layer 位为 00（MP3 的 layer 位必非 0）。
+	// 必须先于下面的「MPEG 帧同步」判断，否则 AAC 会被认成 mp3。
+	case head[0] == 0xFF && head[1]&0xF6 == 0xF0:
+		return "aac"
 	// MPEG 帧同步字：11 位全 1
 	case head[0] == 0xFF && head[1]&0xE0 == 0xE0:
 		return "mp3"
+	// ASF/WMA 的 GUID 头
+	case head[0] == 0x30 && head[1] == 0x26 && head[2] == 0xB2 && head[3] == 0x75:
+		return "wma"
 	case bytes.HasPrefix(head, []byte("OggS")):
 		return "ogg"
 	case bytes.HasPrefix(head, []byte("MAC ")):
@@ -1077,6 +1151,44 @@ func detectAudioExtByMagic(head []byte) string {
 		return "m4a"
 	}
 	return ""
+}
+
+// extFromContentType 把 Content-Type 映射成扩展名（魔数认不出时的第二道判断）。
+func extFromContentType(ct string) string {
+	ct = strings.ToLower(strings.TrimSpace(ct))
+	if i := strings.Index(ct, ";"); i >= 0 {
+		ct = strings.TrimSpace(ct[:i])
+	}
+	switch ct {
+	case "audio/mpeg", "audio/mp3", "audio/x-mpeg":
+		return "mp3"
+	case "audio/flac", "audio/x-flac":
+		return "flac"
+	case "audio/aac", "audio/aacp", "audio/x-aac":
+		return "aac"
+	case "audio/mp4", "audio/m4a", "audio/x-m4a":
+		return "m4a"
+	case "audio/ogg", "application/ogg":
+		return "ogg"
+	case "audio/wav", "audio/x-wav", "audio/wave":
+		return "wav"
+	case "audio/x-ms-wma", "audio/wma":
+		return "wma"
+	case "audio/x-ape", "audio/ape":
+		return "ape"
+	}
+	return ""
+}
+
+// SniffAudioExt 把魔数判断暴露给其它包（播放前预检用，见 api.handlePlayerCheck）。
+//
+// 播放前预检和下载落地必须用**同一套**判据，否则会出现「预检说能播、真播失败」
+// 或者反过来的假阴性 —— 两套规则各改一半是最难查的那类 bug。
+func SniffAudioExt(head []byte) string { return detectAudioExtByMagic(head) }
+
+// LooksLikeErrorPage 暴露错误页判断（同上：与落地共用一套判据）。
+func LooksLikeErrorPage(head []byte, contentType string) bool {
+	return isErrorPayload(head, contentType)
 }
 
 // isErrorPayload 判断响应体是否明显不是音频（HTML / JSON / XML 错误页）。
@@ -1173,7 +1285,7 @@ func (s SongPayload) shouldUpgradeOver(existing string) bool {
 func findExistingAudio(destDir, base string) (string, bool) {
 	for _, ext := range audioExtensions {
 		p := filepath.Join(destDir, base+"."+ext)
-		if fi, err := os.Stat(p); err == nil && !fi.IsDir() && fi.Size() >= libraryMinAudioBytes {
+		if fi, err := os.Stat(p); err == nil && !fi.IsDir() && libraryFileIsAudio(p, fi.Size()) {
 			return p, true
 		}
 	}

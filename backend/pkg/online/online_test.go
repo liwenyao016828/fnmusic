@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -692,3 +694,240 @@ func itoaTest(n int) string {
 }
 
 var _ = time.Now
+
+// ── 媒体头白名单（M1：探活/取流头一致） ────────────────────────────────
+
+func TestMediaHeadersWhitelist(t *testing.T) {
+	got := MediaHeaders(map[string]string{
+		"Referer":    "https://y.qq.com/",
+		"user-agent": "CustomUA/1.0",
+		"Cookie":     "secret=1",
+		"X-Token":    "leak",
+	})
+	if got == nil {
+		t.Fatal("有白名单头时不该返回 nil")
+	}
+	if got["referer"] != "https://y.qq.com/" {
+		t.Fatalf("Referer 应保留并归一成小写键，得到 %q", got["referer"])
+	}
+	if got["user-agent"] != "CustomUA/1.0" {
+		t.Fatalf("User-Agent 应保留并归一成小写键，得到 %q", got["user-agent"])
+	}
+	if len(got) != 2 {
+		t.Fatalf("Cookie/X-Token 必须丢弃，只留两项，得到 %#v", got)
+	}
+}
+
+func TestMediaHeadersEmptyAndCaseInsensitive(t *testing.T) {
+	if got := MediaHeaders(nil); got != nil {
+		t.Fatalf("空表应返回 nil，得到 %#v", got)
+	}
+	if got := MediaHeaders(map[string]string{"COOKIE": "x"}); got != nil {
+		t.Fatalf("只有非白名单头应返回 nil，得到 %#v", got)
+	}
+	if got := MediaHeaders(map[string]string{"REFERER": "https://music.163.com/"}); got["referer"] != "https://music.163.com/" {
+		t.Fatalf("键名大小写不敏感，得到 %#v", got)
+	}
+	if got := MediaHeaders(map[string]string{"Referer": "   "}); got != nil {
+		t.Fatalf("空白值应被丢弃，得到 %#v", got)
+	}
+}
+
+// ── 同键并发合并（M2：singleflight） ────────────────────────────────────
+
+// slowResolver 每次解析都睡一会儿，用来放大并发窗口；calls 用原子计数。
+type slowResolver struct {
+	platform string
+	calls    atomic.Int64
+	delay    time.Duration
+}
+
+func (s *slowResolver) Platform() string { return s.platform }
+
+func (s *slowResolver) Resolve(ctx context.Context, id string) (*Resolved, error) {
+	s.calls.Add(1)
+	select {
+	case <-time.After(s.delay):
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return &Resolved{URL: "https://example.com/" + id + ".flac", Tier: "flac"}, nil
+}
+
+func (s *slowResolver) ResolveBatch(ctx context.Context, ids []string) (map[string]*Resolved, error) {
+	out := map[string]*Resolved{}
+	for _, id := range ids {
+		if r, err := s.Resolve(ctx, id); err == nil {
+			out[id] = r
+		}
+	}
+	return out, nil
+}
+
+// TestResolveMergesConcurrentSameKey 同一首歌被并发问 N 次，解析器只该被打 1 次。
+// 这是 M2 的核心行为：播放 + 下载 + 边听边存同时问同一首歌时，上游只看到一次请求。
+func TestResolveMergesConcurrentSameKey(t *testing.T) {
+	r := &slowResolver{platform: "wy", delay: 60 * time.Millisecond}
+	p := NewPool(r)
+
+	const n = 12
+	var wg sync.WaitGroup
+	results := make([]*Resolved, n)
+	errs := make([]error, n)
+	start := make(chan struct{})
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start // 尽量让所有 goroutine 同时起跑
+			results[i], errs[i] = p.Resolve(context.Background(), "wy", "song-1")
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	if got := r.calls.Load(); got != 1 {
+		t.Fatalf("12 个并发同键请求应只打 1 次解析器，实际 %d 次", got)
+	}
+	for i := 0; i < n; i++ {
+		if errs[i] != nil {
+			t.Fatalf("第 %d 个请求不该失败：%v", i, errs[i])
+		}
+		if results[i] == nil || results[i].URL == "" {
+			t.Fatalf("第 %d 个请求应拿到结果", i)
+		}
+	}
+}
+
+// TestResolveTierMergesConcurrentSameKey ResolveTier 的同键合并（缓存键含档位）。
+func TestResolveTierMergesConcurrentSameKey(t *testing.T) {
+	r := &slowResolver{platform: "wy", delay: 60 * time.Millisecond}
+	p := NewPool(r)
+
+	const n = 8
+	var wg sync.WaitGroup
+	results := make([]*Resolved, n)
+	errs := make([]error, n)
+	start := make(chan struct{})
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			results[i], errs[i] = p.ResolveTier(context.Background(), "wy", "song-1", "flac")
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	if got := r.calls.Load(); got != 1 {
+		t.Fatalf("8 个并发同键请求应只打 1 次解析器，实际 %d 次", got)
+	}
+	for i := 0; i < n; i++ {
+		if errs[i] != nil {
+			t.Fatalf("第 %d 个请求不该失败：%v", i, errs[i])
+		}
+	}
+}
+
+// TestResolveDifferentKeysDontBlock 不同键的解析不能被 inflight 互相卡住。
+func TestResolveDifferentKeysDontBlock(t *testing.T) {
+	r := &slowResolver{platform: "wy", delay: 50 * time.Millisecond}
+	p := NewPool(r)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); _, _ = p.Resolve(context.Background(), "wy", "a") }()
+	go func() { defer wg.Done(); _, _ = p.Resolve(context.Background(), "wy", "b") }()
+	wg.Wait()
+
+	if got := r.calls.Load(); got != 2 {
+		t.Fatalf("两个不同键应各打一次解析器，实际 %d 次", got)
+	}
+}
+
+// ── 短效链缓存与坏链失效（M3） ─────────────────────────────────────────
+
+// TestStoreRespectsShortExpiry 平台给的过期时间比默认 TTL 短时，缓存寿命按它算。
+// CDN 签名 URL 可能只有 2 分钟寿命，固定 5 分钟会把死链当好链继续发。
+func TestStoreRespectsShortExpiry(t *testing.T) {
+	r := &fakeResolver{platform: "wy", answers: map[string]*Resolved{
+		"1": {URL: "https://e.com/a.flac", Expires: time.Now().Add(2 * time.Minute)},
+	}}
+	p := NewPool(r)
+
+	if _, err := p.Resolve(context.Background(), "wy", "1"); err != nil {
+		t.Fatalf("解析不该失败：%v", err)
+	}
+	p.mu.RLock()
+	e, ok := p.cache["wy\x001"]
+	p.mu.RUnlock()
+	if !ok {
+		t.Fatal("应写入缓存")
+	}
+	// 2 分钟寿命打 9 折 ≈ 108s，必须明显短于默认 5 分钟。
+	life := time.Until(e.expire)
+	if life > 2*time.Minute {
+		t.Fatalf("短效链缓存寿命应 ≤2 分钟，实际 %v", life)
+	}
+	if life < 30*time.Second {
+		t.Fatalf("寿命不该被压得过短（至少留 90%%），实际 %v", life)
+	}
+}
+
+// TestInvalidateClearsAllTiers Invalidate 应清掉该曲目所有档位的缓存，
+// 且清完后的下一次解析重新打解析器。
+func TestInvalidateClearsAllTiers(t *testing.T) {
+	r := &fakeResolver{platform: "wy", answers: map[string]*Resolved{
+		"1": {URL: "https://e.com/a.flac", Tier: "flac"},
+	}}
+	p := NewPool(r)
+
+	if _, err := p.Resolve(context.Background(), "wy", "1"); err != nil {
+		t.Fatalf("首次解析不该失败：%v", err)
+	}
+	if r.calls != 1 {
+		t.Fatalf("首次应打 1 次解析器，实际 %d", r.calls)
+	}
+
+	p.Invalidate("wy", "1")
+
+	// 清掉后再次解析应重新打解析器，而不是吃缓存。
+	if _, err := p.Resolve(context.Background(), "wy", "1"); err != nil {
+		t.Fatalf("清缓存后重解析不该失败：%v", err)
+	}
+	if r.calls != 2 {
+		t.Fatalf("清缓存后应重新打解析器（共 2 次），实际 %d", r.calls)
+	}
+}
+
+// 「这次没拿到」不该被记成「这首歌不能听」。
+//
+// ErrTransient（宿主没起 / 超时 / 5xx）必须**不进负缓存**：记住它的代价是
+// 一次网络抖动让这首歌 5 分钟都播不了；而 ErrNotPlayable 是稳定结论，
+// 必须记住，否则每次播放都要白打一次上游。
+func TestPoolDoesNotNegativeCacheTransientErrors(t *testing.T) {
+	p := NewPool()
+	f := &fakeResolver{platform: "wy", fail: map[string]error{"1": ErrTransient, "2": ErrNotPlayable}}
+	p.Register(f)
+
+	for i := 0; i < 3; i++ {
+		if _, err := p.Resolve(context.Background(), "wy", "1"); !errors.Is(err, ErrTransient) {
+			t.Fatalf("第 %d 次应仍是 ErrTransient，实际 %v", i+1, err)
+		}
+	}
+	if f.calls != 3 {
+		t.Fatalf("ErrTransient 不该被缓存，应每次重解析（3 次），实际 %d 次", f.calls)
+	}
+
+	// 对照组：ErrNotPlayable 必须被记住
+	before := f.calls
+	for i := 0; i < 3; i++ {
+		if _, err := p.Resolve(context.Background(), "wy", "2"); !errors.Is(err, ErrNotPlayable) {
+			t.Fatalf("应返回 ErrNotPlayable，实际 %v", err)
+		}
+	}
+	if got := f.calls - before; got != 1 {
+		t.Errorf("ErrNotPlayable 应只打一次上游（负缓存生效），实际 %d 次", got)
+	}
+}

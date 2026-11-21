@@ -35,12 +35,13 @@ import (
 	"fn-lx-player/pkg/security"
 	"fn-lx-player/pkg/sources"
 	"fn-lx-player/pkg/takeover"
+	"fn-lx-player/pkg/useragent"
 
 	"fn-lx-player/pkg/intercept"
 )
 
 // CurrentVersion 应用版本号。发布新版本时与 fpk-package/manifest 的 version 同步修改。
-const CurrentVersion = "2.31.0"
+const CurrentVersion = "2.32.0"
 
 // CurrentAppName 对外暴露的应用标识，必须与 fpk-package/manifest 的 appname 一致。
 //
@@ -172,6 +173,12 @@ type Server struct {
 	trustedCIDRs []*net.IPNet
 	corsOrigins  []string
 	startedAt    time.Time
+
+	// pushOnlineSink 把推送时「曲库里没有 / 版本不同」的曲目写成**在线条目**，
+	// 飞牛页面里显示完整歌单（用户 2026-11-21 的要求）。
+	// 由 main.go 注入（server.PushOnlineSink = ic.AddSharedPlaylistTracks），
+	// 没注入时推送会照常执行，只是只把曲库命中的曲目写进官方歌单。
+	pushOnlineSink func(playlistGUID string, tracks []online.Track) (int, error)
 }
 
 // effectiveAuthMode 返回生效的鉴权模式。字段没初始化时按 FN_API_TOKEN 推断，
@@ -285,6 +292,16 @@ func NewServer(cfgMgr *config.ConfigManager, sourcesMgr *sources.Manager, static
 			return fn()
 		}
 		return nil
+	})
+	// 在线条目写入通道：推送时「曲库里没有 / 版本不同」的曲目会写成在线条目，
+	// 飞牛页面显示完整歌单（用户 2026-11-21 的要求）。main.go 注入。
+	// 用惰性闭包读 s.pushOnlineSink —— 它是在 NewServer 返回后才由 SetPushOnlineSink
+	// 设置的，直接传字段值这里还是 nil。
+	s.pushRunner.SetOnlineSink(func(playlistGUID string, tracks []online.Track) (int, error) {
+		if s.pushOnlineSink == nil {
+			return 0, nil
+		}
+		return s.pushOnlineSink(playlistGUID, tracks)
 	})
 	s.downloadQueue = downloadqueue.NewStore(cfgMgr.DataDir())
 	s.appUpdate = newAppUpdateManager(cfgMgr)
@@ -812,8 +829,10 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 // playerStreamUA 中继与校验出站时使用的 UA。
-// 不少音乐 CDN 会按 UA 拒绝（默认 Go UA 常被挡），所以统一伪装成浏览器。
-const playerStreamUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+// 与取媒体、下载的 UA 必须**同一份**（见 pkg/useragent 的唯一真源说明）：
+// 探活、取流、下载三处 UA 不一致时，会出现「探活过了、播放 403」这种
+// 看起来随机、其实只是头不对的故障。
+const playerStreamUA = useragent.Desktop
 
 // streamClient 用于把第三方直链转成浏览器可播放的流。
 // 复用连接池；不做整体超时（长音频流），由请求上下文与 ResponseHeaderTimeout 兜底。
@@ -898,8 +917,13 @@ func handleAudioStream(w http.ResponseWriter, r *http.Request) {
 // 而前端只判断「是不是 http(s) 链接」，于是认为取链成功 → 播放器再去拉就 404，
 // 用户看到的是「无法在线播放」，界面上没有任何提示、也看不出是哪一环坏了。
 //
-// 这里用 `Range: bytes=0-1` **只取 2 字节就断开**，绝不把整个音频拉下来。
-// 返回 {ok, status, content_type, note}；判据是 200 / 206 才算可取。
+// 这里用 `Range: bytes=0-2047` **只取开头 2KB 就断开**，绝不把整个音频拉下来。
+// 返回 {ok, status, content_type, note}；判据是「状态码 200/206」+「不是错误页」。
+//
+// ⚠️ 2026-11-20：以前只判状态码。可是防盗链 / 聚合接口的失败响应**常常也是 200**
+// （回一页 HTML 或者 `{"errorcode":-46628}`），于是预检说能播、点下去才失败 ——
+// 用户看到的就是「明明探活过了，播放还是没反应」。现在把开头 2KB 拿来做一次
+// 魔数 / 错误页判断，判据与下载落地共用（downloader.SniffAudioExt、LooksLikeErrorPage）。
 func handlePlayerCheck(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodOptions {
 		w.WriteHeader(http.StatusOK)
@@ -923,7 +947,7 @@ func handlePlayerCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	outReq.Header.Set("User-Agent", playerStreamUA)
-	outReq.Header.Set("Range", "bytes=0-1")
+	outReq.Header.Set("Range", "bytes=0-2047")
 	if ref := downloader.GetStreamReferer(targetURL, strings.TrimSpace(r.URL.Query().Get("referer"))); ref != "" {
 		outReq.Header.Set("Referer", ref)
 	}
@@ -939,23 +963,43 @@ func handlePlayerCheck(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
-	// 只读最多 2 字节就断开 —— 不要为了校验把整个音频拉下来
-	_, _ = io.CopyN(io.Discard, resp.Body, 2)
+	// 只读开头最多 2KB 就断开 —— 不要为了校验把整个音频拉下来
+	head := make([]byte, 2048)
+	n, _ := io.ReadFull(resp.Body, head)
+	head = head[:n]
 
-	ok := resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusPartialContent
-	note := ""
-	if !ok {
-		note = "上游返回 " + resp.Status
-	}
+	contentType := resp.Header.Get("Content-Type")
+	ok, note := judgePlayerCheck(resp.StatusCode, resp.Status, contentType, head)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"code": 200, "message": "ok",
 		"data": map[string]any{
 			"ok":           ok,
 			"status":       resp.StatusCode,
-			"content_type": resp.Header.Get("Content-Type"),
+			"content_type": contentType,
 			"note":         note,
 		},
 	})
+}
+
+// judgePlayerCheck 判定「这条直链现在能不能取到音频」。
+//
+// 拆成纯函数是为了能直接对着用例测：状态码与内容是两条独立证据，
+// 而防盗链 / 聚合接口的失败响应经常是 200 + 一页 HTML。
+func judgePlayerCheck(status int, statusText, contentType string, head []byte) (bool, string) {
+	statusOK := status == http.StatusOK || status == http.StatusPartialContent
+	if !statusOK {
+		return false, "上游返回 " + statusText
+	}
+	if downloader.LooksLikeErrorPage(head, contentType) {
+		// 状态码 200 但内容是 HTML / JSON 错误页：这就是「探活过了却播不了」的主要来源
+		return false, "上游返回的是错误页而不是音频"
+	}
+	if len(head) > 0 && downloader.SniffAudioExt(head) == "" {
+		// 认不出容器：可能是不带 ID3 的裸 MP3 片段、也可能是别的东西。
+		// 不判死（宁可让播放器试一次），但把情况说清楚，别让用户以为一切正常。
+		return true, "认不出音频容器，可能需要播放器自行判断"
+	}
+	return true, ""
 }
 
 // redactConfig 把配置里**不能回传给浏览器**的字段抹掉。

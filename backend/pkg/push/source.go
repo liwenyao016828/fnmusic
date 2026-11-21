@@ -21,10 +21,14 @@ const (
 
 // Source 拉取到的源。
 type Source struct {
-	ID       string  `json:"id"`
-	Title    string  `json:"title"`
-	CoverURL string  `json:"cover_url,omitempty"`
-	Owner    string  `json:"owner,omitempty"`
+	ID       string `json:"id"`
+	Title    string `json:"title"`
+	CoverURL string `json:"cover_url,omitempty"`
+	Owner    string `json:"owner,omitempty"`
+	// Platform 是这个源的在线平台（online.PlatformNetease / PlatformQQ 的取值），
+	// 推送时会把「曲库里没有 / 版本不同」的曲目按这个平台写成在线条目，
+	// 这样飞牛页面里才能显示完整歌单而不是只有已下载的部分。
+	Platform string  `json:"platform,omitempty"`
 	Tracks   []Track `json:"tracks"`
 }
 
@@ -79,6 +83,7 @@ func fetchNetease(store *account.Store, kind, sourceID string) (*Source, error) 
 		Title:    strOf(raw["title"]),
 		CoverURL: strOf(raw["cover_url"]),
 		Owner:    strOf(raw["owner"]),
+		Platform: "wy",
 		Tracks:   tracksFromItems(raw["items"]),
 	}
 	if len(src.Tracks) == 0 {
@@ -99,7 +104,7 @@ func fetchQQ(store *account.Store, kind, sourceID string) (*Source, error) {
 		if err != nil {
 			return nil, err
 		}
-		src := &Source{ID: "daily", Title: "QQ 音乐 · 每日推荐", Tracks: tracksFromItems(songs)}
+		src := &Source{ID: "daily", Title: "QQ 音乐 · 每日推荐", Platform: "tx", Tracks: tracksFromItems(songs)}
 		if len(src.Tracks) == 0 {
 			return nil, fmt.Errorf("每日推荐为空：可能登录态已过期")
 		}
@@ -118,6 +123,7 @@ func fetchQQ(store *account.Store, kind, sourceID string) (*Source, error) {
 			Title:    strOf(raw["title"]),
 			CoverURL: strOf(raw["cover_url"]),
 			Owner:    strOf(raw["owner"]),
+			Platform: "tx",
 			Tracks:   tracksFromItems(raw["items"]),
 		}
 		if len(src.Tracks) == 0 {

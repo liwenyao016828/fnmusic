@@ -1245,6 +1245,70 @@ func APICatalog(baseURL string) []Endpoint {
 			Notes:   "默认移入 .tidy_trash 而不是直接删除，误判可恢复；同名歌词与封面会一起搬走。",
 		},
 
+		// ── 文件夹整理（v2.32.0）──
+		{
+			Method: http.MethodGet, Path: "/api/organize/presets", Summary: "文件夹整理的内置结构样式与当前模板", Category: catTidy,
+			Example: "curl " + baseURL + "/api/organize/presets",
+			Notes: "返回内置样式（歌手/专辑/曲目等 5 种）、生效中的模板、模板占位符说明，" +
+				"以及上次整理能否撤销。",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/organize/sample", Summary: "按指定样式渲染一条示例路径（只算不动盘）", Category: catTidy,
+			Params: []Param{
+				{Name: "dir_template", In: "body", Desc: "目录模板；空串=平铺"},
+				{Name: "file_template", In: "body", Desc: "文件名模板"},
+			},
+			Example: "curl -X POST " + baseURL + "/api/organize/sample -H 'Content-Type: application/json' -d '{\"dir_template\":\"{artist}/{album}\",\"file_template\":\"{track:02d} {title}\"}'",
+			Notes: "把模板套到一条示例歌曲上，返回 周杰伦/范特西/01 双截棍.flac 这样的成品路径；" +
+				"界面改模板时用它即时显示效果，不扫盘也不动文件。",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/organize/template", Summary: "保存文件夹整理的结构样式", Category: catTidy,
+			Params: []Param{
+				{Name: "dir_template", In: "body", Desc: "目录模板；空串=平铺（**空串是合法值**）"},
+				{Name: "file_template", In: "body", Desc: "文件名模板"},
+				{Name: "number_unknown", In: "body", Desc: "给没有曲序的歌补序号"},
+			},
+			Example: "curl -X POST " + baseURL + "/api/organize/template -H 'Content-Type: application/json' -d '{\"dir_template\":\"{artist}/{album}\",\"file_template\":\"{track:02d} {title}\"}'",
+			Notes: "存进配置，下次打开还是这套样式。与 POST /api/config 的差别：" +
+				"这里空串会照存（平铺样式），那边空串视为没传。",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/organize/plan", Summary: "预演整理方案（只读，不动文件）", Category: catTidy,
+			Params: []Param{
+				{Name: "dir", In: "body", Desc: "整理根目录；省略时用配置里生效的曲库目录"},
+				{Name: "dir_template", In: "body", Desc: "目录模板，如 {artist}/{album}；空串=平铺"},
+				{Name: "file_template", In: "body", Desc: "文件名模板，如 {track:02d} {title}"},
+				{Name: "number_unknown", In: "body", Desc: "给没有曲序的歌按出现顺序补序号"},
+				{Name: "max_depth", In: "body", Desc: "扫描深度，默认 12"},
+			},
+			Example: "curl -X POST " + baseURL + "/api/organize/plan -H 'Content-Type: application/json' -d '{\"dir\":\"/vol1/Music\"}'",
+			Notes: "只算不搬：返回每首歌的目标路径、冲突（目标已被占用）与跳过原因。" +
+				"明细最多回 500 条，统计是全量。",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/organize/apply", Summary: "执行文件夹整理（真实移动文件）", Category: catTidy,
+			Params: []Param{
+				{Name: "dir", In: "body", Desc: "整理根目录"},
+				{Name: "dir_template", In: "body", Desc: "目录模板"},
+				{Name: "file_template", In: "body", Desc: "文件名模板"},
+				{Name: "number_unknown", In: "body", Desc: "给没有曲序的歌补序号"},
+			},
+			Example: "curl -X POST " + baseURL + "/api/organize/apply -H 'Content-Type: application/json' -d '{\"dir\":\"/vol1/Music\"}'",
+			Notes: "服务器按当前配置重算一遍再搬（不信任客户端传来的旧方案）。" +
+				"同名 .jpg/.lrc 跟着一起改名同目录；执行后可撤销，并自动触发曲库重扫。",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/organize/undo", Summary: "撤销最近一次文件夹整理", Category: catTidy,
+			Example: "curl -X POST " + baseURL + "/api/organize/undo",
+			Notes:   "逆序搬回原位（后搬的先回）。撤销记录用一次即清空，不能反复回放。",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/organize/journal", Summary: "查询可撤销的整理记录", Category: catTidy,
+			Example: "curl " + baseURL + "/api/organize/journal",
+			Notes:   "available=false 表示没有可撤销的整理；有记录时给出时间、根目录、模板与移动条数。",
+		},
+
 		// ── AI 大模型 ──
 		{
 			Method: http.MethodGet, Path: "/api/ai/config", Summary: "读取 AI 配置（密钥已脱敏）", Category: catAI,
@@ -1439,7 +1503,7 @@ func APICatalog(baseURL string) []Endpoint {
 				{Name: "dry_run", In: "body", Desc: "true 时只返回匹配结果，不写入歌单"},
 			},
 			Example: "curl -X POST " + baseURL + "/api/fnos/push -H 'Content-Type: application/json' -d '{\"title\":\"我的歌单\",\"dry_run\":true,\"tracks\":[{\"name\":\"晴天\",\"artist\":\"周杰伦\"}]}'",
-			Notes:   "在飞牛曲库中按歌名与「歌手+歌名」两次检索，相似度低于阈值视为未命中，不写入。建议先用 dry_run 预览匹配情况。",
+			Notes:   "在飞牛曲库中按歌名与「歌手+歌名」两次检索，相似度低于阈值视为未命中，不写入。建议先用 dry_run 预览匹配情况。曲库里没有或版本不同的曲目，若带 platform/platform_id，会以在线条目补进歌单（返回 online/online_items 字段）。",
 		},
 
 		// ── 账号连接 ──
@@ -1576,7 +1640,7 @@ func APICatalog(baseURL string) []Endpoint {
 				{Name: "source_id", In: "body", Desc: "临时配置：歌单 ID"},
 			},
 			Example: "curl -X POST " + baseURL + "/api/push/preview -H 'Content-Type: application/json' -d '{\"provider\":\"netease\",\"source_kind\":\"daily\"}'",
-			Notes:   "建立任务前先用它确认匹配情况，避免推送一堆匹配不上的曲目。",
+			Notes:   "建立任务前先用它确认匹配情况，避免推送一堆匹配不上的曲目。返回里的 online/online_items 是会以在线条目补进飞牛歌单的曲目（曲库没有 / 版本不同），真跑时它们也会显示在飞牛页面歌单里。",
 		},
 		{
 			Method: http.MethodGet, Path: "/api/auto-download/records",

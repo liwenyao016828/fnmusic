@@ -36,6 +36,12 @@ import nodeZlib from 'node:zlib';
 const argv = process.argv.slice(2);
 const arg = (n, d) => { const i = argv.indexOf('--' + n); return i >= 0 && argv[i + 1] ? argv[i + 1] : d; };
 const DIR = arg('dir', path.join(process.cwd(), 'preset_sources'));
+
+// 探活/取流统一 UA。**必须与后端 `backend/pkg/useragent` 的 Desktop 完全一致**
+// （唯一真源在 Go 那边）。探活用它、取流/下载也用同一份，避免「探活过了、
+// 播放被 CDN 拒」这种看起来随机、其实只是头不一致的故障（M1）。
+// 改这里之前先看后端的 useragent.Desktop。
+const PLAYBACK_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 const PORT = Number(arg('port', '8920'));
 
 // 本次启动的身份标识，随 /health 一起自报。
@@ -687,7 +693,7 @@ function probeAudioUrl(raw, hops = 0, budgetMs = 7000) {
     try {
       req = lib.request(u, {
         method: 'GET',
-        headers: { Range: 'bytes=0-2047', 'User-Agent': 'Mozilla/5.0', 'Icy-MetaData': '0' },
+        headers: { Range: 'bytes=0-2047', 'User-Agent': PLAYBACK_UA, 'Icy-MetaData': '0' },
         timeout: budgetMs,
         rejectUnauthorized: false,
       }, (res) => {

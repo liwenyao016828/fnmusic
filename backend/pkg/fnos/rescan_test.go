@@ -139,3 +139,52 @@ func TestRescanSchedulerWithoutStatePathStillWorks(t *testing.T) {
 		t.Errorf("不设 statePath 也应正常扫描，实际 %d 次", n)
 	}
 }
+
+// 手动触发（文件夹整理这种一次搬几百个文件的动作）要能立刻扫，
+// 不能等 10 分钟 minGap —— 否则用户在飞牛音乐里看到的是「整理完歌全没了」。
+func TestRescanSchedulerScheduleNowSkipsMinGap(t *testing.T) {
+	var calls int32
+	s := NewRescanScheduler(20*time.Millisecond, time.Hour)
+	s.scan = func() error { atomic.AddInt32(&calls, 1); return nil }
+
+	s.Schedule()
+	time.Sleep(80 * time.Millisecond)
+	if n := atomic.LoadInt32(&calls); n != 1 {
+		t.Fatalf("第一次应已执行，实际 %d 次", n)
+	}
+
+	// minGap 是一小时：普通 Schedule 会被推迟，ScheduleNow 要立刻跑
+	s.ScheduleNow()
+	time.Sleep(120 * time.Millisecond)
+	if n := atomic.LoadInt32(&calls); n != 2 {
+		t.Fatalf("ScheduleNow 应跳过最小间隔立即扫描，实际 %d 次", n)
+	}
+
+	// 口子只开这一次：紧接着的普通 Schedule 仍回到常规节流
+	s.Schedule()
+	time.Sleep(120 * time.Millisecond)
+	if n := atomic.LoadInt32(&calls); n != 2 {
+		t.Errorf("ScheduleNow 之后应恢复常规节流，实际 %d 次", n)
+	}
+}
+
+// ScheduleNow 的静默期要短（3 秒上限），不然用户还是得干等 30 秒
+func TestRescanSchedulerScheduleNowUsesShortDebounce(t *testing.T) {
+	var calls int32
+	s := NewRescanScheduler(30*time.Second, time.Hour)
+	s.scan = func() error { atomic.AddInt32(&calls, 1); return nil }
+
+	began := time.Now()
+	s.ScheduleNow()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) && atomic.LoadInt32(&calls) == 0 {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if n := atomic.LoadInt32(&calls); n != 1 {
+		t.Fatalf("ScheduleNow 应使用 ≤3s 的短静默期，实际 %d 次", n)
+	}
+	// 短静默期是 debounce 上限 3 秒，不能退回 30 秒
+	if elapsed := time.Since(began); elapsed > 4*time.Second {
+		t.Errorf("ScheduleNow 等了 %v，应该 ≤3s 就执行", elapsed)
+	}
+}
