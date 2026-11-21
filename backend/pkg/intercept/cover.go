@@ -45,11 +45,24 @@ func (i *Interceptor) handleCover(w http.ResponseWriter, r *http.Request) bool {
 	sub := subPathAfter(r.URL.Path, apiPrefix+"/static/cover")
 	track, fake, ok := i.lookupTrack(r, sub)
 	if !ok {
+		// v2.33.0：曲目表里没有不一定是「不是我们的」—— 歌手头像与纯专辑锚点
+		// 都不属于曲目，但它们的 coverId 也是我们下发的虚拟 id。两级兜底都试一遍，
+		// 都不中就原样透传（= 官方封面行为）。
+		if data, ctype, hit := i.entityCover(r, sub); hit {
+			i.writeCover(w, r, data, ctype)
+			return true
+		}
 		i.passThrough(w, r)
 		return true
 	}
 
 	data, ctype := i.coverBytes(r.Context(), track, fake)
+	i.writeCover(w, r, data, ctype)
+	return true
+}
+
+// writeCover 把封面字节写出去（含占位图与缓存头策略）。
+func (i *Interceptor) writeCover(w http.ResponseWriter, r *http.Request, data []byte, ctype string) {
 	// placeholder 为 true 表示这次没取到真图，发的是兜底图。
 	placeholder := len(data) == 0
 	if placeholder {
@@ -71,10 +84,9 @@ func (i *Interceptor) handleCover(w http.ResponseWriter, r *http.Request) bool {
 	}
 	w.WriteHeader(http.StatusOK)
 	if r.Method == http.MethodHead {
-		return true
+		return
 	}
 	_, _ = w.Write(data)
-	return true
 }
 
 // coverBytes 取封面字节，优先用本地磁盘缓存。
@@ -86,7 +98,53 @@ func (i *Interceptor) coverBytes(ctx context.Context, t online.Track, fake strin
 	if strings.TrimSpace(t.CoverURL) == "" {
 		return nil, ""
 	}
-	cachePath := filepath.Join(i.cfg.DataDir, "covers", fake)
+	return i.coverURLBytes(ctx, t.CoverURL, fake, t.RealID())
+}
+
+// entityCover 按「歌手 / 纯专辑锚点」的虚拟 id 取封面。
+//
+// hit 表示「这个 id 是我们下发的实体」—— 此时即便取图失败也要发占位图（与曲目同
+// 一条约定）；false 表示不是我们的 id，调用方应原样透传。
+func (i *Interceptor) entityCover(r *http.Request, sub string) ([]byte, string, bool) {
+	coverURL, cacheKey, logID, ok := i.entityCoverTarget(r, sub)
+	if !ok {
+		return nil, "", false
+	}
+	data, ctype := i.coverURLBytes(r.Context(), coverURL, cacheKey, logID)
+	return data, ctype, true
+}
+
+// entityCoverTarget 把请求里的 id 反解成「该抓哪个封面地址」。
+//
+// 与 entityCover 拆开是为了可测：真抓一次要打外网，而「反解对了没有」这件事
+// 只看这三个返回值就够了（cacheKey 是磁盘缓存文件名、logID 只进日志）。
+func (i *Interceptor) entityCoverTarget(r *http.Request, sub string) (coverURL, cacheKey, logID string, ok bool) {
+	for _, c := range albumRequestIDs(r, sub) {
+		form := strings.TrimSpace(c)
+		form = strings.TrimSuffix(form, ":"+online.SubKindArtist)
+		form = strings.TrimSuffix(form, ":"+online.SubKindAlbum)
+		if form == "" {
+			continue
+		}
+		// 歌手头像（搜索结果 / 歌手页 / 收藏里点歌手都走这一条）
+		if a, hit := i.artists.Lookup(form); hit {
+			return a.CoverURL, form, a.RealID(), true
+		}
+		// 纯专辑锚点（歌手页的专辑卡片没有曲目，只能靠这张表）
+		if ref, hit := i.albumRefs.Lookup(form); hit {
+			return ref.CoverURL, form, ref.RealID(), true
+		}
+	}
+	return "", "", "", false
+}
+
+// coverURLBytes 按 URL 取封面字节（磁盘缓存键为 cacheKey）。
+func (i *Interceptor) coverURLBytes(ctx context.Context, coverURL, cacheKey, logID string) ([]byte, string) {
+	coverURL = strings.TrimSpace(coverURL)
+	if coverURL == "" {
+		return nil, ""
+	}
+	cachePath := filepath.Join(i.cfg.DataDir, "covers", cacheKey)
 	if data, err := os.ReadFile(cachePath); err == nil && len(data) > 0 {
 		return data, sniffImageType(data)
 	}
@@ -94,13 +152,13 @@ func (i *Interceptor) coverBytes(ctx context.Context, t online.Track, fake strin
 	ctx, cancel := context.WithTimeout(ctx, coverFetchBudget)
 	defer cancel()
 
-	req, err := online.NewRequest(ctx, http.MethodGet, t.CoverURL, "")
+	req, err := online.NewRequest(ctx, http.MethodGet, coverURL, "")
 	if err != nil {
 		return nil, ""
 	}
 	resp, err := online.SharedClient().Do(req)
 	if err != nil {
-		i.logf("[INTERCEPT] 拉取封面失败 %s：%v", t.RealID(), err)
+		i.logf("[INTERCEPT] 拉取封面失败 %s：%v", logID, err)
 		return nil, ""
 	}
 	defer func() { _ = resp.Body.Close() }()

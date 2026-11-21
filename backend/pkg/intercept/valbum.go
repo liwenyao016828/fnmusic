@@ -352,7 +352,9 @@ func (i *Interceptor) onlineAlbumCards(ctx context.Context, keyword string) []an
 		// 登记锚点：卡片上的 `<fake>:album` 之后才反解得出来（这就是「复用登记表」
 		// 的全部代价 —— 一条 Put）。
 		fake := i.registry.Put(g.anchor)
-		out = append(out, albumCardVO(g.name, g.artist, fake, g.count, ts))
+		// 卡片上的歌手也要可点（v2.33.0）：锚点曲目带原生歌手 id 时登记一位歌手，
+		// 把它的虚拟 id 传给卡片；没有则回落 `<fake>:artist`（旧形态）。
+		out = append(out, albumCardVO(g.name, g.artist, fake, i.artistGuidForTrack(g.anchor), g.count, ts))
 	}
 	return out
 }
@@ -378,7 +380,7 @@ func (i *Interceptor) waitAlbumSearch(ch chan []any) []any {
 //  1. 与官方已有专辑同名的不注入（忽略大小写与空白差异）—— 用户看到两张同名卡片
 //     会以为是重复项，而官方的那个才对得上他的库；
 //  2. 顺序保持在线那一路算出来的顺序（按曲目数降序，见 albumGroups）。
-func pickAlbumCards(cards []any, official map[string]bool) []any {
+func pickAlbumCards(cards []any, official albumOfficialIndex) []any {
 	if len(cards) == 0 {
 		return nil
 	}
@@ -388,7 +390,15 @@ func pickAlbumCards(cards []any, official map[string]bool) []any {
 		if m == nil {
 			continue
 		}
-		if official[albumKey(asString(m["name"]))] {
+		name := albumKey(asString(m["name"]))
+		ak := cardArtistKey(m)
+		// v2.33.0：去重口径从「专辑名」升级成「专辑名 + 歌手」（上游 v3.2.0 的修法）。
+		//
+		// 只按名字去重的后果：官方的《精选》与在线某位歌手的《精选》同名，
+		// 在线卡片被整张顶掉 —— 用户搜「精选」少的不是一张专辑，是那位歌手的
+		// 整张作品。现在同名但不同歌手的两张都保留；任一方缺歌手信息时仍按名字
+		// 合并（没有判据时宁可合并，也不要同名卡片并排出现两张）。
+		if official.has(name, ak) {
 			continue
 		}
 		out = append(out, c)
@@ -396,29 +406,91 @@ func pickAlbumCards(cards []any, official map[string]bool) []any {
 	return out
 }
 
+// cardArtistKey 从一张官方/在线专辑卡片里取「主艺术家」的归一化键。
+//
+// 官方条目的歌手可能在 `artists[0].name`（虚拟 id 那一套的形状），也可能是
+// 平铺的 `artist` / `singer` 字段。三处都试，取不到返回空串。
+func cardArtistKey(m map[string]any) string {
+	if artists := asSlice(m["artists"]); len(artists) > 0 {
+		if first := asMap(artists[0]); first != nil {
+			if n := strings.TrimSpace(asString(first["name"])); n != "" {
+				return artistKey(n)
+			}
+		}
+	}
+	for _, k := range []string{"artist", "singer", "artistName"} {
+		if n := strings.TrimSpace(asString(m[k])); n != "" {
+			return artistKey(n)
+		}
+	}
+	return ""
+}
+
 // albumNameSet 收集官方结果里的专辑名（归一化后），用于「同名不重复注入」。
 // 官方条目的专辑名可能在 `name` 也可能在 `albumName`（与其它端点的一致习惯）。
-func albumNameSet(list []any) map[string]bool {
-	out := make(map[string]bool, len(list))
+func albumNameSet(list []any) albumOfficialIndex {
+	out := make(albumOfficialIndex, len(list))
 	for _, raw := range list {
 		m := asMap(raw)
 		if m == nil {
 			continue
 		}
-		if k := albumKey(firstNonEmpty(asString(m["name"]), asString(m["albumName"]))); k != "" {
-			out[k] = true
+		k := albumKey(firstNonEmpty(asString(m["name"]), asString(m["albumName"])))
+		if k == "" {
+			continue
 		}
+		if out[k] == nil {
+			out[k] = make(map[string]bool, 2)
+		}
+		out[k][cardArtistKey(m)] = true
 	}
 	return out
 }
 
+// albumOfficialIndex 记「官方结果里每个专辑名出现过哪些歌手键」。
+//
+// 为什么不是「名 + 歌手」的单层集合（v2.33.0 第一版就是这么写的，被既有测试当场
+// 抓住）：官方卡片缺 `artists[]` 时歌手键是空串，单层集合里就只剩 (名, 空)，
+// 而在线卡片是 (名, 真歌手) —— 两者判不成同一张，「与官方同名的在线专辑不该重复
+// 注入」直接失效。缺歌手时该按名字合并，所以必须**按名字分组**再比歌手。
+type albumOfficialIndex map[string]map[string]bool
+
+// has 判断一张待注入的在线卡片是否与官方结果重复。
+//
+// 三个条件任一成立即算重复：
+//  1. 同名同歌手（正常的同一张专辑）；
+//  2. 官方那条同名卡片没有歌手信息（没有判据，按名字合并）；
+//  3. 在线这条没有歌手信息，而官方有同名卡片（同理，缺歌手仍合并 —— 上游
+//     v3.2.0 的措辞：「缺歌手仍合并」）。
+func (idx albumOfficialIndex) has(nameKey, artistKeyValue string) bool {
+	artists := idx[nameKey]
+	if len(artists) == 0 {
+		return false
+	}
+	if artists[artistKeyValue] {
+		return true
+	}
+	if artists[""] {
+		return true
+	}
+	return artistKeyValue == "" && len(artists) > 0
+}
+
 // albumGroup 是一组「同一个平台的同一张专辑」。
+//
+// ⚠️ 2026-11-21（v2.33.0）起聚合键多了**歌手**一位（见 albumGroups）：
+// 原来只有「平台 + 专辑名」，于是《精选》《同名专辑》这类同名不同歌手的作品
+// 会被并成一张，卡片上的歌手与曲目数都是错的（上游 v3.2.0 修的就是这一条）。
 type albumGroup struct {
-	platform string
-	name     string
-	artist   string
-	anchor   online.Track
-	count    int
+	platform  string
+	name      string
+	artist    string
+	artistKey string
+	// albumID 是平台内专辑 id（网易 album id / QQ albummid），可能为空。
+	// 有它就能问原生接口要完整曲目（见 albumNative）。
+	albumID string
+	anchor  online.Track
+	count   int
 }
 
 // albumGroups 把在线曲目按「平台 + 专辑名」聚合，并按「曲目数降序 → 平台顺序 → 专辑名」
@@ -453,18 +525,33 @@ func albumGroups(tracks []online.Track, platformOrder []string) []albumGroup {
 			// 平台列表里没有它（外挂平台刚启用、配置刚改）→ 排在已知平台之后。
 			rank[t.Platform] = len(platformOrder)
 		}
-		gid := t.Platform + "\x1f" + key
+		// 聚合键 = 平台 + 专辑名 + **首位歌手**。
+		//
+		// 为什么是首位而不是「整组歌手排序拼接」（上游的做法）：同一张专辑里
+		// 每一首歌的歌手列表并不总是一样（合唱曲目会多一位），按整组拼会把
+		// 一张专辑拆成两张。而「首位歌手」在同一张专辑里是稳定的（专辑主艺术家），
+		// 对同名不同歌手的区分也够用。
+		ak := artistKey(t.Artist())
+		gid := t.Platform + "\x1f" + key + "\x1f" + ak
 		if n, ok := idx[gid]; ok {
 			groups[n].count++
+			if groups[n].albumID == "" && t.AlbumID != "" {
+				// 同组里任一曲目带专辑 id 就记下来：聚合是「先到先得」，
+				// 而排在前面的那条不一定带 id（不同来源的同一张专辑）。
+				groups[n].albumID = t.AlbumID
+				groups[n].anchor = t
+			}
 			continue
 		}
 		idx[gid] = len(groups)
 		groups = append(groups, albumGroup{
-			platform: t.Platform,
-			name:     strings.TrimSpace(t.Album),
-			artist:   t.Artist(),
-			anchor:   t,
-			count:    1,
+			platform:  t.Platform,
+			name:      strings.TrimSpace(t.Album),
+			artist:    t.Artist(),
+			artistKey: ak,
+			albumID:   t.AlbumID,
+			anchor:    t,
+			count:     1,
 		})
 	}
 
@@ -475,7 +562,10 @@ func albumGroups(tracks []online.Track, platformOrder []string) []albumGroup {
 		if rank[groups[a].platform] != rank[groups[b].platform] {
 			return rank[groups[a].platform] < rank[groups[b].platform]
 		}
-		return albumKey(groups[a].name) < albumKey(groups[b].name)
+		if ka, kb := albumKey(groups[a].name), albumKey(groups[b].name); ka != kb {
+			return ka < kb
+		}
+		return groups[a].artistKey < groups[b].artistKey
 	})
 	return groups
 }
@@ -485,7 +575,7 @@ func albumGroups(tracks []online.Track, platformOrder []string) []albumGroup {
 // 字段集照参考实现的 `_album_list_obj`（app.py:8569）—— 那个形状是在真机上被
 // 官方前端渲染过的（二手中最硬的一份）。`coverId` 取锚点曲目的虚拟 id：封面端点
 // 对曲目的虚拟 id 本来就能出图（cover.go），不必为专辑再造一条封面链路。
-func albumCardVO(name, artist, anchorFake string, trackCount int, ts int64) map[string]any {
+func albumCardVO(name, artist, anchorFake, artistGuid string, trackCount int, ts int64) map[string]any {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		name = online.UnknownAlbum
@@ -498,7 +588,7 @@ func albumCardVO(name, artist, anchorFake string, trackCount int, ts int64) map[
 		"guid": anchorFake + ":" + online.SubKindAlbum,
 		"name": name,
 		"artists": []any{map[string]any{
-			"guid":      anchorFake + ":" + online.SubKindArtist,
+			"guid":      artistCardGuid(artistGuid, anchorFake),
 			"name":      artist,
 			"coverId":   nil,
 			"createdAt": ts,
@@ -511,6 +601,33 @@ func albumCardVO(name, artist, anchorFake string, trackCount int, ts int64) map[
 		"updatedAt":   ts,
 		"trackCount":  trackCount,
 	}
+}
+
+// artistGuidForTrack 取一首曲目「主艺术家」的歌手虚拟 id（没有原生歌手 id 时为空）。
+//
+// 只在曲目带**按位置对齐**的歌手 id 时才登记：Aligned 的判定在 Track.Normalized 里，
+// 这里直接看长度即可（ArtistIDs 不进对齐就会被清空）。
+func (i *Interceptor) artistGuidForTrack(t online.Track) string {
+	if len(t.ArtistIDs) == 0 || len(t.ArtistIDs) != len(t.Artists) {
+		return ""
+	}
+	return i.artists.Put(online.Artist{
+		Platform: t.Platform,
+		ArtistID: t.ArtistIDs[0],
+		Name:     t.Artists[0],
+		CoverURL: t.CoverURL,
+	})
+}
+
+// artistCardGuid 返回专辑卡片上「主艺术家」的可点虚拟 id。
+//
+// artistGuid 非空（歌手页的原生专辑列表）时用它 —— 那样点专辑上的歌手能进歌手页；
+// 空时回落到「曲目虚拟 id + :artist」（搜索聚合出来的专辑卡片，历史行为）。
+func artistCardGuid(artistGuid, anchorFake string) string {
+	if g := strings.TrimSpace(artistGuid); g != "" {
+		return g
+	}
+	return anchorFake + ":" + online.SubKindArtist
 }
 
 // bumpAlbumTotal 把注入的卡片数加进 `total`。
@@ -557,7 +674,7 @@ func jsonInt(v any) (int, bool) {
 //
 // 缓存按**用户 + 专辑**分键（见 albumCacheKey）：合成结果里含按用户隔离的本地快照。
 func (i *Interceptor) albumFor(candidates []string, r *http.Request) (vPlaylist, string, bool) {
-	anchor, anchorFake, ok := i.albumAnchor(candidates)
+	anchor, anchorFake, ok, synthetic := i.albumAnchorKind(candidates)
 	if !ok {
 		return vPlaylist{}, "", false
 	}
@@ -584,7 +701,7 @@ func (i *Interceptor) albumFor(candidates []string, r *http.Request) (vPlaylist,
 	i.albumMu.Unlock()
 
 	now := time.Now()
-	tracks := i.albumTracks(r.Context(), anchor, user)
+	tracks := i.albumTracks(r.Context(), anchor, user, synthetic)
 	for _, t := range tracks {
 		// 曲目登记进虚拟 id 表：详情 / 曲目列表下发的 guid 之后要能取流、取歌词、
 		// 取封面（否则就是「查得到点不动」的死条目）。
@@ -626,14 +743,41 @@ func (i *Interceptor) albumFor(candidates []string, r *http.Request) (vPlaylist,
 //
 // 反解一律走**既有登记表**（前缀/后缀只是形态归一，不新建任何映射）。
 func (i *Interceptor) albumAnchor(candidates []string) (online.Track, string, bool) {
+	anchor, fake, ok, _ := i.albumAnchorKind(candidates)
+	return anchor, fake, ok
+}
+
+// albumAnchorKind 与 albumAnchor 同义，额外回答「这条锚点是不是**合成出来的**」。
+//
+// 合成锚点（来自 albumRefs 的纯专辑身份）**不能当成一首曲目**塞进曲目列表：
+// 它的 PlatformID 是平台内**专辑** id，不是曲目 id —— 当成曲目下发，客户端拿它
+// 取流就是一次必然失败的请求，而且它还会顶掉真正的第一首。
+func (i *Interceptor) albumAnchorKind(candidates []string) (anchor online.Track, fake string, ok, synthetic bool) {
 	for _, c := range candidates {
 		for _, form := range albumIDForms(c) {
-			if t, ok := i.registry.Lookup(form); ok {
-				return t, form, true
+			// v2.33.0：歌手页专辑卡片下发的是**纯专辑锚点**（albumRefs 表），
+			// 没有曲目可借。这里把它合成一条临时 anchor 曲目并登记进曲目表，
+			// 后续 albumFor / albumTracks / 封面反解全部复用既有链路。
+			if ref, hit := i.albumRefs.Lookup(form); hit {
+				anchor := online.Track{
+					Platform:   ref.Platform,
+					PlatformID: ref.AlbumID,
+					Title:      ref.Name,
+					Album:      ref.Name,
+					Artists:    splitArtists(ref.Artist),
+					CoverURL:   ref.CoverURL,
+					AlbumID:    ref.AlbumID,
+					Year:       ref.Year,
+				}.Normalized()
+				fake := i.registry.Put(anchor)
+				return anchor, fake, true, true
+			}
+			if t, hit := i.registry.Lookup(form); hit {
+				return t, form, true, false
 			}
 		}
 	}
-	return online.Track{}, "", false
+	return online.Track{}, "", false, false
 }
 
 // albumIDForms 列出一个候选 id 的等价形态。
@@ -691,12 +835,21 @@ func albumRequestIDs(r *http.Request, sub string) []string {
 //  2. **同专辑名**：聚合的全部依据；
 //  3. **艺术家有交集**：防同名专辑污染（不同歌手的《精选》）。锚点艺术家未知时
 //     不做这条判断（没有可用判据，宁可不筛）。
-func (i *Interceptor) albumTracks(ctx context.Context, anchor online.Track, user string) []online.Track {
+//
+// synthetic 表示这条 anchor 是**合成**出来的（来自 albumRefs 的纯专辑身份，
+// 见 albumAnchorKind）：它只有专辑 id，不是一首真曲目，所以不能进曲目列表 ——
+// 否则专辑页第一首会是一个取流必失败的假条目。
+func (i *Interceptor) albumTracks(ctx context.Context, anchor online.Track, user string, synthetic bool) []online.Track {
 	anchor = anchor.Normalized()
 	cands := make([]online.Track, 0, 32)
 	seen := make(map[string]bool, 32)
-	cands = append(cands, anchor)
-	seen[anchor.RealID()] = true
+	if synthetic {
+		// 记进 seen：曲目聚合时若真出现「与专辑同 id」的条目也不会重复。
+		seen[anchor.RealID()] = true
+	} else {
+		cands = append(cands, anchor)
+		seen[anchor.RealID()] = true
+	}
 
 	key := albumKey(anchor.Album)
 	known := key != "" && key != albumKey(online.UnknownAlbum)
@@ -725,6 +878,28 @@ func (i *Interceptor) albumTracks(ctx context.Context, anchor online.Track, user
 	}
 	for _, h := range i.store.History(user) {
 		add(h.Track)
+	}
+
+	// ②' v2.33.0：原生专辑接口（**完整曲目**）。
+	//
+	// 老口径是拿专辑名去搜索里聚合，搜到几首算几首 —— 一张 12 首的专辑常常只出
+	// 3~4 首。现在搜索层已经把平台内专辑 id 一路带到 anchor.AlbumID，可以直接问
+	// 平台要这张专辑的完整曲目（网易 / QQ 实测可用）。失败（平台不支持 / 风控 /
+	// 网络抖动）时回落老口径，不让专辑页变空。
+	if id := strings.TrimSpace(anchor.AlbumID); id != "" && len(cands) < albumCandidateMax {
+		nctx, ncancel := context.WithTimeout(context.Background(), artistFetchBudget)
+		detail, err := i.albumDetail()(nctx, anchor.Platform, id)
+		ncancel()
+		if err == nil && len(detail.Tracks) > 0 {
+			for _, song := range detail.Tracks {
+				if t, ok := trackFromSong(anchor.Platform, song); ok {
+					add(t)
+				}
+				if len(cands) >= albumCandidateMax {
+					break
+				}
+			}
+		}
 	}
 
 	// ② 搜索补足：拿专辑名当关键词。**复用 collectOnline**（多源并发 + 失败只记一笔
@@ -812,7 +987,7 @@ func albumKey(name string) string {
 // 外加 `trackCount` 与 `tracks`。曲目条目见 albumTrackVO。
 func albumDetailVO(pl vPlaylist, anchorFake string, favorites map[string]bool) map[string]any {
 	ts := pl.UpdatedAt
-	out := albumCardVO(pl.Name, albumArtist(pl.Tracks, anchorFake), anchorFake, len(pl.Tracks), ts)
+	out := albumCardVO(pl.Name, albumArtist(pl.Tracks, anchorFake), anchorFake, "", len(pl.Tracks), ts)
 	out["guid"] = pl.GUID
 	out["coverId"] = pl.CoverID
 	tracks := make([]any, 0, len(pl.Tracks))

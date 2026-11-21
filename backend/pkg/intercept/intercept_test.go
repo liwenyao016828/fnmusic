@@ -111,6 +111,17 @@ type harness struct {
 	charts     []string
 	// chartsOff = 榜单注入总开关被关掉（名单仍在 `charts` 里）。
 	chartsOff bool
+
+	// 在线歌手 / 原生专辑的替身（v2.33.0，见 vartist_test.go）。
+	//
+	// 真实实现要打 music.163.com 与 y.qq.com —— 必须在 harness 里就替掉，
+	// 否则任何走到歌手路由的用例都会依赖外网。
+	artistHits   []search.ArtistHit
+	artistInfo   search.ArtistInfo
+	artistErr    error
+	artistSongs  []search.UnifiedSong
+	artistAlbums []search.AlbumHit
+	albumDetail  search.AlbumDetail
 }
 
 func newHarness(t *testing.T) *harness {
@@ -184,6 +195,36 @@ func newHarness(t *testing.T) *harness {
 			h.mu.Lock()
 			defer h.mu.Unlock()
 			return !h.chartsOff
+		},
+		// 在线歌手 / 原生专辑同样必须注入（见 harness 的注释）。
+		ArtistSearch: func(_ context.Context, _ string, limit int) []search.ArtistHit {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			hits := append([]search.ArtistHit(nil), h.artistHits...)
+			if limit > 0 && len(hits) > limit {
+				hits = hits[:limit]
+			}
+			return hits
+		},
+		ArtistDetail: func(_ context.Context, _ string) (search.ArtistInfo, error) {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			return h.artistInfo, h.artistErr
+		},
+		ArtistTracks: func(_ context.Context, _ string, _, _ int, _ string) ([]search.UnifiedSong, int, error) {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			return append([]search.UnifiedSong(nil), h.artistSongs...), len(h.artistSongs), h.artistErr
+		},
+		ArtistAlbums: func(_ context.Context, _ string, _, _ int) ([]search.AlbumHit, int, error) {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			return append([]search.AlbumHit(nil), h.artistAlbums...), len(h.artistAlbums), h.artistErr
+		},
+		AlbumDetailFn: func(_ context.Context, _, _ string) (search.AlbumDetail, error) {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			return h.albumDetail, h.artistErr
 		},
 	})
 	if h.it == nil {

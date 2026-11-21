@@ -84,6 +84,20 @@ type Config struct {
 	Platforms []string
 	// ResolverTTL 预留：解析结果缓存时长（0 = 用 online 包默认值）。
 	ResolverTTL time.Duration
+	// ── 在线歌手 / 原生专辑的四个注入口（v2.33.0，见 vartist.go）─────────
+	//
+	// 与 Searcher / LyricFetcher 同一条口径：真实实现要打 music.163.com 与
+	// y.qq.com，单测不能依赖外网。这四个是**函数类型**而不是接口，因为调用点
+	// 只需要一个动作，不值得为它定义一个接口。
+	//
+	// nil = 用 pkg/search 的真实实现（生产行为）。测试里注入替身即可完全离线
+	// 地验证「歌手页四条端点」与「原生专辑完整曲目」。
+	ArtistSearch  ArtistSearchFunc
+	ArtistDetail  ArtistDetailFunc
+	ArtistTracks  ArtistTracksFunc
+	ArtistAlbums  ArtistAlbumsFunc
+	AlbumDetailFn AlbumDetailFunc
+
 	// Searcher 是搜索实现的注入口，nil 时用 pkg/search 的真实实现。
 	//
 	// 存在的理由是**可测性**：搜索要打四家平台的外网接口，单测不能依赖网络，
@@ -338,6 +352,46 @@ func DefaultPlatforms() []string {
 }
 
 // platforms 返回当前要参与搜索合并的平台（**现取**，见 Config.Platforms）。
+// ── 在线歌手 / 原生专辑注入口的取值（nil 时回落真实实现）───────────────
+//
+// 五个小访问器集中在这里，调用点就只写 `i.artistSearch()(ctx, ...)`，
+// 不必每处都写一遍 `if f := i.cfg.ArtistSearch; f != nil {...}`。
+
+func (i *Interceptor) artistSearch() ArtistSearchFunc {
+	if f := i.cfg.ArtistSearch; f != nil {
+		return f
+	}
+	return search.SearchArtistNETEASE
+}
+
+func (i *Interceptor) artistDetail() ArtistDetailFunc {
+	if f := i.cfg.ArtistDetail; f != nil {
+		return f
+	}
+	return search.FetchArtistNETEASE
+}
+
+func (i *Interceptor) artistTracks() ArtistTracksFunc {
+	if f := i.cfg.ArtistTracks; f != nil {
+		return f
+	}
+	return search.FetchArtistTracksNETEASE
+}
+
+func (i *Interceptor) artistAlbums() ArtistAlbumsFunc {
+	if f := i.cfg.ArtistAlbums; f != nil {
+		return f
+	}
+	return search.FetchArtistAlbumsNETEASE
+}
+
+func (i *Interceptor) albumDetail() AlbumDetailFunc {
+	if f := i.cfg.AlbumDetailFn; f != nil {
+		return f
+	}
+	return search.FetchAlbumDetail
+}
+
 func (i *Interceptor) platforms() []string {
 	if i.cfg.PlatformsFunc != nil {
 		if out := i.cfg.PlatformsFunc(); len(out) > 0 {
@@ -351,6 +405,26 @@ func (i *Interceptor) platforms() []string {
 }
 
 // Interceptor 是拦截层主体。
+// ── 在线歌手 / 原生专辑的注入口类型（v2.33.0）──────────────────────────
+//
+// 这四个签名与 pkg/search/artist.go 的导出函数一一对应，只是去掉了 ctx
+// （由拦截层自己加超时围栏，注入方拿到的就只是一个「问平台」的动作）。
+
+// ArtistSearchFunc 搜在线歌手：关键词 → 命中列表。
+type ArtistSearchFunc func(ctx context.Context, keyword string, limit int) []search.ArtistHit
+
+// ArtistDetailFunc 取一位在线歌手的详情。
+type ArtistDetailFunc func(ctx context.Context, artistID string) (search.ArtistInfo, error)
+
+// ArtistTracksFunc 取歌手的歌曲列表；order 只认 hot / time。
+type ArtistTracksFunc func(ctx context.Context, artistID string, offset, limit int, order string) ([]search.UnifiedSong, int, error)
+
+// ArtistAlbumsFunc 取歌手的专辑列表。
+type ArtistAlbumsFunc func(ctx context.Context, artistID string, offset, limit int) ([]search.AlbumHit, int, error)
+
+// AlbumDetailFunc 按平台内专辑 id 取完整曲目（网易 album id / QQ albummid）。
+type AlbumDetailFunc func(ctx context.Context, platform, albumID string) (search.AlbumDetail, error)
+
 type Interceptor struct {
 	cfg      Config
 	logf     func(format string, args ...any)
@@ -358,6 +432,18 @@ type Interceptor struct {
 	pool     *online.Pool
 	store    *online.Store
 	routes   []route
+
+	// artists 是「在线歌手」的虚拟 id 表（见 online/artist.go 与 vartist.go）。
+	//
+	// 与 registry（曲目表）**分开**：同一首歌的曲目 id 与它歌手 id 是两个实体，
+	// 混在一张表里就只能靠「id 恰好不撞」来保证正确性。
+	artists *online.ArtistRegistry
+
+	// albumRefs 是「只有专辑身份、没有曲目」的专辑锚点表（见 online/albumref.go）。
+	//
+	// 歌手页的专辑列表就是它的第一个使用者：原生歌手专辑接口只给专辑不给歌，
+	// 而曲目侧的专辑虚拟 id 必须借一首歌才能反解出来。
+	albumRefs *online.AlbumRefRegistry
 
 	userMu    sync.Mutex
 	userCache map[string]userEntry
@@ -562,6 +648,8 @@ func New(cfg Config) *Interceptor {
 		cfg:                     cfg,
 		logf:                    logf,
 		registry:                online.NewRegistry(0),
+		artists:                 online.NewArtistRegistry(0),
+		albumRefs:               online.NewAlbumRefRegistry(0),
 		pool:                    pool,
 		downloaded:              downloaded,
 		dlSet:                   map[string]bool{},
@@ -589,6 +677,11 @@ func New(cfg Config) *Interceptor {
 		quality:                 &qualityScanState{status: QualityStatus{State: QualityStateIdle, Entries: []QualityEntry{}}},
 	}
 	i.platformsStatic = platforms
+
+	// 曲目 VO 里的歌手要从「名字」变成「可点进歌手页的虚拟 id」（见 online/artist.go
+	// 的 artistEntries）。VO 构造在 online 包里、歌手表在拦截层里，所以这里把表
+	// 注进去 —— 进程启动时写一次，运行期不再改。
+	online.SetArtistNamer(i.artists.Put)
 
 	// 网易歌单取回：默认用内置实现，测试可注入替身（见 Config.NeteasePlaylist）。
 	i.nmFetch = cfg.NeteasePlaylist
@@ -711,6 +804,13 @@ func (i *Interceptor) buildRoutes() []route {
 		// 一次性诊断（真机上能看出客户端到底用了什么方法）。
 		{all, apiPrefix + "/search/album", i.handleAlbumSearch},
 		{all, apiPrefix + "/track/album-detail/list", i.handleAlbumTrackList},
+		// 在线歌手（见 vartist.go）：搜索注入歌手卡片、详情 / 曲目 / 专辑本地应答。
+		// ⚠️ `/album/artist-detail/list` 必须单独挂载：它比 `/album` 长，靠路由表
+		// 的「长度降序」排在前面，否则会被专辑详情认领走。
+		{all, apiPrefix + "/album/artist-detail/list", i.handleArtistAlbumList},
+		{all, apiPrefix + "/artist", i.handleArtistDetail},
+		{all, apiPrefix + "/track/artist-detail/list", i.handleArtistTrackList},
+		{all, apiPrefix + "/search/artist", i.handleArtistSearch},
 		{all, apiPrefix + "/album", i.handleAlbumDetail},
 		// 搜索联想：官方库的联想词 + 在线源的前几条歌名（见 suggest.go）。
 		// 前缀挂载 —— 官方也用 `/search/suggest/<keyword>` 这种带子路径的写法

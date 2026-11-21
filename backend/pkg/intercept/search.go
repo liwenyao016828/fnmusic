@@ -298,6 +298,11 @@ func trackFromSong(platform string, s search.UnifiedSong) (online.Track, bool) {
 		Duration:   duration,
 		CoverURL:   strings.TrimSpace(s.Cover),
 		Year:       s.Year,
+		// 平台内专辑 id 与歌手 id（v2.33.0）：有它们才能问原生专辑接口、
+		// 才能把曲目 artists 里的歌手变成可点进歌手页的虚拟 id。
+		// Normalized() 会在位置对不齐时把 ArtistIDs 整组丢掉（半对半错比没有更危险）。
+		AlbumID:   strings.TrimSpace(s.AlbumID),
+		ArtistIDs: s.ArtistIDs,
 	}.Normalized(), true
 }
 

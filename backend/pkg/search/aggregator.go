@@ -48,6 +48,16 @@ type UnifiedSong struct {
 	Disc  int `json:"disc,omitempty"`  // 光盘序号，0 = 平台没给
 	// AlbumMID 只有 QQ 有：取「风格」得再调一次专辑详情接口（四家的**搜索**响应都不含 genre）。
 	AlbumMID string `json:"album_mid,omitempty"`
+	// AlbumID 是平台内的专辑 id（网易 `al.id`、QQ `albummid`）。
+	//
+	// 2026-11-21（v2.33.0）新增：有了它，专辑页才能问平台要**完整曲目**
+	// （见 pkg/intercept/valbum.go 的 albumNativeTracks），而不是拿专辑名再搜一遍。
+	// 空值 = 平台没给（酷狗 / 酷我 / 外挂源），专辑页回落到老口径。
+	AlbumID string `json:"album_id,omitempty"`
+	// ArtistIDs 是平台内的歌手 id，与 Singer 拆出来的每一位**按位置对应**
+	// （网易 `ar[].id`、QQ `singer[].mid`）。缺位或长度对不上 = 没有原生身份，
+	// 上层会把整组丢弃（见 online.Track.ArtistIDs）。
+	ArtistIDs []string `json:"artist_ids,omitempty"`
 }
 
 // msToYear 毫秒时间戳 → 年份（<=0 或异常值返回 0）
@@ -779,9 +789,11 @@ func searchNetEaseRaw(keyword string, page, limit int) []UnifiedSong {
 				ID      int64  `json:"id"`
 				Name    string `json:"name"`
 				Artists []struct {
+					ID   int64  `json:"id"`
 					Name string `json:"name"`
 				} `json:"ar"`
 				Album struct {
+					ID     int64  `json:"id"`
 					Name   string `json:"name"`
 					PicURL string `json:"picUrl"`
 				} `json:"al"`
@@ -807,8 +819,16 @@ func searchNetEaseRaw(keyword string, page, limit int) []UnifiedSong {
 	list := make([]UnifiedSong, 0, len(raw.Result.Songs))
 	for _, s := range raw.Result.Songs {
 		artists := make([]string, 0)
+		artistIDs := make([]string, 0, len(s.Artists))
 		for _, a := range s.Artists {
 			artists = append(artists, a.Name)
+			// 平台内歌手 id：有它这一位歌手才能点进歌手页（见 online/artist.go）。
+			// 0 = 平台没给，留空串让上层把整组身份丢掉，绝不拿名字去猜。
+			if a.ID > 0 {
+				artistIDs = append(artistIDs, fmt.Sprintf("%d", a.ID))
+			} else {
+				artistIDs = append(artistIDs, "")
+			}
 		}
 		durationSec := s.Duration / 1000
 		cover := s.Album.PicURL
@@ -837,6 +857,9 @@ func searchNetEaseRaw(keyword string, page, limit int) []UnifiedSong {
 			Year:      msToYear(s.PublishTime),
 			Track:     s.No,
 			Disc:      atoiLoose(s.Cd),
+			// 平台内专辑 id：专辑页拿它问原生接口要**完整曲目**（v2.33.0）。
+			AlbumID:   albumIDString(s.Album.ID),
+			ArtistIDs: nonEmptyIDs(artistIDs),
 		})
 	}
 	return list
@@ -942,7 +965,10 @@ func parseQQMobile(body []byte) []UnifiedSong {
 			qs = []string{Quality320k}
 		}
 		list = append(list, UnifiedSong{
-			ID:        "tx_" + s.Songmid,
+			ID: "tx_" + s.Songmid,
+			// 平台内专辑 id = albummid：QQ 的专辑详情接口（fcg_v8_album_info_cp）
+			// 要的就是它，拿到才能给专辑页一份完整曲目。
+			AlbumID:   s.Albummid,
 			Songmid:   s.Songmid,
 			Name:      s.Songname,
 			Singer:    strings.Join(singers, ", "),

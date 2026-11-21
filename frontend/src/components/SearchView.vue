@@ -68,7 +68,7 @@
         主色用项目 emerald，未照搬 flow 的蓝。
       -->
       <div v-if="currentMode === 'discover' && !isChartsSegment" class="max-w-[1500px] mx-auto px-4 pt-5 pb-0 sm:px-7 sm:pt-6">
-        <div class="grid grid-cols-1 gap-[18px] lg:grid-cols-[1.35fr_0.65fr]">
+        <div class="grid grid-cols-1 gap-[18px] lg:grid-cols-[1.2fr_0.8fr]">
 
           <!--
             左：欢迎卡。
@@ -83,10 +83,8 @@
             <div class="flex items-start justify-between gap-3">
               <div class="min-w-0">
                 <div class="text-[12px] font-medium tracking-[0.01em] text-[var(--ys-text-aux)]">{{ heroEyebrow }}</div>
-                <h1
-                  class="my-2 text-[26px] font-semibold tracking-[-0.02em] text-[var(--ys-text)] sm:text-[30px]"
-                  title="搜索全网曲库，或浏览官方榜单与精选歌单"
-                >{{ heroGreeting }}</h1>
+                <!-- v2.33.0：问候语（「下午好，来点音乐」）从这张欢迎卡搬到了右侧播放器卡的
+                     闲置态里 —— 一句话只出现一次，视觉焦点也集中在正在播放的那一侧。 -->
               </div>
               <!-- 就地刷新两个平台的账号连接状态（不再是「管理账号 → 跳走」）。
                    2026-10-18：改成图标按钮 + 悬浮说明，不再常驻「刷新状态」四个字。 -->
@@ -221,7 +219,19 @@
                 全角偏细的字形，粗细与描边对不上，是「不像原生控件」的直接原因。
               · 主播放键反转成**白底黑图标**（Apple Music 桌面的做法），整块只有这一个高对比焦点。
           -->
-          <DiscoverLyricPlayer class="hidden md:block" :song="currentSong" :playing="isPlaying" :lyric-data="lyricData" :trans-data="transData" :current-time="currentTime" :duration="duration" @seek="emit('seek', $event)" />
+          <!-- v2.33.0：整卡重做为「封面当背景 + iOS 计时器式立体滚动歌词」的极简版：
+               只留歌名/歌手 + 滚动歌词，播放控制交给底部灵动播放条，不再重复。 -->
+          <DiscoverLyricPlayer
+            class="hidden md:block"
+            :song="currentSong"
+            :greeting="heroGreeting"
+            :playing="isPlaying"
+            :lyric-data="lyricData"
+            :trans-data="transData"
+            :current-time="currentTime"
+            :duration="duration"
+            @seek="emit('seek', $event)"
+          />
         </div>
       </div>
 

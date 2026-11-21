@@ -22,7 +22,7 @@
 | **后端依赖** | **已引入第三方依赖**（`modernc.org/sqlite v1.36.1`，纯 Go）。旧版「零依赖」规则已作废，见 §2 规则二 |
 | **前端依赖** | vue / vite / tailwindcss / axios / lucide-vue-next / crypto-js / buffer / qrcode |
 | **打包** | `bash scripts/build.sh`，**不需要 fnpack** |
-| **当前版本** | `2.32.0`（代码与 manifest 已同步，见 §7） |
+| **当前版本** | `2.33.0`（代码与 manifest 已同步，见 §7） |
 | **应用内更新** | `backend/pkg/appupdate` + `frontend/src/components/UpdateCard.vue`：查 GitHub Release → 流式下载到 `<数据目录>/updates/` → 执行 `/tmp/yinshu-update/apply-update.sh`。**v2.28.2 起回到「卸载旧版 → 安装新版」的老办法**（`appcenter-cli stop` → `uninstall` → `install-fpk` → 按 `/api/app/version` 版本验收）：v2.28.0 的「就地升级」在真机上被应用中心拦下（安装任务返回 10030 参数异常），而老办法只要 fpk 里**没有卸载向导**就能跑通 —— 所以 v2.28.1 起 `fpk-package/wizard/uninstall` 已删除。⚠️ 若要再给 fpk 加卸载向导，必须同时保证「应用内更新」这条路仍能卸载（带向导时应用中心命令行拒绝卸载且返回码仍是 0，见 §1.4.1）。**安装这一跳在开发机上无法验证**（没有 `appcenter-cli`、没有 `/var/apps/`），真机第一次用要盯着 log。 |
 | **文件名体检** | `backend/pkg/nas/health.go`：扫出非法 UTF-8 / 控制字符 / 首尾空格 / 0 字节音频 / `.part` 残留 / 权限 000 等条目（它们会让 fnOS 整层目录报「未知错误」）。修复接口**只收 `id`（路径字节的 base64url）不收 path** —— 非法 UTF-8 的名字过一次 JSON 就变成 U+FFFD，传 path 必然找不到文件；服务端在最近 8 次扫描缓存里回查。 |
 | **自动发布** | 功能完成并验证后由 DSH 提交、推送 main；GitHub Actions 校验四处版本 → 前端构建 → 后端/前端/洛雪测试 → FPK 自检 → 新版本 Release + SHA256。已有版本不覆盖；不自动部署 NAS。不用 git hook 自动暂存工作区。 |
@@ -43,7 +43,7 @@
 | **推荐开发环境** | **WSL2 Debian**（见 §1.0）——Windows 下也能跑，但需要额外环境变量 |
 | **接口总数** | `backend/pkg/api/catalog.go` 共 **136 个**（core 99 / internal 37，见 §6.1）。目录**面向 AI**：顶层 `guide` 先说「是干嘛的、怎么做」，接口清单只是参考 ⚠️ `/api/catalog` 是**扁平结构** —— 数组在**顶层 `endpoints`**，不是 `data.endpoints` |
 | **音乐入口接管** | 可选能力（`QULV_TAKEOVER=1`），默认关闭。接管官方 Unix socket 并全透传，见 §2 规则六 / §3.6 |
-| **在线曲库** | 接管生效时可用（v2.1.70 新增；v2.1.71 修真机接管失败；v2.1.72 修 isFavorite 写死）：网易 + QQ 的在线搜索/取流/歌词/封面/收藏/歌单/历史，合并进官方界面。见 §3.7 |
+| **在线曲库** | 接管生效时可用（v2.1.70 新增；v2.1.71 修真机接管失败；v2.1.72 修 isFavorite 写死）：网易 + QQ 的在线搜索/取流/歌词/封面/收藏/歌单/历史，合并进官方界面。**v2.33.0 起补上在线歌手与原生专辑**（搜歌手 / 歌手页 / 歌手的热门最新歌曲与专辑列表 / 专辑走平台原生接口取完整曲目；歌手链路目前只有网易，QQ 的歌手接口已下线）。见 §3.7 |
 | **音源协议** | **两种互补协议**：`official`（后端内置，免脚本，搜索/榜单/歌单/歌词）+ `lx`（浏览器脚本，取直链）。见 §3.4 |
 | **无损校验口径** | v2.16.0 起 `pkg/flacok` 的走帧解析与 RFC 9639 对齐（LPC 精度 4 位 + 移位 5 位、Rice/浪费位数一元码是「n 个 0 再一个 1」、FIXED 子帧必须先读 `order × 位宽` 的预热采样）。**改这个包之前先跑 `TestRealEncoderOutputIsValid`**（`pkg/flacok/testdata/` 有 FIXED/LPC16/LPC24/wasted 四个真实 fixture）：解析错一位，`ValidateFile` 就会把合法无损判成 `flac_corrupt`，下载器随即降档重下 —— 用户看到的表象是「无损下载永远是 mp3」，很容易误判成音源问题 |
 | **文案与报错口径** | **界面只给「你该怎么做」，报错只留一句人话；技术细节一律进日志**。改任何提示文案前先读 §3.3.3 |
@@ -1221,6 +1221,10 @@ restore(preflight)
 | `pkg/sidecar/sidecar.go` | **sidecar 进程管理**（v2.1.83）：venv 引导、spawn、健康检查、优雅停止、残留清理 |
 | `musicdl_wiring.go` | **musicdl 接线**（v2.1.83，仓库根/backend）：配置 → 进程 → 注册，`Apply(cfg)` 幂等 |
 | `sidecar/musicdl_service/` | **Python sidecar 源码**（v2.1.83）：`core.py`（纯逻辑、零依赖可测）+ `app.py`（FastAPI）+ `test_core.py` + `requirements.txt` |
+| `pkg/online/artist.go` | **歌手登记表**（v2.33.0）：`RealArtistID(平台, id) = "online:<平台>:artist:<平台内 id>"`（中间那段 `artist` 是必需的，防止与曲目 id 撞车）；`ArtistRegistry` 与曲目登记表同构（纯内存、FIFO、上限 2000）；全局 `ArtistNamer` 在进程启动时注入一次，让 `vo.go` 的 artists[] 能带上可点的 guid |
+| `pkg/online/albumref.go` | **专辑锚点表**（v2.33.0）：给「只有专辑身份、没有曲目」的卡片（歌手页的专辑列表）当锚点，`RealAlbumID = "online:<平台>:album:<平台内专辑 id>"` |
+| `pkg/search/artist.go` | **平台原生歌手 / 专辑接口适配**（v2.33.0）：网易四件套（搜歌手 / 歌手详情 / 歌手曲目 / 歌手专辑）+ 原生专辑详情（网易 `api/v1/album/<id>`、QQ `fcg_v8_album_info_cp`）。**QQ 的歌手接口已下线**，见下文第 6 条坑 |
+| `pkg/intercept/vartist.go` | **歌手四条路由**（v2.33.0）：`/search/artist`、`/artist`、`/track/artist-detail/list`、`/album/artist-detail/list`。见 §3.7「在线歌手与专辑」 |
 | `pkg/intercept/assets/ui.js` | **注入进飞牛官方页面的脚本**（v2.1.79 起，v2.1.81 改版，`go:embed`）：顶栏「曲率」入口 + 面板（正在播放 / 一键下载 / 打开曲率 / 偏好 / 状态）+ 行菜单「下载到曲率」+ 顶部 toast。**皮肤全用官方的 `--ds-*` 变量**（见下文第 6 条）。零 `setInterval`、幂等、只打同源白名单接口 |
 
 #### 五条硬约束
@@ -1575,6 +1579,68 @@ token 模式下 127.0.0.1 一样要凭据，漏带头就是 401 → 空榜 → �
 仍是 `{wy,tx,kg,kw}`（`PlatformPriority()` 会滤掉 mg/bq/bi）、`main.go` 没给
 `intercept.Config.Platforms` 传值（`pkg/intercept` 用 `{"wy","tx"}`，官方页搜索合并不带
 外挂平台）、曲率搜索 UI 只暴露 wy/tx。三件事是一件事，下一轮做。
+
+#### 在线歌手与专辑（v2.33.0，对齐上游 fnmusic-ext v3.2.0）
+
+以前官方页面的「歌手」Tab 只有本地曲库里的歌手，在线歌手根本不出现 —— 因为
+`buildRoutes` 里**一条歌手路由都没有**，四个请求全被兜底透传给了官方。专辑则是另一个毛病：
+专辑页的曲目是「拿专辑名去关键词搜，搜到几首算几首」，12 首的专辑常常只显示 3、4 首。
+
+v2.33.0 补上这四条路由（`pkg/intercept/vartist.go`）：
+
+| 路由 | 干什么 |
+|---|---|
+| `/search/artist` | 官方信封透传 + 在线歌手补在后（本地在前、在线在后，与搜索同口径） |
+| `/artist`（含 `/artist/detail`） | 歌手详情：头像、简介、专辑数、曲目数 |
+| `/track/artist-detail/list` | 歌手的热门 / 最新歌曲，带 `page`/`size`/`sort` |
+| `/album/artist-detail/list` | 歌手的专辑列表 |
+
+配套：`pkg/online/artist.go`（歌手登记表）、`pkg/online/albumref.go`（专辑锚点表）、
+`pkg/search/artist.go`（平台原生接口适配）、`Track.AlbumID` / `Track.ArtistIDs`
+（专辑页要靠前者取完整曲目，歌手名可点要靠后者）。
+
+**六个坑（都是这轮踩出来的，别改回去）**
+
+1. **歌手 guid 用裸 32 位 hex，不带 `:artist` 后缀。** `lookup.go` 的 `expandGUID` 只剥**一层**
+   后缀，而歌手的 guid 会被官方客户端原样回传；带后缀反而让 `<fake>:artist` 与
+   「曲目 guid + `:artist`」两条路径互相污染。`artistByRequest` / `entityCoverTarget` /
+   `albumRequestIDs` 三处都按「先试原样、再 `TrimSuffix` 掉 `:artist`/`:album`」写的。
+2. **网易的歌曲对象有两套字段名。** 搜索与专辑详情是 `ar` / `al` / `dt`，歌手曲目列表是
+   `artists` / `album` / `duration`。`neSong.unified()` 两个都解（`Ar` 优先）。
+3. **网易的 `disc` 有时是数字、有时是字符串**（专辑详情给 `1`，歌手曲目列表给 `"1"`）。
+   写成 `int` 会让**整批**曲目解码失败，线上症状是「歌手页的热门歌曲永远是空的」。
+   已用 `neFlexInt` 兜住 —— 这条是联网用例 `TestLiveFetchArtistTracksNETEASE` 抓出来的，
+   本地夹具只抄了一种形态，测不出来。
+4. **网易的 `order` 只认 `hot` / `time` 两个字面值。** 传 `true` 不报错，**静默返回空数组**。
+   `handleArtistTrackList` 把 `sort` 里的 `createdat` / `time` / `new` 一律映射成 `time`，其余 `hot`。
+5. **歌手专辑列表没有 `total`**，只有 `more`；翻页与总数的算法是「`more` 为真就认为还有」，
+   `total` 由 `offset + len(list) + (more ? 1 : 0)` 估出来。
+6. **QQ 的歌手接口已经全部下线**（`fcg_v8_singer_track_cp.fcg` / `fcg_v8_singer_album_cp.fcg`
+   实测 HTTP 404 空 body，换 `songstatus=1`、`platform=yqq` 等参数也一样）。
+   所以本轮 QQ **只接专辑**（`fcg_v8_album_info_cp.fcg` 实测可用），歌手链路只有网易。
+   酷狗 / 酷我 / 外挂平台的歌手点进去仍然透传 —— 等于今天的行为。
+
+**专辑的两种锚点**（`valbum.go`）
+
+- 搜索结果里的专辑卡片：锚点是**一首真实曲目**（卡片本来就有曲目），照旧进 `registry`。
+- 歌手页的专辑卡片：卡片上**没有曲目**，只有专辑身份。这类走 `albumRefs`（`online.AlbumRef`，
+  `RealAlbumID = "online:<平台>:album:<平台内专辑 id>"`）。`albumAnchorKind` 会为它合成一个
+  临时 anchor 并登记，同时返回 `synthetic=true` —— `albumTracks` 见到 `synthetic` **不把它当曲目**
+  塞进列表（否则专辑页第一首是个点开必然失败的假条目，曲目数还多一首）。
+
+**两个可测性决定**
+
+- `Config` 新增五个函数字段（`ArtistSearch` / `ArtistDetail` / `ArtistTracks` / `ArtistAlbums` /
+  `AlbumDetailFn`，nil = 用 `pkg/search` 的真实实现），配 `i.artistSearch()` 等五个访问器。
+  这样 `vartist_test.go` 与 `valbum_test.go` 全离线，形状与分页口径都能钉死。
+- `cover.go` 把「找出封面该抓哪个 URL」拆成 `entityCoverTarget`（纯查表、返回
+  `(coverURL, cacheKey, logID, ok)`）与 `entityCover`（真抓）。不拆的话这条兜底只能靠联网验。
+
+**失效模式没变**：任何一步反解不出、形状不认识、平台请求失败，一律**逐字节透传**官方响应。
+所以这套东西整个坏掉时，表现仍然只是「在线歌手 / 在线专辑消失」，官方音乐照常。
+
+**还没做的**：曲率自己的前端（Vue）**没有歌手 / 专辑 Tab 与详情页** —— 这一轮只服务
+飞牛官方页面的接管。要给我们自己的界面加，得先有详情页组件与路由，是另一件事。
 
 #### 测试与可测性
 

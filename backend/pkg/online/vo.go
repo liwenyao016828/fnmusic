@@ -91,12 +91,11 @@ func (t Track) audioSpec(pb Playback) map[string]any {
 //
 // 官方习惯：搜索 VO 里 artist 的 guid 是「曲目 guid + :artist」，**没有**
 // coverId 字段（那是收藏 VO 的形态，见 FavoriteVO）。
-func (t Track) artistsArray(fake string) []any {
-	return []any{map[string]any{
-		"name": t.Artist(),
-		"guid": fake + ":" + SubKindArtist,
-	}}
-}
+//
+// ⚠️ 2026-11-21（v2.33.0）起，**有原生歌手 id 的曲目**不再走这条回落：
+// 逐位歌手会拿到自己的虚拟 id（见 artist.go 的 artistEntries），点进去能打开
+// 歌手页。回落路径一个字没改，所以没有歌手 id 的源行为不变。
+func (t Track) artistsArray(fake string) []any { return t.artistEntries(fake) }
 
 // albumObject 构造搜索 VO 的 album 对象。
 func (t Track) albumObject(fake string) map[string]any {
@@ -176,13 +175,7 @@ func FavoriteVO(t Track, pb Playback, createdAt int64, isFavorite bool, template
 	fake := t.FakeID()
 	ts := createdAt
 
-	artists := []any{map[string]any{
-		"guid":      fake + ":" + SubKindArtist,
-		"name":      t.Artist(),
-		"coverId":   nil, // 官方习惯：artist 没有独立封面，**不能**填歌曲 guid
-		"createdAt": ts,
-		"updatedAt": ts,
-	}}
+	artists := t.favoriteArtists(fake, ts)
 
 	album := map[string]any{
 		"guid":        fake + ":" + SubKindAlbum,

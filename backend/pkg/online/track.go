@@ -136,6 +136,23 @@ type Track struct {
 	CoverURL   string   `json:"cover_url,omitempty"`
 	Quality    string   `json:"quality,omitempty"`
 	Year       int      `json:"year,omitempty"`
+
+	// AlbumID 是**平台内**的专辑 id（网易 album id、QQ albummid…），拿它可以直接问
+	// 平台的原生专辑接口要完整曲目（见 valbum.go 的 albumNativeTracks）。
+	//
+	// 空值表示平台没给（酷狗 / 酷我 / 外挂源通常没有）—— 那时专辑页回落到
+	// 「按专辑名搜索 + 同名同歌手筛选」的老口径，行为与今天一致。
+	//
+	// ⚠️ 与 PlatformID 一样是**真实 id**，永不下发；下发的专辑 id 一律是虚拟 id。
+	AlbumID string `json:"album_id,omitempty"`
+
+	// ArtistIDs 是平台内的歌手 id，与 Artists **按位置一一对应**（网易 ar[].id、
+	// QQ singer[].mid）。缺一位就整组视为「没有原生歌手 id」—— 半对半错的身份比
+	// 没有更危险：点进去会打开另一个歌手的页面。
+	//
+	// 只有拿到它，曲目里的歌手名才能变成**可点进歌手页的链接**（见 artist.go）；
+	// 没有时 vo.go 回落成「曲目虚拟 id + :artist」，点击透传给官方（= 今天的行为）。
+	ArtistIDs []string `json:"artist_ids,omitempty"`
 }
 
 // RealID 返回本条曲目的真实 id。
@@ -184,15 +201,29 @@ func (t Track) AlbumName() string {
 func (t Track) Normalized() Track {
 	out := t
 	cleaned := make([]string, 0, len(out.Artists))
-	for _, a := range out.Artists {
+	ids := make([]string, 0, len(out.Artists))
+	aligned := len(out.ArtistIDs) == len(out.Artists)
+	for n, a := range out.Artists {
 		if s := strings.TrimSpace(a); s != "" {
 			cleaned = append(cleaned, s)
+			if aligned {
+				ids = append(ids, strings.TrimSpace(out.ArtistIDs[n]))
+			}
+		} else {
+			// 有一位是空名 → 位置对应关系断了，整组歌手 id 一起丢
+			// （见 Track.ArtistIDs 的注释：半对半错的身份比没有更危险）。
+			aligned = false
 		}
 	}
 	if len(cleaned) == 0 {
 		cleaned = []string{UnknownArtist}
 	}
 	out.Artists = cleaned
+	if aligned && len(ids) == len(cleaned) {
+		out.ArtistIDs = ids
+	} else {
+		out.ArtistIDs = nil
+	}
 
 	if strings.TrimSpace(out.Album) == "" {
 		out.Album = UnknownAlbum
