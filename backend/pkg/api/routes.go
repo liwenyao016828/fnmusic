@@ -212,6 +212,8 @@ var routeTable = []routeSpec{
 	{Path: "/api/library/meta-snapshots", Handler: func(s *Server) http.HandlerFunc { return s.HandleMetaSnapshots }},
 	// 旧路径只保留定时开关的写入（op=schedule），其余动作一律提示改走新接口
 	{Path: "/api/library/snapshots", Handler: func(s *Server) http.HandlerFunc { return s.handleSnapshotSchedule }},
+	{Path: "/api/library/repair/scan", Handler: func(s *Server) http.HandlerFunc { return s.handleRepairScan }},
+	{Path: "/api/library/repair/replace", Handler: func(s *Server) http.HandlerFunc { return s.handleRepairReplace }},
 	{Path: "/api/duplicates", Handler: func(s *Server) http.HandlerFunc { return s.HandleDuplicates }},
 	{Path: "/api/duplicates/resolve", Handler: func(s *Server) http.HandlerFunc { return s.HandleDuplicatesResolve }},
 

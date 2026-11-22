@@ -41,7 +41,7 @@ import (
 )
 
 // CurrentVersion 应用版本号。发布新版本时与 fpk-package/manifest 的 version 同步修改。
-const CurrentVersion = "2.33.0"
+const CurrentVersion = "2.35.0"
 
 // CurrentAppName 对外暴露的应用标识，必须与 fpk-package/manifest 的 appname 一致。
 //
@@ -152,10 +152,14 @@ type Server struct {
 	// 「替换音质」的四个动作（见 pkg/api/quality.go）。四个都要传：
 	// 起任务/看状态/收回/执行替换是一件事的四个面，分开注册只会出现
 	// 「能扫不能换」这种半截能力。
-	qualityStart   func(mode string, limit int) (intercept.QualityStatus, error)
+	qualityStart   func(mode string, limit int, refresh bool) (intercept.QualityStatus, error)
 	qualityStatus  func() intercept.QualityStatus
 	qualityStop    func() intercept.QualityStatus
 	qualityReplace func(r *http.Request, paths []string) (any, error)
+
+	// 歌曲修复（v2.35.0）的两个动作：扫坏文件 + 用挑中的候选覆盖。
+	repairScan    func(r *http.Request, dir string) (intercept.RepairScanResult, error)
+	repairReplace func(r *http.Request, req intercept.TrackReplaceRequest) (intercept.TrackReplaceResult, error)
 
 	// 后台「音质补强」的设置面（见 pkg/api/quality_autoupgrade.go，v2.22）。
 	//

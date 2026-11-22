@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-// ── 全局限速：所有出站请求共用一个进程级节流器 ──
+// ── 全局限速：所有出站请求共用一个进程级节流器（**按平台分槽**）────────
 //
 // 为什么必须有这一层：补全/整理是**并发**跑的（`complete.Options.Concurrency`
 // 默认 2、`tidy.TidyBatch` 也是 2），而每首歌会按平台顺序搜多次、还要取歌词 /
@@ -21,6 +21,16 @@ import (
 // 为什么必须是**全局单例**：如果每个调用点各自限速，总速率会被并发数放大。参考实现
 // music-meta-web v1.4.8 的 `ratelimit.py` 正因为这点把节流器做成进程级单例，
 // 并注明「per-worker 限速会把上游 QPS 乘 worker 数」。
+//
+// # 为什么是「按平台分槽」而不是「全局一个时间片」
+//
+// 风控是**按站**算的：网易的 QPS 限额和 QQ 的 QPS 限额互不相干，把它们排进同一条
+// 队列等于用最慢的那个站拖住所有站。实测 NAS 上（2026-11-21）：
+//
+//	全局单槽：20 首并发搜索墙钟 4.16s → 吞吐 4.81 次/秒；
+//	分槽之后：每个平台各走各的时间片，互不排队。
+//
+// 同一个平台的请求仍然共享一个槽（这一条不能松 —— 那才是限速的目的）。
 //
 // 抖动：每次间隔取 `interval × (0.5~1.5)`，避免固定周期被识别成脚本。
 // 抖动用纳秒时钟取低位，不引入 math/rand —— 后端刻意保持零第三方依赖。
@@ -32,8 +42,10 @@ import (
 const defaultSearchMinInterval = 300 * time.Millisecond
 
 var (
-	throttleMu       sync.Mutex
-	throttleNextSlot time.Time // 下一次允许发出请求的最早时刻
+	throttleMu sync.Mutex
+	// throttleSlots 记每个平台「下一次允许发出请求的最早时刻」。
+	// 键是平台短码（wy / tx / kg / kw / other）。
+	throttleSlots    = map[string]time.Time{}
 	throttleInterval = defaultSearchMinInterval
 )
 
@@ -48,7 +60,7 @@ func MinInterval() time.Duration {
 func SetMinInterval(d time.Duration) {
 	throttleMu.Lock()
 	throttleInterval = d
-	throttleNextSlot = time.Time{}
+	throttleSlots = map[string]time.Time{}
 	throttleMu.Unlock()
 }
 
@@ -56,20 +68,27 @@ func SetMinInterval(d time.Duration) {
 //
 // 用「预约」而不是「持锁 sleep」：持锁 sleep 会把所有请求串成一条线（连 HTTP 往返
 // 都排队），而预约只约束**发出时刻**，请求本身仍可并发往返。
-func throttle() {
+//
+// platform 决定用哪个槽：同一个平台共用一个槽（限速的目的），不同平台互不排队
+// （风控是按站算的）。
+func throttle(platform string) {
 	throttleMu.Lock()
 	interval := throttleInterval
 	if interval <= 0 {
 		throttleMu.Unlock()
 		return
 	}
+	key := platform
+	if key == "" {
+		key = "other"
+	}
 	now := time.Now()
 	slot := now
-	if throttleNextSlot.After(now) {
-		slot = throttleNextSlot
+	if throttleSlots[key].After(now) {
+		slot = throttleSlots[key]
 	}
 	jitter := 0.5 + float64(time.Now().UnixNano()%1000)/1000.0
-	throttleNextSlot = slot.Add(time.Duration(float64(interval) * jitter))
+	throttleSlots[key] = slot.Add(time.Duration(float64(interval) * jitter))
 	throttleMu.Unlock()
 
 	if wait := time.Until(slot); wait > 0 {
@@ -94,7 +113,7 @@ func doHTTPFor(platform string, req *http.Request) (*http.Response, error) {
 	if platform == "" {
 		platform = platformOf(req.URL.String())
 	}
-	throttle()
+	throttle(platform)
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		recordFailure(platform, "transport", err.Error())

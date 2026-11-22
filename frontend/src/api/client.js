@@ -282,14 +282,24 @@ export const ChartInjectAPI = {
 // 契约（后端已定死，改字段先过后端）：
 // · `scan` 是**异步任务**：action:'start' 开扫、'status' 查进度（界面靠轮询 status）。
 //   data: {state:'idle'|'running'|'done'|'failed', mode, total, scanned, truncated,
-//   upgradeable, error, entries:[{path, title, artist, ext, current_tier,
+//   skipped, updated, upgradeable, error,
+//   entries:[{path, title, artist, ext, current_tier,
 //   channels:[{channel:'lx'|'dl'|'native', tier, score, platform, platform_id}],
-//   best:{channel,tier,score,platform,platform_id}|null, upgradeable:boolean}]}
+//   best:{channel,tier,score,platform,platform_id}|null, upgradeable:boolean,
+//   timed_out?:boolean}]}
+//   · timed_out=true = 「这一轮没探出结论（等超时了）」，**不是**「探出没有更高音质」。
+//     这两种情况界面上必须分开显示：超时的下次还要重探。
 // · `replace` **同步**返回 {done:[{path,ok,new_path,tier,channel}], failed:[{path,error}]}，
 //   一次最多 50 条路径，超出由调用方分批。
 export const QualityAPI = {
-  scan: (action, mode = 'lossy', limit = 200) =>
-    api.post('/quality/scan', { action, mode, limit }).then(res => res.data),
+  // refresh 只在 action=start 时有意义：
+  //   false（默认）= 跳过最近 7 天扫过、结论仍然有效的歌（后端落盘在
+  //   <DataDir>/quality_scan.json，重启还在），所以叫「继续扫描」；
+  //   true = 全部重扫。用户 m00784 明确要求「避免重复扫描同一首歌」，
+  //   因为扫一首要问 2–3 条渠道，一库几百首是十几分钟的活。
+  scan: (action, mode = 'lossy', limit = 200, refresh = false) =>
+    api.post('/quality/scan', { action, mode, limit, ...(refresh ? { refresh: true } : {}) })
+      .then(res => res.data),
   // 替换 = 逐条走外网重新取更高音质的文件再落盘，一批 50 条轻松超过默认 30s，
   // 长超时必须放宽（对齐 PushAPI.run 的长任务口径）。
   //
@@ -314,6 +324,15 @@ export const QualityAPI = {
     save: (patch) => api.post('/quality/auto-upgrade', patch).then(res => res.data),
     run: (now = false) => api.post('/quality/auto-upgrade/run', { now }, { timeout: 180000 }).then(res => res.data),
   },
+}
+
+// 歌曲修复（v2.35.0）：找坏文件 + 用搜索挑中的候选版本原地替换。
+// scan 只读文件头（容器魔数/时长/码率），纯本地、秒级；
+// replace 会重新取一份候选并**原地覆盖**用户那份坏文件，超时放宽到 10 分钟。
+// 候选从 SearchAPI.search 拿（多平台聚合，带 platform + songmid + quality）。
+export const RepairAPI = {
+  scan: (dir = '') => api.post('/library/repair/scan', { dir }).then(res => res.data),
+  replace: (req) => api.post('/library/repair/replace', req, { timeout: 600000 }).then(res => res.data),
 }
 
 export const DownloadAPI = {

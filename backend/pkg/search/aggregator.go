@@ -319,17 +319,19 @@ func filterAndRankSongs(keyword string, songs []UnifiedSong) []UnifiedSong {
 // platform 只接受 wy / tx / kg / kw（官方协议覆盖的平台）；其它值返回空 ——
 // 聚合（all）不在这里做，补全场景下按平台逐个试比一次拿四家更容易定位匹配质量。
 func Search(keyword, platform string, page, pageSize int) []UnifiedSong {
-	keyword = strings.TrimSpace(keyword)
-	if keyword == "" {
+	return SearchContext(context.Background(), keyword, platform, page, pageSize)
+}
+
+// SearchContext 同 Search，但把 ctx 传下去。
+//
+// 为什么需要 ctx：探测腿（替换音质扫描）要掐住「每个 musicdl 源最多等多久」，
+// 这个预算随 ctx 走（见 online.WithSourceBudget）—— 同一份搜索代码，下载腿要慢而全、
+// 探测腿要快而准，等多久必须由调用方决定。
+func SearchContext(ctx context.Context, keyword, platform string, page, pageSize int) []UnifiedSong {
+	keyword, plat, page, pageSize, ok := normalizeSearchArgs(keyword, platform, page, pageSize)
+	if !ok {
 		return nil
 	}
-	if page <= 0 {
-		page = 1
-	}
-	if pageSize <= 0 || pageSize > 50 {
-		pageSize = 20
-	}
-	plat := strings.ToLower(strings.TrimSpace(platform))
 
 	// 外挂搜索器优先（见 provider.go）。
 	//
@@ -342,11 +344,46 @@ func Search(keyword, platform string, page, pageSize int) []UnifiedSong {
 	// 退回去的结果可能解析不出直链 —— 那正是「外挂不可用」时的既有行为，
 	// 不假装它能播（下游的 playableOnly 会如实把它挡在可播列表之外）。
 	if s := lookupSearcher(plat); s != nil {
-		if out := s.Search(context.Background(), keyword, page, pageSize*2); len(out) > 0 {
+		if out := s.Search(ctx, keyword, page, pageSize*2); len(out) > 0 {
 			return filterAndRankSongs(keyword, out)
 		}
 	}
+	return searchNativeContext(keyword, plat, page, pageSize)
+}
 
+// SearchNativeContext 只走**原生**实现，跳过外挂搜索器。
+//
+// 什么时候需要它：替换音质扫描里的「原生渠道」要回答的是「不靠任何外挂，
+// 曲率自己能拿到什么档位」。走 SearchContext 的话，用户一旦把某个平台也加进
+// 外挂源列表（真实配置里常见：musicdl 的 `wy`），该平台就会转去问 musicdl ——
+// 而 musicdl 网易源实测要几十秒（它对每条结果都解析一次直链），原生接口只要 0.3s。
+// 结果是「原生搜索」这一段凭空多等十几秒，还拿不到原生才有的档位信息。
+func SearchNativeContext(ctx context.Context, keyword, platform string, page, pageSize int) []UnifiedSong {
+	_ = ctx // 原生实现目前不走 ctx（出站由各自 client 的 8s 超时兜住）
+	keyword, plat, page, pageSize, ok := normalizeSearchArgs(keyword, platform, page, pageSize)
+	if !ok {
+		return nil
+	}
+	return searchNativeContext(keyword, plat, page, pageSize)
+}
+
+// normalizeSearchArgs 归一化四个入参；ok=false 表示关键词为空，直接返回 nil。
+func normalizeSearchArgs(keyword, platform string, page, pageSize int) (string, string, int, int, bool) {
+	keyword = strings.TrimSpace(keyword)
+	if keyword == "" {
+		return "", "", 0, 0, false
+	}
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 || pageSize > 50 {
+		pageSize = 20
+	}
+	return keyword, strings.ToLower(strings.TrimSpace(platform)), page, pageSize, true
+}
+
+// searchNativeContext 四个原生平台的检索分派（wy / tx / kg / kw）。
+func searchNativeContext(keyword, plat string, page, pageSize int) []UnifiedSong {
 	switch plat {
 	case "wy":
 		return filterAndRankSongs(keyword, searchNetEase(keyword, page, pageSize*2))

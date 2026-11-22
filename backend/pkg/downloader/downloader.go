@@ -99,6 +99,22 @@ type SongPayload struct {
 	// 只有曲率自己的替换流程会传；外部调用方不传，行为不变。
 	DestDir  string `json:"dest_dir,omitempty"`
 	DestBase string `json:"dest_base,omitempty"`
+
+	// ForceReplace = 「不管盘上那份是什么，都换成这次下到的」。给**歌曲修复**用。
+	//
+	// 为什么不能复用 UpgradeIfBetter：那条的判据是「本次档位严格更高」，而歌曲修复
+	// 要换的是**坏文件**（扩展名写 flac 其实是 mp3、时长只有几秒、无损小得离谱）。
+	// 坏文件的档位常常与候选一样（都是 320k），按档位比就永远换不掉 —— 用户点了
+	// 「换这个版本」却什么都没发生。
+	//
+	// 打开后跳过两处判断：① shouldUpgradeOver 的档位比较；② findExistingAudio 的
+	// 体积门槛（见 libraryFileIsAudio：<32KB 一律不算音频，而坏文件正好都在这一档，
+	// 于是「找不到旧文件」→ 走 allocateUniquePath → 在旁边多出一份 `xxx (2).mp3`，
+	// 坏的还躺在原地。v2.35.0 真机实测就是这个形状）。
+	//
+	// ⚠️ 只在调用方**明确指定了目标文件**（DestDir/DestBase）时才有意义；
+	// 外部调用方不传，行为完全不变。
+	ForceReplace bool `json:"force_replace,omitempty"`
 }
 
 // GetStreamReferer determines the appropriate Referer header for music streaming and downloading
@@ -521,7 +537,7 @@ func (d *Downloader) downloadInner(song SongPayload) (*SongResult, error) {
 	// 例外：调用方明确要「升级」且现有文件是有损、本次要无损（见 UpgradeIfBetter）。
 	var replacePath string
 	if existing, ok := findExistingAudio(destDir, base); ok {
-		if !song.shouldUpgradeOver(existing) {
+		if !song.shouldUpgradeOver(existing) && !song.forceReplaceHere() {
 			return &SongResult{
 				SongName:     song.Name,
 				Singer:       song.Singer,
@@ -532,6 +548,15 @@ func (d *Downloader) downloadInner(song SongPayload) (*SongResult, error) {
 			}, nil
 		}
 		replacePath = existing
+	}
+
+	// 歌曲修复：目标文件可能**小到不被认成音频**（坏文件常只有几 KB），上面那一步
+	// 就会漏掉它。这里按「调用方点名的那份」再找一次 —— 只看存不存在，不看体积、
+	// 不嗅魔数：用户已经明确说要换这一份，判据不该再由体积来否决。
+	if replacePath == "" && song.forceReplaceHere() {
+		if p, ok := findAnyFileWithBase(destDir, base); ok {
+			replacePath = p
+		}
 	}
 
 	// 下载目录里没有同名文件时，再查一次全库索引（曲库管家扫出来的所有目录）。
@@ -864,6 +889,9 @@ func (d *Downloader) downloadInner(song SongPayload) (*SongResult, error) {
 		} else {
 			log.Printf("[DOWNLOAD] 音质升级：%s → %s", filepath.ToSlash(replacePath), filepath.ToSlash(finalPath))
 			nas.InvalidateScanCacheFile(replacePath)
+			// 扩展名变了（mp3 → flac）时，旧的同名 .lrc 会留在原地变成孤儿：
+			// 新文件的歌词按新主干另写一份，旧的那份谁也不再读它。顺手清掉。
+			removeOrphanLrc(replacePath, finalPath)
 		}
 	}
 
@@ -1290,6 +1318,48 @@ func findExistingAudio(destDir, base string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// forceReplaceHere 判断这次请求是不是「点名要换掉盘上那一份」。
+//
+// 两个条件都要：ForceReplace 打开 **且** 调用方给了目标位置。只开开关不给位置时
+// 落点是按候选歌名算出来的，那不是「用户点的那份文件」，不能拿它去覆盖别人的东西。
+func (s SongPayload) forceReplaceHere() bool {
+	return s.ForceReplace && strings.TrimSpace(s.DestBase) != ""
+}
+
+// findAnyFileWithBase 找同主干的音频文件，**不看体积、不嗅魔数**。
+//
+// 只给 forceReplaceHere 用。为什么需要单独一个：findExistingAudio 依赖
+// libraryFileIsAudio，而它对 <32KB 的文件一律返回 false（那是为了别把封面图、
+// 歌词碎片当成歌）。可歌曲修复要换的坏文件恰好都在这一档 —— 真机那份
+// `01 夜曲.mp3` 只有 4127 字节（ID3 标签占了 3601，音频只剩 516 字节）。
+// 于是「找不到旧文件」→ allocateUniquePath 生成 `01 夜曲 (2).mp3` → 坏的还在。
+func findAnyFileWithBase(destDir, base string) (string, bool) {
+	for _, ext := range audioExtensions {
+		p := filepath.Join(destDir, base+"."+ext)
+		if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
+			return p, true
+		}
+	}
+	return "", false
+}
+
+// removeOrphanLrc 清掉「换扩展名后留下的孤儿歌词」。
+//
+// 只在**主干没变、只有扩展名变了**时动手（mp3 → flac）：那种情况下新旧两份的
+// .lrc 路径完全相同，新歌词已经写在那个位置上了，不存在要删的东西。真正会留孤儿
+// 的是主干也变了的情形（调用方给的 DestBase 与旧文件名不同），此时旧 .lrc 谁也不读。
+// 删不掉不算错（可能用户手工放过一份），静默跳过。
+func removeOrphanLrc(oldPath, newPath string) {
+	oldLrc := strings.TrimSuffix(oldPath, filepath.Ext(oldPath)) + ".lrc"
+	newLrc := strings.TrimSuffix(newPath, filepath.Ext(newPath)) + ".lrc"
+	if strings.EqualFold(filepath.ToSlash(oldLrc), filepath.ToSlash(newLrc)) {
+		return
+	}
+	if fi, err := os.Stat(oldLrc); err == nil && !fi.IsDir() {
+		_ = os.Remove(oldLrc)
+	}
 }
 
 // allocateUniquePath 生成不覆盖既有文件的路径（同名依次追加 " (2)"、" (3)" ...）

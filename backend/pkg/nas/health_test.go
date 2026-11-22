@@ -196,3 +196,73 @@ func TestSuggestNameKeepsExtension(t *testing.T) {
 		t.Fatalf("建议名字仍不干净：%q", got)
 	}
 }
+
+// 首尾点空格的判据只看**末尾**。
+//
+// 早先按 Trim(name, ". ") 判，把开头的点也算成问题 —— 于是我们自己的回收站
+// `.tidy_trash` 被报成「名字有问题，可自动改名」，一键修就会把回收站目录搬走。
+// 开头的点在 Windows/SMB 上是合法的。
+func TestIssueTrailingOnlyChecksSuffix(t *testing.T) {
+	root := newHealthRoot(t)
+	cases := []struct {
+		name string
+		want bool
+	}{
+		{"hidden", false},   // 普通名字
+		{".hidden", false},  // 开头的点合法
+		{"..double", false}, // 开头全是点也不算
+		{"normal", false},   //
+		{"tail.", true},     // 末尾的点 -> 该报
+		{"tail ", true},     // 末尾空格 -> 该报
+	}
+	for _, c := range cases {
+		dir := filepath.Join(root, c.name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		parent := filepath.Dir(dir)
+		entries, err := os.ReadDir(parent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var entry os.DirEntry
+		for _, e := range entries {
+			if e.Name() == c.name {
+				entry = e
+				break
+			}
+		}
+		if entry == nil {
+			t.Fatalf("没找到刚建的目录 %q", c.name)
+		}
+		issue, ok := inspectEntry(dir, entry)
+		if ok != c.want {
+			t.Errorf("%q 该报=%v，实际 ok=%v（kind=%s）", c.name, c.want, ok, issue.Kind)
+		}
+		if ok && issue.Kind != IssueTrailing {
+			t.Errorf("%q 分类该是 trailing，实际 %s", c.name, issue.Kind)
+		}
+	}
+}
+
+// 回收站目录不该被当成「名字有问题」提出来，也不该进去遍历。
+func TestHealthSkipsRecycleBin(t *testing.T) {
+	root := newHealthRoot(t)
+	trash := filepath.Join(root, ".tidy_trash")
+	if err := os.MkdirAll(trash, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// 回收站里故意放一个名字很烂的文件
+	if err := os.WriteFile(filepath.Join(trash, "bad:name.mp3"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := ScanHealth(root)
+	if err != nil {
+		t.Fatalf("扫描失败: %v", err)
+	}
+	for _, is := range rep.Issues {
+		if strings.Contains(is.Path, ".tidy_trash") {
+			t.Errorf("回收站不该出现在清单里：%s（%s）", is.Path, is.Kind)
+		}
+	}
+}

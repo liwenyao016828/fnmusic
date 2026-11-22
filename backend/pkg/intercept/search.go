@@ -185,7 +185,7 @@ func (i *Interceptor) collectOnline(ctx context.Context, keyword string) []onlin
 		wg.Add(1)
 		go func(idx int, platform string) {
 			defer wg.Done()
-			songs := i.searcher(keyword, platform, 1, onlinePerPlatform)
+			songs := i.searchCtx(context.Background(), keyword, platform, 1, onlinePerPlatform)
 			results[idx] = result{platform: platform, songs: songs}
 		}(idx, platform)
 	}

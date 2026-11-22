@@ -945,3 +945,108 @@ func TestDownloadReplaceInPlaceSameExt(t *testing.T) {
 		t.Errorf("该只剩 1 个音频文件（不留 (1) 影子），实际 %d 个", n)
 	}
 }
+
+// 歌曲修复：坏文件小到不被认成音频（<32KB），也必须被**原地换掉**。
+//
+// v2.35.0 真机实测的形状：`01 夜曲.mp3` 只有 4127 字节（ID3 占 3601，音频剩 516），
+// findExistingAudio 依赖 libraryFileIsAudio 的体积门槛 → 认为「不存在」→
+// allocateUniquePath 生成 `01 夜曲 (2).mp3`，坏的还躺在原地。用户点了「换这个版本」
+// 却什么都没换掉。ForceReplace 就是为这一档开的通道。
+func TestDownloadForceReplaceTinyBrokenFile(t *testing.T) {
+	flac := downloadFixtureFLAC()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "audio/flac")
+		_, _ = w.Write(flac)
+	}))
+	defer srv.Close()
+
+	outDir := t.TempDir()
+	old := filepath.Join(outDir, "01 夜曲.mp3")
+	// 4KB 的坏 mp3：远小于 librarySmallAudioBytes(32KB)
+	if err := os.WriteFile(old, append([]byte{0xff, 0xfb, 0x90, 0x00}, make([]byte, 4096)...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	d := newTestDownloader(t, outDir)
+
+	res, err := d.downloadSingleSong(SongPayload{
+		Name: "夜曲", Singer: "周杰伦", URL: srv.URL + "/a.flac", Quality: "flac",
+		DestDir: outDir, DestBase: "01 夜曲", ForceReplace: true,
+	})
+	if err != nil {
+		t.Fatalf("强制替换应当成功: %v", err)
+	}
+	want := filepath.ToSlash(filepath.Join(outDir, "01 夜曲.flac"))
+	if got := filepath.ToSlash(res.Path); got != want {
+		t.Errorf("该落在原主干上（换扩展名）%q，得到 %q", want, got)
+	}
+	if _, err := os.Stat(old); !os.IsNotExist(err) {
+		t.Errorf("坏文件该被删掉，stat 结果 %v", err)
+	}
+	if n := countAudioFiles(t, outDir); n != 1 {
+		t.Errorf("该只剩 1 个音频文件（不留 (2) 影子），实际 %d 个", n)
+	}
+}
+
+// 同档位也要换：歌曲修复不看档位高低（坏的那份与候选都是 320k）。
+func TestDownloadForceReplaceSameTierSameExt(t *testing.T) {
+	payload := append([]byte("ID3"), make([]byte, 600*1024)...)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "audio/mpeg")
+		_, _ = w.Write(payload)
+	}))
+	defer srv.Close()
+
+	outDir := t.TempDir()
+	old := filepath.Join(outDir, "甲 - 乙.mp3")
+	if err := os.WriteFile(old, append([]byte{0xff, 0xfb, 0x90, 0x00}, make([]byte, 3000)...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	d := newTestDownloader(t, outDir)
+
+	res, err := d.downloadSingleSong(SongPayload{
+		Name: "乙", Singer: "甲", URL: srv.URL + "/a.mp3", Quality: "320k",
+		DestDir: outDir, DestBase: "甲 - 乙", ForceReplace: true,
+	})
+	if err != nil {
+		t.Fatalf("同档位强制替换应当成功: %v", err)
+	}
+	if got := filepath.ToSlash(res.Path); got != filepath.ToSlash(old) {
+		t.Errorf("该覆盖原路径 %q，得到 %q", filepath.ToSlash(old), got)
+	}
+	if fi, err := os.Stat(old); err != nil || fi.Size() < 500*1024 {
+		t.Errorf("原路径上该是新的大文件，err=%v", err)
+	}
+	if n := countAudioFiles(t, outDir); n != 1 {
+		t.Errorf("该只剩 1 个音频文件，实际 %d 个", n)
+	}
+}
+
+// ForceReplace 没给目标位置时不生效 —— 不能拿它去覆盖按候选歌名算出来的落点。
+func TestForceReplaceRequiresDestBase(t *testing.T) {
+	if (SongPayload{ForceReplace: true}).forceReplaceHere() {
+		t.Error("只开开关、没给 DestBase 时不该进入强制替换")
+	}
+	if !(SongPayload{ForceReplace: true, DestBase: "甲 - 乙"}).forceReplaceHere() {
+		t.Error("开关 + DestBase 都给了就该生效")
+	}
+	if (SongPayload{DestBase: "甲 - 乙"}).forceReplaceHere() {
+		t.Error("没开开关时不该生效（外部调用方行为不变）")
+	}
+}
+
+// findAnyFileWithBase 不看体积：4KB 的坏文件也要找得到。
+func TestFindAnyFileWithBaseIgnoresSize(t *testing.T) {
+	dir := t.TempDir()
+	base := "歌手 - 歌曲"
+	tiny := filepath.Join(dir, base+".mp3")
+	if err := os.WriteFile(tiny, []byte{0xff, 0xfb, 0x90, 0x00}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := findExistingAudio(dir, base); ok {
+		t.Error("findExistingAudio 仍应按体积门槛拒绝小文件（既有口径不变）")
+	}
+	got, ok := findAnyFileWithBase(dir, base)
+	if !ok || got != tiny {
+		t.Errorf("findAnyFileWithBase 该找到那份小文件，得到 %q ok=%v", got, ok)
+	}
+}

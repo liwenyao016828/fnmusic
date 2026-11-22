@@ -25,7 +25,7 @@ import (
 
 // SetQuality 注入「替换音质」的四个动作。由 main 提供（这里不 import main）。
 func (s *Server) SetQuality(
-	start func(mode string, limit int) (intercept.QualityStatus, error),
+	start func(mode string, limit int, refresh bool) (intercept.QualityStatus, error),
 	status func() intercept.QualityStatus,
 	stop func() intercept.QualityStatus,
 	replace func(r *http.Request, paths []string) (any, error),
@@ -55,12 +55,15 @@ const qualityBodyLimit = 50
 
 // handleQualityScan 扫描曲库、逐首探各渠道可得档位。
 //
-// body：`{"action":"start"|"status"|"stop", "mode":"lossy"|"all", "limit":200}`
-// - action 缺省 start（界面上就是「开始扫描」）。
-// - mode 缺省 lossy：只扫**有损**文件 —— 无损的没什么可换的，扫它纯属浪费外呼。
-// - limit 缺省 200、上限 2000；超出只是把 `truncated` 置真，不是错误。
+// body：`{"action":"start"|"status"|"stop", "mode":"lossy"|"all", "limit":200, "refresh":false}`
+//   - action 缺省 start（界面上就是「开始扫描」）。
+//   - mode 缺省 lossy：只扫**有损**文件 —— 无损的没什么可换的，扫它纯属浪费外呼。
+//   - limit 缺省 200、上限 2000；超出只是把 `truncated` 置真，不是错误。
+//   - refresh 缺省 false = **跳过最近 7 天扫过、结论仍然有效的歌**（结论落盘，
+//     重启还在）。true 才是「全部重扫」。用户 2026-11-21 要求「避免重复扫描同一首歌」，
+//     因为扫一首要问 2–3 条渠道，一库几百首就是十几分钟。
 //
-// data 形如 `{state,mode,total,scanned,truncated,upgradeable,error,entries:[…]}`；
+// data 形如 `{state,mode,total,scanned,truncated,skipped,upgradeable,updated,error,entries:[…]}`；
 // `entries[].channels[]` 就是「这首歌在各渠道**实际**能拿到什么档位」的答案。
 func (s *Server) handleQualityScan(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -72,16 +75,17 @@ func (s *Server) handleQualityScan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Action string `json:"action"`
-		Mode   string `json:"mode"`
-		Limit  int    `json:"limit"`
+		Action  string `json:"action"`
+		Mode    string `json:"mode"`
+		Limit   int    `json:"limit"`
+		Refresh bool   `json:"refresh"`
 	}
 	if r.Body != nil {
 		_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&body)
 	}
 	switch strings.ToLower(strings.TrimSpace(body.Action)) {
 	case "", "start":
-		st, err := s.qualityStart(body.Mode, body.Limit)
+		st, err := s.qualityStart(body.Mode, body.Limit, body.Refresh)
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"code": 400, "msg": err.Error()})
 			return

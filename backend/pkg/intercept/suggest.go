@@ -1,6 +1,7 @@
 package intercept
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"sort"
@@ -166,7 +167,7 @@ func (i *Interceptor) suggestOnline(keyword string, plats []string, deadline tim
 		if time.Now().After(deadline) {
 			break
 		}
-		for _, s := range i.searcher(keyword, platform, 1, suggestPerSource) {
+		for _, s := range i.searchCtx(context.Background(), keyword, platform, 1, suggestPerSource) {
 			title := strings.TrimSpace(s.Name)
 			if title == "" {
 				continue

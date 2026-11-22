@@ -22,7 +22,7 @@ func TestThrottleSpacesRequests(t *testing.T) {
 
 	start := time.Now()
 	for i := 0; i < 3; i++ {
-		throttle()
+		throttle("wy")
 	}
 	elapsed := time.Since(start)
 
@@ -43,7 +43,7 @@ func TestThrottleDisabled(t *testing.T) {
 
 	start := time.Now()
 	for i := 0; i < 200; i++ {
-		throttle()
+		throttle("wy")
 	}
 	if elapsed := time.Since(start); elapsed > 200*time.Millisecond {
 		t.Fatalf("限速关闭后 200 次 throttle 仍耗时 %v", elapsed)
@@ -67,7 +67,7 @@ func TestThrottleConcurrentReservationsSpread(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			throttle()
+			throttle("wy")
 			mu.Lock()
 			sends = append(sends, time.Now())
 			mu.Unlock()
@@ -94,6 +94,37 @@ func TestThrottleConcurrentReservationsSpread(t *testing.T) {
 	// 5 次请求跨 4 个间隔，抖动上限 1.5×interval → 放宽到 8×interval。
 	if span := sends[len(sends)-1].Sub(sends[0]); span > interval*8 {
 		t.Fatalf("%d 次并发请求跨了 %v，远超预期（期望 <= %v）", n, span, interval*8)
+	}
+}
+
+// TestThrottleSlotsAreIndependentPerPlatform 不同平台**互不排队**（分槽的意义）。
+//
+// 为什么钉这条：限速的目的是「别把单个站打爆」，不是「所有站一起慢」。
+// 之前是全局一个时间片，结果网易一慢，QQ 的搜索也得排在后面（实测 NAS 上
+// 20 首并发搜索墙钟 4.16s，吞吐只有 4.81 次/秒）。
+//
+// 同平台仍然共享一个槽 —— 这一条由 TestThrottleSpacesRequests 盯着。
+func TestThrottleSlotsAreIndependentPerPlatform(t *testing.T) {
+	restoreThrottle(t)
+	const interval = 60 * time.Millisecond
+	SetMinInterval(interval)
+
+	// 先占住 wy 的槽：再取一个 wy 的名额必然要等。
+	throttle("wy")
+	wyStart := time.Now()
+	throttle("wy")
+	wyWait := time.Since(wyStart)
+
+	// tx 的槽是空的 → 不该被 wy 的排队拖住。
+	txStart := time.Now()
+	throttle("tx")
+	txWait := time.Since(txStart)
+
+	if wyWait < interval/2 {
+		t.Fatalf("同平台的第二次请求只等了 %v，间隔没生效", wyWait)
+	}
+	if txWait > interval/2 {
+		t.Fatalf("换平台后仍等了 %v，分槽没生效", txWait)
 	}
 }
 

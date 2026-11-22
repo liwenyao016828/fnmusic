@@ -35,8 +35,23 @@
             class="ys-btn ys-btn-primary ys-press"
             :disabled="qRunning || qBusy"
             :title="qScanBtnTitle"
-            @click="startQualityScan"
+            @click="startQualityScan()"
           >{{ qScanBtnText }}</button>
+          <!--
+            「全部重扫」（v2.33.1）：主按钮默认**跳过最近 7 天扫过、结论仍然有效的歌**
+            （结论落盘在 quality_scan.json，重启还在）。怀疑结论过时（例如刚换了音源、
+            渠道刚恢复）时才需要这个 —— 一库几百首全量重扫要十几分钟，不该是默认动作。
+          -->
+          <button
+            v-if="qHasEntries && !qRunning && !qBusy"
+            type="button"
+            class="ys-btn ys-btn-sm ys-press shrink-0"
+            title="把曲库里每一首从头重扫一遍（不跳过最近扫过的），一库几百首要十几分钟"
+            @click="startQualityScan(true)"
+          >
+            <RotateCcw class="h-3 w-3" :stroke-width="2" />
+            全部重扫
+          </button>
           <button
             v-if="qRunning"
             type="button"
@@ -140,7 +155,7 @@
               <label
                 class="flex h-8 w-8 shrink-0 items-center justify-center"
                 :class="(!e.upgradeable || e.replaced) ? 'cursor-not-allowed' : 'cursor-pointer'"
-                :title="e.replaced ? '已替换' : (e.upgradeable ? '勾选后可用最高音质替换' : '已是各渠道最高音质，无需替换')"
+                :title="e.replaced ? '已替换' : (e.upgradeable ? '勾选后可用最高音质替换' : (e.timed_out ? '这一轮没探出结论（超时），不是「没有更高音质」' : '已是各渠道最高音质，无需替换'))"
               >
                 <input
                   type="checkbox"
@@ -157,6 +172,11 @@
                 </div>
                 <div class="mt-0.5 truncate text-[11px] text-[var(--ys-text-muted)]">{{ e.artist || '未知歌手' }}</div>
                 <div v-if="e.rowError" class="mt-0.5 text-[10.5px] leading-relaxed text-red-500">替换失败：{{ e.rowError }}</div>
+                <!-- 超时＝「这一轮没探出」，不是「探出没有」。这两件事必须让用户分得清：
+                     前者下次还得重扫，后者可以据此判定「已是最高音质」。 -->
+                <div v-else-if="e.timed_out" class="mt-0.5 text-[10.5px] leading-relaxed text-amber-600">
+                  这一轮没探出结论（等得太久，超时了）—— 下次扫描会重探这首
+                </div>
               </div>
               <span
                 class="shrink-0 rounded-full bg-[var(--ys-surface-sunken)] px-2 py-0.5 text-[10.5px] text-[var(--ys-text-muted)]"
@@ -185,7 +205,7 @@
                   <div
                     class="q-cell-tier truncate text-[10px] leading-tight"
                     :class="cell.tier ? 'ys-num text-[var(--ys-text-muted)]' : 'text-[var(--ys-text-aux)]'"
-                  >{{ cell.tier || '拿不到' }}</div>
+                  >{{ cell.tier || (e.timed_out ? '没探完' : '拿不到') }}</div>
                 </button>
               </div>
               <span v-if="qPickOf(e)" class="shrink-0 text-[10.5px] text-[var(--ys-accent)]">用{{ Q_CHANNEL_LABELS[qPickOf(e)] || qPickOf(e) }}替换</span>
@@ -351,7 +371,7 @@ import SectionCard from './SectionCard.vue'
 import SegmentedControl from './SegmentedControl.vue'
 import SelectionBar from './SelectionBar.vue'
 import InlineNotice from './InlineNotice.vue'
-import { FileAudio, Gauge, Library, Replace, Square } from 'lucide-vue-next'
+import { FileAudio, Gauge, Library, Replace, RotateCcw, Square } from 'lucide-vue-next'
 import { QualityAPI, DEFAULT_AUTO_DOWNLOAD_CHANNELS } from '../api/client'
 import { fail as failText, apiError } from '../services/userMsg'
 import { ok as notifyOk, fail as notifyFail } from '../services/feedback'
@@ -470,16 +490,20 @@ function setQOnlyUpgradeable(v) {
   if (v === qOnlyUpgradeable.value) return
   qOnlyUpgradeable.value = v
 }
+const qHasEntries = computed(() => (qScan.value?.entries || []).length > 0)
 const qRowsAll = computed(() => {
-  const es = qScan.value?.entries || []
-  // 扫完且一条都不可替换（也还没替换过任何东西）→ 让位给空态文案，不刷一屏灰勾
-  if (qScan.value?.state === 'done' && !es.some((e) => e.upgradeable || e.replaced)) return []
-  return es
+  // v2.33.1：扫完但一条都不可替换时**不再清空**表格。原来这里为了「让位给空态文案」
+  // 直接 return []，用户看到的是「扫出来的歌全没了」，以为是扫描把结果丢了
+  // （用户 m00784 的第 1 条反馈就是它）。现在照实列出来 —— 不可替换的行本来就该
+  // 看得到，想清屏请用「只看能替换的」筛选，而不是把结果藏起来。
+  return qScan.value?.entries || []
 })
 const qRows = computed(() => {
   if (!qOnlyUpgradeable.value) return qRowsAll.value
   // 失败的行（rowError）一定留着 —— 被筛掉的话用户根本找不到失败原因
-  return qRowsAll.value.filter((e) => e.upgradeable || e.rowError)
+  // 超时的行（timed_out）也留着 —— 它不是「已是最优」，是「这一轮没结论」，
+  // 筛掉等于把「还没探清」伪装成「探过了没有」，下次重扫时用户也就看不到它了。
+  return qRowsAll.value.filter((e) => e.upgradeable || e.rowError || e.timed_out)
 })
 /** 被筛选隐藏掉的行数（提示用，免得用户以为扫描结果少了） */
 const qHiddenRowCount = computed(() => (qOnlyUpgradeable.value ? qRowsAll.value.length - qRows.value.length : 0))
@@ -499,27 +523,27 @@ const qModeHint = computed(() => {
   if (!es.length) return ''
   const scanned = qScan.value?.mode || ''
   if (!scanned || scanned === qMode.value) return ''
-  return `下面这批结果是按「${qModeLabel(scanned)}」扫的 —— 换了范围后要再按一次「重新扫描」，才会按「${qModeLabel(qMode.value)}」重扫`
+  // 换范围后**必须全量重扫**：历史结论是上一个范围（例如只扫了有损）的，不能拿来跳过。
+  return `下面这批结果是按「${qModeLabel(scanned)}」扫的 —— 换了范围后要再按一次「全部重扫」，才会按「${qModeLabel(qMode.value)}」重扫`
 })
 /**
- * 音质扫描按钮的文案（六-2）。
+ * 音质扫描按钮的文案（v2.33.1 改口径）。
  *
- * 原来只有「开始扫描 / 扫描中…」两态，但后端 `StartQualityScan`
- * （backend/pkg/intercept/quality.go:266）**每次都从头扫**，不清空旧结果就直接覆盖：
- * 已经扫出 30 条可替换、用户想再扫一遍，点下去会把那 30 条连同用户勾好的选择一起冲掉。
- * 所以按「有没有旧结果」分成两种文案，并在 title 里写清会丢什么。
+ * 原来只有「开始扫描 / 重新扫描」两态，而且**每次都从头扫**：扫一首要问 2–3 条
+ * 渠道（洛雪一条失败就是 8 秒 × 脚本数），一库几百首十几分钟，而绝大多数歌的结论
+ * 根本没变（用户 m00784 第 2 条原话就是「避免重复扫描同一首歌」）。
+ * 现在后端把结论落盘、默认跳过 7 天内有效的，所以主按钮叫「继续扫描」；
+ * 真的要全量重扫，用右边的「全部重扫」。
  */
 const qScanBtnText = computed(() => {
   if (qRunning.value) return '扫描中…'
   if (qBusy.value) return '提交中…'
-  const es = qScan.value?.entries || []
-  return es.length ? '重新扫描' : '开始扫描'
+  return qHasEntries.value ? '继续扫描' : '开始扫描'
 })
 const qScanBtnTitle = computed(() => {
   if (qRunning.value) return '扫描进行中 —— 用右边的停止按钮可以真的让后端停下'
-  const es = qScan.value?.entries || []
-  if (!es.length) return '让三条渠道逐条对比曲库能拿到的最高音质'
-  return `会从头上重新扫一遍，现在这 ${es.length} 条结果和已勾的选择都会被清掉；只想保留现状就不要再点`
+  if (!qHasEntries.value) return '让三条渠道逐条对比曲库能拿到的最高音质'
+  return '只扫最近 7 天没扫过、或盘上文件已经变过的歌；扫过的结论直接沿用，不再白问一遍渠道。想把每首都重扫一遍，用右边的「全部重扫」'
 })
 
 const qStatusText = computed(() => {
@@ -533,7 +557,17 @@ const qStatusText = computed(() => {
     parts.push(`扫描完成 —— 共扫 ${qScan.value?.scanned ?? 0} 条，可替换 ${qScan.value?.upgradeable ?? 0} 条`)
   } else if (qState.value === 'failed') {
     parts.push('扫描失败')
+  } else if (qState.value === 'idle' && qHasEntries.value) {
+    // 重启后进页读到的就是落盘的历史结论 —— 说清它是「上次扫的」，别让人以为刚扫过
+    parts.push(`上次扫描结果（共 ${qScan.value.entries.length} 条，可替换 ${qScan.value?.upgradeable ?? 0} 条）`)
   }
+  const skipped = Number(qScan.value?.skipped) || 0
+  if (skipped > 0 && qState.value !== 'running') parts.push(`跳过 ${skipped} 条最近扫过的`)
+  // 超时的那几首不算「已探过」——说清楚，免得用户以为它们已经探清是「没有更高音质」
+  const timedOut = (qScan.value?.entries || []).filter((e) => e.timed_out).length
+  if (timedOut > 0 && qState.value !== 'running') parts.push(`${timedOut} 条没探完（超时），下次会重探`)
+  const scannedWhen = qScan.value?.updated ? formatRecordTime(qScan.value.updated) : ''
+  if (scannedWhen && qState.value !== 'running') parts.push(`上次扫描 ${scannedWhen}`)
   if (qScan.value?.truncated) parts.push('已达数量上限，曲库后面部分没扫')
   return parts.join(' · ')
 })
@@ -554,7 +588,10 @@ function qChannelCells(e) {
     const from = hit && hit.platform ? `（来自${hit.platform}）` : ''
     const isPicked = picked === ch
     let hint
-    if (!tier) hint = `${label}：这条在该渠道拿不到`
+    // 超时的行：三个格子都空着，但**不能**说成「拿不到」——
+    // 「拿不到」是「探过了，确实没有」；超时空着是「压根没探完」。
+    if (!tier && e.timed_out) hint = `${label}：这一轮没探完（超时），不代表这个渠道没有`
+    else if (!tier) hint = `${label}：这条在该渠道拿不到`
     else if (!canPick) hint = `${label}：${tier}${from} —— 这条不需要替换或已经替换过了`
     else hint = `${label}：${tier}${from} · 点一下＝这首歌用${label}替换${isPicked ? '（再点一下取消）' : ''}`
     return { ch, label, tier, picked: isPicked, pickable: !!tier && canPick, hint }
@@ -624,6 +661,9 @@ function normalizeScan(j) {
     total: Number(d.total) || 0,
     scanned: Number(d.scanned) || 0,
     truncated: !!d.truncated,
+    // 跳过的条数（最近 7 天扫过、结论仍有效）与结果里最新的扫描时间（Unix 秒）
+    skipped: Number(d.skipped) || 0,
+    updated: Number(d.updated) || 0,
     upgradeable: Number(d.upgradeable) || 0,
     error: d.error || '',
     entries: Array.isArray(d.entries) ? d.entries : [],
@@ -633,14 +673,14 @@ function normalizeScan(j) {
   }
 }
 
-async function startQualityScan() {
+async function startQualityScan(refresh = false) {
   if (qRunning.value || qBusy.value) return
   const limit = clampQLimit(qLimit.value)
   qLimit.value = limit
   savePref('quality_limit', limit)
   qErrorText.value = ''
   try {
-    const res = await QualityAPI.scan('start', qMode.value, limit)
+    const res = await QualityAPI.scan('start', qMode.value, limit, refresh)
     if (res.code === 200) {
       qStopped.value = false
       qScan.value = normalizeScan(res.data)

@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -54,6 +55,15 @@ const (
 	// musicdlHealthTimeout 要短：健康检查是给「现在能不能用」下结论的，
 	// 卡住不返回等于把调用方也卡住。
 	musicdlHealthTimeout = 3 * time.Second
+	// musicdlFailCooldownBase 是一个源失败一次后要冷却多久。
+	//
+	// 为什么要有熔断：musicdl 的源是十几个互不相干的第三方站，其中总有站点抽风
+	// （改版、被墙、超时）。不熔断的话每次搜索都会把时间平均摊给所有源，
+	// 一个坏源就能把整次搜索拖到它的超时上限（实测慢源 3~15s，坏源直接跑满预算）。
+	musicdlFailCooldownBase = 2 * time.Minute
+	// musicdlFailCooldownMax 是冷却上限：连续失败越多冷却越久，但有顶，
+	// 免得某个源被永久拉黑（它的站可能十分钟后就修好了）。
+	musicdlFailCooldownMax = 15 * time.Minute
 )
 
 // MusicDL 是 sidecar 的客户端。一个实例覆盖多个平台（sidecar 内部按源名区分）。
@@ -61,6 +71,22 @@ type MusicDL struct {
 	base   string
 	client *http.Client
 	logf   func(format string, args ...any)
+
+	// health 记每个源最近的表现，用来熔断。
+	//
+	// 熔断的判据只认**明确的失败**（sidecar 报不可用 / 参数错，或我们这次等到超时）；
+	// 「搜到了 0 条」**不算**失败 —— 那个源可能只是没有这首歌（实测 16 个源里
+	// 有一半搜「海阔天空 beyond」能出结果、搜别的歌就 0 条，那是正常的）。
+	mu     sync.Mutex
+	health map[string]*musicdlSourceHealth
+}
+
+// musicdlSourceHealth 是一个源的健康记录。
+type musicdlSourceHealth struct {
+	fails       int       // 连续失败次数
+	cooldownEnd time.Time // 冷却到什么时候
+	lastFail    time.Time
+	lastOK      time.Time
 }
 
 // NewMusicDL 组装客户端。base 形如 `http://127.0.0.1:8901`。
@@ -72,7 +98,107 @@ func NewMusicDL(base string, logf func(string, ...any)) *MusicDL {
 		base:   strings.TrimRight(strings.TrimSpace(base), "/"),
 		client: &http.Client{Timeout: musicdlResolveTimeout},
 		logf:   logf,
+		health: map[string]*musicdlSourceHealth{},
 	}
+}
+
+// ── 单源等待预算（走 ctx）───────────────────────────────────────────────────
+//
+// 为什么预算要由调用方给：同一份搜索代码有两条腿，口径正好相反。
+//
+//	下载腿：宁可慢也要完整候选 —— musicdl 会对**每条结果**解析一次直链
+//	        （sidecar 注释里记着咪咕 3 条约 49s、网易 3 条约 162s），
+//	        给 3s 等于把取音池掐死。
+//	探测腿（替换音质扫描）：只要「有没有更高档位」这一个答案，慢源就是纯浪费。
+//
+// 两条腿用的是同一个 Search，所以「每个源最多等多久」必须随 ctx 走，不能写死在客户端里。
+type sourceBudgetKey struct{}
+
+// WithSourceBudget 告诉 musicdl 客户端「这次每个源最多等多久」。
+func WithSourceBudget(ctx context.Context, d time.Duration) context.Context {
+	if ctx == nil || d <= 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, sourceBudgetKey{}, d)
+}
+
+// SourceBudget 取出 ctx 里的单源等待预算（没有 = 不限速，走慢口径）。
+func SourceBudget(ctx context.Context) (time.Duration, bool) {
+	if ctx == nil {
+		return 0, false
+	}
+	d, ok := ctx.Value(sourceBudgetKey{}).(time.Duration)
+	return d, ok && d > 0
+}
+
+// sourceAllowed 这个源现在能不能问（不在冷却期里）。
+func (m *MusicDL) sourceAllowed(src string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	h := m.health[src]
+	if h == nil {
+		return true
+	}
+	return !h.cooldownEnd.After(time.Now())
+}
+
+// markSourceFailed 记一次失败并进入冷却。
+func (m *MusicDL) markSourceFailed(src, reason string) {
+	if src == "" {
+		return
+	}
+	m.mu.Lock()
+	h := m.health[src]
+	if h == nil {
+		h = &musicdlSourceHealth{}
+		m.health[src] = h
+	}
+	h.fails++
+	h.lastFail = time.Now()
+	backoff := musicdlFailCooldownBase
+	for i := 1; i < h.fails; i++ {
+		backoff *= 2
+		if backoff >= musicdlFailCooldownMax {
+			break
+		}
+	}
+	if backoff > musicdlFailCooldownMax {
+		backoff = musicdlFailCooldownMax
+	}
+	h.cooldownEnd = h.lastFail.Add(backoff)
+	fails := h.fails
+	m.mu.Unlock()
+	m.logf("[MUSICDL] 源 %s 连续第 %d 次失败（%s），接下来 %s 内跳过它", src, fails, reason, backoff)
+}
+
+// markSourceOK 成功一次就清掉冷却与失败计数。
+func (m *MusicDL) markSourceOK(src string) {
+	if src == "" {
+		return
+	}
+	m.mu.Lock()
+	if h := m.health[src]; h != nil {
+		h.fails = 0
+		h.cooldownEnd = time.Time{}
+		h.lastOK = time.Now()
+	}
+	m.mu.Unlock()
+}
+
+// SourceCooldownRemaining 这个源还要冷却多久（0 = 现在就能问）。
+//
+// 给「音源管理」页与测试用：界面上要能看出「这个源刚被熔断，还差多久恢复」。
+func (m *MusicDL) SourceCooldownRemaining(src string) time.Duration {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	h := m.health[strings.ToLower(strings.TrimSpace(src))]
+	if h == nil {
+		return 0
+	}
+	if d := time.Until(h.cooldownEnd); d > 0 {
+		return d
+	}
+	return 0
 }
 
 // Base 返回 sidecar 的基地址（空串 = 没配）。
@@ -332,30 +458,94 @@ func (m *MusicDL) Probe(ctx context.Context, sources []string, keyword string, l
 //
 // 单个源出错**不算整次失败**：把出错的源记进日志，把其余源的结果返回 ——
 // 用户要的是「少一个平台」，不是「搜索坏了」。全部源都失败才返回错误。
+//
+// 走的是**慢口径**（不限单源等待）：这条路主要服务下载，宁可慢也要完整候选。
 func (m *MusicDL) Search(ctx context.Context, keyword string, sources []string, limit int) ([]MusicDLSong, error) {
+	return m.search(ctx, keyword, sources, limit, 0)
+}
+
+// SearchWithBudget 同 Search，但给每个源一个**等待上限**（探测腿用）。
+//
+// 预算只掐「我们等多久」，不掐 sidecar 内部的工作量 —— 它那边的线程会继续跑到
+// 自己的单源预算为止，我们只是不等它了。
+func (m *MusicDL) SearchWithBudget(ctx context.Context, keyword string, sources []string, limit int, budget time.Duration) ([]MusicDLSong, error) {
+	return m.search(ctx, keyword, sources, limit, budget)
+}
+
+func (m *MusicDL) search(ctx context.Context, keyword string, sources []string, limit int, budget time.Duration) ([]MusicDLSong, error) {
 	keyword = strings.TrimSpace(keyword)
 	if keyword == "" {
 		return nil, nil
 	}
+
+	// 熔断：冷却期内的源**这一轮不问**（问它就是白等它超时）。
+	ask := make([]string, 0, len(sources))
+	skipped := make([]string, 0, len(sources))
+	for _, src := range sources {
+		src = strings.ToLower(strings.TrimSpace(src))
+		if src == "" {
+			continue
+		}
+		if !m.sourceAllowed(src) {
+			skipped = append(skipped, src)
+			continue
+		}
+		ask = append(ask, src)
+	}
+	if len(ask) == 0 {
+		if len(skipped) > 0 {
+			m.logf("[MUSICDL] %d 个源都在冷却期，本次不再问：%s", len(skipped), strings.Join(skipped, "/"))
+		}
+		return nil, nil
+	}
+
 	payload := map[string]any{"keyword": keyword}
-	if len(sources) > 0 {
-		payload["sources"] = sources
+	if len(ask) > 0 {
+		payload["sources"] = ask
 	}
 	if limit > 0 {
 		payload["limit"] = limit
 	}
 
+	timeout := musicdlSearchTimeout
+	if budget > 0 && budget < timeout {
+		timeout = budget
+	}
+
 	var resp musicdlSearchResp
-	if err := m.postJSON(ctx, "/search", payload, &resp, musicdlSearchTimeout); err != nil {
+	if err := m.postJSON(ctx, "/search", payload, &resp, timeout); err != nil {
+		// 整次超时/失败：这次问过的源全部记一次失败（分不清是哪个慢，就都算上）。
+		for _, src := range ask {
+			m.markSourceFailed(src, err.Error())
+		}
 		return nil, err
 	}
-	for src, e := range resp.Errors {
+
+	// 有结果的源 = 这次是好的；报错的源 = 这次坏了。
+	ok := map[string]bool{}
+	for _, it := range resp.Items {
+		if src := strings.ToLower(strings.TrimSpace(it.Source)); src != "" {
+			ok[src] = true
+		}
+	}
+	errs := make(map[string]MusicDLSideError, len(resp.Errors))
+	for k, v := range resp.Errors {
+		errs[strings.ToLower(strings.TrimSpace(k))] = v
+	}
+	for src, e := range errs {
 		if e.IsInvalid() {
 			// 参数错是我们的问题，喊出来
 			m.logf("[MUSICDL] 搜索源 %s 参数错误：%v", src, e)
+			m.markSourceFailed(src, e.Message)
 			continue
 		}
 		m.logf("[MUSICDL] 搜索源 %s 当前不可用：%v", src, e)
+		m.markSourceFailed(src, e.Message)
+	}
+	for src := range ok {
+		if _, bad := errs[src]; !bad {
+			m.markSourceOK(src)
+		}
 	}
 	if len(resp.Items) == 0 && len(resp.Errors) > 0 {
 		return nil, fmt.Errorf("musicdl 的 %d 个源全部不可用", len(resp.Errors))

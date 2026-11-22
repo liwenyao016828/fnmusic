@@ -22,7 +22,7 @@
 | **后端依赖** | **已引入第三方依赖**（`modernc.org/sqlite v1.36.1`，纯 Go）。旧版「零依赖」规则已作废，见 §2 规则二 |
 | **前端依赖** | vue / vite / tailwindcss / axios / lucide-vue-next / crypto-js / buffer / qrcode |
 | **打包** | `bash scripts/build.sh`，**不需要 fnpack** |
-| **当前版本** | `2.33.0`（代码与 manifest 已同步，见 §7） |
+| **当前版本** | `2.35.0`（代码与 manifest 已同步，见 §7） |
 | **应用内更新** | `backend/pkg/appupdate` + `frontend/src/components/UpdateCard.vue`：查 GitHub Release → 流式下载到 `<数据目录>/updates/` → 执行 `/tmp/yinshu-update/apply-update.sh`。**v2.28.2 起回到「卸载旧版 → 安装新版」的老办法**（`appcenter-cli stop` → `uninstall` → `install-fpk` → 按 `/api/app/version` 版本验收）：v2.28.0 的「就地升级」在真机上被应用中心拦下（安装任务返回 10030 参数异常），而老办法只要 fpk 里**没有卸载向导**就能跑通 —— 所以 v2.28.1 起 `fpk-package/wizard/uninstall` 已删除。⚠️ 若要再给 fpk 加卸载向导，必须同时保证「应用内更新」这条路仍能卸载（带向导时应用中心命令行拒绝卸载且返回码仍是 0，见 §1.4.1）。**安装这一跳在开发机上无法验证**（没有 `appcenter-cli`、没有 `/var/apps/`），真机第一次用要盯着 log。 |
 | **文件名体检** | `backend/pkg/nas/health.go`：扫出非法 UTF-8 / 控制字符 / 首尾空格 / 0 字节音频 / `.part` 残留 / 权限 000 等条目（它们会让 fnOS 整层目录报「未知错误」）。修复接口**只收 `id`（路径字节的 base64url）不收 path** —— 非法 UTF-8 的名字过一次 JSON 就变成 U+FFFD，传 path 必然找不到文件；服务端在最近 8 次扫描缓存里回查。 |
 | **自动发布** | 功能完成并验证后由 DSH 提交、推送 main；GitHub Actions 校验四处版本 → 前端构建 → 后端/前端/洛雪测试 → FPK 自检 → 新版本 Release + SHA256。已有版本不覆盖；不自动部署 NAS。不用 git hook 自动暂存工作区。 |
@@ -39,9 +39,10 @@
 | **洛雪轮询口径** | v2.17.6 起「当前选择的洛雪音源」是**多选 = 轮询**：用户勾了几个脚本，就按用户在音源页排的顺序挨个问，取**实际档位最高**的那条（不是第一个能下的就赢）。实现分两侧：宿主 `sidecar/lx_host/server.mjs` 的 `/resolve` 收 `scripts`（既是白名单也是顺序）+ `collect`（把能下得动的候选整批交回，每条都做过 Range 活性探测）；Go 侧 `pkg/intercept/lxresolve.go` 的 `pickLxCandidate` 按 `lxTierFromSize`（字节数 ÷ 时长）换算实际档位后挑最高，**已证明能下的候选永远优先于探测没结论的**，同档位按用户排序取靠前者。脚本名 → 文件名只能走 `lxnode.ScriptFileName` 一处口径（宿主只认落盘文件名，真机撞过 `全豆要[聚合音源]` vs `全豆要_聚合音源_.js`），同名脚本落成同一个文件算一份 |
 | **替换记录口径** | v2.17.8 起每次替换都落盘一条记录（`pkg/intercept/quality.go`，`<DataDir>/quality_records.json`，上限 100 条、原子写），`POST /api/quality/scan {action:status}` 的 `records` 字段带回来，界面进页即读（不是只有「刚扫过」才显示）。一条记录 = 文件、歌名/歌手、`from → to`、渠道、成败；失败带 `note`（如「各渠道都没有更高的档位」）。记录是**历史**，删了文件也不回收——它回答的是「我换过什么」，不是「现在盘上有什么」 |
 | **音质补强口径** | v2.17.0 起收藏自动下载**不再「只试一次就永久放弃」**：这次拿不到无损的先落一份能拿到的，之后由后台轮补强（`pkg/intercept/upgrade_sweeper.go`，每 20 分钟一轮、每轮最多 3 首），失败冷却 **24 小时**、累计 **5 回**收手，剩下的交给「替换音质」页手动做。账本在 `online.DownloadedItem` 的 `upgrade_tries/upgrade_next`（老数据只有 `upgrade_tried=true` 没有 `upgrade_next` ⇒ 视作「早可以再试」，用来救 2.15/2.16 那批被误判成「已放弃」的记录）。登记表里的触发来源是 `upgrade`（界面显示「音质补强」），与「收藏」触发的失败必须分开看：前者是「无损版还没搞到」，后者才是「你要的歌没下下来」 |
-| **替换音质口径** | v2.17.0 起「补全整理」页有「替换音质」段：扫曲库（默认只扫**有损**文件）→ 逐首列出**各渠道实际能拿到什么档位**（`POST /api/quality/scan`，异步 + 轮询）→ 勾选后用最高档位覆盖（`POST /api/quality/replace`，一次 ≤50 条，串行）。**档位一律按实际判**（`pkg/audioext.TierOfFile`，界面与下载器共用，v2.17.2）：容器（flac/ape/wav/dsf/dff 算无损）+ mp3 读第一帧标称码率（≥256k 算 320k、≥160k 算 192k、其余 128k；读不出来回落 320k）+ 洛雪那条按**实测字节数/时长**推算（第三方站常态是「名义无损、实际 128k」，真机见过 4,186,741 字节/295 秒 ≈ 113kbps 被标成 flac）。落盘带 `upgrade_if_better`：只有拿到**更高**档位才覆盖，绝不降级；「拿到同档、没覆盖」在结果里是 `ok:false` + `note`，与真失败分开。扫描/替换都要拦截层在跑（没接管时接口如实回 502 `available:false`，不是 500） |
+| **替换音质口径** | v2.17.0 起「补全整理」页有「替换音质」段：扫曲库（默认只扫**有损**文件）→ 逐首列出**各渠道实际能拿到什么档位**（`POST /api/quality/scan`，异步 + 轮询）→ 勾选后用最高档位覆盖（`POST /api/quality/replace`，一次 ≤50 条，串行）。**档位一律按实际判**（`pkg/audioext.TierOfFile`，界面与下载器共用，v2.17.2）：容器（flac/ape/wav/dsf/dff 算无损）+ mp3 读第一帧标称码率（≥256k 算 320k、≥160k 算 192k、其余 128k；读不出来回落 320k）+ 洛雪那条按**实测字节数/时长**推算（第三方站常态是「名义无损、实际 128k」，真机见过 4,186,741 字节/295 秒 ≈ 113kbps 被标成 flac）。落盘带 `upgrade_if_better`：只有拿到**更高**档位才覆盖，绝不降级；「拿到同档、没覆盖」在结果里是 `ok:false` + `note`，与真失败分开。扫描/替换都要拦截层在跑（没接管时接口如实回 502 `available:false`，不是 500）。**v2.34.0 起结论落盘 + 增量扫描**：每条结果带 `scanned_at`，存 `<DataDir>/quality_scan.json`（原子写、上限 5000 条、按 `scanned_at` 淘汰最旧），`POST /api/quality/scan` 的 body 加 `refresh` —— `refresh=false`（默认，「继续扫描」）跳过**最近 7 天内扫过、且盘上文件与档位都没变**的歌并把条数回在 `skipped` 里；`refresh=true`（「全部重扫」）才是全量。失效判定三件套见 `qualityEntryFresh`（未过期 / 文件还在 / `qualityCurrentTierOfFile` 与结论里的 `currentTier` 一致）。被叫停的扫描**不记结论**（否则会白白跳过一个没探完的文件）；进页面读到的是落盘的历史结论（`state=idle` + `updated` 是上次扫描时间），不是空表 **v2.34.1 起提速**：探测腿给单个 musicdl 源 8 秒预算且只问 1 条候选（下载腿不限时）、失败音源熔断 2→4→8 分钟（封顶 15 分钟，**「搜到 0 条」不算失败**）、单首 25 秒围栏（到点记 `timed_out`＝**没探出**，不是「没有更高音质」，也不进 7 天免扫名单）、搜索限速改成按平台分槽。详见 §3.7「「替换音质」的三处提速」 |
+| **歌曲修复口径** | v2.35.0 起「补全整理 → 修复」是**一张合并清单**：歌名不对（AI 判名）、内容重复（哈希/同名分组）、文件名非法（`pkg/nas/health.go`）、音频不对（`pkg/audioprobe` 读文件头）四类问题合成同一张表，按类筛选、勾选后分派到各自既有接口。**「音频不对」= 扩展名与真实容器不符 / 时长 < 30 秒 / 无损容器但等效码率 < 200kbps**（`POST /api/library/repair/scan`，纯本地、只读前 64KB）。这类文件走 `POST /api/library/repair/replace`：搜歌名列出各版本让用户挑一个，**覆盖本体、不做档位比较**（坏文件同档位也必须换），落盘后复核空文件或 < 5 秒则保留旧文件。⚠️ 与「替换音质」规则相反 —— 那条只在拿到更高档位时才覆盖。详见 §3.7 |
 | **推荐开发环境** | **WSL2 Debian**（见 §1.0）——Windows 下也能跑，但需要额外环境变量 |
-| **接口总数** | `backend/pkg/api/catalog.go` 共 **136 个**（core 99 / internal 37，见 §6.1）。目录**面向 AI**：顶层 `guide` 先说「是干嘛的、怎么做」，接口清单只是参考 ⚠️ `/api/catalog` 是**扁平结构** —— 数组在**顶层 `endpoints`**，不是 `data.endpoints` |
+| **接口总数** | `backend/pkg/api/catalog.go` 共 **138 个**（core 101 / internal 37，见 §6.1）。目录**面向 AI**：顶层 `guide` 先说「是干嘛的、怎么做」，接口清单只是参考 ⚠️ `/api/catalog` 是**扁平结构** —— 数组在**顶层 `endpoints`**，不是 `data.endpoints` |
 | **音乐入口接管** | 可选能力（`QULV_TAKEOVER=1`），默认关闭。接管官方 Unix socket 并全透传，见 §2 规则六 / §3.6 |
 | **在线曲库** | 接管生效时可用（v2.1.70 新增；v2.1.71 修真机接管失败；v2.1.72 修 isFavorite 写死）：网易 + QQ 的在线搜索/取流/歌词/封面/收藏/歌单/历史，合并进官方界面。**v2.33.0 起补上在线歌手与原生专辑**（搜歌手 / 歌手页 / 歌手的热门最新歌曲与专辑列表 / 专辑走平台原生接口取完整曲目；歌手链路目前只有网易，QQ 的歌手接口已下线）。见 §3.7 |
 | **音源协议** | **两种互补协议**：`official`（后端内置，免脚本，搜索/榜单/歌单/歌词）+ `lx`（浏览器脚本，取直链）。见 §3.4 |
@@ -416,6 +417,27 @@ ResolveSafePath(raw string) (string, error)  // 校验并解析真实路径
 受 `lx_server_enabled` 开关控制。执行条件和浏览器路径的区别见规则一；后台任务只应在
 服务端渠道实际可用时确认接管。`README.md` 记录宿主配置及使用边界。
 
+#### ⚠️ 宿主必须 Node ≥ 22（v2.34.0 真机根因，**别退回按 PATH 找 node**）
+
+宿主用 `--permission` 做进程级隔离（只放行脚本文件与脚本目录），**这个参数是 Node 22 才有的**。
+飞牛系统自带 `/usr/bin/node` 是 **v18.20.4**，`/vol1/@appcenter/nodejs_v20/bin/node` 是 **v20.20.2**
+（版本号骗人：v20 也不认 `--permission`）。原来的 `resolveNodeBin` 先走 `exec.LookPath("node")`，
+在 NAS 上必然命中 v18 → `bad option: --permission` → 子进程秒退 → 界面只剩「启动失败」，
+**连带整条洛雪链路全灭**（日志刷「lx 渠道候选解析失败 / 洛雪轮询取链失败…lx 宿主不可用（failed）」）。
+开发机 PATH 里是 v22.20.0，所以这个坑只在真机出现 —— 别在开发机上「验过了」就收工。
+
+现在的口径（`nodeCandidateList` + `nodeUsable`）：
+
+1. 候选顺序 **显式绝对路径 → `QULV_NODE_BIN` → `/vol1/@appcenter/nodejs_v24|v22|v20|v18/bin/node`
+   → `/usr/local/bin/node`、`/usr/bin/node`、`/vol2/@appcenter/nodejs_*`、`/opt/node*/bin/node`
+   → 最后才是 `LookPath`**。应用中心自带的 Node 必须排在 PATH 前面。
+2. **判断「能不能用」必须实跑探针**（`nodePermissionProbe` = `node --permission --eval ""`，5s 超时、
+   exit 0 才算），不能读 `--version` —— v20.20.2 会乖乖报 20 然后拒绝 `--permission`。结论进 `sync.Map` 缓存。
+3. 一个可用的都没有时，报错要写清「需要 Node ≥ 22」与已知位置，并指向 `QULV_NODE_BIN`。
+4. 子进程 stdout/stderr **一律进 `tailBuffer` 环形缓冲**（保留最后 4096 字节）再进报错信息
+   （`lx 宿主启动后立刻退出了（node=<path>）：<前 3 行>`）—— 原来直接接 `os.Stderr`，
+   而 fnOS 应用中心不收集应用 stderr，真正的失败原因（`bad option`）就这么在真机上彻底丢掉了。
+
 ---
 
 ## 3. 代码地图
@@ -438,14 +460,14 @@ ResolveSafePath(raw string) (string, error)  // 校验并解析真实路径
 | `nas` | 3006 | 目录扫描、音频串流、标签读写、**路径守卫**、扫描结果缓存 | `pathguard.go` 是所有文件访问的闸门；`ScanSongs` 已改用 `dirwalk`（与索引同一套枚举规则），响应带 `truncated`/`warnings`，**缓存命中也照带**（见 §11 ㊼ 块十） |
 | `push` | 2291 | **推送同步**：账号歌单/日推 → 飞牛音乐歌单，含任务存储与定时调度 | 见 §3.2；`source_link.go` 的 QQ 抓取已改为复用 `charts`（见 §11 ㉘） |
 | `ai` | 2000 | **OpenAI 兼容客户端** + 4 个业务用法（判名/挑歌/核验歌词/生成正则） | **见 §3.5 与 §4.2** |
-| `intercept` | 9333 | **飞牛官方页面的接管层**：socket 接管、`/music/api/v1/*` 拦截与合并、虚拟 id 与虚拟歌单、注入 UI 的同源通道 | 见 §11 相关条目与 `docs/变更记录/2026-10-06.md` turn 62–96；⚠️ **这个包在 2026-10-06 被误删过约 350 行**（补丁漏了 `s[m.end():]`），已重建 —— 重建靠 `intercept_test.go`（47 KB）当验收网，见 turn 94。核心文件：`intercept.go`（`Handle`/`buildRoutes`/`route`/`forward`/`upstreamJSON`/`userKey`/`credentialFingerprint`/`adoptLegacyUserKey`/JSON 小工具）、`stream.go`（取流 + tee）、`tee.go`（边听边下）、`autodownload.go`（收藏/歌单触发的后台下载 + `downloadCandidates` 逐候选重试）、`acquire.go`（下载源池：`rankedSources`/`betterCandidate`/`durationMatches`）、`qulvbridge.go`（`/music/_qulv/*` 同源通道）、`favorite.go`/`playlist.go`/`history.go`/`lyric.go`/`metadata.go`/`cover.go`/`search.go`/`vplaylist.go`/`vchart.go`/`pageshell.go`/`lookup.go`、`assets/ui.js`（注入脚本，含 `describeSource`） |
+| `intercept` | 9333 | **飞牛官方页面的接管层**：socket 接管、`/music/api/v1/*` 拦截与合并、虚拟 id 与虚拟歌单、注入 UI 的同源通道 | 见 §11 相关条目与 `docs/变更记录/2026-10-06.md` turn 62–96；⚠️ **这个包在 2026-10-06 被误删过约 350 行**（补丁漏了 `s[m.end():]`），已重建 —— 重建靠 `intercept_test.go`（47 KB）当验收网，见 turn 94。核心文件：`intercept.go`（`Handle`/`buildRoutes`/`route`/`forward`/`upstreamJSON`/`userKey`/`credentialFingerprint`/`adoptLegacyUserKey`/JSON 小工具）、`stream.go`（取流 + tee）、`tee.go`（边听边下）、`autodownload.go`（收藏/歌单触发的后台下载 + `downloadCandidates` 逐候选重试）、`acquire.go`（下载源池：`rankedSources`/`betterCandidate`/`durationMatches`）、`qulvbridge.go`（`/music/_qulv/*` 同源通道）、`favorite.go`/`playlist.go`/`history.go`/`lyric.go`/`metadata.go`/`cover.go`/`search.go`/`vplaylist.go`/`vchart.go`/`pageshell.go`/`lookup.go`、`repair_scan.go`（音频体检：格式不符 / 时长过短 / 假无损）、`repair.go`（按用户挑的版本覆盖本体，不做档位比较）、`assets/ui.js`（注入脚本，含 `describeSource`） |
 | `online` | 3641 | 在线音源抽象：解析池（`resolve.go`）、已下载登记表（`downloaded.go`）、musicdl sidecar 客户端（`musicdl.go`） | `DownloadedItem` 带 `Source`/`Quality`（**实际取音**，可能已被下载源池换源）与 `Size`；`Put` **只登记真的存在的文件**；`downloaded.json` 是「收藏自动绑定本地」的落点 |
 | `search` | 4261 | 多平台搜索聚合与去噪、**真实音质解析**、**音质查询接口**、**QQ 专辑详情（风格/年份）** | 全文零引用音源 → 免脚本可用；§5.7 / §5.8；`album_qq.go` 是**唯一的真实 genre 来源**（四家的搜索响应都不含 genre，见 §4.13） |
 | `fnos` | 1881 | **飞牛集成**：官方开放 API + 音乐应用接口 + 令牌读取 | 见 §3.2；重扫节流在 `rescan.go`（**debounce 30s / 最小间隔 10min**，`lastRun` 落盘，见 §4.11） |
 | `sources` | 1868 | 音源脚本管理 + 批量导入/导出/清理/删除 | `batch.go` / `manage.go` 见 §3.2 |
 | `tags` | 2123 | 音频标签读写（MP3 = ID3v2.3，FLAC = Vorbis + PICTURE） | ⚠️ **`Write` 是合并语义**：没传的字段先从文件读回来再写（`mergeTextFields`）。两种容器的底层策略都是「删掉受管字段重建」，不合并就会**静默抹掉**没传的字段（见 §4.13）。封面另有各自的保留逻辑 |
 | **`complete`** | 2842 | **主动补全流水线**：挑活 → 判名 → 搜索匹配 → 歌词核验 → 写标签 + **备份/撤销** | **见 §3.5**；`Resolve`/`Execute` 两阶段；**六个字段逐个可勾**，值只取「已匹配上的那条命中」（见 §4.13）；`ctx` 取消 = **不再派发新曲目**，被停止的曲目单记 `Cancelled`（绝不混进 `no_match`/`failed`，见 §11 ㊼ 块八） |
-| `downloader` | 1863 | 下载落盘（断点续传、错误页拦截、歌词内嵌、封面内嵌） | 见 §4.3 的两个已修 bug；**单曲内部不做重试**，换源由上层负责（见 §4.1.8）；封面抓取失败会**记日志**（见 §4.11） |
+| `downloader` | 1682 | 下载落盘（断点续传、错误页拦截、歌词内嵌、封面内嵌） | 见 §4.3 的两个已修 bug；**单曲内部不做重试**，换源由上层负责（见 §4.1.8）；封面抓取失败会**记日志**（见 §4.11）；v2.35.0 新增 `ForceReplace` 通道（点名覆盖那一份，跳过档位比较与 32KB 体积门槛），见 §3.7「歌曲修复（替换）」第 8 条 |
 | `tidy` | 1571 | **刮削整理 + 双通道去重** | ⚠️ `TidyOne` **不下载封面**，见 §4.8；绝不写目录级 cover.jpg；`Item` 支持年份/曲序/光盘/风格（见 §4.13） |
 | **`nameparse`** | 1048 | **文件名解析规则层**：内置启发式 + `Suspect` 标记 + 用户自定义正则 | **见 §3.5**；改之前必读 |
 | `library` | 1313 | **增量索引 + 枚举完整性安全门 + 字段缺口统计**（遍历本体已搬到 `dirwalk`，这里只做映射） | 见 §4.4、§5.4、§11 ㊼ 块十；⚠️ 「标签读没读过」的判据是 `Entry.TagReadAt`，**不再是「标题为空」**（那样新增字段永远补不上，见 §4.13）；⚠️ 缺口统计把**写不了标签的格式**（非 MP3/FLAC）单列成 `unsupported`，既不算待补也不算待读（见 §4.13） |
@@ -460,6 +482,7 @@ ResolveSafePath(raw string) (string, error)  // 校验并解析真实路径
 | `downloadqueue` | 252 | **下载队列落盘**（NAS 上的权威副本，浏览器 localStorage 只当缓存） | v2.1.17 新增；**不解释任务字段**（`[]json.RawMessage`），前端改字段不用动后端 |
 | `proxy` | 188 | HTTP 代理（供 lx 脚本跨域取数） | |
 | `audioext` | 148 | **音频扩展名唯一清单**：`Exts`（14 种，能扫/能播）/ `Writable`（mp3+flac，能写标签） | v2.1.30 新增（见 §11 ㊼-④）；⚠️ 两组**别混用**：能扫 ≠ 能写，混了「补全成功」就是空话（见 §4.13） |
+| **`audioprobe`** | 400 | **只读文件头判真实容器与时长**（FLAC STREAMINFO / MP3 Xing·CBR / WAV fmt+data / DSF），不信标签 | v2.35.0 新增，「歌曲修复」的判据来源。⚠️ `EffectiveKbps` 必须是 float64（100 秒却只有 200 字节折算 0.016kbps，取整会抹掉信号）；MPEG1 LayerIII 码率表索引 **9 = 128kbps**（不是 11）。见 §3.7「歌曲修复（替换）」 |
 
 ### 3.2 四个新增能力模块（2026-09-16）
 
@@ -798,7 +821,8 @@ flow 实测：`.download-shell { grid-template-columns:220px 1fr; gap:20px }`，
 |---|---|
 | `PushManager.vue` | 订阅更新（v2.1.16 曾并入 LibraryManager；**P1 重新独立**，吃全局 `pushEngine`）。原因见 §4.1.5 |
 | `DownloadHub.vue` | 下载（队列 / 歌单下载 / 自动下载记录三段） |
-| `TidyView.vue` | 补全整理（扫描缺失 / 字段补全 / 体检 / 查重） |
+| `TidyView.vue` | 补全整理（扫描缺失 / 字段补全 / **修复清单**：歌名·查重·文件名·音频四类合一 / 音质） |
+| `RepairCandidateSheet.vue` | 「歌曲修复」的版本挑选抽屉（v2.35.0）：搜歌名列各版本 → 两次点击确认 → 覆盖本体，展示前后对照 |
 | `LibraryManager.vue` | 本地曲库（P1 后只剩 NasExplorer 外壳） |
 | `AccountManager.vue` | 账号连接：两个平台卡片（品牌色顶边）、扫码弹窗（网易需前端渲染二维码，用 `qrcode` 包）、每日推荐/歌单速览 |
 
@@ -1641,6 +1665,154 @@ v2.33.0 补上这四条路由（`pkg/intercept/vartist.go`）：
 
 **还没做的**：曲率自己的前端（Vue）**没有歌手 / 专辑 Tab 与详情页** —— 这一轮只服务
 飞牛官方页面的接管。要给我们自己的界面加，得先有详情页组件与路由，是另一件事。
+
+#### 「替换音质」的三处提速（v2.34.1）
+
+扫描慢的根因全在「等外网」。实测（2026-11-21，NAS 上跑已安装的 2.34.0）：30 首冷扫
+**580.9s ≈ 19.4s/首**，单首最坏 80.3s；一百来首的歌库 ≈ 35 分钟，一万首 ≈ 54 小时。
+改这三处之前先看下面四条。
+
+1. **探测腿掐预算，下载腿不限时。**（`pkg/intercept/quality.go` +
+   `pkg/online/musicdl.go`）预算**随 ctx 走**：`online.WithSourceBudget(ctx, d)` /
+   `online.SourceBudget(ctx)`，只有探测腿设置它。下载要的是「能下下来」，慢而全是应该的
+   —— v2.13.0 那轮把 sidecar 预算从 12s 提到 120s，就是因为掐太死会「取音池恒空」。
+   ⚠️ 同理 `musicDLPlatformSearcher.Search` 在有预算时把 limit 夹到 **1**
+   （musicdl **对每条结果都解析一次直链**，条数直接乘在耗时上；原来走的是
+   `cfg.MusicDLEffectiveLimit()`，默认 **5**）。
+
+2. **熔断只认「明确失败」，「搜到 0 条」不算失败。**（`pkg/online/musicdl.go`）
+   源级健康度 `health map[string]*musicdlSourceHealth`，连续失败按 2→4→8 分钟退避、
+   封顶 15 分钟，冷却期内**不再发给 sidecar**（整批都冷却时直接空手回，不发请求）。
+   ⚠️ 判据只有两种：sidecar 明确报 `unavailable`/`invalid`，或**我们这次等到超时**。
+   「这个源没有这首歌」是正常结果 —— 实测 16 个源里有一半搜别的歌就是 0 条，
+   拿 0 条去熔断会把好源判死。
+
+3. **超时是「没探出」，不是「探出没有」。**（`pkg/intercept/quality.go`）
+   单首围栏 `qualityProbeBudget = 25s`，到点记 `TimedOut=true`、`Best=nil`、
+   `Upgradeable=false`。三处联动，别拆开：
+   · `qualityEntryFresh` 里 `TimedOut` 的条目**不进 7 天免扫名单**（下次要重探）；
+   · `upsertQualityEntryLocked` / `qualityScanStore.put` 里，**新的超时覆盖不了旧的结论**
+     （网络慢只是一次的事）；
+   · `qualityStoreSnapshot()` 只丢「文件没了 / 盘上档位变了」的条目 ——
+     **过期与超时的条目都留在列表里给用户看**（用户抱怨过「扫出来的歌莫名全没了」）。
+   前端要把这两种情况分开显示（`timed_out` → 「没探完」，不是「拿不到」）。
+
+4. **限速按平台分槽，不是全局一个时间片。**（`pkg/search/throttle.go`）
+   `throttle(platform)`：同平台共用一个槽，不同平台互不排队（槽内仍是「预约时间片 +
+   0.5~1.5 抖动」）。理由：限速是「别把单个站打爆」，不是「所有站一起慢」——
+   实测全局单槽 20 首并发墙钟 4.16s（吞吐 4.81 次/秒），分槽后各平台不再互相排队。
+
+5. **「原生渠道」只问原生平台，不走外挂搜索器。**（`Interceptor.nativePlatforms()` +
+   `search.SearchNativeContext`）两件事必须分开做，缺一个都还是慢：
+   · `i.platforms()` 在生产里是「默认平台 ∪ 用户启用的 musicdl 源」（dev 实测 **20 个**），
+     拿它当原生平台列表就会串行搜 20 个源 —— 原生这一腿只能用 `nativePlatforms()`
+     把列表收敛回 `wy/tx/kg/kw`；
+   · 只收敛列表还不够：`search.SearchContext` 先问外挂搜索器，而 musicdl 的 `wy` 源
+     **把平台 `wy` 整个劫持了** —— 本该 0.3s 的网易原生接口变成几十秒的 musicdl 网易源。
+     所以原生腿走 `search.SearchNativeContext`（跳过外挂），实测这一段从 **25s 降到 0.15~1.4s**。
+   ⚠️ 两处都要保留三级注入判断（`searcherCtx` → `searcher` → 生产兜底），
+   否则测试替身全部失效、用例「什么都没搜到」。
+
+6. **洛雪腿也要预算。**（`withLxBudget` / `lxBudgetOf`，`pkg/intercept/lxsource.go`）
+   洛雪是「几个脚本各问一遍」，实测单首最高 **16.6s**，比其它段加起来还长，而且它
+   不受 musicdl 单源预算约束。探测腿给 `qualityLxBudget = 6s`，下载腿不给（要真直链）。
+   为什么走 ctx 而不是加参数：它在 `rankedSources` / `collectDownloadAttemptsWith`
+   两层之下，加参数要给下载腿也用着的签名开洞。
+
+7. **按段计时别在失败路径上写 `continue`。**（`pkg/intercept/autodownload.go` 的
+   `case dlChanNative`）计时累加在循环末尾，`continue` 会跳过它 —— v2.34.1 踩过：
+   日志里「原生解析」恒显示 `0s`，看着像这段没跑，实际是失败路径漏记。
+
+8. **文件名开头的曲序要去掉再比对。**（`qualityMatchTitle`，`pkg/intercept/quality.go`）
+   曲库文件普遍叫 `01 夜曲.flac`，平台曲名是 `夜曲`；严格相等比对会让原生列**永远空着**。
+   只认「≤4 位数字 + 分隔符」这一种形态（`10000 Reasons` 不能被切），
+   调用方同时用原样标题比一次，所以切错也不丢匹配。
+
+**实测效果**（dev 机，12 首有损、4 worker）：19.4s/首 → **约 1.5s/首**（10~13 倍）。
+剩余大头是「找候选」卡在 `qualitySourceBudget = 8s`（20 个源并发，总有一个慢源顶到上限）
+与「洛雪」卡在 6s。
+
+⚠️ **改 `intercept.Config.Searcher` 的签名要付出代价**：全仓约 40 处测试替身是
+`h.it.searcher = func(_ string, _ string, _, _ int) []search.UnifiedSong`。
+所以 v2.34.1 **另开** `Config.SearcherCtx`（带 ctx 的并行入口）+ `Interceptor.searchCtx`，
+三级优先：①`searcherCtx` ②`searcher`（测试替身，ctx 丢掉）③都没注入 → `search.SearchContext`。
+⚠️ `New()` 里**不要**把 `search.Search` 塞进 `i.searcher` 兜底 —— 那会让测试替身
+（改的是 `i.searcher`）和真实实现（走 `i.searcherCtx`）各走一条，出现「什么都没搜到」。
+
+按段计时日志（每首一行，v2.34.1 新增）：
+`[INTERCEPT] 音质探测 %s：总 %v（原生搜索 %v｜找候选 %v｜原生解析 %v｜洛雪 %v｜外挂池 %v）%s`，
+末段为「［超时，没探出］」。计时结构 `dlTimings` 在 `pkg/intercept/autodownload.go`。
+
+#### 「歌曲修复（替换）」与合并清单（v2.35.0）
+
+用户原话（2026-11-21）：「增加歌曲修复(替换)找那些歌曲大小与格式不对，还有时间过短的，
+然后可以替换歌曲，通过搜索歌名，返回各种版本让用户选择。然后查重，歌名修复，
+文件名体检的列表合并为一个列表共用。」
+
+四类问题 → **一张清单**，动作仍按类分派（合并的是列表，不是行为）：
+
+| 类 | 判据 / 来源 | 动作 | 会动什么 |
+|---|---|---|---|
+| `title` 歌名 | `GET /api/library/title-fix/scan`（读索引，不读文件） | `titleFixFix` | 只改标题标签 |
+| `dup` 重复 | `GET /api/duplicates`（content + name 双通道） | `duplicates/resolve` | 移进 `.tidy_trash` |
+| `file` 文件名 | `POST /api/nas/health/scan`（磁盘条目本身非法） | `nas/health/fix` | 改名 / 改权限 / 删残留 |
+| `audio` 音频 | `POST /api/library/repair/scan`（读文件头） | `POST /api/library/repair/replace` | **覆盖文件本体** |
+
+九个坑：
+
+1. **音频检查必须读文件头，不能信扩展名和标签**。`backend/pkg/audioprobe` 只读前 64KB
+   （mp3 的 ID3 常有 46KB，读少了会认成未知容器），回答「真实容器 + 时长 + 名义码率」，
+   `EffectiveKbps = Size*8/DurationSec/1000` 由这三样自己算 —— **这个词必须是 float64**：
+   100 秒却只有 200 字节的文件折算是 0.016kbps，用 int 会抹成 0，假无损就报不出来。
+2. **MPEG1 Layer III 的码率表索引 9 是 128kbps**（11 才是 192），抄错会让「时长过短」误报一片。
+   表在 `pkg/audioprobe/audioprobe.go` 的 `mp3Bitrates[2][3][15]`。
+3. **替换音质与歌曲修复是两条相反的规则**：前者「只有严格更好才换」，后者「坏文件同档位也要换」。
+   `ReplaceTrackFromCandidate` 因此**不做档位比较**，走 `postDownloadForceReplace`（见第 8 条）。
+   唯一的守卫是落盘后复核：新文件为空、或时长 <5 秒 → 报错并保留旧文件。
+4. **清理重复不能只传 `{dir, mode}`**。那样后端会重新扫描并移走**全部**重复项，
+   用户在这张表里取消了几个勾也照样被搬走。必须显式提交 `groups`
+   （`HandleDuplicatesResolve` 拿到 groups 就不再重扫），只提交勾了 ≥1 条可删的组，
+   「保留」那条永远取后端算出的 `keep`，不给前端改。
+5. **文件名体检修的是 ID 不是 path**：非法 UTF-8 的名字往返 JSON 会变成 U+FFFD，
+   所以 `nas/health/fix` 只认 base64url 的 `id`；前端列表里必须把 `id` 原样留着（`healthRows` 的 `rawId`）。
+6. **`intercept.Config` 注入口要为测试留缝**。`RepairScanResult` / `TrackReplaceResult` 的注入点
+   走 `Server.SetRepair(scan, replace)`，签名收 `*http.Request`；`ic` 的方法收 `ctx`，
+   所以 main.go 里**必须包一层**（`func(r, dir){ return ic.ScanRepairIssues(r.Context(), dir) }`），
+   直接传方法值编译不过。没接管时（`ic == nil`）回 502 `{"available":false}`。
+7. **`npm` 侧没有 `.ys-input` 这个类**：输入框用
+   `h-8 rounded-lg border border-[var(--ys-line-control)] px-2.5 text-xs`。
+8. **「指定原地覆盖」不等于真的会覆盖 —— 下载器有两道门会把坏文件挡在外面**。
+   v2.35.0 真机实测过一次：点「换版本」返回 `ok:true`，但盘上坏文件还在，旁边多了一份
+   `01 夜曲 (2).mp3`。两道门是：
+   - `findExistingAudio` → `libraryFileIsAudio(path, size)`：**size < 32KB 一律 false**
+     （本意是别把封面图 / 歌词碎片当成歌）。而歌曲修复要换的坏文件恰好都在这一档 ——
+     那份 `01 夜曲.mp3` 只有 4127 字节（ID3 占 3601，音频只剩 516）。找不到旧文件 →
+     `replacePath` 为空 → `allocateUniquePath` 生成 `(2)` 影子名 → `installFileExclusive`
+     独占安装，绝不覆盖；末尾删旧文件那段也依赖 `replacePath != ""`，所以坏的留着。
+   - `shouldUpgradeOver`：要求本次档位**严格更高**（或同档不同容器）。坏文件与候选常常
+     同为 320k，这条判据直接否掉替换。
+
+   修法是给下载器单开一条通道，而不是放宽既有口径（`TestFindExistingAudio` 明确断言
+   1024 字节的 mp3「不算已下载」，那条不能动）：
+   `SongPayload.ForceReplace bool` + `forceReplaceHere()`（**必须同时给了 DestBase**，
+   否则不生效，避免拿它去覆盖按候选歌名算出来的落点）→ 跳过档位比较、并用
+   `findAnyFileWithBase`（只 Stat，不看体积不嗅魔数）找旧文件。
+   拦截层对应 `postDownloadForceReplace`（payload 刻意**不传** `upgrade_if_better`，
+   改传 `force_replace: true`），与 `postDownload` 共用 `postDownloadPayload` 解应答。
+   换扩展名时还会 `removeOrphanLrc` 清掉主干变了之后没人读的旧 `.lrc`。
+   ⚠️ 「替换音质」若遇到 <32KB 的文件同样换不掉，但它扫的是正常有损文件，很少这么小。
+
+9. **文件名体检的「首尾有点/空格」只看末尾，且不进内部目录**。原来判 `name != strings.Trim(name, ". ")`，
+   把**开头**的点也算成问题 —— 我们自己的回收站 `.tidy_trash` 就被报成「名字有问题，可自动改名」，
+   点一下「自动修文件名」会把回收站目录搬走、里面的东西全回到曲库里。开头点在 Windows/SMB 上合法，
+   所以改成 `strings.TrimRight(name, ". ") != name`；另外 `.tidy_trash` / `@eaDir` / `.@__thumb` 直接
+   `SkipDir`，不进去遍历（里面全是「已经不要了」的东西，报出来只会让清单变长）。用例在
+   `pkg/nas/health_test.go` 的 `TestIssueTrailingOnlyChecksSuffix`、`TestHealthSkipsRecycleBin`。
+
+前端落点：`frontend/src/services/repairList.js`（行模型 / 合并 / 过滤 / 勾选还原，纯逻辑、有单测
+`repairList.test.mjs`）、`frontend/src/components/RepairCandidateSheet.vue`（换版本抽屉，
+右滑 SideSheet）、`frontend/src/components/TidyView.vue` 的「修复清单」卡。
+`LibraryHealthCard.vue` 与 `TrackRepairCard.vue` 在改造后已无人引用（既有死代码，未删）。
 
 #### 测试与可测性
 
@@ -3369,7 +3541,7 @@ GET /api/accounts/tracks?provider=netease&kind=playlist&id=<歌单ID>&limit=200
 
 ## 6. 接口契约（对外最重要）
 
-**`backend/pkg/api/catalog.go` 是接口文档的单一数据源**，`GET /api/catalog` 返回全部 **136 个**
+**`backend/pkg/api/catalog.go` 是接口文档的单一数据源**，`GET /api/catalog` 返回全部 **138 个**
 接口的结构化描述，前端「开放接口」抽屉渲染同一份数据。
 
 > **目录的主要读者是「替用户操作本应用」的外部 AI**，不是翻手册的人。
@@ -4045,7 +4217,7 @@ window.addEventListener('resize', () => this.resize())   // 匿名函数，移�
 - [ ] `bash .dev/wsl-run.sh status` 环境正常（WSL 下）；或 Windows 下 `bash scripts/dev.sh` 能起来，浏览器能看到界面
 - [ ] `go test ./...` 全绿（**698 个用例**，其中 8 个联网用例默认 skip）
 - [ ] `cd frontend && npm run test` 全绿（**138 个用例**）与 `npm run build` 通过
-- [ ] `GET /api/catalog` 返回 **136 个**接口（core 99 / internal 37），顶层带 `guide`（9 条任务食谱）
+- [ ] `GET /api/catalog` 返回 **138 个**接口（core 101 / internal 37），顶层带 `guide`（9 条任务食谱）
 - [ ] `cd backend && go test ./pkg/api/ -run 'Catalog|Route'` 绿（源码：路由↔目录双向、目录自洽）
       `node .dev/catalog-audit.mjs http://127.0.0.1:8900` 输出「线上这一版与源码一致。」且 role/hidden 无不一致
 - [ ] `GET /api/fnos/status` 可访问（非飞牛环境两个 available 为 false 属正常）

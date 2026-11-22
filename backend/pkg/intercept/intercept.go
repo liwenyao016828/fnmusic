@@ -104,6 +104,12 @@ type Config struct {
 	// 也不该为了测试去起一个假的第三方站点。注入点放在这里，测试就能精确
 	// 控制「哪些平台返回什么」。
 	Searcher func(keyword, platform string, page, size int) []search.UnifiedSong
+	// SearcherCtx 同 Searcher，但带 ctx。给「每个源最多等多久」这类**按调用场景
+	// 变化**的预算留的口子（探测腿要掐住 musicdl 的单源等待，下载腿不能）。
+	//
+	// 不给就用 pkg/search 的真实实现；给了 Searcher 而不给 SearcherCtx 时，
+	// SearcherCtx 会退回到 Searcher（测试替身照旧生效，不会打到外网）。
+	SearcherCtx func(ctx context.Context, keyword, platform string, page, size int) []search.UnifiedSong
 	// Pool 是直链解析池的注入口，nil 时用内置的网易 + QQ 解析器。
 	Pool *online.Pool
 	// LyricFetcher 是歌词取回的注入口，nil 时用 pkg/search 的三级链路。
@@ -404,6 +410,75 @@ func (i *Interceptor) platforms() []string {
 	return append([]string(nil), defaultPlatforms...)
 }
 
+// nativePlatforms 只返回**曲率自己会解析直链**的那几个平台（网易 / QQ）。
+//
+// ⚠️ 与 platforms() 的区别很要紧：platforms() 是「官方页面搜索要合并哪些平台」，
+// 它包含用户启用的全部外挂源（musicdl 那批，实测 dev 机上 20 个）。而「原生渠道」
+// 这一列问的是「不靠任何外挂、曲率自己能拿到什么档位」—— 把外挂源算进来，
+// 这一列就变成「再搜一遍所有外挂源」，既重复劳动又把单首探测拖到几十秒。
+//
+// v2.34.1 真机抓到的现象：替换音质扫描里「原生搜索」一段吃满 25s 围栏，
+// 而直连网易/QQ 只要 0.3s —— 因为这一段实际在串行搜 20 个 musicdl 源。
+func (i *Interceptor) nativePlatforms() []string {
+	out := make([]string, 0, len(defaultPlatforms))
+	for _, p := range i.platforms() {
+		p = strings.ToLower(strings.TrimSpace(p))
+		switch p {
+		case "wy", "tx", "kg", "kw":
+			out = append(out, p)
+		}
+	}
+	if len(out) == 0 {
+		return append([]string(nil), defaultPlatforms...)
+	}
+	return out
+}
+
+// searchCtx 走带 ctx 的搜索入口。
+//
+// 三个来源，优先级从高到低：
+//  1. 注入了 SearcherCtx → 用它（ctx 完整传下去）；
+//  2. 注入了 Searcher（测试替身）→ 用它，ctx 被丢掉 —— 与从前行为一致；
+//  3. 都没注入 → pkg/search 的带 ctx 实现（生产路径）。
+//
+// 什么时候必须走这一路：探测腿（替换音质扫描）要掐住「每个 musicdl 源最多等多久」，
+// 这个预算在 ctx 里（见 online.WithSourceBudget）。走 i.searcher 就把 ctx 丢了，
+// 慢源会把单首探测拖到它的超时上限（实测最坏一首 80s）。
+func (i *Interceptor) searchCtx(ctx context.Context, keyword, platform string, page, size int) []search.UnifiedSong {
+	if i.searcherCtx != nil {
+		return i.searcherCtx(ctx, keyword, platform, page, size)
+	}
+	if i.searcher != nil {
+		return i.searcher(keyword, platform, page, size)
+	}
+	return search.SearchContext(ctx, keyword, platform, page, size)
+}
+
+// nativeSearchCtx 走「只要原生实现」的搜索入口（替换音质扫描的原生渠道专用）。
+//
+// 前三级的注入判断与 searchCtx 一致（测试替身必须仍然生效），只有**生产兜底**
+// 换成 search.SearchNativeContext —— 跳过外挂搜索器。
+// 原因见 search.SearchNativeContext 的注释：用户把 wy 之类也配进外挂源时，
+// 走 searchCtx 会拐去问 musicdl（几十秒），原生接口只要 0.3s。
+func (i *Interceptor) nativeSearchCtx(ctx context.Context, keyword, platform string, page, size int) []search.UnifiedSong {
+	if i.searcherCtx != nil {
+		return i.searcherCtx(ctx, keyword, platform, page, size)
+	}
+	if i.searcher != nil {
+		return i.searcher(keyword, platform, page, size)
+	}
+	return search.SearchNativeContext(ctx, keyword, platform, page, size)
+}
+
+// searchReady 这条拦截层能不能搜歌。
+//
+// ⚠️ 生产环境**不注入**搜索器（见 New 里的注释）—— 搜索能力由 pkg/search 的
+// 真实实现提供。所以判据不能是「字段是不是 nil」，否则原生渠道（网易/QQ）
+// 会被整个跳过，那一列永远是空的（v2.34.1 修：就是这个判据漏了原生渠道）。
+func (i *Interceptor) searchReady() bool {
+	return i.searchFallback || i.searcherCtx != nil || i.searcher != nil
+}
+
 // Interceptor 是拦截层主体。
 // ── 在线歌手 / 原生专辑的注入口类型（v2.33.0）──────────────────────────
 //
@@ -527,6 +602,12 @@ type Interceptor struct {
 	// quality 管「替换音质」的扫描任务（见 quality.go）。
 	// 它在 New() 里建好（内置 mutex，零值不可用）。
 	quality *qualityScanState
+	// qualityStore 把「扫过哪些歌、结论是什么」落盘（见 quality_store.go）。
+	//
+	// 为什么要有：扫描结果原来是纯内存的，重启/换页回来就没了，每次都得从头
+	// 重问两三条渠道（一库几百首 = 十几分钟外呼）。用户 2026-11-21 明确要求
+	// 「保留已扫描的歌曲的记录，避免重复扫描同一首歌」。
+	qualityStore *qualityScanStore
 
 	// qrMu/qrList/qrLoaded 是「替换音质」的历史记录（见 quality.go 的
 	// QualityRecords）：懒加载 + 内存副本，落盘失败不影响替换本身。
@@ -556,11 +637,24 @@ type Interceptor struct {
 	fbMu    sync.Mutex
 	fbCache map[string]fbEntry
 
-	searcher      func(keyword, platform string, page, size int) []search.UnifiedSong
-	lxSearch      func(ctx context.Context, keyword string, limit int) ([]lxnode.Song, error)
-	lxResolve     func(ctx context.Context, source string, info map[string]any, quality string) (string, int64, error)
-	lxResolveAll  func(ctx context.Context, source string, info map[string]any, quality string, scripts []string) ([]lxnode.Candidate, error)
-	lxSourceNames func() []string
+	searcher func(keyword, platform string, page, size int) []search.UnifiedSong
+	// searcherCtx 同 searcher，但带 ctx。
+	//
+	// 为什么要两个：ctx 里带着「每个 musicdl 源最多等多久」的预算（探测腿用，
+	// 见 online.WithSourceBudget），没有 ctx 就传不下去。给 searcher 改签名会
+	// 波及几十个测试替身，所以另开一个入口 —— 注入了 Searcher 的测试会自动
+	// 退回到它（见 New），测试语义一个字不变。
+	searcherCtx func(ctx context.Context, keyword, platform string, page, size int) []search.UnifiedSong
+	// searchFallback = 没注入任何搜索器（生产环境就是这种）→ 搜索能力由
+	// pkg/search 的真实实现提供（见 searchCtx 的第三级回落）。
+	//
+	// ⚠️ **别拿字段是不是 nil 当「有没有搜索能力」**：生产环境两个字段都是 nil，
+	// 照着判就会把原生渠道（网易/QQ）整个跳过 —— 那一列永远是空的。
+	searchFallback bool
+	lxSearch       func(ctx context.Context, keyword string, limit int) ([]lxnode.Song, error)
+	lxResolve      func(ctx context.Context, source string, info map[string]any, quality string) (string, int64, error)
+	lxResolveAll   func(ctx context.Context, source string, info map[string]any, quality string, scripts []string) ([]lxnode.Candidate, error)
+	lxSourceNames  func() []string
 
 	// lxMu/lxItems 是「洛雪搜索结果 → 取链时要喂回去的那条记录」的暂存。
 	//
@@ -635,10 +729,16 @@ func New(cfg Config) *Interceptor {
 	if pool == nil {
 		pool = online.NewPool(online.NetEaseResolver{}, online.QQResolver{})
 	}
+	// 搜索入口有两个：带 ctx 的与不带 ctx 的。
+	//
+	// ⚠️ 这里**故意不**把 search.Search 塞进 searcher —— 「没注入」和「注入了一个
+	// 替身」必须能区分开：
+	//   - 没注入（生产）→ searchCtx 走 pkg/search 的带 ctx 实现（预算才传得下去）；
+	//   - 注入了替身（测试）→ searchCtx 走替身，ctx 被丢掉，语义与从前一模一样。
+	// 早期版本在 New() 里就把 search.Search 填进 searcher，结果测试里
+	// `h.it.searcher = 替身` 之后仍然走真实现 → 一堆用例「什么都没搜到」。
 	searcher := cfg.Searcher
-	if searcher == nil {
-		searcher = search.Search
-	}
+	searcherCtx := cfg.SearcherCtx
 	lyricFetcher := cfg.LyricFetcher
 	if lyricFetcher == nil {
 		lyricFetcher = defaultLyricFetcher
@@ -659,6 +759,8 @@ func New(cfg Config) *Interceptor {
 		upgradeSweepBatchFn:     cfg.UpgradeSweepBatch,
 		upgradeIgnoreCooldownFn: cfg.UpgradeIgnoreCooldown,
 		searcher:                searcher,
+		searcherCtx:             searcherCtx,
+		searchFallback:          searcher == nil && searcherCtx == nil,
 		lxSearch:                cfg.LxSearch,
 		lxResolve:               cfg.LxResolve,
 		lxResolveAll:            cfg.LxResolveAll,
@@ -675,6 +777,7 @@ func New(cfg Config) *Interceptor {
 		fbCache:                 make(map[string]fbEntry, 16),
 		stats:                   make(map[string]int, 32),
 		quality:                 &qualityScanState{status: QualityStatus{State: QualityStateIdle, Entries: []QualityEntry{}}},
+		qualityStore:            newQualityScanStore(cfg.DataDir),
 	}
 	i.platformsStatic = platforms
 

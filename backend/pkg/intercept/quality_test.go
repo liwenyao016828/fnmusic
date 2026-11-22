@@ -190,12 +190,13 @@ func TestQualityScanEmptyLibraryGoesDone(t *testing.T) {
 	h := newHarness(t)
 	h.it.cfg.DownloadDir = func() string { return root }
 
-	st, err := h.it.StartQualityScan("lossy", 50)
+	st, err := h.it.StartQualityScan("lossy", 50, false)
 	if err != nil {
 		t.Fatalf("起扫描失败：%v", err)
 	}
-	if st.State != QualityStateRunning || st.Total != 0 {
-		t.Fatalf("起手该是 running/0 首，得到 %+v", st)
+	// 空曲库没有可探的歌 → 不必起 goroutine，直接就是 done/0 首（v2.33.1）。
+	if st.State != QualityStateDone || st.Total != 0 {
+		t.Fatalf("空曲库该直接 done/0 首，得到 %+v", st)
 	}
 	for n := 0; n < 200; n++ {
 		time.Sleep(10 * time.Millisecond)
@@ -220,7 +221,7 @@ func TestQualityScanDoesNotStartTwice(t *testing.T) {
 	h.it.quality.status = QualityStatus{State: QualityStateRunning, Total: 7, Scanned: 3}
 	h.it.quality.mu.Unlock()
 
-	st, err := h.it.StartQualityScan("all", 10)
+	st, err := h.it.StartQualityScan("all", 10, false)
 	if err != nil {
 		t.Fatalf("重复 start 不该报错：%v", err)
 	}
@@ -370,5 +371,210 @@ func TestQualityRecordsCap(t *testing.T) {
 	}
 	if got := len(i.QualityRecords()); got != qualityRecordLimit {
 		t.Fatalf("应截断到 %d 条，得到 %d", qualityRecordLimit, got)
+	}
+}
+
+// ── 扫描结论的持久化与「不重复扫」（v2.33.1，需求 m00784）──────────────
+//
+// 用户的原话：「当前不会保留扫描记录，每次都需要重新扫描；请优化并保留已扫描的
+// 歌曲的记录，避免重复扫描同一首歌。」以及「若没有更高音质，会自动清除已扫描出的
+// 歌曲」——前半句在这里钉，后半句在 utils/QualityView 与 StartQualityScan 的
+// 「Entries 先放上次结论」上钉（前端那半条在 frontend 的用例里）。
+
+// waitQualityDone 等到扫描任务收尾（最多 5 秒）。
+func waitQualityDone(t *testing.T, it *Interceptor) QualityStatus {
+	t.Helper()
+	for n := 0; n < 500; n++ {
+		if st := it.QualityScanStatus(); st.State == QualityStateDone {
+			return st
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("扫描没能在合理时间内结束：%+v", it.QualityScanStatus())
+	return QualityStatus{}
+}
+
+// writeQualityFile 在曲库根下放一个「看起来像音频」的文件。
+func writeQualityFile(t *testing.T, root, rel string) string {
+	t.Helper()
+	p := filepath.Join(root, rel)
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte("ID3\x03\x00\x00"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// TestQualityScanKeepsEntriesWhenNothingUpgradeable 钉 issue 1 的后端半边：
+// 扫完但没有任何可替换的歌时，entries **不能**被清空（那会让界面看起来「扫出来的
+// 歌全没了」）。
+func TestQualityScanKeepsEntriesWhenNothingUpgradeable(t *testing.T) {
+	root := t.TempDir()
+	h := newHarness(t)
+	h.it.cfg.DownloadDir = func() string { return root }
+	writeQualityFile(t, root, "a.mp3")
+	writeQualityFile(t, root, "b.mp3")
+
+	if _, err := h.it.StartQualityScan("lossy", 10, false); err != nil {
+		t.Fatalf("起扫描失败：%v", err)
+	}
+	st := waitQualityDone(t, h.it)
+	if len(st.Entries) != 2 {
+		t.Fatalf("扫出 2 首就该留着 2 条明细（哪怕一条都不可替换），得到 %d 条：%+v", len(st.Entries), st)
+	}
+	if st.Upgradeable != 0 {
+		t.Fatalf("没有任何渠道答话时不该有可替换项，得到 %+v", st)
+	}
+	for _, e := range st.Entries {
+		if e.ScannedAt == 0 {
+			t.Fatalf("每条明细都该带扫描时间，得到 %+v", e)
+		}
+	}
+}
+
+// TestQualityScanSkipsFreshEntries 钉 issue 2：第二次扫描要跳过最近扫过的歌。
+func TestQualityScanSkipsFreshEntries(t *testing.T) {
+	root := t.TempDir()
+	h := newHarness(t)
+	h.it.cfg.DownloadDir = func() string { return root }
+	writeQualityFile(t, root, "a.mp3")
+	writeQualityFile(t, root, "b.mp3")
+
+	if _, err := h.it.StartQualityScan("lossy", 10, false); err != nil {
+		t.Fatal(err)
+	}
+	first := waitQualityDone(t, h.it)
+	if first.Scanned != 2 || first.Skipped != 0 {
+		t.Fatalf("第一次该全扫（2 首），得到 %+v", first)
+	}
+
+	// 第二次：两首都还新鲜 → 一条都不重扫，但明细照旧在。
+	st2, err := h.it.StartQualityScan("lossy", 10, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st2.Skipped != 2 || st2.Total != 0 {
+		t.Fatalf("第二次该跳过 2 首、待扫 0 首，得到 %+v", st2)
+	}
+	if len(st2.Entries) != 2 {
+		t.Fatalf("跳过的歌也要继续列着（结论沿用），得到 %d 条", len(st2.Entries))
+	}
+	after := waitQualityDone(t, h.it)
+	if after.Scanned != 0 {
+		t.Fatalf("跳过的不该记成已扫，得到 %+v", after)
+	}
+
+	// 「全部重扫」→ 两首都要重新探。
+	st3, err := h.it.StartQualityScan("lossy", 10, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st3.Total != 2 || st3.Skipped != 0 {
+		t.Fatalf("refresh=true 该全量重扫，得到 %+v", st3)
+	}
+	waitQualityDone(t, h.it)
+}
+
+// TestQualityScanStorePersistsAcrossRestart 钉「重启还在」：结论落在
+// <DataDir>/quality_scan.json，换一个 store 实例（模拟重启）仍能读回来。
+func TestQualityScanStorePersistsAcrossRestart(t *testing.T) {
+	dir := t.TempDir()
+	s := newQualityScanStore(dir)
+	s.put(QualityEntry{
+		Path: filepath.Join(dir, "keep.mp3"), Title: "keep", Ext: ".mp3",
+		CurrentTier: online.Tier320k, Upgradeable: true, ScannedAt: 1700000000,
+	})
+	s.flush()
+
+	if _, err := os.Stat(filepath.Join(dir, "quality_scan.json")); err != nil {
+		t.Fatalf("结论该落到 quality_scan.json：%v", err)
+	}
+	got := newQualityScanStore(dir).snapshot()
+	if len(got) != 1 || got[0].Title != "keep" || !got[0].Upgradeable {
+		t.Fatalf("重建 store 该读回同一条结论，得到 %+v", got)
+	}
+	if newest := newQualityScanStore(dir).newest(); newest != 1700000000 {
+		t.Fatalf("newest 该回 1700000000，得到 %d", newest)
+	}
+}
+
+// TestQualityStoreSnapshotKeepsStaleButNotSkippable 钉两件事：
+//
+//  1. **文件没了 / 档位变了** → 结论作废（不再描述现实），丢掉；
+//  2. **超过 7 天** → 仍然留在列表里（用户要看得见「上次扫到过什么」），
+//     但**不能**用来跳过重扫 —— 免扫名单只认新鲜的结论。
+//
+// 第 2 条是 2026-11-21 改的：用户抱怨「扫出来的歌莫名其妙全没了」。
+// 「没结论」可以少给，「扫过的人」不能藏。
+func TestQualityStoreSnapshotKeepsStaleButNotSkippable(t *testing.T) {
+	root := t.TempDir()
+	h := newHarness(t)
+	h.it.cfg.DownloadDir = func() string { return root }
+
+	fresh := writeQualityFile(t, root, "fresh.mp3")
+	gone := writeQualityFile(t, root, "gone.mp3")
+	old := writeQualityFile(t, root, "old.mp3")
+	tier := qualityCurrentTierOfFile(fresh, ".mp3")
+	now := time.Now().Unix()
+	oldAt := now - int64(qualityScanFreshTTL/time.Second) - 60
+
+	h.it.qualityStore.put(QualityEntry{Path: fresh, Ext: ".mp3", CurrentTier: tier, ScannedAt: now})
+	h.it.qualityStore.put(QualityEntry{Path: gone, Ext: ".mp3", CurrentTier: tier, ScannedAt: now})
+	h.it.qualityStore.put(QualityEntry{Path: old, Ext: ".mp3", CurrentTier: tier, ScannedAt: oldAt})
+	if err := os.Remove(gone); err != nil {
+		t.Fatal(err)
+	}
+
+	got := h.it.qualityStoreSnapshot()
+	paths := map[string]bool{}
+	for _, e := range got {
+		paths[e.Path] = true
+	}
+	if paths[gone] {
+		t.Fatalf("文件都没了的结论该作废，得到 %+v", got)
+	}
+	if !paths[fresh] {
+		t.Fatalf("新鲜的结论该留下，得到 %+v", got)
+	}
+	if !paths[old] {
+		t.Fatalf("过期的结论也要留在列表里给用户看，得到 %+v", got)
+	}
+
+	// 过期 ≠ 可以免扫：免扫判据必须拒绝它。
+	if h.it.qualityEntryFresh(QualityEntry{Path: old, Ext: ".mp3", CurrentTier: tier, ScannedAt: oldAt}, time.Now()) {
+		t.Fatal("过期结论不该能跳过重扫")
+	}
+	if !h.it.qualityEntryFresh(QualityEntry{Path: fresh, Ext: ".mp3", CurrentTier: tier, ScannedAt: now}, time.Now()) {
+		t.Fatal("新鲜结论该能跳过重扫")
+	}
+
+	// 盘上档位变了（用户自己换了文件）→ 结论作废。
+	h.it.qualityStore.put(QualityEntry{Path: fresh, Ext: ".mp3",
+		CurrentTier: online.TierLossless, ScannedAt: now})
+	if got := h.it.qualityStoreSnapshot(); len(got) != 1 || got[0].Path != old {
+		t.Fatalf("档位与盘上不符的结论该作废，得到 %+v", got)
+	}
+}
+
+// TestQualityTimedOutEntryIsNotSkippable 超时是「没探出」，不是「探出没有」：
+// 它得留在列表里（用户看得见这首扫过），但不能进免扫名单。
+func TestQualityTimedOutEntryIsNotSkippable(t *testing.T) {
+	root := t.TempDir()
+	h := newHarness(t)
+	h.it.cfg.DownloadDir = func() string { return root }
+
+	f := writeQualityFile(t, root, "slow.mp3")
+	tier := qualityCurrentTierOfFile(f, ".mp3")
+	now := time.Now().Unix()
+
+	h.it.qualityStore.put(QualityEntry{Path: f, Ext: ".mp3", CurrentTier: tier, ScannedAt: now, TimedOut: true})
+
+	if got := h.it.qualityStoreSnapshot(); len(got) != 1 || got[0].Path != f {
+		t.Fatalf("超时的条目也要留在列表里，得到 %+v", got)
+	}
+	if h.it.qualityEntryFresh(QualityEntry{Path: f, Ext: ".mp3", CurrentTier: tier, ScannedAt: now, TimedOut: true}, time.Now()) {
+		t.Fatal("超时的结论没有结论，不该能跳过重扫")
 	}
 }

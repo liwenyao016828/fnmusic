@@ -388,6 +388,17 @@ func main() {
 				return map[string]any{"done": done, "failed": failed}, nil
 			},
 		)
+
+		// 歌曲修复（v2.35.0）：扫坏文件（读容器魔数/时长，纯本地）+ 用搜索挑中的
+		// 候选覆盖坏文件（原地落盘，前后各读一次文件身体验证）。
+		server.SetRepair(
+			func(r *http.Request, dir string) (intercept.RepairScanResult, error) {
+				return ic.ScanRepairIssues(r.Context(), dir)
+			},
+			func(r *http.Request, req intercept.TrackReplaceRequest) (intercept.TrackReplaceResult, error) {
+				return ic.ReplaceTrackFromCandidate(r.Context(), req)
+			},
+		)
 		// 后台「音质补强」的设置面（v2.22）。三件事：
 		//   status —— 把「内存里的配置 + 进程里的活状态（这一轮派了几首、
 		//             下次什么时候跑、还剩多少欠账）」合成一份给界面；

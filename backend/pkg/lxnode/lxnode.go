@@ -771,49 +771,112 @@ const nodeSearchHint = "/vol1/@appcenter/nodejs_v*/bin/node"
 // 表现就是用户报的那句「我 lx 音乐怎么没有参与到下载」—— 而且怎么查都查不到
 // 「宿主压根没启动」这一层。
 //
-// 查找顺序（先精确后兜底）：
-//  1. 配置里给了**绝对路径**且存在 → 用它；
+// 查找顺序（先精确后兜底，**每一步都要过 nodeUsable**）：
+//  1. 配置里给了**绝对路径**且可用 → 用它；
 //  2. 环境变量 `QULV_NODE_BIN`（运维覆盖口）；
-//  3. PATH 里能找到 → 用它（开发机 / 通用 Linux 走这条）；
-//  4. 已知安装位置：`/vol1/@appcenter/nodejs_vNN/bin/node`（**版本号大的优先**）、
-//     `/usr/local/bin/node`、`/usr/bin/node`、`/opt/node*/bin/node`。
-func resolveNodeBin(configured string) string {
-	configured = strings.TrimSpace(configured)
-	// 1. 显式绝对路径
-	if filepath.IsAbs(configured) {
-		if isExecutableFile(configured) {
-			return configured
+//  3. 飞牛 appcenter 的 nodejs 应用：`/vol1/@appcenter/nodejs_vNN/bin/node`
+//     （**版本号大的优先**）—— 刻意排在 PATH **之前**；
+//  4. `/usr/local/bin/node`、`/usr/bin/node`、`/vol2/@appcenter/nodejs_vNN/bin/node`、
+//     `/opt/node*/bin/node`；
+//  5. 最后才是 PATH（配置里给的名字优先，其次 "node"）。
+//
+// # 为什么 appcenter 必须排在 PATH 之前（2026-11-21 真机故障）
+//
+// 原来 PATH 在第 3 步、已知位置排最后。飞牛系统里 `/usr/bin/node` 是 **v18.20.4**，
+// PATH 里先命中它 → 宿主带着 `--permission` 启动 → `bad option: --permission` → 退 9 →
+// 子进程秒退。界面只有一句「启动失败」，而整条洛雪链路（搜索/取直链/歌手）全灭，
+// 日志刷满「lx 宿主不可用」—— 从界面上完全看不出是 node 版本问题。
+// 所以现在**已知安装位置优先**，PATH 只作最后兜底。
+//
+// # 为什么还要真跑一次探针（nodeUsable）
+//
+// 光看版本号不够：飞牛上的 `/vol1/@appcenter/nodejs_v20/bin/node` 报 20.20.2，
+// 而 `--permission` 本该在 v20 就有（实验特性），这台机器的构建却直接 `bad option`。
+// 版本号会骗人，参数能不能过只有跑一次才知道。
+
+// nodeMinMajorForPermission 是「能稳定支持 --permission 的最低 Node 大版本」。
+const nodeMinMajorForPermission = 22
+
+// nodePermissionProbe 真跑一次「空脚本 + --permission」，exit 0 才算可用。
+//
+// 是变量而不是普通函数：用例要能替换它（开发机上不一定装了 node，也不该为了跑用例
+// 依赖本机 node 的具体版本）。
+var nodePermissionProbe = func(bin string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, "--permission", "--eval", "")
+	cmd.Env = childEnv()
+	return cmd.Run() == nil
+}
+
+// nodeProbeCache 缓存探测结果（单次约几十毫秒，但没必要每次起宿主都探）。
+var nodeProbeCache sync.Map // bin → bool
+
+// nodeUsable 判断「这个路径的 node 能不能拿来起宿主」。
+func nodeUsable(bin string) bool {
+	if !isExecutableFile(bin) {
+		return false
+	}
+	if v, ok := nodeProbeCache.Load(bin); ok {
+		return v.(bool)
+	}
+	ok := nodePermissionProbe(bin)
+	nodeProbeCache.Store(bin, ok)
+	return ok
+}
+
+// nodeCandidateList 按优先级列出候选路径（**只排序，不判断可用性**）。
+func nodeCandidateList(configured string) []string {
+	var out []string
+	add := func(p string) {
+		if p == "" {
+			return
 		}
-		// 绝对路径写错时**继续往下找**，而不是直接失败 —— 用户的意图是「用 node」，
-		// 不是「用这个特定的路径」。
+		for _, have := range out {
+			if have == p {
+				return
+			}
+		}
+		out = append(out, p)
 	}
-	// 2. 环境变量覆盖
-	if env := strings.TrimSpace(os.Getenv("QULV_NODE_BIN")); env != "" && isExecutableFile(env) {
-		return env
+	// 1. 配置里的绝对路径。写错时**继续往下找** —— 用户的意图是「用 node」，
+	// 不是「用这个特定的路径」。
+	if filepath.IsAbs(configured) {
+		add(configured)
 	}
-	// 3. PATH（配置里给的名字优先，其次 "node"）
+	// 2. 环境变量覆盖口
+	add(strings.TrimSpace(os.Getenv("QULV_NODE_BIN")))
+	// 3. 飞牛 appcenter（版本号大的优先）
+	for _, v := range []string{"v24", "v22", "v20", "v18"} {
+		add(filepath.Join("/vol1/@appcenter/nodejs_"+v, "bin", "node"))
+	}
+	// 4. 常见安装位置
+	add("/usr/local/bin/node")
+	add("/usr/bin/node")
+	for _, v := range []string{"v24", "v22", "v20", "v18"} {
+		add(filepath.Join("/vol2/@appcenter/nodejs_"+v, "bin", "node"))
+	}
+	if matches, err := filepath.Glob("/opt/node*/bin/node"); err == nil {
+		for _, m := range matches {
+			add(m)
+		}
+	}
+	// 5. PATH 兜底
 	for _, name := range []string{configured, "node"} {
 		if name == "" || filepath.IsAbs(name) {
 			continue
 		}
 		if p, err := exec.LookPath(name); err == nil {
-			return p
+			add(p)
 		}
 	}
-	// 4. 已知安装位置。nodejs_vNN 按**版本号降序**：v24 优先于 v22。
-	var candidates []string
-	for _, v := range []string{"v24", "v22", "v20", "v18"} {
-		candidates = append(candidates, filepath.Join("/vol1/@appcenter/nodejs_"+v, "bin", "node"))
-	}
-	candidates = append(candidates, "/usr/local/bin/node", "/usr/bin/node")
-	for _, v := range []string{"v24", "v22", "v20", "v18"} {
-		candidates = append(candidates, filepath.Join("/vol2/@appcenter/nodejs_"+v, "bin", "node"))
-	}
-	if matches, err := filepath.Glob("/opt/node*/bin/node"); err == nil {
-		candidates = append(candidates, matches...)
-	}
-	for _, c := range candidates {
-		if isExecutableFile(c) {
+	return out
+}
+
+// resolveNodeBin 找出**能用**的 node 可执行文件，返回空串 = 一个可用的都没有。
+func resolveNodeBin(configured string) string {
+	for _, c := range nodeCandidateList(strings.TrimSpace(configured)) {
+		if nodeUsable(c) {
 			return c
 		}
 	}
@@ -847,6 +910,47 @@ type execProc struct {
 	cfg  Config
 	cmd  *exec.Cmd
 	done chan struct{}
+	// tail 留住子进程输出的**最后**一段，用于「宿主为什么秒退」的报错。
+	tail *tailBuffer
+}
+
+// tailBuffer 是一个只留最后 N 字节的写缓冲。
+//
+// 为什么必须有它（2026-11-21 真机故障的直接教训）：宿主的 stderr 原来直接接
+// 进程自己的 os.Stderr，而 fnOS 应用中心**不收集**子进程 stderr —— 真正的原因
+// （`bad option: --permission`）就这么彻底丢了，界面上只剩一句「启动失败」。
+// 把尾巴留下来，报错文案才能自解释，不用再去扒进程环境。
+type tailBuffer struct {
+	mu  sync.Mutex
+	buf []byte
+	max int
+}
+
+func newTailBuffer(max int) *tailBuffer { return &tailBuffer{max: max} }
+
+func (t *tailBuffer) Write(p []byte) (int, error) {
+	t.mu.Lock()
+	t.buf = append(t.buf, p...)
+	if len(t.buf) > t.max {
+		t.buf = t.buf[len(t.buf)-t.max:]
+	}
+	t.mu.Unlock()
+	return len(p), nil
+}
+
+func (t *tailBuffer) String() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return strings.TrimSpace(string(t.buf))
+}
+
+// firstLines 取前 n 行，拼成一行（报错文案里不该塞整段 stack trace）。
+func firstLines(s string, n int) string {
+	lines := strings.Split(s, "\n")
+	if len(lines) > n {
+		lines = lines[:n]
+	}
+	return strings.TrimSpace(strings.Join(lines, " | "))
 }
 
 // staleScanInterval / staleKillWait 控制「清完残留之后等端口真的让出来」的节奏。
@@ -945,7 +1049,8 @@ func looksLikeLxHost(cmdline string) bool {
 func (p *execProc) Start() error {
 	node := resolveNodeBin(p.cfg.NodeBin)
 	if node == "" {
-		return fmt.Errorf("找不到 node 可执行文件（试过 PATH 与 %s）—— 设 QULV_NODE_BIN 指一个", nodeSearchHint)
+		return fmt.Errorf("找不到能用的 node（需要 Node ≥ %d：宿主用 --permission 做进程级隔离，飞牛系统自带的 v18/v20 不认这个参数）——已知位置 %s，可用 QULV_NODE_BIN 指一个",
+			nodeMinMajorForPermission, nodeSearchHint)
 	}
 	if p.cfg.Script == "" {
 		return errors.New("没有配置 lx 宿主脚本路径")
@@ -961,7 +1066,11 @@ func (p *execProc) Start() error {
 	p.cmd = exec.Command(node, p.cfg.hostArgs()...)
 	// 环境变量显式指定（不继承）—— 理由见 childEnv。
 	p.cmd.Env = childEnv()
-	p.cmd.Stdout, p.cmd.Stderr = os.Stderr, os.Stderr
+	// 输出同时进两个地方：进程自己的 stderr（开发机直接看得到），以及一个环形尾巴
+	// （真机上 fnOS 不收集 stderr，出问题只有这条尾巴能说明原因，见 tailBuffer）。
+	p.tail = newTailBuffer(4096)
+	out := io.MultiWriter(os.Stderr, p.tail)
+	p.cmd.Stdout, p.cmd.Stderr = out, out
 	// 自己的进程组：停止时对整组发信号，宿主若再拉子进程也不会变成孤儿。
 	// 这也是 clearStaleHost 敢用 `kill(-pid)` 的前提。
 	p.cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -984,10 +1093,19 @@ func (p *execProc) Start() error {
 		}
 		select {
 		case <-p.done:
-			if err != nil {
-				return fmt.Errorf("lx 宿主启动后立刻退出了：%w", err)
+			// 带上 node 路径与子进程 stderr 的尾巴：真机上这是**唯一**能说明
+			// 「为什么秒退」的信息（例如 bad option: --permission）。
+			detail := ""
+			if p.tail != nil {
+				detail = firstLines(p.tail.String(), 3)
 			}
-			return errors.New("lx 宿主启动后立刻退出了（看日志，多半是端口仍被占用）")
+			if detail != "" {
+				detail = "：" + detail
+			}
+			if err != nil {
+				return fmt.Errorf("lx 宿主启动后立刻退出了（node=%s）%s：%w", node, detail, err)
+			}
+			return fmt.Errorf("lx 宿主启动后立刻退出了（node=%s）%s", node, detail)
 		case <-time.After(200 * time.Millisecond):
 		}
 	}

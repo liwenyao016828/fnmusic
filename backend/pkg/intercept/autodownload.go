@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -737,6 +738,30 @@ func lxTrackOf(t online.Track, tier string) online.Track {
 // 探测途中一旦拿到「用户允许的顶」（`tiers[0]`，highest 就是无损）立刻收工 ——
 // 已经不可能更好了，再问别的渠道只是白等。
 func (i *Interceptor) collectDownloadAttempts(ctx context.Context, t online.Track, tiers []string) []dlAttempt {
+	return i.collectDownloadAttemptsWith(ctx, t, tiers, nil)
+}
+
+// dlTimings 一次探测里各段花了多久 —— 用来回答「这 19 秒到底花在哪」。
+//
+// 以前只能靠推算（是慢源？洛雪轮询？原生解析？），加了这层计时之后日志里能直接
+// 看到真实比例，下一步优化才有依据。
+type dlTimings struct {
+	Search time.Duration // 找候选：各下载源各搜一次
+	Native time.Duration // 原生渠道解析（曲目自己平台按档位阶梯）
+	Lx     time.Duration // 洛雪（同 id 直问 + 同名候选）
+	DL     time.Duration // 外挂池（musicdl）
+}
+
+// Total 各段合计（用来打一行汇总）。
+func (t *dlTimings) Total() time.Duration {
+	if t == nil {
+		return 0
+	}
+	return t.Search + t.Native + t.Lx + t.DL
+}
+
+// collectDownloadAttemptsWith 探测并把各段耗时记进 tm（tm 为 nil 时不计时）。
+func (i *Interceptor) collectDownloadAttemptsWith(ctx context.Context, t online.Track, tiers []string, tm *dlTimings) []dlAttempt {
 	channels := i.downloadChannels()
 	if len(tiers) == 0 || len(channels) == 0 {
 		return nil
@@ -762,7 +787,11 @@ func (i *Interceptor) collectDownloadAttempts(ctx context.Context, t online.Trac
 	// 池里的候选：**声明值只用来决定「先探谁」**，不参与最后谁赢的判断。
 	// （声明值为什么不能当判据：musicdl 的 mp3 一律被标成 320k，而洛雪脚本报的
 	// 「无损」实测有四成是 128k 的转码 —— v2.13.0 那轮就是这么定的。）
+	searchStart := time.Now()
 	cands := i.rankedSources(ctx, t.Title, t.Artist(), t.Duration)
+	if tm != nil {
+		tm.Search = time.Since(searchStart)
+	}
 	sort.SliceStable(cands, func(a, b int) bool {
 		return qualityTierRank(cands[a].Quality) > qualityTierRank(cands[b].Quality)
 	})
@@ -815,9 +844,14 @@ func (i *Interceptor) collectDownloadAttempts(ctx context.Context, t online.Trac
 		if ctx.Err() != nil {
 			break
 		}
+		branchStart := time.Now()
 		switch ch {
 		case dlChanNative:
 			// 原生 = 曲目自己平台按档位阶梯解析（网易云 / QQ / 酷狗 …）。
+			//
+			// ⚠️ 失败路径**不要写 continue**：那会跳过下面的按段计时累加，
+			// 于是「原生解析」恒显示 0s —— 而这正是最需要看到真实耗时的一段
+			//（v2.34.1 就踩过一次，日志里原生解析全是 0s，误判成「这段没跑」）。
 			res, err := i.pool.ResolveLadder(ctx, t.Platform, t.PlatformID, tiers)
 			if err != nil {
 				if ctx.Err() == nil {
@@ -829,9 +863,9 @@ func (i *Interceptor) collectDownloadAttempts(ctx context.Context, t online.Trac
 						push(dlChanNative, t, fres)
 					}
 				}
-				continue
+			} else {
+				push(dlChanNative, t, res)
 			}
-			push(dlChanNative, t, res)
 
 		case dlChanLx:
 			// (a) 同一个平台 id 直接问洛雪（不需要脚本会搜）。
@@ -854,6 +888,16 @@ func (i *Interceptor) collectDownloadAttempts(ctx context.Context, t online.Trac
 
 		case dlChanMusicDL:
 			probePool(dlChanMusicDL)
+		}
+		if tm != nil {
+			switch ch {
+			case dlChanNative:
+				tm.Native += time.Since(branchStart)
+			case dlChanLx:
+				tm.Lx += time.Since(branchStart)
+			case dlChanMusicDL:
+				tm.DL += time.Since(branchStart)
+			}
 		}
 		if best >= ceiling {
 			break // 到顶了，别的渠道再问也不可能更好
@@ -976,6 +1020,46 @@ func (i *Interceptor) postDownload(ctx context.Context, fake string, t, used onl
 	for k, v := range i.downloadPrefs() {
 		payload[k] = v
 	}
+	return i.postDownloadPayload(ctx, fake, t, used, actualTier, payload)
+}
+
+// postDownloadForceReplace 与 postDownload 相同，但**点名覆盖那一份文件**。
+//
+// 给歌曲修复用：坏文件的档位常常与候选一样（都是 320k），按「严格更高」比就永远
+// 换不掉；而且坏文件小到不被下载器认成音频（<32KB），连「旧文件在哪」都找不到。
+// 详见 downloader.SongPayload.ForceReplace。
+func (i *Interceptor) postDownloadForceReplace(ctx context.Context, fake string, t, used online.Track, url, actualTier, targetPath string) (online.DownloadedItem, error) {
+	tp := strings.TrimSpace(targetPath)
+	if tp == "" {
+		return online.DownloadedItem{}, fmt.Errorf("强制替换必须指定目标文件")
+	}
+	payload := map[string]any{
+		"name":     t.Title,
+		"singer":   t.Artist(),
+		"album":    t.Album,
+		"cover":    t.CoverURL,
+		"source":   t.Platform,
+		"songmid":  t.PlatformID,
+		"url":      url,
+		"duration": t.Duration,
+		"quality":  firstNonEmpty(actualTier, used.Quality),
+		"dest_dir": filepath.Dir(tp),
+		// ⚠️ 这里刻意**不传** upgrade_if_better：那条是「按档位决定要不要换」，
+		// 而这次是用户点名要换这一份，判据不该再由档位来否决。
+		"force_replace": true,
+		"dest_base":     strings.TrimSuffix(filepath.Base(tp), filepath.Ext(tp)),
+	}
+	for k, v := range i.downloadPrefs() {
+		payload[k] = v
+	}
+	return i.postDownloadPayload(ctx, fake, t, used, actualTier, payload)
+}
+
+// postDownloadPayload 把已组好的 payload 发给下载接口并解出落盘结果。
+//
+// 抽出来是因为「按最高音质入库」与「点名换掉这一份」两条路的 payload 不同，
+// 但应答解析、成功判据、大小回读完全一样 —— 两份实现迟早会漂移。
+func (i *Interceptor) postDownloadPayload(ctx context.Context, fake string, t, used online.Track, actualTier string, payload map[string]any) (online.DownloadedItem, error) {
 	out, status, err := i.postLocalAPI(ctx, "/api/download/song", payload)
 	if err != nil {
 		return online.DownloadedItem{}, err

@@ -131,10 +131,31 @@ func (s *musicDLPlatformSearcher) Search(ctx context.Context, keyword string, pa
 	// 原生那边也是 page/pageSize 直接传给上游）。
 	_ = page
 
+	// 探测腿（ctx 里带了单源预算）：每源只要 1 条，超时就不等了。
+	//
+	// 为什么：musicdl 的搜索会**对每条结果解析一次直链**（实测单条约 16s），
+	// 所以耗时 ≈ 条数 × 单条成本。探测要回答的只是「有没有更高档位」，
+	// 一条就够判断；下载腿没有预算，走 perPage 的慢口径，行为一个字没变。
+	if budget, ok := online.SourceBudget(ctx); ok && budget > 0 {
+		if limit > 1 {
+			limit = 1
+		}
+		items, err := s.parent.m.SearchWithBudget(ctx, keyword, []string{s.platform}, limit, budget)
+		if err != nil {
+			return nil
+		}
+		return s.convert(items)
+	}
+
 	items, err := s.parent.m.Search(ctx, keyword, []string{s.platform}, limit)
 	if err != nil {
 		return nil
 	}
+	return s.convert(items)
+}
+
+// convert 把 sidecar 的条目转成搜索层的统一结构（并滤掉混进来的别的源）。
+func (s *musicDLPlatformSearcher) convert(items []online.MusicDLSong) []UnifiedSong {
 	out := make([]UnifiedSong, 0, len(items))
 	for _, it := range items {
 		if it.Source != "" && it.Source != s.platform {

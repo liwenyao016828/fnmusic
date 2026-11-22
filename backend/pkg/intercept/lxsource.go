@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"time"
 
 	"fn-lx-player/pkg/lxnode"
 	"fn-lx-player/pkg/search"
@@ -47,6 +48,33 @@ const lxSourcePrefix = "lx:"
 // 「有没有同名同版的那一条」，不是把某个源的结果全捞回来。
 const lxSearchLimit = 5
 
+// lxBudgetKey 让调用方限定「洛雪这一路最多等多久」。
+//
+// 为什么走 ctx 而不是加参数：洛雪这条腿藏在 `lxCandidates` 里，中间隔着
+// rankedSources / collectDownloadAttemptsWith 两层 —— 加参数要一路传下去，
+// 而这两个函数的签名已经被下载腿用着（下载腿不限时）。ctx 是唯一不需要
+// 在调用链上开洞的通道（与 online.WithSourceBudget 同一手法）。
+type lxBudgetKey struct{}
+
+// withLxBudget 限定洛雪这一路的等待上限；d <= 0 表示不额外限制。
+func withLxBudget(ctx context.Context, d time.Duration) context.Context {
+	if d <= 0 || ctx == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, lxBudgetKey{}, d)
+}
+
+// lxBudgetOf 取 ctx 里的洛雪预算（没有 = 0 = 不限）。
+func lxBudgetOf(ctx context.Context) time.Duration {
+	if ctx == nil {
+		return 0
+	}
+	if d, ok := ctx.Value(lxBudgetKey{}).(time.Duration); ok {
+		return d
+	}
+	return 0
+}
+
 // lxCandidates 问一次洛雪宿主，把结果翻译成池能用的统一歌曲结构。
 //
 // 任何失败（宿主没开 / 连不上 / 脚本报错）都只记一笔日志并返回 nil ——
@@ -57,6 +85,13 @@ const lxSearchLimit = 5
 func (i *Interceptor) lxCandidates(ctx context.Context, keyword string) []search.UnifiedSong {
 	if i.lxSearch == nil || strings.TrimSpace(keyword) == "" {
 		return nil
+	}
+	// 探测腿会给这一路划个上限（见 withLxBudget）；下载腿没有，照旧等满宿主自己的
+	// 12s 单次超时。
+	if d := lxBudgetOf(ctx); d > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, d)
+		defer cancel()
 	}
 	songs, err := i.lxSearch(ctx, keyword, lxSearchLimit)
 	if err != nil {

@@ -343,7 +343,10 @@ func (i *Interceptor) rankedSources(ctx context.Context, title, artist string, w
 			// 3 条（2026-10-08）：池要回答的是「有没有同名的、音质更好的那一条」。
 			// 原先要 5 条，而 musicdl 会对**每条结果**解析一次直链（单条约 16s）——
 			// 5 条就是 80s，白等。3 条够判断，也够给跨源匹配留余地。
-			results[idx] = i.searcher(keyword, p, 1, 3)
+			//
+			// ⚠️ 走带 ctx 的那一路：探测腿（替换音质扫描）在 ctx 里带了「每个源最多
+			// 等多久」的预算，走无 ctx 的入口那个预算就丢了（慢源会拖到 15s+）。
+			results[idx] = i.searchCtx(ctx, keyword, p, 1, 3)
 		}(idx, p)
 	}
 	// 洛雪源与平台源**并发**问：它只是池里的另一条来源，没理由串在平台后面多等一轮

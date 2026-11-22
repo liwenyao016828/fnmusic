@@ -1245,6 +1245,34 @@ func APICatalog(baseURL string) []Endpoint {
 			Notes:   "默认移入 .tidy_trash 而不是直接删除，误判可恢复；同名歌词与封面会一起搬走。",
 		},
 
+		// ── 歌曲修复（v2.35.0）──
+		{
+			Method: http.MethodPost, Path: "/api/library/repair/scan", Summary: "曲库管家：扫出音频不对的文件（格式不符 / 时长过短 / 假无损）", Category: catTidy,
+			Params:  []Param{{Name: "dir", In: "body", Desc: "曲库目录；省略时用配置里生效的曲库目录"}},
+			Example: "curl -X POST " + baseURL + "/api/library/repair/scan -H 'Content-Type: application/json' -d '{\"dir\":\"/vol1/Music\"}'",
+			Notes: "**只读文件头**判定（不信扩展名与标签）：`ext_mismatch`=扩展名与真实容器不符，" +
+				"`too_short`=时长不足 30 秒，`fake_lossless`=无损容器但等效码率低于 200kbps。" +
+				"返回 `{dir,scanned,issues[],elapsed_ms}`。纯本地操作，几百首要几秒。",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/library/repair/replace", Summary: "曲库管家：用搜索到的另一个版本覆盖掉坏文件", Category: catTidy,
+			Params: []Param{
+				{Name: "path", In: "body", Required: true, Desc: "要覆盖的本地文件绝对路径"},
+				{Name: "platform", In: "body", Required: true, Desc: "音源平台短码，如 wy / tx / kg / kw / lx:wy / musicdl 源名"},
+				{Name: "platform_id", In: "body", Required: true, Desc: "该平台内的曲目 id（搜索接口返回的 songmid）"},
+				{Name: "title", In: "body", Desc: "曲名（省略则取文件名）"},
+				{Name: "artist", In: "body", Desc: "歌手"},
+				{Name: "album", In: "body", Desc: "专辑"},
+				{Name: "duration", In: "body", Desc: "时长（秒），用于校验候选是否对得上"},
+				{Name: "quality", In: "body", Desc: "期望档位，如 flac / 320k"},
+				{Name: "cover_url", In: "body", Desc: "封面地址（顺手写进标签）"},
+			},
+			Example: "curl -X POST " + baseURL + "/api/library/repair/replace -H 'Content-Type: application/json' -d '{\"path\":\"/vol1/Music/a.flac\",\"platform\":\"wy\",\"platform_id\":\"186016\",\"title\":\"夜曲\",\"artist\":\"周杰伦\"}'",
+			Notes: "**覆盖文件本体**（不另存旧文件），与「替换音质」不同：这里不看档位比较 ——" +
+				"坏文件即使同档位也要换。重新落盘后会用 audioprobe 复核新文件，新文件为空或时长异常短则报错并保留旧的。" +
+				"返回 `{path,ok,note,before,after,tier}`，before/after 是替换前后的 `{container,duration_sec,size,kbps}`。",
+		},
+
 		// ── 文件夹整理（v2.32.0）──
 		{
 			Method: http.MethodGet, Path: "/api/organize/presets", Summary: "文件夹整理的内置结构样式与当前模板", Category: catTidy,

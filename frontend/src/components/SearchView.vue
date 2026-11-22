@@ -79,126 +79,140 @@
             榜单有自己的顶层导航段，不必在发现页再放第二个入口。
             说明性文案一律收进 title（悬浮可见），不常驻占位。
           -->
-          <div class="flex min-w-0 flex-col rounded-[var(--ys-radius-block)] border border-[var(--ys-border)] bg-white px-4 py-4 sm:px-[30px] sm:py-[26px]">
-            <div class="flex items-start justify-between gap-3">
-              <div class="min-w-0">
-                <div class="text-[12px] font-medium tracking-[0.01em] text-[var(--ys-text-aux)]">{{ heroEyebrow }}</div>
-                <!-- v2.33.0：问候语（「下午好，来点音乐」）从这张欢迎卡搬到了右侧播放器卡的
-                     闲置态里 —— 一句话只出现一次，视觉焦点也集中在正在播放的那一侧。 -->
-              </div>
-              <!-- 就地刷新两个平台的账号连接状态（不再是「管理账号 → 跳走」）。
-                   2026-10-18：改成图标按钮 + 悬浮说明，不再常驻「刷新状态」四个字。 -->
+          <div class="flex min-w-0 flex-col rounded-[var(--ys-radius-block)] border border-[var(--ys-border)] bg-white px-4 py-4 sm:px-[26px] sm:py-[22px]">
+            <!--
+              2026-11-21 用户口径（配参考图）：「请重新优化页面布局，参照图片所示的布局样式」，
+              四条硬要求：①卡片高度跟随内容自适应；②右侧播放卡与这张卡等高；
+              ③弹窗扫码改成卡片内扫码（未扫码时先占一个空白二维码框，点了才在卡内出码）；
+              ④平台品牌色只给 Logo 和按钮，卡身保持中性。
+              所以这里回到参考图的两段式：卡头「账号连接 + 刷新」，下面并排两张平台卡，
+              每张卡 = 品牌标 + 平台名 / 分隔线 / 状态胶囊 / 二维码位 / 品牌色整宽按钮。
+              平台名重新常驻显示 —— 2026-10-18 曾把它收进 title，但参考图里它是主标识，
+              而且卡里现在没有别的大字，收起来整张卡就只剩一个图标。
+            -->
+            <div class="flex items-center justify-between gap-3">
+              <h2 class="text-[13px] font-semibold text-[var(--ys-text)]">账号连接</h2>
+              <!-- 就地刷新两个平台的账号连接状态（不再是「管理账号 → 跳走」）。 -->
               <button
                 type="button"
                 @click="refreshAccounts()"
                 :disabled="accountsLoading"
                 title="重新读取两个平台的连接状态"
                 aria-label="刷新连接状态"
-                class="mt-1 grid h-8 w-8 shrink-0 place-items-center rounded-full text-[var(--ys-text-aux)] transition-colors hover:bg-black/[0.04] hover:text-[var(--ys-text)] disabled:opacity-50"
+                class="inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-1 text-[12px] text-[var(--ys-text-aux)] transition-colors hover:bg-black/[0.04] hover:text-[var(--ys-text)] disabled:opacity-50"
               >
-                <RefreshCw class="h-4 w-4" :class="accountsLoading ? 'animate-spin' : ''" />
+                <RefreshCw class="h-3.5 w-3.5" :class="accountsLoading ? 'animate-spin' : ''" />
+                <span>刷新</span>
               </button>
             </div>
 
-            <!--
-              双平台推荐：网易云 + QQ 音乐的个人推荐。
-              2026-10-18 用户口径：「双平台推荐下的两个卡片嵌入到上方『中午好』卡片内」——
-              原来那一节的标题（「双平台推荐」+ 一句说明）整个删掉，卡片直接长在这里，
-              页面上少一层标题、少一段常驻说明。说明性文案改挂 title（悬浮可见）。
-              扫码登录 / 登出**就在这两张卡片里**（2026-09-27 从「账号连接」搬来：那页的扫码
-              登录与这里重复，用户要求只留一处）。二维码弹窗见 components/QrLoginModal.vue，
-              状态映射见 services/qrLogin.js。
-              曲目来自 GET /api/accounts/tracks —— 已归一化为可播放形状，点击即入列表，可播放/下载。
-            -->
-            <div class="mt-4 grid grid-cols-1 min-[400px]:grid-cols-2 gap-3 md:gap-4">
+            <!-- 并排的断点从 400 提到 520：卡里现在有平台名 + 132px 二维码位，
+                 400 宽时两列只剩 ~150px，名字会被截成「网易…」。窄了就上下排。 -->
+            <div class="mt-3.5 grid grid-cols-1 gap-3 min-[520px]:grid-cols-2">
               <div
                 v-for="p in recommendPlatforms" :key="p.id"
-                class="overflow-hidden rounded-[12px] border border-[var(--ys-border)] bg-[var(--ys-surface-sunken)]"
+                class="flex flex-col rounded-[12px] border border-[var(--ys-border)] bg-[var(--ys-surface-sunken)] px-3.5 py-3.5"
               >
-                <!-- 卡片头：平台名与说明全部收进 title，只留品牌标 + 连接状态
-                     （用户 2026-10-18：「把图标从 q 改为 qq，w 改为网易，或者你改为他们的
-                     官方图标。去掉 qq 音乐和网易云文字。」） -->
-                <div
-                  class="flex items-center justify-between gap-2 border-b border-[var(--ys-border)] px-3 py-2.5 sm:gap-3 sm:px-4 sm:py-3"
-                  :title="platformCardTitle(p)"
-                >
-                  <BrandMark :platform="p.id" class="h-7 w-7 sm:h-8 sm:w-8" />
-                  <span
-                    class="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium sm:px-2.5 sm:py-1 sm:text-[11px]"
-                    :class="p.connected ? 'bg-[var(--ys-accent-soft)] text-[var(--ys-accent)]' : 'bg-black/[0.05] text-[var(--ys-text-muted)]'"
-                  >{{ p.connected ? '已连接' : '未连接' }}</span>
+                <!-- 卡头：官方品牌标 + 平台名（品牌色只在这里和下面的按钮上出现） -->
+                <div class="flex items-center gap-2.5" :title="platformCardTitle(p)">
+                  <BrandMark :platform="p.id" class="h-9 w-9" />
+                  <b class="min-w-0 truncate text-[16px] font-semibold tracking-[-0.01em] text-[var(--ys-text)]">{{ p.name }}</b>
                 </div>
 
-                <!-- 卡片体 -->
-                <div class="px-3 py-3 sm:px-4 sm:py-4">
-                  <template v-if="p.connected">
-                    <!-- 账号行：谁登着 + 登出（登出=断开本机凭据，下次要重新扫码）。
-                         UID 收进 title，不再占一行。 -->
-                    <div class="mb-2.5 flex items-center gap-2 sm:mb-3 sm:gap-2.5" :title="`UID ${p.uid || '-'}`">
-                      <img
-                        v-if="p.avatar"
-                        :src="p.avatar"
-                        class="h-8 w-8 shrink-0 rounded-full object-cover sm:h-9 sm:w-9"
-                        referrerpolicy="no-referrer"
-                        @error="(e) => (e.target.style.display = 'none')"
-                      />
-                      <div v-else class="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[var(--ys-surface-sunken)] text-[12px] font-bold text-gray-500 sm:h-9 sm:w-9 sm:text-[13px]">
-                        {{ (p.nickname || p.name).slice(0, 1) }}
-                      </div>
-                      <div class="min-w-0 flex-1">
-                        <b class="block truncate text-[12px] font-medium text-[var(--ys-text)] sm:text-[13px]">{{ p.nickname || '已登录' }}</b>
-                      </div>
-                      <button
-                        class="shrink-0 rounded-full border border-[var(--ys-border)] px-2 py-1 text-[11px] font-medium text-[var(--ys-text-muted)] transition-colors hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 disabled:opacity-50 sm:px-2.5 sm:py-1.5 sm:text-[12px]"
-                        :disabled="!!platformBusy"
-                        @click="disconnectPlatform(p)"
-                      >{{ platformBusy === p.id + ':disconnect' ? '登出中…' : '登出' }}</button>
+                <div class="my-3 border-t border-[var(--ys-border)]"></div>
+
+                <template v-if="p.connected">
+                  <!-- 账号行：谁登着 + 登出（登出=断开本机凭据，下次要重新扫码）。UID 收进 title。 -->
+                  <div class="flex items-center gap-2.5" :title="`UID ${p.uid || '-'}`">
+                    <img
+                      v-if="p.avatar"
+                      :src="p.avatar"
+                      class="h-8 w-8 shrink-0 rounded-full object-cover"
+                      referrerpolicy="no-referrer"
+                      @error="(e) => (e.target.style.display = 'none')"
+                    />
+                    <div v-else class="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[var(--ys-surface-control)] text-[12px] font-bold text-gray-500">
+                      {{ (p.nickname || p.name).slice(0, 1) }}
                     </div>
-
-                    <!-- 每日推荐（提示语收进 title） -->
+                    <b class="min-w-0 flex-1 truncate text-[13px] font-medium text-[var(--ys-text)]">{{ p.nickname || '已登录' }}</b>
                     <button
-                      @click="loadRecommend(p.id, 'daily')"
-                      :disabled="!!recommendLoading"
-                      :title="p.dailyHint"
-                      class="ys-press flex w-full items-center gap-2 rounded-[12px] border border-[var(--ys-border)] px-2.5 py-2.5 text-left hover:border-emerald-500/30 hover:bg-[var(--ys-accent-soft)] disabled:opacity-60 sm:gap-3 sm:px-3.5 sm:py-3"
-                    >
-                      <div class="grid h-8 w-8 shrink-0 place-items-center rounded-[8px] bg-[var(--ys-accent-soft)] text-[var(--ys-accent)] sm:h-9 sm:w-9">
-                        <CalendarHeart class="w-4 h-4" />
-                      </div>
-                      <div class="min-w-0 flex-1">
-                        <b class="block text-[12px] font-medium text-[var(--ys-text)] sm:text-[13px]">每日推荐</b>
-                      </div>
-                      <Loader2 v-if="recommendLoading === p.id + ':daily'" class="w-4 h-4 shrink-0 animate-spin text-emerald-600" />
-                      <ChevronRight v-else class="w-4 h-4 shrink-0 text-[var(--ys-text-aux)]" />
-                    </button>
-
-                    <!-- 我的歌单（最多 4 个） -->
-                    <div v-if="p.playlists.length" class="mt-2.5">
-                      <span class="mb-1.5 block text-[11px] text-[var(--ys-text-aux)]">我的歌单</span>
-                      <div class="flex flex-wrap gap-1.5">
-                        <button
-                          v-for="pl in p.playlists.slice(0, 4)" :key="pl.id"
-                          @click="loadRecommend(p.id, 'playlist', pl.id)"
-                          :disabled="!!recommendLoading"
-                          class="max-w-full truncate rounded-full bg-black/[0.04] px-2.5 py-1.5 text-[11px] text-[var(--ys-text-muted)] transition-colors hover:bg-[var(--ys-accent-soft)] hover:text-[var(--ys-accent)] disabled:opacity-60"
-                          :title="pl.name + (pl.count ? ` · ${pl.count} 首` : '')"
-                        >{{ pl.name }}</button>
-                      </div>
-                    </div>
-                    <p v-else-if="p.playlistsLoading" class="mt-2.5 text-[11px] text-[var(--ys-text-aux)]">正在读取歌单…</p>
-                  </template>
-
-                  <!-- 未连接：就地扫码登录（二维码弹窗在本组件里，不再跳到「账号连接」）。
-                       提示语收进 title，不再占两行文字。 -->
-                  <div v-else class="flex flex-col items-center gap-2.5 py-4 text-center">
-                    <button
-                      @click="startPlatformLogin(p)"
+                      class="shrink-0 rounded-full border border-[var(--ys-border)] px-2.5 py-1 text-[11.5px] font-medium text-[var(--ys-text-muted)] transition-colors hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 disabled:opacity-50"
                       :disabled="!!platformBusy"
-                      :title="p.loginHint"
-                      class="ys-press rounded-[8px] bg-emerald-600 px-3.5 py-1.5 text-[12px] font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
-                    >{{ platformBusy === p.id + ':qr' ? '正在获取二维码…' : '扫码登录' }}</button>
+                      @click="disconnectPlatform(p)"
+                    >{{ platformBusy === p.id + ':disconnect' ? '登出中…' : '登出' }}</button>
                   </div>
-                </div>
+
+                  <!-- 每日推荐（提示语收进 title） -->
+                  <button
+                    @click="loadRecommend(p.id, 'daily')"
+                    :disabled="!!recommendLoading"
+                    :title="p.dailyHint"
+                    class="ys-press mt-3 flex w-full items-center gap-2 rounded-[10px] border border-[var(--ys-border)] bg-white px-2.5 py-2.5 text-left hover:border-emerald-500/30 hover:bg-[var(--ys-accent-soft)] disabled:opacity-60"
+                  >
+                    <div class="grid h-8 w-8 shrink-0 place-items-center rounded-[8px] bg-[var(--ys-accent-soft)] text-[var(--ys-accent)]">
+                      <CalendarHeart class="h-4 w-4" />
+                    </div>
+                    <b class="min-w-0 flex-1 text-[12.5px] font-medium text-[var(--ys-text)]">每日推荐</b>
+                    <Loader2 v-if="recommendLoading === p.id + ':daily'" class="h-4 w-4 shrink-0 animate-spin text-emerald-600" />
+                    <ChevronRight v-else class="h-4 w-4 shrink-0 text-[var(--ys-text-aux)]" />
+                  </button>
+
+                  <!-- 我的歌单（最多 4 个） -->
+                  <div v-if="p.playlists.length" class="mt-2.5">
+                    <span class="mb-1.5 block text-[11px] text-[var(--ys-text-aux)]">我的歌单</span>
+                    <div class="flex flex-wrap gap-1.5">
+                      <button
+                        v-for="pl in p.playlists.slice(0, 4)" :key="pl.id"
+                        @click="loadRecommend(p.id, 'playlist', pl.id)"
+                        :disabled="!!recommendLoading"
+                        class="max-w-full truncate rounded-full bg-black/[0.04] px-2.5 py-1.5 text-[11px] text-[var(--ys-text-muted)] transition-colors hover:bg-[var(--ys-accent-soft)] hover:text-[var(--ys-accent)] disabled:opacity-60"
+                        :title="pl.name + (pl.count ? ` · ${pl.count} 首` : '')"
+                      >{{ pl.name }}</button>
+                    </div>
+                  </div>
+                  <p v-else-if="p.playlistsLoading" class="mt-2.5 text-[11px] text-[var(--ys-text-aux)]">正在读取歌单…</p>
+                </template>
+
+                <!-- 未连接：状态胶囊 + 卡内二维码位 + 品牌色整宽按钮（原弹窗已去掉） -->
+                <template v-else>
+                  <div class="flex justify-center">
+                    <span class="rounded-full bg-black/[0.06] px-3 py-1 text-[11.5px] font-medium text-[var(--ys-text-muted)]">未连接</span>
+                  </div>
+
+                  <!-- 二维码位：没点登录时是空白占位框（虚线），点了就在原地出码 —— 
+                       用户 2026-11-21：「把文字『登录同步歌单』所在的位置替换为一个空白二维码框；
+                       点击扫码后，再在卡片内显示二维码」。 -->
+                  <div class="mt-3 flex flex-col items-center">
+                    <div
+                      class="grid h-[132px] w-[132px] place-items-center overflow-hidden rounded-[10px] bg-white"
+                      :class="qrFor(p.id) ? 'border border-[var(--ys-border)]' : 'border border-dashed border-[var(--ys-border-strong)]'"
+                    >
+                      <img
+                        v-if="qrFor(p.id)?.image"
+                        :src="qrFor(p.id).image"
+                        class="h-full w-full object-contain p-1.5"
+                        alt="登录二维码"
+                      />
+                      <span v-else-if="qrFor(p.id)" class="px-2 text-center text-[11px] text-[var(--ys-text-aux)]">{{ QR_TEXT.rendering }}</span>
+                      <QrCode v-else class="h-7 w-7 text-[var(--ys-text-aux)] opacity-30" aria-hidden="true" />
+                    </div>
+                    <!-- 状态行常驻占位（没会话时留空）：两张卡同一行等高，
+                         少一行字就会把下面那颗按钮顶错位。 -->
+                    <p
+                      class="mt-1.5 h-[16px] w-full text-center text-[11.5px] font-medium leading-[16px]"
+                      :class="qrFor(p.id)?.ok ? 'text-emerald-600' : qrFor(p.id)?.expired ? 'text-rose-500' : 'text-[var(--ys-text-muted)]'"
+                    >{{ qrFor(p.id)?.status || '' }}</p>
+                  </div>
+
+                  <!-- 品牌色只给按钮（网易云红 / QQ 绿），卡身保持中性 -->
+                  <button
+                    @click="onPlatformLoginButton(p)"
+                    :disabled="!!platformBusy"
+                    :title="p.loginHint"
+                    class="ys-press mt-2.5 h-10 w-full rounded-[8px] text-[13px] font-semibold text-white transition-[filter] hover:brightness-95 disabled:opacity-50"
+                    :style="{ backgroundColor: p.brand }"
+                  >{{ platformLoginLabel(p) }}</button>
+                </template>
               </div>
             </div>
 
@@ -280,9 +294,6 @@
           </div>
         </div>
       </div>
-
-      <!-- 平台扫码登录弹窗（状态全在 services/qrLogin.js） -->
-      <QrLoginModal :session="qr" @close="closeQr" @restart="restartQr" />
 
       <!-- 1. 发现大厅 - 排行榜单网格 (紧凑精致卡片排版) -->
       <!--
@@ -893,7 +904,6 @@ import { normalizeColumns, listColumnClass, LIST_COLUMNS_KEY } from '../services
 import QRCode from 'qrcode'
 import DownloadQualityModal from './DownloadQualityModal.vue'
 import InlineNotice from './InlineNotice.vue'
-import QrLoginModal from './QrLoginModal.vue'
 import SelectField from './SelectField.vue'
 import BrandMark from './BrandMark.vue'
 import DiscoverLyricPlayer from './DiscoverLyricPlayer.vue'
@@ -923,6 +933,7 @@ import {
 import { logError, logInfo, logWarn } from '../services/appLog'
 import {
   QR_POLL_MS,
+  QR_TEXT,
   LOGIN_SUCCESS_CLOSE_MS,
   qrCheckView,
   qrSessionView,
@@ -935,7 +946,7 @@ import {
 import {
   Search, Play, Loader2, Music2, Download, HardDriveDownload,
   Folder, ArrowLeft, Shuffle, Repeat, Repeat1, Check, X, Radio, BellPlus,
-  CalendarHeart, ChevronRight, Trophy, RefreshCw,
+  CalendarHeart, ChevronRight, Trophy, RefreshCw, QrCode,
   Pause, SkipBack, SkipForward, Disc3,
 } from 'lucide-vue-next'
 
@@ -976,14 +987,8 @@ const emit = defineEmits(['play', 'play-all', 'update:play-mode', 'navigate', 'p
 
 
 // ── hero 问候语（参考 flow 的 .eyebrow + hero h1）──
-const heroEyebrow = computed(() => {
-  const d = new Date()
-  const week = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'][d.getDay()]
-  const mm = String(d.getMonth() + 1).padStart(2, '0')
-  const dd = String(d.getDate()).padStart(2, '0')
-  return `${week} · ${mm}月${dd}日`
-})
-
+// 2026-11-21：日期 eyebrow 随「账号连接」卡头一起撤掉了（参考图那里只有标题 + 刷新），
+// 问候语仍在，只是搬到了右侧播放器卡的闲置态里。
 const heroGreeting = computed(() => {
   const h = new Date().getHours()
   if (h < 6) return '夜深了，听点安静的'
@@ -1001,17 +1006,22 @@ const recommendLoading = ref('')            // 形如 "netease:daily"，用于�
 
 const PLATFORM_META = {
   netease: {
-    // mark / markClass 已删（2026-10-18）：卡片头改用 components/BrandMark.vue 的品牌标，
-    // 平台名也不再常驻显示 —— 都进 title（见 platformCardTitle）。
+    // mark / markClass 已删（2026-10-18）：卡片头改用 components/BrandMark.vue 的品牌标。
+    // 2026-11-21 起平台名重新常驻显示（参考图里它是卡头主标识）。
     id: 'netease', name: '网易云音乐', desc: '独立推荐空间',
     topBorder: 'border-t-[3px] border-t-rose-400',
     source: 'wy', appName: '网易云音乐',
+    // 品牌色：只给「扫码登录」按钮用（用户 2026-11-21：「品牌色只用于 Logo 和按钮，
+    // 不要给整张卡片染色」）。取客户端图标那颗红，比 #C20C0C 亮一点，白字更清楚。
+    brand: '#f2415a',
     loginHint: '扫码登录后可读每日推荐与私人歌单（含创建与收藏）',
   },
   qq: {
     id: 'qq', name: 'QQ 音乐', desc: '独立推荐空间',
     topBorder: 'border-t-[3px] border-t-emerald-400',
     source: 'tx', appName: 'QQ音乐',
+    // QQ 音乐的官方绿。
+    brand: '#2eb767',
     loginHint: '扫码登录后可读每日推荐与自建 / 收藏歌单',
   },
 }
@@ -1182,7 +1192,7 @@ async function loadRecommend(provider, kind, id = '') {
 }
 
 // ── 平台扫码登录 / 登出（2026-09-27 从「账号连接」搬来：那页的扫码登录与本页重复）──
-// 弹窗见 components/QrLoginModal.vue；状态映射与文案见 services/qrLogin.js。
+// 二维码直接长在平台卡里（2026-11-21 去掉弹窗）；状态映射与文案见 services/qrLogin.js。
 // 这里只负责「取二维码 → 按 2 秒轮询 → 成功后刷新账号与歌单」这些副作用。
 const accountsLoading = ref(false)
 const platformBusy = ref('')                // 'netease:qr' / 'netease:disconnect'
@@ -1194,6 +1204,34 @@ let qrErrLogged = false                     // 每 2 秒一轮，轮询失败只
 /** 平台元信息（也带上卡片里那些字段），用于「按 id 找回平台」 */
 function platformOf(id) {
   return recommendPlatforms.value.find((p) => p.id === id) || null
+}
+
+/**
+ * 某个平台当前开着的扫码会话（同一时刻只可能有一个）。
+ * 2026-11-21 起二维码直接长在平台卡里，所以模板按平台取 —— 没开就是 null，
+ * 那一格显示虚线占位框（用户要求：未扫码时先放一个空白二维码框）。
+ */
+function qrFor(id) {
+  return qr.value && qr.value.platformId === id ? qr.value : null
+}
+
+/**
+ * 未连接卡上那颗按钮的文案：同一颗按钮承担三件事 —— 取码 / 换一张 / 收起。
+ * 不再有第二个入口，所以按钮文字必须自己说清楚现在点它会怎样。
+ */
+function platformLoginLabel(p) {
+  if (platformBusy.value === p.id + ':qr') return '正在获取二维码…'
+  const session = qrFor(p.id)
+  if (!session) return '扫码登录'
+  return session.expired ? '刷新二维码' : '取消扫码'
+}
+
+/** 那颗按钮点下去：没码就取码，过期就换一张，正在等扫码就收起 */
+function onPlatformLoginButton(p) {
+  const session = qrFor(p.id)
+  if (!session) return startPlatformLogin(p)
+  if (session.expired) return restartQr()
+  closeQr()
 }
 
 /**

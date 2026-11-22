@@ -32,6 +32,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"fn-lx-player/pkg/audioext"
 	"fn-lx-player/pkg/namefmt"
@@ -53,6 +54,40 @@ const (
 	qualityScanMaxEntries = 500
 	// 用户输入的 limit 上限：防止一次扫到几十万首把整机拖住。
 	qualityScanMaxLimit = 2000
+)
+
+// 三道预算（变量而不是常量：测试要把围栏缩到毫秒级）。
+var (
+	// 单首探测的总时长围栏。
+	//
+	// 为什么要有：探测是「等外网」的重活，而外网的时间不是我们能定的 —— 实测最坏
+	// 一首要 80s（2026-11-21，NAS 上 30 首冷扫 580.9s ≈ 19.4s/首）。4 个 worker
+	// 里只要有一个卡住，那一格就废了，整批的墙钟被最慢的那首拖着走。
+	//
+	// 到点怎么办：**记「没探出」**，不是「探出没有」。区别很要紧 ——
+	// 「没有更高音质」是结论，可以据此跳过重扫 7 天；「没探出」没有结论，
+	// 下次还得再探（见 qualityEntryFresh 里对 TimedOut 的处理）。
+	qualityProbeBudget = 25 * time.Second
+
+	// 单个 musicdl 源在**探测腿**上最多等多久。
+	//
+	// 只掐探测腿，不掐下载腿：下载要的是「能下下来」，慢而全是对的
+	// （v2.13.0 那轮把 sidecar 预算从 12s 提到 120s 就是因为掐太死会「取音池恒空」）。
+	// 探测腿只是问「有没有更高音质」，等太久没有意义 —— 实测多数源 1~2s 就回，
+	// 少数慢源 3~15s，等满 15s 也未必有结果。
+	qualitySourceBudget = 8 * time.Second
+
+	// 洛雪那一路在**探测腿**上最多等多久。
+	//
+	// 为什么要单独一条：洛雪是按脚本逐个问的（6 个脚本各问一遍，单次实测 3~7s），
+	// 而它不受 musicdl 单源预算的约束 —— v2.34.1 实测单首「洛雪」一段最高 16.6s，
+	// 比其它所有段加起来还长。下载腿仍然不限（要真直链）。
+	qualityLxBudget = 6 * time.Second
+
+	// 替换那条腿的围栏：用户已经点了「替换」，正等着 —— 这时候按 25s 掐掉探测，
+	// 界面就会显示「各渠道都没有更高的档位」这种**结论性**的话，而实际只是
+	// 没探完。所以替换腿给一个宽裕的围栏，且**不限**单源等待（它要的是真直链）。
+	qualityReplaceProbeBudget = 120 * time.Second
 )
 
 // 无损容器。**按容器判**，不看文件名里有没有「无损」两个字 ——
@@ -80,18 +115,33 @@ type QualityEntry struct {
 	Channels    []channelTier `json:"channels"`
 	Best        *channelTier  `json:"best"`
 	Upgradeable bool          `json:"upgradeable"`
+	// TimedOut 表示「这次探测没跑完就被围栏掐了」，也就是**没有结论**。
+	//
+	// 它和 Upgradeable=false 是两回事：
+	//   - Upgradeable=false 且 TimedOut=false → 「探过了，确实没有更高音质」（结论）
+	//   - TimedOut=true                      → 「没探出」（无结论，下次要重探）
+	// 免扫名单只认前者（见 qualityEntryFresh）。
+	TimedOut bool `json:"timed_out,omitempty"`
+	// ScannedAt 是这条结论的探测时间（Unix 秒，0 = 老数据/未知）。
+	// 有了它界面才能显示「上次扫描」，也才能判断这条结论能不能跳过重扫。
+	ScannedAt int64 `json:"scanned_at"`
 }
 
 // QualityStatus 扫描任务的状态（也是 /api/quality/scan 的 data）。
 type QualityStatus struct {
-	State       string         `json:"state"`
-	Mode        string         `json:"mode"`
-	Total       int            `json:"total"`
-	Scanned     int            `json:"scanned"`
-	Truncated   bool           `json:"truncated"`
-	Upgradeable int            `json:"upgradeable"`
-	Error       string         `json:"error"`
-	Entries     []QualityEntry `json:"entries"`
+	State     string `json:"state"`
+	Mode      string `json:"mode"`
+	Total     int    `json:"total"`
+	Scanned   int    `json:"scanned"`
+	Truncated bool   `json:"truncated"`
+	// Skipped 是「因为最近扫过而跳过」的条数（不重扫、结论直接沿用）。
+	Skipped     int `json:"skipped"`
+	Upgradeable int `json:"upgradeable"`
+	// Updated 是结果里最新的扫描时间（Unix 秒，0 = 从来没扫过）。
+	// 界面用它显示「上次扫描」。
+	Updated int64          `json:"updated"`
+	Error   string         `json:"error"`
+	Entries []QualityEntry `json:"entries"`
 	// Records 是「替换音质」的**历史记录**（最近 N 条，落盘，重启还在）。
 	//
 	// 为什么必须落盘：替换是**原地覆盖**，用户在文件管理器里看不出任何变化，
@@ -174,19 +224,67 @@ func qualityNameKey(s string) string {
 	return b.String()
 }
 
+// qualityMatchTitle 去掉文件名开头的曲序（`01 夜曲` → `夜曲`）。
+//
+// 为什么要：曲库里的文件常带曲序前缀（`01 夜曲.flac`、`03 - 歌名.mp3`），而平台的
+// 曲名里没有。严格相等比对就会一律对不上 —— 真机实证：v2.34.1 修好「原生渠道根本
+// 没跑」之后，`01 夜曲` 这类文件的原生列仍然是空的，因为它拿 `01夜曲` 去跟 `夜曲` 比。
+//
+// 只认「数字 + 分隔符」这一种形态：`10000 Reasons`、`7 Rings` 这种以数字开头的
+// **歌名**不能被切（判据是紧跟数字的字符必须是空格或分隔符，且数字不超过 4 位）。
+// 调用方还会同时用原样标题比一次，所以切错了也不会丢匹配。
+func qualityMatchTitle(title string) string {
+	s := strings.TrimSpace(title)
+	n := 0
+	for n < len(s) && n < 4 && s[n] >= '0' && s[n] <= '9' {
+		n++
+	}
+	if n == 0 || n >= len(s) {
+		return s
+	}
+	// 紧跟数字的必须是分隔符。ASCII 的直接看字节；CJK 的分隔符是多字节，
+	// 按 rune 解一个再比（byte 层面比会把 `、` 切成两半）。
+	tail := s[n:]
+	switch tail[0] {
+	case ' ', '.', '-', '_', ')', ']':
+		tail = tail[1:]
+	default:
+		if r, size := utf8.DecodeRuneInString(tail); r == '、' || r == '）' || r == '】' {
+			tail = tail[size:]
+		} else {
+			return s
+		}
+	}
+	rest := strings.TrimSpace(strings.TrimLeft(tail, " .-_)]、）】"))
+	if rest == "" {
+		return s
+	}
+	return rest
+}
+
 // nativeTrackFor 在**原生平台**上搜一次这首歌，用于回答「原生渠道能拿到什么档位」。
 //
 // 曲库文件没有平台 id，所以这条渠道必须从搜索开始 —— 而搜索是模糊的，这里只接受
 // 歌名归一化后完全相等的那条（宁可这一列空着，也不要拿别人那首的结果去比）。
-func (i *Interceptor) nativeTrackFor(title, artist string) online.Track {
-	if i.searcher == nil || strings.TrimSpace(title) == "" {
+func (i *Interceptor) nativeTrackFor(ctx context.Context, title, artist string) online.Track {
+	if !i.searchReady() || strings.TrimSpace(title) == "" {
 		return online.Track{}
 	}
-	keyword := strings.TrimSpace(title + " " + artist)
+	// 关键词用去掉曲序的标题去搜（`01 夜曲` → 搜 `夜曲`，命中率差很多）。
+	base := qualityMatchTitle(title)
+	keyword := strings.TrimSpace(base + " " + artist)
+	if keyword == "" {
+		keyword = strings.TrimSpace(title + " " + artist)
+	}
+	// 两个键都收：原样标题与去曲序标题。都算命中，`7 Rings` 这类数字开头的歌名
+	// 就不会因为切错而丢匹配。
 	want := qualityNameKey(title)
-	for _, p := range i.platforms() {
-		for _, s := range i.searcher(keyword, p, 1, 3) {
-			if qualityNameKey(s.Name) != want {
+	wantTrimmed := qualityNameKey(base)
+	// ⚠️ 只问**原生**平台（网易/QQ），不是 platforms() 那一长串 ——
+	// 后者含用户启用的全部外挂源，串行搜一遍就是几十秒（见 nativePlatforms）。
+	for _, p := range i.nativePlatforms() {
+		for _, s := range i.nativeSearchCtx(ctx, keyword, p, 1, 3) {
+			if k := qualityNameKey(s.Name); k != want && k != wantTrimmed {
 				continue
 			}
 			id := songPlatformID(s)
@@ -206,7 +304,21 @@ func (i *Interceptor) nativeTrackFor(title, artist string) online.Track {
 
 // probeQuality 探一首歌在各渠道的可得档位。返回的 entry 里 `Channels` 按用户配的
 // 渠道顺序排（与界面上那三行的顺序一致），`Best` 是其中实际档位最高的那条。
+//
+// 三道保险（2026-11-21）：
+//  1. 单首围栏 qualityProbeBudget —— 到点就收手，不再等外网。
+//  2. 单源预算 qualitySourceBudget —— 通过 ctx 传给 musicdl 侧，只掐探测腿。
+//  3. 按段计时 —— 日志里能看到这秒数花在找候选还是解析，方便继续优化。
+//
+// 超时的语义是「**没探出**」而不是「探出没有」：entry.Best 为空、Upgradeable=false，
+// 但 TimedOut=true —— 这条不会被算进 7 天免扫名单（见 qualityEntryFresh）。
 func (i *Interceptor) probeQuality(ctx context.Context, path string) QualityEntry {
+	return i.probeQualityWithBudget(ctx, path, qualityProbeBudget, qualitySourceBudget)
+}
+
+// probeQualityWithBudget 探一首，可指定两道预算；budget<=0 表示不额外加围栏
+// （仍受传入 ctx 的约束）。
+func (i *Interceptor) probeQualityWithBudget(ctx context.Context, path string, budget, sourceBudget time.Duration) QualityEntry {
 	ext := strings.ToLower(filepath.Ext(path))
 	base := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 	artist, title := namefmt.Parse(base)
@@ -218,10 +330,24 @@ func (i *Interceptor) probeQuality(ctx context.Context, path string) QualityEntr
 		Ext: ext, CurrentTier: qualityCurrentTierOfFile(path, ext),
 	}
 
-	track := i.nativeTrackFor(entry.Title, entry.Artist)
+	// 围栏从「开始找候选」就掐起 —— 慢的地方正是这里。
+	pctx := ctx
+	if budget > 0 {
+		var cancel context.CancelFunc
+		pctx, cancel = context.WithTimeout(ctx, budget)
+		defer cancel()
+	}
+	pctx = online.WithSourceBudget(pctx, sourceBudget)
+	pctx = withLxBudget(pctx, qualityLxBudget)
+
+	t0 := time.Now()
+	track := i.nativeTrackFor(pctx, entry.Title, entry.Artist)
+	searchElapsed := time.Since(t0)
 	track.Title = entry.Title
 	track.Artists = []string{entry.Artist}
-	attempts := i.collectDownloadAttempts(ctx, track, i.downloadTiers())
+
+	tm := &dlTimings{}
+	attempts := i.collectDownloadAttemptsWith(pctx, track, i.downloadTiers(), tm)
 	entry.Channels = channelTiersOf(attempts, i.downloadChannels())
 
 	// 赢家：实际档位最高、同档位取渠道顺序靠前的那条（与落盘时的排序口径一致）。
@@ -237,6 +363,23 @@ func (i *Interceptor) probeQuality(ctx context.Context, path string) QualityEntr
 	}
 	entry.Upgradeable = entry.Best != nil &&
 		online.TierRank(entry.Best.Tier) > online.TierRank(entry.CurrentTier)
+
+	// 超时 → 这条没有结论，不能进免扫名单。
+	//
+	// ⚠️ 只认**围栏**超时，不认「用户叫停」：叫停时 ctx 本身被取消，pctx 也会
+	// 跟着报错，但那是「用户主动停的」，不是「探测不出来」，而且上面已经探到的
+	// 渠道结果不该被抹掉。
+	timedOut := pctx.Err() != nil && ctx.Err() == nil
+	if timedOut {
+		entry.TimedOut = true
+		entry.Best = nil
+		entry.Upgradeable = false
+	}
+
+	// 按段计时：这行是「优化到底有没有用」的证据。
+	i.logf("[INTERCEPT] 音质探测 %s：总 %v（原生搜索 %v｜找候选 %v｜原生解析 %v｜洛雪 %v｜外挂池 %v）%s",
+		entry.Title, time.Since(t0), searchElapsed, tm.Search, tm.Native, tm.Lx, tm.DL,
+		map[bool]string{true: "［超时，没探出］", false: ""}[entry.TimedOut])
 	return entry
 }
 
@@ -261,9 +404,15 @@ func channelOrderIndex(channels []string, want string) int {
 
 // ── 扫描任务 ──
 
-// StartQualityScan 起一次扫描。已有任务在跑时**返回当前状态**而不是并起第二个
-// （扫描是外呼重活，两份并行只是互相拖慢）。
-func (i *Interceptor) StartQualityScan(mode string, limit int) (QualityStatus, error) {
+// StartQualityScan 起一次扫描。
+//
+// refresh=false（默认）会**跳过最近扫过、结论仍然有效的歌**：曲库里绝大多数文件
+// 这几天的结论没变，重问一遍等于白等十几分钟（用户 2026-11-21 的反馈）。
+// refresh=true 是「全部重扫」，用于怀疑结论过时的场合（例如刚换了音源）。
+//
+// 已有任务在跑时**返回当前状态**而不是并起第二个（扫描是外呼重活，两份并行
+// 只是互相拖慢）。
+func (i *Interceptor) StartQualityScan(mode string, limit int, refresh bool) (QualityStatus, error) {
 	if i.quality == nil {
 		return QualityStatus{State: QualityStateIdle}, fmt.Errorf("拦截层未就绪")
 	}
@@ -284,23 +433,108 @@ func (i *Interceptor) StartQualityScan(mode string, limit int) (QualityStatus, e
 		i.quality.mu.Unlock()
 		return st, nil
 	}
+	i.quality.mu.Unlock()
+
 	paths, truncated, err := i.qualityListLibraryFiles(mode, limit)
 	if err != nil {
-		i.quality.mu.Unlock()
 		return QualityStatus{State: QualityStateFailed, Error: err.Error()}, nil
+	}
+
+	// 历史结论放在锁外取：要逐条 stat 文件判断是否还新鲜，不该占着状态锁。
+	prev := i.qualityStoreSnapshot()
+	now := time.Now()
+	todo := make([]string, 0, len(paths))
+	skipped := 0
+	if refresh {
+		todo = append(todo, paths...)
+	} else {
+		for _, p := range paths {
+			if e, ok := i.qualityStoreLookup(p); ok && i.qualityEntryFresh(e, now) {
+				skipped++
+				continue
+			}
+			todo = append(todo, p)
+		}
+	}
+
+	i.quality.mu.Lock()
+	if i.quality.running { // 两次加锁之间别人已经起了任务
+		st := i.quality.status
+		i.quality.mu.Unlock()
+		return st, nil
 	}
 	i.quality.running = true
 	i.quality.stop = make(chan struct{})
+	// Entries 先放**上次的结论**：点「继续扫描」时看到的是「历史 + 这一次新增」，
+	// 而不是一屏空白（「扫出来的歌全没了」有一半就是这么来的）。
 	i.quality.status = QualityStatus{
 		State: QualityStateRunning, Mode: mode,
-		Total: len(paths), Truncated: truncated,
-		Entries: make([]QualityEntry, 0, len(paths)),
+		Total: len(todo), Truncated: truncated, Skipped: skipped,
+		Entries: prev, Upgradeable: countQualityUpgradeable(prev),
 	}
+	i.quality.status.Updated = i.qualityStoreNewest()
 	st := i.quality.status
 	i.quality.mu.Unlock()
 
-	go i.runQualityScan(paths)
+	if len(todo) == 0 {
+		// 全都在 7 天内扫过 → 不必起 goroutine，直接把已有结论当本轮结果。
+		i.finishQualityScan()
+		return i.QualityScanStatus(), nil
+	}
+	go i.runQualityScan(todo)
 	return st, nil
+}
+
+// finishQualityScan 收尾：状态回 done、排序、落盘。
+func (i *Interceptor) finishQualityScan() {
+	i.quality.mu.Lock()
+	i.quality.running = false
+	i.quality.stop = nil
+	// 结果按「可替换优先 + 路径」排一下：用户打开这一页最想看的是能换的那批，
+	// 而不是按文件系统遍历顺序（那个顺序在他眼里就是随机的）。
+	sortQualityEntries(i.quality.status.Entries)
+	i.quality.status.State = QualityStateDone
+	i.quality.status.Upgradeable = countQualityUpgradeable(i.quality.status.Entries)
+	i.quality.mu.Unlock()
+	if i.qualityStore != nil {
+		i.qualityStore.flush()
+	}
+}
+
+// upsertQualityEntryLocked 把一条探测结果写进当前状态（同路径覆盖，不重复列）。
+// 调用方必须持有 i.quality.mu。
+//
+// ⚠️ 超时的结果**不覆盖**已有的结论：超时是「没探出」，不是「探出没有」——
+// 覆盖掉等于把一条有效的结论抹成空白。
+func (i *Interceptor) upsertQualityEntryLocked(e QualityEntry) {
+	for n := range i.quality.status.Entries {
+		if i.quality.status.Entries[n].Path == e.Path {
+			if e.TimedOut && !i.quality.status.Entries[n].TimedOut {
+				return // 已有结论更值钱，保留
+			}
+			i.quality.status.Entries[n] = e
+			return
+		}
+	}
+	i.quality.status.Entries = append(i.quality.status.Entries, e)
+	// 超上限时按「可替换优先 + 路径」裁掉尾巴：宁可少列几条不能换的，
+	// 也不要因为历史结论占满名额而把这次新探出来的结果丢掉。
+	if len(i.quality.status.Entries) > qualityScanMaxEntries {
+		sortQualityEntries(i.quality.status.Entries)
+		i.quality.status.Entries = i.quality.status.Entries[:qualityScanMaxEntries]
+	}
+}
+
+// countQualityUpgradeable 数「能换」的条数（状态里那几个计数都从它来，
+// 免得覆盖写、裁尾之后计数与明细对不上）。
+func countQualityUpgradeable(list []QualityEntry) int {
+	n := 0
+	for _, e := range list {
+		if e.Upgradeable {
+			n++
+		}
+	}
+	return n
 }
 
 // QualityScanStatus 读当前状态（未起过任务时是 idle）。
@@ -309,8 +543,30 @@ func (i *Interceptor) QualityScanStatus() QualityStatus {
 		return QualityStatus{State: QualityStateIdle}
 	}
 	i.quality.mu.Lock()
-	defer i.quality.mu.Unlock()
 	st := i.quality.status
+	// 刚启动/重启后状态里没有明细 → 用落盘的历史结论填一次（填完就写回 status，
+	// 后续轮询不再重复 stat 文件）。
+	if len(st.Entries) == 0 && !i.quality.running {
+		if hist := i.qualityStoreSnapshot(); len(hist) > 0 {
+			st.Entries = hist
+			st.Upgradeable = countQualityUpgradeable(hist)
+			i.quality.status.Entries = hist
+			i.quality.status.Upgradeable = st.Upgradeable
+		}
+	}
+	if st.State == "" {
+		st.State = QualityStateIdle
+	}
+	st.Updated = i.qualityStoreNewest()
+	if st.Updated == 0 {
+		// 没有落盘时间时退回「明细里最新的一条」，界面至少能显示个时间。
+		for _, e := range st.Entries {
+			if e.ScannedAt > st.Updated {
+				st.Updated = e.ScannedAt
+			}
+		}
+	}
+	i.quality.mu.Unlock()
 	if st.Entries == nil {
 		st.Entries = []QualityEntry{}
 	}
@@ -335,7 +591,27 @@ func (i *Interceptor) StopQualityScan() QualityStatus {
 		i.quality.stop = nil
 	}
 	i.quality.mu.Unlock()
+	// 叫停也要落盘：用户停下来的那一批结论同样是有效的（重启后不该白丢）。
+	if i.qualityStore != nil {
+		i.qualityStore.flush()
+	}
 	return i.QualityScanStatus()
+}
+
+// qualityStoreLookup / qualityStoreNewest / qualityStoreSnapshot 是带 nil 兜底的
+// 三个入口：qualityStore 在测试里可能是 nil（只测扫描逻辑时不必造盘）。
+func (i *Interceptor) qualityStoreLookup(path string) (QualityEntry, bool) {
+	if i.qualityStore == nil {
+		return QualityEntry{}, false
+	}
+	return i.qualityStore.lookup(path)
+}
+
+func (i *Interceptor) qualityStoreNewest() int64 {
+	if i.qualityStore == nil {
+		return 0
+	}
+	return i.qualityStore.newest()
 }
 
 func (i *Interceptor) runQualityScan(paths []string) {
@@ -364,15 +640,23 @@ func (i *Interceptor) runQualityScan(paths []string) {
 			defer wg.Done()
 			for n := range jobs {
 				entry := i.probeQuality(ctx, paths[n])
+				// 被叫停（用户点「停止」/任务取消）时就**不要**记结论：半途而废的探测
+				// 结果会被存成「7 天内不用重扫」，等于把一次中断变成永久误判。
+				stopped := ctx.Err() != nil
+				if !stopped && entry.ScannedAt == 0 {
+					entry.ScannedAt = time.Now().Unix()
+				}
 				i.quality.mu.Lock()
-				if len(i.quality.status.Entries) < qualityScanMaxEntries {
-					i.quality.status.Entries = append(i.quality.status.Entries, entry)
-				}
+				i.upsertQualityEntryLocked(entry)
 				i.quality.status.Scanned++
-				if entry.Upgradeable {
-					i.quality.status.Upgradeable++
+				if !stopped && entry.ScannedAt > i.quality.status.Updated {
+					i.quality.status.Updated = entry.ScannedAt
 				}
+				i.quality.status.Upgradeable = countQualityUpgradeable(i.quality.status.Entries)
 				i.quality.mu.Unlock()
+				if !stopped && i.qualityStore != nil {
+					i.qualityStore.put(entry)
+				}
 			}
 		}()
 	}
@@ -389,20 +673,7 @@ func (i *Interceptor) runQualityScan(paths []string) {
 	close(jobs)
 	wg.Wait()
 
-	i.quality.mu.Lock()
-	i.quality.running = false
-	i.quality.stop = nil
-	// 结果按「可替换优先 + 路径」排一下：用户打开这一页最想看的是能换的那批，
-	// 而不是按文件系统遍历顺序（那个顺序在他眼里就是随机的）。
-	sort.SliceStable(i.quality.status.Entries, func(a, b int) bool {
-		ea, eb := i.quality.status.Entries[a], i.quality.status.Entries[b]
-		if ea.Upgradeable != eb.Upgradeable {
-			return ea.Upgradeable
-		}
-		return ea.Path < eb.Path
-	})
-	i.quality.status.State = QualityStateDone
-	i.quality.mu.Unlock()
+	i.finishQualityScan()
 }
 
 // qualityLibraryRoots 返回「扫哪些目录」。
@@ -545,14 +816,19 @@ func (i *Interceptor) replaceOneQuality(ctx context.Context, raw string) (Qualit
 		return QualityReplaceDone{}, fmt.Errorf("已经是无损（%s），不需要替换", strings.TrimPrefix(ext, "."))
 	}
 
-	entry := i.probeQuality(ctx, path)
+	entry := i.probeQualityWithBudget(ctx, path, qualityReplaceProbeBudget, 0)
 	if entry.Best == nil || !entry.Upgradeable {
+		// 区分「探出没有更高档位」与「没探出」—— 这两句话对用户意味着完全不同的
+		// 下一步动作（前者别试了，后者等会儿再试）。
+		if entry.TimedOut {
+			return QualityReplaceDone{}, fmt.Errorf("这一轮没探完（超时），稍后再试一次")
+		}
 		return QualityReplaceDone{}, fmt.Errorf("各渠道都没有更高的档位：现在 %s，渠道最高 %s",
 			entry.CurrentTier, bestTierText(entry))
 	}
 	best := *entry.Best
 
-	track := i.nativeTrackFor(entry.Title, entry.Artist)
+	track := i.nativeTrackFor(ctx, entry.Title, entry.Artist)
 	track.Title = entry.Title
 	track.Artists = []string{entry.Artist}
 	tiers := i.downloadTiers()
@@ -596,10 +872,58 @@ func (i *Interceptor) replaceOneQuality(ctx context.Context, raw string) (Qualit
 		}, nil
 	}
 	i.logf("[INTERCEPT] 替换音质：%s → %s（%s 渠道 %s）", filepath.Base(path), filepath.Base(item.Path), pick.Channel, pick.Tier())
+	// 盘上档位真的变了 → 旧结论（「能换成 320k」）立刻作废，改成新档位 + 刚扫过，
+	// 下次点扫描就不用再为这首白问一遍渠道。
+	i.noteQualityReplaced(path, after, item.Path)
 	return QualityReplaceDone{
 		Path: path, OK: true, NewPath: item.Path, Tier: item.Quality, Channel: pick.Channel,
 		From: before, Title: entry.Title, Artist: entry.Artist,
 	}, nil
+}
+
+// noteQualityReplaced 在替换成功后同步「扫描结论」。
+//
+// 为什么必须同步：结论里存着「盘上档位」与「能不能换」。换了文件不同步，
+// 下次加载历史时 qualityEntryFresh 会发现档位对不上而作废——虽然不会出错，
+// 但会白重扫一遍；更糟的是界面上还会显示「这首能升级」（旧结论），
+// 用户点了才发现已经换过了。
+func (i *Interceptor) noteQualityReplaced(path, newTier, finalPath string) {
+	if strings.TrimSpace(newTier) == "" {
+		return
+	}
+	if strings.TrimSpace(finalPath) == "" {
+		finalPath = path
+	}
+	ext := strings.ToLower(filepath.Ext(finalPath))
+	e, ok := i.qualityStoreLookup(path)
+	if !ok {
+		base := strings.TrimSuffix(filepath.Base(finalPath), filepath.Ext(finalPath))
+		artist, title := namefmt.Parse(base)
+		if strings.TrimSpace(title) == "" {
+			title = strings.TrimSpace(base)
+		}
+		e = QualityEntry{
+			Path: finalPath, Title: strings.TrimSpace(title), Artist: strings.TrimSpace(artist),
+		}
+	}
+	e.Path = finalPath
+	e.Ext = ext
+	e.CurrentTier = newTier
+	e.Upgradeable = false
+	e.Best = nil
+	e.ScannedAt = time.Now().Unix()
+	if i.qualityStore != nil {
+		if finalPath != path {
+			i.qualityStore.drop(path)
+		}
+		i.qualityStore.put(e)
+		// 这条是用户当场看到的结论，立刻落盘（不用等攒够 20 条）。
+		i.qualityStore.flush()
+	}
+	i.quality.mu.Lock()
+	i.upsertQualityEntryLocked(e)
+	i.quality.status.Upgradeable = countQualityUpgradeable(i.quality.status.Entries)
+	i.quality.mu.Unlock()
 }
 
 func bestTierText(e QualityEntry) string {

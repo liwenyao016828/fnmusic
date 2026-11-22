@@ -125,6 +125,11 @@ func ScanHealth(dir string) (HealthReport, error) {
 		if path == real {
 			return nil
 		}
+		// 自己的回收站与群晖缩略图目录不进去查：里面全是「已经不要了」的东西，
+		// 报出来只会让清单变长；更怕的是用户顺手「自动修文件名」把回收站目录本身搬走。
+		if d != nil && d.IsDir() && healthSkipDir(d.Name()) {
+			return fs.SkipDir
+		}
 		if issue, ok := inspectEntry(path, d); ok {
 			if len(rep.Issues) < healthMaxIssues {
 				rep.Issues = append(rep.Issues, issue)
@@ -248,6 +253,18 @@ func healthRank(kind string) int {
 	return 10
 }
 
+// healthSkipDir 判断某个目录是不是「不该进去查」的内部目录。
+//
+// `.tidy_trash` 是查重清理的回收站 —— 里面的名字好不好都已无所谓；
+// `@eaDir` 是群晖/飞牛的缩略图缓存，条目数量巨大且名字由系统生成。
+func healthSkipDir(name string) bool {
+	switch name {
+	case ".tidy_trash", "@eaDir", ".@__thumb":
+		return true
+	}
+	return false
+}
+
 // inspectEntry 判断一个条目是否有问题。返回 false 表示干净。
 func inspectEntry(path string, d fs.DirEntry) (HealthIssue, bool) {
 	name := d.Name()
@@ -264,9 +281,13 @@ func inspectEntry(path string, d fs.DirEntry) (HealthIssue, bool) {
 	case strings.ContainsAny(name, `\/:*?"<>|`):
 		issue.Kind = IssueIllegalChar
 		issue.Detail = "文件名含跨平台非法字符"
-	case name != strings.Trim(name, ". "):
+	// 只看**末尾**的点与空格：那才是 Windows/SMB 打不开的原因。
+	// 开头的点在两边都合法（`.DS_Store`、我们自己的 `.tidy_trash` 都是），
+	// 早先按 Trim(name, ". ") 判会把 `.tidy_trash` 也报成「名字有问题」，
+	// 而「自动改名」真去改它，就是把回收站目录搬走、里面的东西全回到曲库里。
+	case strings.TrimRight(name, ". ") != name:
 		issue.Kind = IssueTrailing
-		issue.Detail = "文件名首尾有点或空格（Windows/SMB 上打不开）"
+		issue.Detail = "文件名末尾有点或空格（Windows/SMB 上打不开）"
 	case len(name) > 255:
 		issue.Kind = IssueTooLong
 		issue.Detail = "文件名超过 255 字节"

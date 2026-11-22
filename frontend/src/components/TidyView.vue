@@ -502,182 +502,303 @@
         </template>
       </SectionCard>
 
-      <!-- ═════ 修复段 · 一：歌名修复（原「体检」）═════ -->
+      <!-- ═════ 修复段：一张清单管四类问题（2026-11-21）═════ -->
       <!--
-        ═════ 修复段 · 一：歌名修复（原「体检」）═════
-        2026-10-24 用户：「去除体检中的曲库体检，更名为歌名修复，页面加入歌名修复功能。」
-        原来的「曲库体检」只统计缺歌词/缺封面（audit 四格），用户明确不要了；
-        这一段的主动作换成歌名修复：扫出没有歌名 / 歌名就是文件名的曲目，
-        交给 AI 从候选里挑或直接按文件名解析，**只改标签里的标题字段**。
-        文件名体检（LibraryHealthCard）留着 —— 它是「磁盘条目本身不合法」，
-        和改歌名是两件事，但它就在这一段里，用户修完名字可以顺手扫一遍。
+        ═════ 修复段：一张清单管四类问题（2026-11-21）═════
 
-        2026-10-29 重排：本段与「查重」「文件名体检」合成了「修复」——
-        三者都是「东西**不对**」（歌名是垃圾 / 同一首有两份 / 文件名非法），
-        用户修的时候本来就是在同一个地方来回看。
-        搬走的：「命名解析规则 / 文件名解析试算」→「系统 → 设置」（那是配置不是操作）；
-        「缺歌词」→「补全」段（那是「东西**缺**」）。
+        历史：2026-10-24 把「曲库体检」换成「歌名修复」；10-29 又把「查重」和
+        「文件名体检」收进同一段，但三段各自是一张卡、各自有一份列表 ——
+        用户看问题得先想「这属于哪一类」，而同一首坏歌可能同时命中两类。
+
+        2026-11-21 用户：「查重、歌名修复、文件名体检的列表合并为一个列表共用」，
+        并新增第四类「歌曲修复(替换)」：把大小/格式不对、时长过短的文件
+        通过搜索歌名换成正常版本。于是这一段变成**一张表**：
+          · 歌名   —— 标题为空/就是文件名，交给 AI 判名（写标签）
+          · 重复   —— 内容相同/同名不同版，留一份、其余移入回收站
+          · 文件名 —— 磁盘条目本身非法（会让飞牛报「未知错误」）
+          · 音频   —— 扩展名与真实容器不符 / 时长过短 / 假无损（换掉文件本体）
+
+        三条口径：
+        1. **一类扫出 0 条不许把整张表清空**（v2.34.0 的教训：替换音质扫完
+           0 条可替换就把表清空了，用户以为「我扫出来的歌全没了」）。这里
+           只有「四类都空」才走空态，且文案明说是空不是丢。
+        2. 合并的是**列表**，不是动作：批量按钮仍按类分派到各自的后端接口
+           （title-fix / duplicates-resolve / nas-health-fix / repair-replace）。
+        3. 慢扫描不捆绑：查重算 hash、文件名体检遍历目录都可能几十秒，
+           所以除了「扫描」一次跑完四类，每一类都能单独重扫。
       -->
       <SectionCard
         v-show="sub === 'repair'"
         :icon="ScanSearch"
-        title="歌名修复"
-        sub="没有歌名 / 歌名就是文件名的曲目：让 AI 从搜索结果里挑，或按文件名解析 —— 只改标题标签，可撤回"
+        title="修复清单"
+        sub="歌名不对、内容重复、文件名非法、音频坏掉 —— 四类问题都在这一张表里，勾选后按类处理"
       >
         <template #actions>
-          <!-- 2026-10-25 用户：「右上角的按钮迁移到下方卡片内」—— 扫描歌名 + 修复记录时间都进卡片头 -->
-          <span v-if="titleFixRecordsAtText" class="text-[10.5px] text-[var(--ys-text-aux)]">{{ titleFixRecordsAtText }}</span>
+          <span v-if="repairAtText" class="text-[10.5px] text-[var(--ys-text-aux)]">{{ repairAtText }}</span>
           <button
-            :disabled="titleFixScanning"
-            :title="titleFixScanning ? '正在从曲库索引里挑出歌名可疑的曲目…' : '扫出没有歌名 / 歌名就是文件名的曲目，交给 AI 修'"
+            :disabled="!!repairBusy"
+            :title="repairBusy ? repairBusyText : '一次扫完四类：音频检查 / 歌名可疑 / 查重 / 文件名体检'"
             class="ys-btn ys-btn-primary ys-press"
-            @click="scanTitleFix"
-          >{{ titleFixScanning ? '扫描中…' : '扫描歌名' }}</button>
+            @click="scanAllRepair"
+          >{{ repairBusy === 'all' ? '扫描中…' : '扫描' }}</button>
         </template>
 
-        <!-- 空态 -->
-        <div v-if="!titleFixItems.length && !titleFixScanning" class="ys-empty">
-          <p>还没有扫到可疑歌名 —— 点右上「扫描歌名」</p>
-          <p class="mt-1 text-[10.5px]">判定口径：标题为空、标题就是文件名（有没有扩展名都算）、标题里带「未知」「unknown」「未命名」</p>
+        <!-- 空态：只有四类都空才显示，且必须说清「是没查出来，不是被你扫丢了」 -->
+        <div v-if="!repairRows.length && !repairBusy" class="ys-empty">
+          <p>还没有扫描结果 —— 点右上「扫描」把四类问题一次查一遍</p>
+          <p class="mt-1 text-[10.5px]">
+            歌名可疑 / 内容重复 / 文件名非法 / 音频不对（格式不符、时长过短、假无损）
+          </p>
         </div>
+        <div v-if="repairBusy && !repairRows.length" class="ys-empty">{{ repairBusyText }}</div>
 
-        <div v-if="titleFixScanning" class="ys-empty">
-          正在从曲库索引里挑歌名可疑的曲目…
-        </div>
+        <InlineNotice v-if="repairError" :text="repairError" />
 
-        <!-- AI 修复卡：批量猜 + 逐条改 -->
-        <div v-if="titleFixItems.length" class="mt-1 space-y-2.5 rounded-[12px] border border-[var(--ys-border)] bg-[var(--ys-surface-sunken)] p-3.5">
-          <div class="flex flex-wrap items-center justify-between gap-2">
-            <span class="text-[11px] font-semibold text-[var(--ys-text)]">
-              歌名可疑 {{ titleFixItems.length }} 首
-              <span v-if="titleFixSelectedCount" class="text-[var(--ys-accent)]">· 已勾 {{ titleFixSelectedCount }}</span>
+        <div v-if="repairRows.length" class="mt-1 space-y-2.5">
+          <!-- 按类筛选 + 单独重扫 -->
+          <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5">
+            <span class="flex flex-wrap items-center gap-1.5">
+              <button
+                v-for="f in repairFilters"
+                :key="f.id"
+                class="ys-press rounded-full border px-2.5 py-1 text-[11px] transition-colors"
+                :class="repairFilter === f.id
+                  ? 'border-transparent bg-[var(--ys-accent)] text-white'
+                  : 'border-[var(--ys-border)] bg-white text-[var(--ys-text-muted)] hover:text-[var(--ys-text)]'"
+                @click="repairFilter = f.id"
+              >{{ f.name }}<span class="ml-1 font-mono">{{ f.count }}</span></button>
             </span>
-            <span class="flex items-center gap-2">
-              <button
-                :disabled="titleFixBusy || !titleFixSelectedCount"
-                class="ys-btn ys-btn-sm ys-btn-primary ys-press"
-                @click="runTitleFix"
-              >{{ titleFixBusy ? '修复中…' : `AI 修复 ${titleFixSelectedCount || ''}` }}</button>
-              <button
-                :disabled="titleFixBusy"
-                class="rounded-full px-2.5 py-1.5 text-[11px] text-[var(--ys-text-muted)] hover:text-[var(--ys-text)] disabled:opacity-50"
-                @click="toggleAllTitleFix"
-              >{{ titleFixAllSelected ? '全不选' : '全选' }}</button>
-              <!-- 9.6（2026-10-27）：清空整份待修名单原来一下就点没了（虽然能重扫，
-                   但几百首的勾选要重来一遍）—— 和查重一样点两次。 -->
-              <button
-                :disabled="titleFixBusy"
-                class="ys-btn ys-btn-sm"
-                :class="titleFixClearArmed ? 'ys-btn-ghost-danger font-semibold' : ''"
-                @click="clearTitleFixList"
-              >{{ titleFixClearArmed ? '确认清空' : '清空' }}</button>
+            <span class="flex flex-wrap items-center gap-1 text-[10.5px] text-[var(--ys-text-aux)]">
+              <span>只重扫这一类：</span>
+              <button class="underline decoration-dotted underline-offset-2 hover:no-underline disabled:opacity-50" :disabled="!!repairBusy" @click="scanRepairAudio">音频</button>
+              <button class="underline decoration-dotted underline-offset-2 hover:no-underline disabled:opacity-50" :disabled="!!repairBusy" @click="scanRepairTitle">歌名</button>
+              <button class="underline decoration-dotted underline-offset-2 hover:no-underline disabled:opacity-50" :disabled="!!repairBusy" @click="scanRepairDup">查重</button>
+              <button class="underline decoration-dotted underline-offset-2 hover:no-underline disabled:opacity-50" :disabled="!!repairBusy" @click="scanRepairHealth">文件名</button>
             </span>
           </div>
 
-          <!--
-            3.8（2026-10-27）：几百首时「我刚勾了哪几首」在表里找不着 ——
-            加「只看勾选的」+「按歌名排序」。默认不过滤、不排序（保持扫描顺序）。
-          -->
-          <div class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-[var(--ys-text-muted)]">
+          <!-- 勾选与全选 -->
+          <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-[var(--ys-text-muted)]">
             <label class="flex cursor-pointer items-center gap-1.5">
               <input
                 type="checkbox"
                 class="h-3.5 w-3.5 accent-[var(--ys-accent)]"
-                :checked="titleFixOnlySelected"
-                @change="setTitleFixOnlySelected($event.target.checked)"
+                :checked="repairOnlySelected"
+                @change="repairOnlySelected = $event.target.checked"
               />
               只看勾选的
             </label>
-            <label class="flex cursor-pointer items-center gap-1.5">
-              <input
-                type="checkbox"
-                class="h-3.5 w-3.5 accent-[var(--ys-accent)]"
-                :checked="titleFixSort === 'title'"
-                @change="setTitleFixSort($event.target.checked ? 'title' : 'file')"
-              />
-              按歌名排序（空的排前面）
-            </label>
-            <span v-if="titleFixHiddenCount" class="text-[var(--ys-text-aux)]">已隐藏 {{ titleFixHiddenCount }} 条未勾选</span>
-            <span class="ml-auto text-[10.5px] text-[var(--ys-text-aux)]">共 {{ titleFixItems.length }} 条</span>
+            <button
+              class="rounded-full px-2 py-0.5 text-[11px] text-[var(--ys-text-muted)] hover:text-[var(--ys-text)] disabled:opacity-50"
+              :disabled="!!repairBusy"
+              @click="toggleAllRepair"
+            >{{ repairAllSelected ? '全不选' : '全选' }}</button>
+            <span class="text-[var(--ys-text-aux)]">
+              已勾 <b class="font-mono text-[var(--ys-text)]">{{ repairSelection.all }}</b> 条
+              <template v-if="repairHiddenCount">· 已隐藏 {{ repairHiddenCount }} 条</template>
+            </span>
+            <span class="ml-auto text-[10.5px] text-[var(--ys-text-aux)]">共 {{ repairRows.length }} 条</span>
           </div>
 
-          <div v-if="!titleFixView.length" class="ys-empty ys-empty-sm">
-            勾选被「只看勾选的」藏住了 —— 取消勾选这句就能看到全部 {{ titleFixItems.length }} 条
+          <!-- 批量动作：按「勾了什么」出现，不按筛选出现 —— 没勾的时候不该有红按钮可点 -->
+          <div class="flex flex-wrap items-center gap-2">
+            <button
+              v-if="repairSelection.title"
+              :disabled="titleFixBusy"
+              class="ys-btn ys-btn-sm ys-btn-primary ys-press"
+              :title="titleFixAiReady ? '让 AI 给勾选的曲目判名，只改标题标签' : '还没配置 AI 大模型 —— 到「系统 → 设置 → AI」里配好再来'"
+              @click="runTitleFix"
+            >{{ titleFixBusy ? '修复中…' : `AI 修歌名 ${repairSelection.title}` }}</button>
+
+            <template v-if="repairSelection.dup">
+              <button
+                :disabled="dupBusy"
+                class="ys-btn ys-btn-sm ys-press"
+                @click="resolveDupSelected(true)"
+              >{{ dupBusy ? '…' : '干跑预览' }}</button>
+              <button
+                :disabled="dupBusy"
+                class="ys-btn ys-btn-sm ys-btn-danger ys-press"
+                :class="dupConfirmArmed ? 'ring-2 ring-rose-300' : ''"
+                :title="dupConfirmArmed ? '再点一次就真的移走' : '第一次点只跑干跑并摊开清单'"
+                @click="resolveDupSelected(false)"
+              >{{ dupConfirmArmed ? '确认移入回收站' : `移入回收站 ${repairSelection.dup}` }}</button>
+              <button
+                v-if="dupConfirmArmed"
+                :disabled="dupBusy"
+                class="ys-btn ys-btn-sm ys-press"
+                @click="cancelResolveDup"
+              >取消</button>
+            </template>
+
+            <button
+              v-if="repairSelection.file"
+              :disabled="healthFixing"
+              class="ys-btn ys-btn-sm ys-press"
+              :class="healthFixArmed ? 'ys-btn-danger' : ''"
+              :title="healthFixArmed ? '再点一次就真的改名/改权限' : '只会动「可自动改名 / 可改权限」的那些'"
+              @click="fixSelectedHealth"
+            >{{ healthFixing ? '修复中…' : (healthFixArmed ? '确认改文件名' : `自动修文件名 ${repairSelection.file}`) }}</button>
+
+            <span v-if="!repairSelection.title && !repairSelection.dup && !repairSelection.file" class="text-[11px] text-[var(--ys-text-aux)]">
+              音频问题要逐首选版本 —— 用行尾的「换版本」；换掉的坏文件不另存，要保险先在「快照」段拍一张
+            </span>
           </div>
-          <div v-else class="max-h-80 overflow-auto rounded-[8px] border border-[var(--ys-border)] bg-white">
-            <table class="w-full min-w-[620px] text-[11px]">
+
+          <!-- 清单本体 -->
+          <div class="max-h-[26rem] overflow-auto rounded-[8px] border border-[var(--ys-border)] bg-white">
+            <table class="w-full min-w-[760px] text-[11px]">
               <thead class="sticky top-0 z-10 bg-[var(--ys-bg-soft)] text-[var(--ys-text-aux)]">
                 <tr>
-                  <th class="w-8 px-2 py-1.5"></th>
+                  <th class="w-9 px-2 py-1.5"></th>
                   <th class="px-2 py-1.5 text-left font-medium">文件</th>
-                  <th class="px-2 py-1.5 text-left font-medium">当前的歌名</th>
-                  <th class="px-2 py-1.5 text-left font-medium">
-                    <!--
-                      2026-10-26 用户：「把修复后的列改成手动歌名体检，
-                      点击后随机抽取 10 首歌曲交给AI修复，并展示修复结果（包括是否可以修复、带原歌名、新歌名等）」。
-                      所以这一列的表头不再是"结果"两个字，而是那个动作的入口。
-                    -->
-                    <span class="flex items-center gap-1.5">
-                      <span>修复后</span>
-                      <button
-                        :disabled="manualAuditBusy"
-                        class="ys-press rounded-full border border-[var(--ys-border)] bg-white px-2 py-0.5 text-[10px] font-normal text-[var(--ys-text-muted)] transition-colors hover:text-[var(--ys-text)] disabled:opacity-50"
-                        title="随便抽 10 首（含歌名正常的）让 AI 判断能不能修复、会改成什么 —— 只出结果，不改文件"
-                        @click="runManualTitleAudit"
-                      >{{ manualAuditBusy ? '抽查中…' : '手动歌名体检' }}</button>
-                    </span>
-                  </th>
+                  <th class="px-2 py-1.5 text-left font-medium">问题</th>
+                  <th class="px-2 py-1.5 text-left font-medium">建议 / 结果</th>
+                  <th class="w-[86px] px-2 py-1.5 text-left font-medium">操作</th>
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="it in titleFixView" :key="it.path" class="border-t border-[var(--ys-border)]">
-                  <!-- 8.5：勾选框热区原来是 16px（只有 input 本身），手指点不中 ——
-                       用 label 把整格撑成 32×32 的可点区域，视觉尺寸不变。 -->
-                  <td class="w-10 px-1.5 py-1">
-                    <label class="flex h-8 w-8 cursor-pointer items-center justify-center">
-                      <input type="checkbox" class="h-4 w-4" :checked="it.selected" :disabled="titleFixBusy" @change="toggleTitleFix(it)" />
+                <tr v-for="row in repairVisibleRows" :key="row.id" class="border-t border-[var(--ys-border)] align-top">
+                  <td class="w-10 px-1 py-1">
+                    <label
+                      v-if="row.role !== 'keep' && !row.done && row.kind !== 'audio'"
+                      class="flex h-8 w-8 cursor-pointer items-center justify-center"
+                    >
+                      <input type="checkbox" class="h-4 w-4" :checked="row.selected" @change="toggleRepairRow(row)" />
                     </label>
+                    <span v-else class="flex h-8 w-8 items-center justify-center text-[10px] text-[var(--ys-text-aux)]">
+                      {{ row.role === 'keep' ? '留' : (row.kind === 'audio' ? '!' : '✓') }}
+                    </span>
                   </td>
-                  <td class="max-w-[220px] truncate px-2 py-1 font-mono text-[var(--ys-text-muted)]" :title="it.path">
-                    {{ baseName(it.path) }}
+                  <td class="max-w-[240px] px-2 py-1">
+                    <div class="ys-cell font-mono text-[var(--ys-text-muted)]" :title="row.path">{{ row.name }}</div>
+                    <div
+                      v-if="row.title || row.artist"
+                      class="ys-cell text-[10px] text-[var(--ys-text-aux)]"
+                      :title="[row.title, row.artist].filter(Boolean).join(' · ')"
+                    >{{ [row.title, row.artist].filter(Boolean).join(' · ') }}</div>
                   </td>
-                  <td class="ys-cell max-w-[150px] px-2 py-1 text-rose-600" :title="it.title">
-                    {{ it.title || '（空）' }}
+                  <td class="max-w-[320px] px-2 py-1">
+                    <span class="rounded-full px-1.5 py-0.5 text-[10px]" :class="repairKindTone(row.kind)">{{ repairKindName(row.kind) }}</span>
+                    <span class="ml-1.5 text-[var(--ys-text)]">{{ row.detail }}</span>
+                    <span v-if="row.meta" class="ml-1 text-[10px] text-[var(--ys-text-aux)]">{{ row.meta }}</span>
+                    <div v-if="row.error" class="mt-0.5 text-[10px] text-rose-500">{{ row.error }}</div>
                   </td>
-                  <td class="ys-cell max-w-[220px] px-2 py-1 text-[var(--ys-text)]" :title="it.suggested_title">
-                    <template v-if="it.done">
-                      <span class="text-[var(--ys-accent)]">✓ {{ it.written_title }}</span>
+                  <td class="ys-cell max-w-[200px] px-2 py-1" :title="row.suggest || row.written">
+                    <template v-if="row.done">
+                      <span class="text-[var(--ys-accent)]">✓ {{ row.written || row.suggest }}</span>
                     </template>
-                    <template v-else-if="it.suggested_title">{{ it.suggested_title }}</template>
-                    <template v-else-if="it.error"><span class="text-amber-600">{{ it.error }}</span></template>
-                    <template v-else>—</template>
+                    <template v-else-if="row.suggest"><span class="text-[var(--ys-text)]">{{ row.suggest }}</span></template>
+                    <template v-else><span class="text-[var(--ys-text-aux)]">—</span></template>
+                  </td>
+                  <td class="px-2 py-1">
+                    <button
+                      v-if="row.kind === 'audio'"
+                      class="ys-btn ys-btn-sm ys-press"
+                      title="搜各平台的版本，挑一个换掉这个坏文件"
+                      @click="openCandidate(row)"
+                    >换版本</button>
+                    <span v-else class="text-[10px] text-[var(--ys-text-aux)]">—</span>
                   </td>
                 </tr>
               </tbody>
             </table>
           </div>
 
-          <!--
-            六-3：页面上有两个「AI 按钮」，区别原来只写在 tooltip 里（手机上等于没有）。
-            正文里点明分工：扫描歌名 = 按规则挑可疑的、会写文件；手动体检 = 随机抽 10 首、
-            只出结论不写文件，专门用来验证 AI 靠不靠谱。
-          -->
+          <div v-if="!repairVisibleRows.length" class="ys-empty ys-empty-sm">
+            勾选被「只看勾选的」藏住了 —— 取消勾选这句就能看到全部 {{ repairRows.length }} 条
+          </div>
+
+          <!-- 查重结果 / 回收站位置：保留规则是后端的，页面必须写出来 -->
+          <div v-if="dupResolveResult" class="rounded-[8px] border border-[var(--ys-border)] bg-white px-3.5 py-2 text-[11px] text-[var(--ys-text-muted)]">
+            {{ dupResolveResult.dry_run ? '干跑估算' : '执行完成' }}：
+            移动 <b class="font-mono">{{ dupResolveResult.moved }}</b> ·
+            删除 <b class="font-mono">{{ dupResolveResult.deleted }}</b> ·
+            释放 <b class="font-mono">{{ fmtSize(dupResolveResult.freed_bytes) }}</b>
+            <span v-if="dupResolveResult.errors && dupResolveResult.errors.length" class="ml-1 text-rose-500">
+              {{ dupResolveResult.errors.length }} 个文件处理失败
+              <button class="underline decoration-dotted underline-offset-2 hover:no-underline" @click="navigateTo('logs')">查看日志</button>
+            </span>
+          </div>
+          <div v-if="trashPath && repairCounts.dup" class="flex flex-wrap items-center gap-x-2 gap-y-1 text-[10.5px] text-[var(--ys-text-aux)]">
+            <span>重复文件移到回收站（不直接删）：</span>
+            <code class="min-w-0 truncate font-mono text-[var(--ys-text-muted)]" :title="trashPath">{{ trashPath }}</code>
+            <button class="shrink-0 underline decoration-dotted underline-offset-2 hover:no-underline" @click="copyTrashPath">复制路径</button>
+          </div>
+
           <p class="text-[10.5px] leading-relaxed text-[var(--ys-text-aux)]">
-            只改文件里的标题标签，不动文件名；每次修复都进「数据快照」，可以随时撤回。
-            这里的「扫描歌名」按规则挑出可疑的，会写文件；
-            「手动歌名体检」是随机抽 10 首（含歌名看着正常的）让 AI 判断，
-            <b>只出结论、不写文件</b> —— 想先看看 AI 靠不靠谱就用它。
+            口径：歌名 = 标题为空 / 就是文件名 / 带「未知」；重复 = 内容相同或同名不同版（保留规则由后端定：取码率时长更优、标签更全的那份）；
+            文件名 = 磁盘条目本身非法（这类会让飞牛文件管理器报「未知错误」）；
+            音频 = 扩展名与真实容器不符 / 时长不足 30 秒 / 无损容器但等效码率低于 200kbps。
+            <b>歌名修复只改标签、不动文件名；音频替换会覆盖文件本体。</b>
           </p>
         </div>
+      </SectionCard>
 
-        <!--
-          手动歌名体检（用户 2026-10-26）：「点击后随机抽取 10 首歌曲交给 AI 修复，
-          并展示修复结果（包括是否可以修复、带原歌名、新歌名等）」。
-          入口在上方表格「修复后」列的表头。**纯只读**：不写标签、不留快照 ——
-          目的就是回答「AI 到底靠不靠谱」，所以样本是随机抽的（也包含歌名看着正常的），
-          只挑可疑样本会得出「AI 全都修对了」的假象。真改请勾回去走 AI 修复。
-        -->
-        <div v-if="manualAuditItems.length || manualAuditBusy" class="mt-3 rounded-[12px] border border-[var(--ys-border)] bg-white p-3">
+      <!-- 歌名修复的历史记录与「手动体检」：它们是「看结果」，不是「待修问题」，所以不并进上面那张表 -->
+      <SectionCard
+        v-show="sub === 'repair'"
+        :icon="History"
+        title="歌名修复记录"
+        sub="AI 改过的标题都在这里，可以逐条撤回；「手动体检」随机抽 10 首只出结论、不写文件"
+      >
+        <template #actions>
+          <span v-if="titleFixRecordsAtText" class="text-[10.5px] text-[var(--ys-text-aux)]">{{ titleFixRecordsAtText }}</span>
+          <button
+            :disabled="manualAuditBusy"
+            class="ys-btn ys-btn-sm ys-press"
+            title="随便抽 10 首（含歌名正常的）让 AI 判断能不能修复、会改成什么 —— 只出结果，不改文件"
+            @click="runManualTitleAudit"
+          >{{ manualAuditBusy ? '抽查中…' : '手动歌名体检' }}</button>
+        </template>
+
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <span class="text-[11px] font-semibold text-[var(--ys-text)]">
+            修复记录 <span class="font-mono">{{ titleFixRecords.length }}</span>
+          </span>
+          <span class="flex items-center gap-2">
+            <button
+              v-if="titleFixSelectedRecords.length"
+              :disabled="titleFixUndoBusy"
+              class="ys-btn ys-btn-sm ys-btn-ghost-danger ys-press"
+              @click="undoTitleFixRecords(titleFixSelectedRecords)"
+            >撤回已勾 {{ titleFixSelectedRecords.length }}</button>
+            <button
+              class="rounded-full px-2.5 py-1 text-[11px] text-[var(--ys-text-muted)] hover:text-[var(--ys-text)]"
+              @click="loadTitleFixRecords"
+            >刷新</button>
+          </span>
+        </div>
+        <p v-if="!titleFixRecords.length" class="mt-2 text-[11px] text-[var(--ys-text-aux)]">
+          还没有修复记录 —— 修过之后这里会列出每一首改了什么，可以逐条撤回。
+        </p>
+        <div v-else class="mt-2 max-h-64 space-y-1 overflow-y-auto">
+          <div v-for="r in titleFixRecords" :key="r.id" class="flex items-center gap-2 rounded-[8px] border border-[var(--ys-border)] bg-[var(--ys-surface-sunken)] px-2 py-1.5 text-[11px]">
+            <label class="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center">
+              <input type="checkbox" :checked="titleFixSelectedRecords.includes(r.id)" @change="toggleTitleFixRecord(r.id)" />
+            </label>
+            <span class="min-w-0 flex-1 truncate" :title="r.path">
+              <s class="text-[var(--ys-text-aux)]">{{ r.old_title || '（空）' }}</s>
+              <span class="mx-1 text-[var(--ys-text-aux)]">→</span>
+              <span class="text-[var(--ys-text)]">{{ r.new_title }}</span>
+            </span>
+            <span class="shrink-0 text-[10px] text-[var(--ys-text-aux)]">{{ r.at_text }}</span>
+            <span v-if="r.undone" class="shrink-0 text-[10px] text-[var(--ys-text-aux)]">已撤回</span>
+            <button
+              v-else
+              class="shrink-0 rounded-full px-2 py-0.5 text-[10px] text-[var(--ys-text-muted)] hover:bg-black/[0.04] hover:text-[var(--ys-text)]"
+              @click="editTitleFixRecord(r)"
+            >修改</button>
+            <button
+              v-if="!r.undone"
+              class="ys-btn ys-btn-sm ys-btn-ghost-danger ys-press"
+              @click="undoTitleFixRecords([r.id])"
+            >撤回</button>
+          </div>
+        </div>
+
+        <!-- 手动歌名体检：纯只读样本，用来回答「AI 到底靠不靠谱」 -->
+        <div v-if="manualAuditItems.length || manualAuditBusy" class="mt-3 rounded-[12px] border border-[var(--ys-border)] bg-[var(--ys-surface-sunken)] p-3">
           <div class="flex flex-wrap items-center justify-between gap-2">
             <span class="text-[11px] font-semibold text-[var(--ys-text)]">
               手动歌名体检
@@ -697,7 +818,7 @@
               >清空</button>
             </span>
           </div>
-          <div v-if="manualAuditItems.length" class="mt-2 max-h-72 overflow-auto rounded-[8px] border border-[var(--ys-border)]">
+          <div v-if="manualAuditItems.length" class="mt-2 max-h-72 overflow-auto rounded-[8px] border border-[var(--ys-border)] bg-white">
             <table class="w-full min-w-[780px] text-[11px]">
               <thead class="sticky top-0 z-10 bg-[var(--ys-bg-soft)] text-[11px] text-[var(--ys-text-aux)]">
                 <tr>
@@ -728,179 +849,13 @@
             </table>
           </div>
           <p class="mt-1.5 text-[10px] leading-relaxed text-[var(--ys-text-aux)]">
-            只出结果，不改任何文件。判定口径与「AI 修复」完全一致，所以这里说能修、那边真修就一定修得出来。
+            只出结果，不改任何文件。判定口径与「AI 修歌名」完全一致，所以这里说能修、那边真修就一定修得出来。
           </p>
-        </div>
-
-        <!-- 修复记录：可撤回 / 批量撤回 / 改回手写标题 -->
-        <div class="mt-3 rounded-[12px] border border-[var(--ys-border)] bg-white p-3">
-          <div class="flex flex-wrap items-center justify-between gap-2">
-            <span class="text-[11px] font-semibold text-[var(--ys-text)]">
-              修复记录 <span class="font-mono">{{ titleFixRecords.length }}</span>
-            </span>
-            <span class="flex items-center gap-2">
-              <button
-                v-if="titleFixSelectedRecords.length"
-                :disabled="titleFixUndoBusy"
-                class="ys-btn ys-btn-sm ys-btn-ghost-danger ys-press"
-                @click="undoTitleFixRecords(titleFixSelectedRecords)"
-              >撤回已勾 {{ titleFixSelectedRecords.length }}</button>
-              <button
-                class="rounded-full px-2.5 py-1 text-[11px] text-[var(--ys-text-muted)] hover:text-[var(--ys-text)]"
-                @click="loadTitleFixRecords"
-              >刷新</button>
-            </span>
-          </div>
-          <p v-if="!titleFixRecords.length" class="mt-2 text-[11px] text-[var(--ys-text-aux)]">
-            还没有修复记录 —— 修过之后这里会列出每一首改了什么，可以逐条撤回。
-          </p>
-          <div v-else class="mt-2 max-h-64 space-y-1 overflow-y-auto">
-            <div v-for="r in titleFixRecords" :key="r.id" class="flex items-center gap-2 rounded-[8px] border border-[var(--ys-border)] bg-[var(--ys-surface-sunken)] px-2 py-1.5 text-[11px]">
-              <label class="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center">
-                <input type="checkbox" :checked="titleFixSelectedRecords.includes(r.id)" @change="toggleTitleFixRecord(r.id)" />
-              </label>
-              <span class="min-w-0 flex-1 truncate" :title="r.path">
-                <s class="text-[var(--ys-text-aux)]">{{ r.old_title || '（空）' }}</s>
-                <span class="mx-1 text-[var(--ys-text-aux)]">→</span>
-                <span class="text-[var(--ys-text)]">{{ r.new_title }}</span>
-              </span>
-              <span class="shrink-0 text-[10px] text-[var(--ys-text-aux)]">{{ r.at_text }}</span>
-              <span v-if="r.undone" class="shrink-0 text-[10px] text-[var(--ys-text-aux)]">已撤回</span>
-              <!-- 改回手写标题：撤回之后再改一个，记录会记住最终值 -->
-              <button
-                v-else
-                class="shrink-0 rounded-full px-2 py-0.5 text-[10px] text-[var(--ys-text-muted)] hover:bg-black/[0.04] hover:text-[var(--ys-text)]"
-                @click="editTitleFixRecord(r)"
-              >修改</button>
-              <button
-                v-if="!r.undone"
-                class="ys-btn ys-btn-sm ys-btn-ghost-danger ys-press"
-                @click="undoTitleFixRecords([r.id])"
-              >撤回</button>
-            </div>
-          </div>
         </div>
       </SectionCard>
 
-      <!-- ═════ 修复段 · 二：查重（原独立段，2026-10-29 并进「修复」）═════ -->
-      <SectionCard
-        v-show="sub === 'repair'"
-        :icon="Copy"
-        title="查重"
-        sub="内容相同 / 同名不同版的重复曲目：保留一份，其余移入回收站"
-      >
-        <template #actions>
-          <button
-            :disabled="deduping"
-            title="扫描曲库，找出内容相同 / 同名的重复曲目"
-            class="ys-btn ys-btn-primary ys-press"
-            @click="runDedupe"
-          >{{ deduping ? '查重中…' : '查找重复' }}</button>
-        </template>
-        <div v-if="!dupResult" class="ys-empty">
-          {{ deduping ? '正在查重…' : '还没有查重结果 —— 点右上「查找重复」' }}
-        </div>
-
-        <div v-if="dupResult" class="space-y-2.5 rounded-[12px] border border-[var(--ys-border)] bg-[var(--ys-surface-sunken)] p-3.5">
-          <div class="flex flex-wrap items-center justify-between gap-2">
-            <span class="text-[11px] font-semibold text-[var(--ys-text)]">
-              <template v-if="dupResult.group_count">
-                发现 <b class="font-mono text-rose-600">{{ dupResult.group_count }}</b> 组重复
-              </template>
-              <template v-else>
-                <span class="text-[var(--ys-accent)]">没有发现重复</span>
-                <span class="ml-1 font-normal text-[var(--ys-text-aux)]">（同一首歌的不同版本按标签区分，不算重复）</span>
-              </template>
-            </span>
-            <!-- 0 组时不给操作按钮：没有可移的文件，留着红按钮只会让人误点 -->
-            <div v-if="dupResult.group_count" class="flex flex-wrap gap-1.5">
-              <button
-                :disabled="dupBusy"
-                class="ys-press rounded-full border border-[var(--ys-border)] bg-white px-3 py-1 text-[11px] text-[var(--ys-text-muted)] transition-colors hover:text-[var(--ys-text)] disabled:opacity-50"
-                @click="resolveDup(true)"
-              >{{ dupBusy ? '…' : '干跑预览' }}</button>
-              <!--
-                P0-4（2026-10-27）：红按钮不再一点就动手。第一次点只跑干跑并把清单摊开，
-                按钮变成「确认移入回收站」；第二次点才真移。原来走 window.confirm()，
-                iOS PWA 下样式系统级、而且确认框里塞不下「将移走 N 个」的清单 ——
-                用户只能盲确认，而这是整页唯一不可逆的批量操作。
-              -->
-              <button
-                :disabled="dupBusy"
-                class="ys-btn ys-btn-sm ys-btn-danger ys-press"
-                :class="dupConfirmArmed ? 'ring-2 ring-rose-300' : ''"
-                @click="resolveDup(false)"
-              >{{ dupConfirmArmed ? '确认移入回收站' : '移入回收站' }}</button>
-              <button
-                v-if="dupConfirmArmed"
-                :disabled="dupBusy"
-                class="rounded-full border border-[var(--ys-border)] bg-white px-3 py-1 text-[11px] text-[var(--ys-text-muted)] transition-colors hover:text-[var(--ys-text)] disabled:opacity-50"
-                @click="cancelResolveDup"
-              >取消</button>
-            </div>
-          </div>
-
-          <!-- 保留规则：谁被保留完全由后端决定，页面以前一个字都没说（2.7） -->
-          <!--
-            9.2 / 七（2026-10-27）：原文写的是 Markdown 的 `**…**`，在 HTML 里就是四个
-            字面星号（真机上直接印出来）。顺便把回收站的**绝对路径**写出来并给个复制按钮 ——
-            以前只说「曲库里的 .tidy_trash」，用户误删后不知道去哪儿找。
-          -->
-          <p class="text-[10.5px] leading-snug text-[var(--ys-text-muted)]">
-            保留规则：内容相同的取码率/时长更优的那份，同名不同版的保留标签更完整的；
-            被清理的文件<b>移到回收站，不会直接删除</b>，需要时可以自己去里面捞回来。
-            <span v-if="dupResult.group_count > (dupResult.groups || []).length" class="text-amber-700">
-              下方清单只列了前 {{ (dupResult.groups || []).length }} 组（共 {{ dupResult.group_count }} 组），
-              点「干跑预览」会给出全部影响的文件数。
-            </span>
-          </p>
-          <div v-if="trashPath" class="flex flex-wrap items-center gap-x-2 gap-y-1 text-[10.5px] text-[var(--ys-text-aux)]">
-            <span>回收站就在：</span>
-            <code class="min-w-0 truncate font-mono text-[var(--ys-text-muted)]" :title="trashPath">{{ trashPath }}</code>
-            <button
-              class="shrink-0 underline decoration-dotted underline-offset-2 hover:no-underline"
-              @click="copyTrashPath"
-            >复制路径</button>
-          </div>
-
-          <div v-if="dupResult.groups.length" class="max-h-64 space-y-1.5 overflow-y-auto">
-            <div v-for="(g, i) in visibleDupGroups" :key="i" class="rounded-[8px] border border-[var(--ys-border)] bg-white p-2.5 text-[11px]">
-              <div class="flex items-center gap-2">
-                <span :class="['rounded-full px-1.5 py-0.5 font-mono text-[10px]', g.type === 'content' ? 'bg-rose-50 text-rose-600' : 'bg-amber-50 text-amber-600']">
-                  {{ g.type === 'content' ? '内容相同' : '同名不同版' }}
-                </span>
-                <span class="text-[var(--ys-text-aux)]">{{ g.count }} 个文件</span>
-              </div>
-              <div class="mt-1 truncate text-[var(--ys-accent)]" :title="g.keep">保留：{{ baseName(g.keep) }}</div>
-              <div class="truncate text-rose-500" :title="g.delete.join('、')">清理：{{ g.delete.map(baseName).join('、') }}</div>
-            </div>
-            <button
-              v-if="dupResult.groups.length > 30"
-              class="w-full rounded-[8px] border border-[var(--ys-border)] bg-white px-3 py-1.5 text-[11px] text-[var(--ys-text-muted)] transition-colors hover:text-[var(--ys-text)]"
-              @click="dupShowAll = !dupShowAll"
-            >{{ dupShowAll ? '只看前 30 组' : `展开全部 ${dupResult.groups.length} 组` }}</button>
-          </div>
-          <div v-if="dupResolveResult" class="rounded-[8px] border border-[var(--ys-border)] bg-white px-3.5 py-2.5 text-[11px] text-[var(--ys-text-muted)]">
-            {{ dupResolveResult.dry_run ? '干跑估算' : '执行完成' }}：
-            移动 <b class="font-mono">{{ dupResolveResult.moved }}</b> ·
-            删除 <b class="font-mono">{{ dupResolveResult.deleted }}</b> ·
-            释放 <b class="font-mono">{{ fmtSize(dupResolveResult.freed_bytes) }}</b>
-            <div v-if="dupResolveResult.errors && dupResolveResult.errors.length" class="mt-1 flex flex-wrap items-center gap-2 text-rose-500">
-              <span>{{ dupResolveResult.errors.length }} 个文件处理失败</span>
-              <button class="underline decoration-dotted underline-offset-2 hover:no-underline" @click="navigateTo('logs')">查看日志</button>
-            </div>
-          </div>
-        </div>
-      </SectionCard>
-
-      <!--
-        文件名体检（用户 2026-10-24）：「飞牛文件和官方音乐 App 打开音乐文件夹显示未知错误」。
-        和上面的曲库体检是同一件事的两种口径 —— 上面数的是「元数据缺口」，
-        这张看的是「磁盘条目本身不合法」。放同一段，用户不用点两次才找得到。
-        2026-10-26 用户：「下面的文件名体检可以与歌名修复合并，并去掉相同的功能」——
-        它现在排在「修复记录」之下、同一张卡片里，由 LibraryHealthCard 自渲染（无外框）。
-      -->
-      <LibraryHealthCard v-show="sub === 'repair'" merge :dir="healthDir || curDir" />
+      <!-- 换版本抽屉：搜各平台版本 → 用户挑一个 → 覆盖原文件 -->
+      <RepairCandidateSheet v-model="candidateOpen" :item="candidateItem" @replaced="onRepaired" />
 
       <!--
         ═════ 快照段：数据快照（原「记录」）═════
@@ -1302,15 +1257,23 @@ import InlineNotice from './InlineNotice.vue'
 import StatLine from './StatLine.vue'
 // 2026-10-29：SegmentedControl 不再在本页出现（分段器只在 App.vue 的
 // #page-head-tidy 里渲染一份），import 已删，避免死引用。
-import LibraryHealthCard from './LibraryHealthCard.vue'
 // 2026-10-29：NameRulesPanel 已搬去「系统 → 设置 → 命名解析规则」（配置不是操作）
 import { useLyricGaps } from '../services/useLyricGaps'
 import SelectField from './SelectField.vue'
+// 2026-11-21「歌曲修复(替换)」：坏文件搜一个版本换掉的抽屉
+import RepairCandidateSheet from './RepairCandidateSheet.vue'
 // 2026-10-29：「替换音质」拆成独立组件 QualityView.vue（现为整理页第四段，
 // 由 App.vue 的 #inner-tidy-quality 槽挂载）—— 本页不再需要
 // 音质那套 API 客户端、渠道常量、勾选条组件与相关图标。
-import { TidyAPI, TagsAPI, NasAPI, ConfigAPI } from '../api/client'
+import { TidyAPI, TagsAPI, NasAPI, ConfigAPI, RepairAPI } from '../api/client'
 import { loadPref, savePref, loadBool, loadCache, saveCache } from '../services/prefs'
+// 修复清单的行模型 / 合并 / 过滤 / 勾选还原（纯逻辑，repairList.test.mjs 钉住）
+import {
+  mergeRows, filterRows, kindCounts, selectionCounts, selectableRows, kindLabel,
+  titleFixRows, dupRows, healthRows, audioRows, dupGroupsFromSelection,
+} from '../services/repairList'
+// 文件名体检的扫描/修复服务（原本由 LibraryHealthCard 调用，合并进清单后改由本页调）
+import { scanHealth, fixHealth, pickFixable } from '../services/libraryHealth'
 import {
   FIELD_DEFS, DEFAULT_FIELDS, parseFields, toggleFieldKey, platformName, planCells,
   summaryCells as _summaryCells, summaryBar, cardModel, cardFields, mapWithLimit,
@@ -1365,6 +1328,340 @@ const curDir = computed(() => (tidyDir.value || nasDir.value || '').trim())
  * 免得用户下次从导航栏自己走进来还停在上次的目录上（这就是当初塞 localStorage 的毛病）。
  */
 const healthDir = ref('')
+
+// ── 修复清单：四类问题共用一张表（2026-11-21）────────────────────────
+// 行模型 / 合并 / 过滤 / 勾选还原都在 services/repairList.js（有单测），
+// 这里只存状态、调后端。合并的只是**列表**，动作仍按类分派：
+//   歌名 → TidyAPI.titleFixFix（只改标签）
+//   重复 → TidyAPI.resolveDuplicates（移回收站）
+//   文件名 → nas/health/fix（只认 base64 id）
+//   音频 → RepairAPI.replace（覆盖文件本体）
+const repairFilter = ref('all')
+const repairOnlySelected = ref(false)
+// '' | 'all' | 'audio' | 'title' | 'dup' | 'file'
+const repairBusy = ref('')
+const repairAt = ref(0)
+const repairError = ref('')
+
+// 音频检查（后端 pkg/audioprobe 只读文件头，不信标签）
+const audioIssues = ref([])
+const audioAt = ref(0)
+
+// 文件名体检：以前是 LibraryHealthCard 的内部状态，合并进清单后搬到页面级
+const healthIssues = ref([])
+const healthScanned = ref(0)
+const healthTruncated = ref(false)
+const healthAt = ref(0)
+const healthFixing = ref(false)
+const healthFixArmed = ref(false)
+
+// 勾选：歌名修复沿用 titleFixItems[].selected（既有逻辑不动），
+// 查重与文件名体检各存一个 Set —— 后端没有「选中」这个概念，勾选纯前端。
+const dupSelected = ref(new Set())
+const healthSelected = ref(new Set())
+
+// 「换版本」抽屉
+const candidateOpen = ref(false)
+const candidateItem = ref(null)
+
+function setToggle(setRef, key) {
+  const next = new Set(setRef.value)
+  if (next.has(key)) next.delete(key)
+  else next.add(key)
+  setRef.value = next
+}
+
+const repairBusyText = computed(() => ({
+  all: '正在扫四类问题：音频 → 歌名 → 查重 → 文件名…',
+  audio: '正在检查音频（读文件头）…',
+  title: '正在从曲库索引里挑歌名可疑的曲目…',
+  dup: '正在查重（要算内容指纹，慢一点）…',
+  file: '正在检查文件名…',
+}[repairBusy.value] || '正在扫描…'))
+
+/**
+ * 合并后的行：四类按 KIND_ORDER 排（歌名 → 重复 → 文件名 → 音频）。
+ * 勾选状态从各自的数据源读出来，这样「全选 / 单点」写回去总是同一份真相。
+ */
+const repairRows = computed(() => {
+  const rows = mergeRows({
+    title: titleFixRows(titleFixItems.value),
+    dup: dupRows(dupResult.value),
+    file: healthRows(healthIssues.value),
+    audio: audioRows(audioIssues.value),
+  })
+  const dup = dupSelected.value
+  const file = healthSelected.value
+  return rows.map((r) => {
+    if (r.kind === 'dup') return { ...r, selected: r.role === 'victim' && dup.has(r.path) }
+    if (r.kind === 'file') return { ...r, selected: file.has(r.rawId) }
+    if (r.kind === 'audio') return { ...r, selected: false }
+    return r
+  })
+})
+
+const repairCounts = computed(() => kindCounts(repairRows.value))
+
+const repairFilters = computed(() => [
+  { id: 'all', name: '全部', count: repairCounts.value.all },
+  { id: 'title', name: '歌名', count: repairCounts.value.title },
+  { id: 'dup', name: '重复', count: repairCounts.value.dup },
+  { id: 'file', name: '文件名', count: repairCounts.value.file },
+  { id: 'audio', name: '音频', count: repairCounts.value.audio },
+])
+
+const repairVisibleRows = computed(() => {
+  const list = filterRows(repairRows.value, repairFilter.value)
+  if (!repairOnlySelected.value) return list
+  return list.filter((r) => r.selected || r.done)
+})
+
+const repairHiddenCount = computed(() => {
+  if (!repairOnlySelected.value) return 0
+  return filterRows(repairRows.value, repairFilter.value)
+    .filter((r) => r.kind !== 'audio' && r.role !== 'keep' && !r.selected && !r.done).length
+})
+
+const repairSelection = computed(() => selectionCounts(repairRows.value))
+
+const repairAllSelected = computed(() => {
+  const sel = selectableRows(repairRows.value, repairFilter.value)
+  return sel.length > 0 && sel.every((r) => r.selected)
+})
+
+const repairAtText = computed(() => (repairAt.value ? `上次扫描 ${fmtWhen(repairAt.value)}` : ''))
+
+function repairKindName(kind) {
+  return kindLabel(kind)
+}
+
+/** 四类问题用颜色区分，但不靠颜色表达严重性（颜色只帮眼睛分组）。 */
+function repairKindTone(kind) {
+  return {
+    title: 'bg-amber-50 text-amber-700',
+    dup: 'bg-rose-50 text-rose-600',
+    file: 'bg-violet-50 text-violet-600',
+    audio: 'bg-sky-50 text-sky-700',
+  }[kind] || 'bg-[var(--ys-surface-sunken)] text-[var(--ys-text-muted)]'
+}
+
+function toggleRepairRow(row) {
+  if (row.role === 'keep' || row.done || row.kind === 'audio') return
+  if (row.kind === 'title') {
+    row.ref.selected = !row.ref.selected
+    saveTitleFix()
+    return
+  }
+  if (row.kind === 'dup') return setToggle(dupSelected, row.path)
+  if (row.kind === 'file') return setToggle(healthSelected, row.rawId)
+}
+
+/** 全选/全不选：只作用于**当前筛选**下的可勾选行（含「全部」）。 */
+function toggleAllRepair() {
+  const turnOn = !repairAllSelected.value
+  const hit = (kind) => repairFilter.value === 'all' || repairFilter.value === kind
+
+  if (hit('title')) {
+    titleFixItems.value.forEach((it) => { if (!it.done) it.selected = turnOn })
+    saveTitleFix()
+  }
+  if (hit('dup')) {
+    const victims = repairRows.value.filter((r) => r.kind === 'dup' && r.role === 'victim')
+    dupSelected.value = new Set(turnOn ? victims.map((r) => r.path) : [])
+  }
+  if (hit('file')) {
+    // 只选「后端能自动处理」的（改名/改权限/删残留）；需手动处理的不勾 —— 勾了也只会回报 missed
+    const fixable = healthIssues.value.filter((it) => ['rename', 'chmod', 'delete'].includes(it.fix))
+    healthSelected.value = new Set(turnOn ? fixable.map((it) => it.id) : [])
+  }
+}
+
+/** 单类扫描的公共骨架：keepBusy=true 时由 scanAllRepair 统一管进度文案。 */
+function beginStep(step, keepBusy) {
+  if (repairBusy.value && repairBusy.value !== 'all') return false
+  if (!keepBusy) repairBusy.value = step
+  return true
+}
+function endStep(keepBusy) {
+  if (!keepBusy) repairBusy.value = ''
+}
+
+async function scanRepairAudio(keepBusy = false) {
+  if (!beginStep('audio', keepBusy)) return false
+  repairError.value = ''
+  try {
+    const res = await RepairAPI.scan(curDir.value)
+    const bad = apiError(res, '音频检查失败')
+    if (bad) { repairError.value = bad; return false }
+    const d = (res && res.data) || {}
+    audioIssues.value = Array.isArray(d.issues) ? d.issues : []
+    audioAt.value = Math.floor(Date.now() / 1000)
+    return true
+  } catch (e) {
+    repairError.value = failText('修复清单：检查音频', e, '音频检查失败')
+    return false
+  } finally {
+    endStep(keepBusy)
+  }
+}
+
+async function scanRepairTitle(keepBusy = false) {
+  if (!beginStep('title', keepBusy)) return false
+  repairError.value = ''
+  try {
+    await scanTitleFix()
+    return true
+  } catch (e) {
+    repairError.value = failText('修复清单：扫描歌名', e, '扫描歌名失败')
+    return false
+  } finally {
+    endStep(keepBusy)
+  }
+}
+
+async function scanRepairDup(keepBusy = false) {
+  if (!beginStep('dup', keepBusy)) return false
+  repairError.value = ''
+  try {
+    await runDedupe()
+    // 默认把每组里可删的都勾上 —— 旧界面「移入回收站」一次就是移走全部重复项
+    const victims = dupRows(dupResult.value).filter((r) => r.role === 'victim').map((r) => r.path)
+    dupSelected.value = new Set(victims)
+    return true
+  } catch (e) {
+    repairError.value = failText('修复清单：查重', e, '查重失败')
+    return false
+  } finally {
+    endStep(keepBusy)
+  }
+}
+
+async function scanRepairHealth(keepBusy = false) {
+  if (!beginStep('file', keepBusy)) return false
+  repairError.value = ''
+  try {
+    const report = await scanHealth(curDir.value)
+    healthIssues.value = report.issues
+    healthScanned.value = report.scanned
+    healthTruncated.value = report.truncated
+    healthAt.value = Math.floor(Date.now() / 1000)
+    // 默认只勾「改名 / 改权限」这两类最安全的；可删的残留与需手动的留给用户自己挑
+    healthSelected.value = new Set(pickFixable(report.issues, 'names').map((it) => it.id))
+    return true
+  } catch (e) {
+    repairError.value = failText('修复清单：检查文件名', e, '检查文件名失败')
+    return false
+  } finally {
+    endStep(keepBusy)
+  }
+}
+
+async function scanAllRepair() {
+  if (repairBusy.value) return
+  repairBusy.value = 'all'
+  repairError.value = ''
+  try {
+    // 逐类跑、互不阻断：一类失败不该让另外三类的结果也没了
+    await scanRepairAudio(true)
+    await scanRepairTitle(true)
+    await scanRepairDup(true)
+    await scanRepairHealth(true)
+    repairAt.value = Math.floor(Date.now() / 1000)
+    const total = repairRows.value.length
+    flash(total ? `扫出 ${total} 条待修` : '四类都没查出问题')
+  } finally {
+    repairBusy.value = ''
+  }
+}
+
+/**
+ * 只移「勾选的」重复项。
+ *
+ * 不能复用旧的 resolveDup()：那个走 `{dir,mode}` 让后端**重扫并移走全部**，
+ * 用户在这张表里取消了几个勾却照样被搬走就太糟了。这里显式提交 groups，
+ * 后端拿到 groups 就不再重扫（见 features.go HandleDuplicatesResolve）。
+ */
+async function resolveDupSelected(dryRun) {
+  const groups = dupGroupsFromSelection(repairRows.value)
+  if (!groups.length) return flash('先勾选要移走的重复项', true)
+  if (!dryRun && !dupConfirmArmed.value) {
+    // 第一次点只干跑 + 武装，按钮文案变成「确认移入回收站」
+    await resolveDupSelected(true)
+    dupConfirmArmed.value = true
+    const n = groups.reduce((acc, g) => acc + g.delete.length, 0)
+    return flash(`将移走 ${n} 个文件（回收站里还能捞回来），再点一次确认`)
+  }
+  dupBusy.value = true
+  try {
+    const res = await TidyAPI.resolveDuplicates({
+      dir: curDir.value, mode: 'trash', dry_run: !!dryRun, groups,
+    })
+    const bad = apiError(res, dryRun ? '干跑失败' : '移入回收站失败')
+    if (bad) return flash(bad, true)
+    dupResolveResult.value = (res && res.data) || null
+    if (!dryRun) {
+      flash(`已移走 ${res?.data?.moved ?? 0} 个文件`)
+      dupConfirmArmed.value = false
+      await scanRepairDup()
+      scanGaps().catch(() => {})
+    }
+  } catch (e) {
+    flash(failText('查重清理', e, '移入回收站失败'), true)
+  } finally {
+    dupBusy.value = false
+  }
+}
+
+/** 修勾选的文件名：两步确认（这是唯一会改磁盘上文件名字的批量动作）。 */
+async function fixSelectedHealth() {
+  const targets = healthIssues.value.filter((it) => healthSelected.value.has(it.id))
+  if (!targets.length) return flash('先勾选要修的文件名', true)
+  if (!healthFixArmed.value) {
+    healthFixArmed.value = true
+    setTimeout(() => { healthFixArmed.value = false }, 6000)
+    return flash(`将修改 ${targets.length} 个文件名 / 权限，再点一次确认`)
+  }
+  healthFixing.value = true
+  try {
+    const r = await fixHealth(curDir.value, targets, {})
+    const parts = [`修好 ${r.fixed}`]
+    if (r.missed) parts.push(`已不存在 ${r.missed}`)
+    if (r.failed.length) parts.push(`失败 ${r.failed.length}`)
+    flash(parts.join(' · '), r.failed.length > 0)
+    await scanRepairHealth()
+  } catch (e) {
+    flash(failText('修文件名', e, '修文件名失败'), true)
+  } finally {
+    healthFixing.value = false
+    healthFixArmed.value = false
+  }
+}
+
+/** 打开「换版本」抽屉：把这一行的音频信息带过去，抽屉会自己搜候选。 */
+function openCandidate(row) {
+  const it = row.ref || {}
+  candidateItem.value = {
+    path: row.path,
+    name: row.name,
+    title: row.title,
+    artist: row.artist,
+    duration_sec: it.duration_sec || 0,
+    container: it.container || '',
+    size: it.size || 0,
+    kbps: it.kbps || 0,
+    kind: row.subKind || '',
+    detail: row.detail || '',
+  }
+  candidateOpen.value = true
+}
+
+function onRepaired(payload) {
+  const path = payload?.item?.path
+  if (!path) return
+  // 换掉了就不再是坏文件 —— 当场摘掉；下次扫描会按新文件重新判定
+  audioIssues.value = audioIssues.value.filter((it) => it.path !== path)
+}
+
 let stopHealthNav = null
 let onDirChanged = null
 // 3.10：刷新 guard 的句柄
