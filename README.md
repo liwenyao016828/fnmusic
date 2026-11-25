@@ -8,7 +8,7 @@
 [![Platform](https://img.shields.io/badge/Platform-fnOS%20%28x86__64%29-3b82f6?logo=linux)](https://developer.fnnas.com/)
 [![Vue 3](https://img.shields.io/badge/Frontend-Vue%203%20%2B%20Vite-42b883?logo=vuedotjs)](https://vuejs.org/)
 [![Go](https://img.shields.io/badge/Backend-Go%201.22+-00add8?logo=go)](https://go.dev/)
-[![Version](https://img.shields.io/badge/Version-2.17.12-0b8a66)](RELEASE_NOTES.md)
+[![Version](https://img.shields.io/badge/Version-2.37.1-0b8a66)](RELEASE_NOTES.md)
 [![License](https://img.shields.io/badge/License-MIT-amber.svg)](LICENSE)
 
 个人项目 · 作者 [@liwenyao016828](https://github.com/liwenyao016828) · 代码由作者主导、AI 协作完成
@@ -19,52 +19,105 @@
 
 ---
 
+![沉浸播放器](docs/screenshots/09-player.png)
+
+<div align="center"><sub>沉浸播放器：黑胶唱机大屏、双语歌词点词跳播、封面取色做氛围背景</sub></div>
+
+---
+
 > **v2.0.0 起更名**：原「极光音乐」(`fn-lx-player`) → **曲率** (`yinshu-ai`)。
 > `appname` 不同，飞牛会把它当成**另一个应用**，**不覆盖**旧版，两者可并存（新 8898 / 旧 8899）。
 > 数据目录独立，历史数据不会自动迁移。
 >
 > 本 README 里的数字都可由 [开发](#️-开发) 一节的命令复现；逐版变更见
 > [`RELEASE_NOTES.md`](RELEASE_NOTES.md)，架构与踩坑见 [`HANDOVER.md`](HANDOVER.md)。
+> 截图来自开发实例（演示曲库），实际界面随版本微调。
 
 ## ✨ 功能
 
-导航是三层：**听**（发现音乐 / 本地曲库）· **管**（补全整理 / 订阅更新 / 下载）· **配置**（音源管理 / 账号连接 / 系统）。
+导航是三层：**听**（发现音乐 / 本地曲库）· **管**（补全整理 / 订阅更新 / 下载）· **配置**（音源管理 / 账号连接 / 设置）。
 
 ### 🔍 发现音乐
-- **全网聚合搜索**：多平台搜索去噪（`GET /api/search`），按音源启用池挑源取链。
+
+![发现音乐](docs/screenshots/01-discover.png)
+
+- **全网聚合搜索**：多平台搜索去噪（`GET /api/search`），按音源启用池挑源取链；
+  聚合有等待上限，慢平台不会拖住整个搜索结果。
 - **榜单 / 精选歌单**：官方协议直连（后端内置，免脚本）浏览网易云与 QQ 音乐的榜单与分类歌单；
   点开即看曲目、直接播、可「订阅更新」。
 - **榜单注入**：勾选的榜单以**只读在线歌单**出现在飞牛音乐 App 里，卡片右上角「+ 注入」就地切换。
 - **双平台推荐**：已登录账号的每日推荐与账号歌单；可选的大模型推荐层（会发收听历史给模型，独立开关）。
 - **正在播放卡**：发现页右侧一张深色卡，直接接管播放控制，不用等播放条。
+- **手机端**：账号连接卡一行两张，只显示「已连接 / 未连接」——手机扫自己屏幕上的码没意义，
+  点未连接标签会提示去电脑上扫码。
 
-### 📁 本地曲库
+### 📁 本地曲库 + 换版本
+
+![本地曲库](docs/screenshots/02-library.png)
+
 深扫各存储卷（FLAC / APE / WAV / DSD / MP3 / AAC / OGG），HTTP 206 分片串流、
 内嵌封面与标签解析、歌词自动关联；目录树随选随切。
 
+- **点歌名/封面即播**：整行标题区是播放入口，封面悬停会浮出播放三角；操作按钮各自拦住冒泡，不会误触播放。
+- **换版本**：每首歌右边一颗按钮，按歌名去各平台找同名版本，挑一条直接**覆盖原文件**。
+
+![换版本](docs/screenshots/03-replace-version.png)
+
+候选列表有三件事值得说：
+
+| 能力 | 说明 |
+|---|---|
+| **先验可用再让你点** | 打开就批量预检每条候选能不能取到直链（不下载、不写盘），取不到的直接置灰并写明原因；「这次没拿到」和「稳定拿不到」分得开，后者才置灰 |
+| **原唱 / 翻唱** | 按歌名、歌手与本地文件比对，用胶囊标签标出来，原唱排前面；跟随主题色，不写死颜色 |
+| **按匹配度排** | 歌名完全一致 > 开头一致 > 包含 > 只沾边，长度差越小越靠前；同分再看档位、时长接近度 |
+
+搜索框只填**歌名**（自动去掉曲序前缀、`- ls` 之类的后缀、括号补充），比「歌名 + 歌手」命中率高得多。
+
 ### 🧹 补全整理
-四个分段，常驻顶部，不再塞进一个「⋯」菜单：
-- **补全**：扫描缺口（歌词 / 封面 / 风格 / 年份 / 曲序 / 光盘各缺多少）→ 勾字段 → 预览 → 确认写入 → 可撤销。
+
+五个分段常驻页头：补全 / 修复 / 音质 / 归类 / 快照。
+
+![补全](docs/screenshots/04-tidy-complete.png)
+
+- **补全**：顶部一排卡片直接告诉你「总数 / 歌词缺几首 / 封面缺几首 / 年份 / 曲序 / 光盘 / 风格」，
+  **点卡片就是勾选要补的字段**（不用再去下面那排标签里挑）→ 预览 → 确认写入 → 可撤销。
   补全的值**一律来自已匹配的搜索结果，不让 AI 猜**。
-- **体检 / 索引 / 查重**：增量索引、重复曲目双通道检测（进 `.tidy_trash` 回收站，不直删）。
-- **替换音质**：扫曲库（默认只扫有损）→ 逐首列出**各渠道实际能拿到什么档位** → 勾选后用最高音质原地替换。
+- **修复**：歌名不对 / 内容重复 / 文件名非法 / 音频不对（格式不符 · 时长过短 · 假无损）四类合成一张清单，
+  条数按类分。另有**版本时长核对**：拿本地实测时长去比同名平台版本，标出「可能不是这个版本」——
+  这些异常常伴随错误的文件，先看再决定换不换。
+- **音质**：扫曲库（默认只扫有损）→ 逐首列出**各渠道实际能拿到什么档位** → 勾选后用最高音质原地替换。
   档位按**实际字节率**判（mp3 读第一帧标称码率，洛雪按实测字节数 ÷ 时长推算），信不过脚本自报的「无损」。
   每次替换落一条**可查记录**（文件 / 歌名 / `from → to` / 渠道 / 成败），进页就能看见。
-- **补全选项**：目录、单次上限、覆盖策略、主力平台，收进右侧抽屉。
+- **归类**：按「歌手 / 专辑 / 曲目」把歌搬进文件夹，同一首的音频 / 图片 / 歌词同名同目录；搬完可撤销。
+  这一段里还有**音质检测**——读文件头、体积与时长，筛出格式或码率明显对不上的文件，逐条给「替换 / 删除」。
+
+![音质检测](docs/screenshots/05-audio-audit.png)
+
+- **快照**：每次补全 / 修复前的快照，可逐条撤回；另有定时与手动快照。删除一律进 `.tidy_trash` 回收站，不直删。
 
 ### 🔔 订阅更新
+
+![订阅更新](docs/screenshots/06-subscribe.png)
+
 歌单 / 榜单 / 账号歌单监控，每轮自动发现新歌；**首轮只建基线不下载**；
 支持干跑预览、版本过滤（Live / Remix / 伴奏剔除）、缺口补下载、飞牛同步历史。
+卡片上直接标「待下载 N 首 / 同步失败」，点开就是明细。
 
 ### ⬇️ 下载
+
+![歌单导入](docs/screenshots/07-playlist-import.png)
+
 - **取音渠道可配**：洛雪 → musicdl → 原生，顺序与开关都能调。
   **洛雪多选 = 轮询**：按你在音源页排的顺序挨个问，取**实际档位最高**的那条（不是第一个能下的就赢）。
+- **歌单导入**：粘贴歌单分享链接（网易云 / QQ / App 里复制的短链都行），整单解析后批量下载。
 - **收藏自动下载**：飞牛里收藏 / 加歌单即后台整轨下载并绑定本地。
 - **音质补强**：这次拿不到无损就先落一份能拿到的，之后后台每 20 分钟一轮、失败冷却 24 小时、累计 5 回收手 ——
   不再「只试一次就永久放弃」，也不会「每次收藏白下一遍」。
+- **查询失败原因给到渠道级**：哪条链没取到、是脚本报错还是平台没有同名版本，都在任务里写清楚。
 - **下载统一由后端执行**：前端选歌并提交任务，通过接口查看状态、暂停 / 继续 / 重试。任务由服务端持久化，关闭网页后继续执行；服务重启后恢复未完成的队列。能否取得音频取决于已配置且可用的服务端音源。
 
 ### 🎛️ 音源管理
+
 - **两种互补协议**：`official`（后端内置，免脚本，搜索 / 榜单 / 歌单 / 歌词）+ `lx`（脚本，取直链）。
   没导入任何脚本时，搜索 / 榜单 / 歌单 / 歌词照常用，只有播放与下载需要一份 LX 脚本。
 - 脚本 URL 订阅 / 本地上传 / 批量导入，自动去重；**多选启用池**（有序优先）。
@@ -72,15 +125,23 @@
 - 熔断与健康度（连续失败 60 秒冷却）、真实探针测速、平台健康度统计。
 
 ### 👤 账号连接
+
 网易云 / QQ 音乐扫码登录；AI 大模型（OpenAI 兼容）配置也在这页。
 账号数据用于每日推荐、账号歌单推送、在线收藏与歌单接管。
 
 ### 🎧 沉浸播放器
-黑胶唱机大屏：氛围背景、双语歌词对照、点词跳播、顺序 / 随机 / 单曲循环。
+
+黑胶唱机大屏：氛围背景取封面主色、双语歌词对照、点词跳播、顺序 / 随机 / 单曲循环。
 手机端左右滑动切页（跟手位移 + 阻尼弹簧），底部一颗搜索图标点开才滑出搜索框。
 
-### 🖥️ 系统
-日志（环形缓冲，重启即清）与设置（取音渠道、曲库文件命名、存储目录、下载行为、AI 开关）收进分段。
+### 🖥️ 设置与日志
+
+![设置](docs/screenshots/08-settings.png)
+
+设置入口在**侧栏左下角**，点开是一列分类（常规 / 下载 / 命名与文件 / 存储 / 集成 / 日志 / 关于），
+选中一类只显示这一类的设置项；点其它页面会自动收起，点框里的分类不会。
+「发现新版本」与任务状态收成图标，和 AI 助手、音源图标排在同一行，右上角带小角标，点开是明细。
+日志是环形缓冲（重启即清），也在这个入口里。
 
 ## 🔌 开放接口（供 AI 与外部程序调用）
 
@@ -99,7 +160,7 @@ curl -X POST http://NAS:8898/api/search -H 'Content-Type: application/json' -d '
 ```
 
 > 数数口径：`grep -cE "Method: +(http\.)?Method[A-Z]" backend/pkg/api/catalog.go` = 202；
-> internal 名单 51 条（其余 146 条为 core）；`cd backend && go list ./... | wc -l` = 45 包。
+> internal 名单 51 条（其余 151 条为 core）；`cd backend && go list ./... | wc -l` = 45 包。
 
 ## 🧭 架构一页话
 
@@ -136,7 +197,7 @@ curl -X POST http://NAS:8898/api/search -H 'Content-Type: application/json' -d '
 **从源码打包**（不需要 `fnpack`）：
 
 ```bash
-bash scripts/build.sh --version 2.17.8      # 前端 → Go 交叉编译 → 组装 .fpk（含自检）
+bash scripts/build.sh --version 2.37.1      # 前端 → Go 交叉编译 → 组装 .fpk（含自检）
 ```
 
 应用依赖 **飞牛音乐**（trim.music）存在（manifest 已声明）；页面注入 / 榜单注入 / 在线曲库
@@ -200,31 +261,32 @@ bash scripts/dev.sh
 # 构建与打包
 bash scripts/build.sh                       # 前端 → Go → .fpk（含自检）
 bash scripts/build.sh --skip-frontend       # 复用 backend/dist
-bash scripts/build.sh --version 2.17.8      # 指定版本号
+bash scripts/build.sh --version 2.37.1      # 指定版本号
 
 # 测试
-cd frontend && node --test 'src/services/*.test.mjs'   # 281 条
-cd backend  && go build ./... && go test ./...         # 36 包；联网用例默认 skip（LIVE_NET_TEST=1 才跑）
-node --test scripts/lx-utils-check.mjs                 # 洛雪宿主单测（147 条）
+cd frontend && node --test 'src/**/*.test.mjs'          # 655 条
+cd backend  && go build ./... && go test ./...          # 45 包 / 1,800 个用例；联网用例默认 skip（LIVE_NET_TEST=1 才跑）
+node --test scripts/lx-utils-check.mjs                  # 洛雪宿主单测（147 条）
 ```
 
 > `node --test` 在本机 v22 上**不接受目录**，要传具体文件或带引号的 glob。
+
+**代码规模**：后端 45 个包 / 436 个 `.go` / 137,336 行（不含测试 84,290 行、测试 53,046 行）；
+前端 60 个 `.vue` / 46,555 行。
 
 **真机验收**：`scripts/nas-acceptance.mjs`；数字对账：`bash scripts/audit-numbers.sh`。
 **本仓库不需要** `fnpack`，打包由 `scripts/build_fpk.py`（纯标准库）完成。
 
 ## 📚 版本与发版
 
-- 当前版本 **2.17.12**，四处手工同步：`backend/pkg/api/server.go` 的 `CurrentVersion`、
+- 当前版本 **2.37.1**，四处手工同步：`backend/pkg/api/server.go` 的 `CurrentVersion`、
   `fpk-package/manifest` 的 `version`、`RELEASE_NOTES.md` 顶部、`HANDOVER.md` §0。
 - 升哪一位：**x.0.0** 架构级 / 破坏性变更；**2.x.0** 新增能力（新功能 / 新页面 / 新链路）；
   **2.x.y** 修 bug、UI 微调、文档。
 - **自动发布**：功能完成并验证后提交并推送 `main`。GitHub Actions 自动校验四处版本、运行测试、构建并自检 FPK，再创建 [Release](https://github.com/liwenyao016828/fnmusic/releases)（安装包 + SHA256 + 本版说明）。已有版本不覆盖；同版本文档提交只检查。PR 和其他分支只检查，不发布，也不自动部署 NAS。
 - **失败重跑**：在 Actions 页面重跑，或执行 `bash scripts/release.sh`（需要已登录的 GitHub CLI）。不需要手动打 tag 或另配个人 Token。
-- 仓库里**只保留最新一个** `.fpk`（历史包在 Releases，不在 git 历史里 —— 否则仓库没法克隆）。
-  本仓库根目录的 `yinshu-ai-2.17.8.fpk` 就是最新一版（sha256
-  `5d840c4b7700c93ed92cff92453c272e60481adde59115bd58c6e42f861ab072`）。
-  > 仓库里放的是**发版留档**；对外分发请走 **Release 资产**（含校验和、可追溯、不进 git 历史）。
+- 仓库里**只保留一个** `.fpk` 作为历史留档（`yinshu-ai-2.17.8.fpk`，`*.fpk` 已在 `.gitignore` 里，
+  之后的包一律不进 git）—— 对外分发请走 **Release 资产**（含校验和、可追溯）。
   > GitHub 的 raw 直链对超过 100 MB 的单个文件会拒绝，`.fpk` 目前没到线，但别拿它当下载渠道。
 
 ## 🙏 致谢
@@ -259,6 +321,7 @@ node --test scripts/lx-utils-check.mjs                 # 洛雪宿主单测（14
 | [NeteaseCloudMusicApiEnhanced/api-enhanced](https://github.com/NeteaseCloudMusicApiEnhanced/api-enhanced) | 网易云登录的关键参数（`login_qr_key` 的 `type: 3`、`login_qr_create` 的 `chainId`）。没有它，网易云扫码会一直卡在「已扫码未确认」 |
 | `leelaa.playlist` v1.1.1（AI 歌单） | 推理模型的错误处理：`content \|\| reasoning` 回退与 `finish_reason=length` 的识别。它无源码（Rust 二进制），靠行为反推 |
 | `zouclang/fnos_music_ext` v2.8.0 | 榜单注入的产品形态（`proxy/charts.py`），以及官方 socket 拓扑的实测线索 |
+| [yetone/magpie](https://github.com/yetone/magpie) | 设置入口的形态：左下角一颗按钮、分类列表从它长出去、按钮本身一帧都不许漂；分类切换只显示该类设置项 |
 
 ### 前端与工程
 
