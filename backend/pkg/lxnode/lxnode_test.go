@@ -798,3 +798,49 @@ func TestScriptFileNameMatchesSyncNaming(t *testing.T) {
 		}
 	}
 }
+
+// 沙箱里的 console 必须像浏览器里那个一样能用。
+//
+// 2026-11-22 实测：宿主原来只给了 `log/warn/error` 三个方法，于是真脚本
+// （`_new_URL_ikun音源_公益__v24.js`）一进来就抛
+// `console.group is not a function`，整条取链被记成「解析响应数据失败」——
+// 用户看到的只是「这个源坏了」，从报错里根本看不出是宿主少给了个调试方法。
+//
+// 这条用例丢一个「把 console 当浏览器用」的脚本进去，要求它照常解析出直链。
+func TestSandboxConsoleSupportsBrowserMethods(t *testing.T) {
+	dir := t.TempDir()
+	writeSources(t, dir, map[string]string{
+		"console.js": `
+lx.send('inited', { sources: { wy: { name: '用 console 的源' } } })
+lx.on('request', () => {
+  // 真脚本常见的分级日志写法；任何一条缺失都会让整条取链抛错。
+  console.group('取链')
+  console.info('开始')
+  console.debug('debug %s', 'x')
+  console.table([{ a: 1 }])
+  console.groupCollapsed('细节')
+  console.log('inside')
+  console.groupEnd()
+  console.groupEnd()
+  console.time('t')
+  console.timeEnd('t')
+  console.count('c')
+  console.assert(true, '不会触发')
+  console.trace('stack')
+  console.dir({ a: 1 })
+  return Promise.resolve('https://cdn.example.invalid/console-ok.flac')
+})
+`,
+	})
+	m := startRealHost(t, dir, 18946)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	got, _, err := m.Resolve(ctx, "wy", map[string]any{"name": "晴天"}, "flac")
+	if err != nil {
+		t.Fatalf("用了 console.group 等浏览器方法就该照常解析：%v", err)
+	}
+	if got != "https://cdn.example.invalid/console-ok.flac" {
+		t.Fatalf("直链不对：%q", got)
+	}
+}

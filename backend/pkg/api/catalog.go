@@ -354,11 +354,15 @@ func APICatalog(baseURL string) []Endpoint {
 			Method: http.MethodGet, Path: "/api/search", Summary: "全网搜索歌曲（多平台聚合去噪）", Category: catSearch,
 			Params: []Param{
 				{Name: "q", In: "query", Required: true, Desc: "关键词，如「周杰伦 夜曲」"},
-				{Name: "source", In: "query", Desc: "平台 wy/tx/kg/kw，默认 all 聚合"},
+				{Name: "source", In: "query", Desc: "平台 wy/tx/kg/kw 或 musicdl 源名（mg/bq/bi…），默认 all 聚合"},
 				{Name: "page", In: "query", Desc: "页码，默认 1"},
+				{Name: "page_size", In: "query", Desc: "每页条数，默认 20，上限 50"},
+				{Name: "include", In: "query", Desc: "额外来源，逗号分隔，目前支持 lx（洛雪音源脚本）。缺省不含"},
+				{Name: "budget_ms", In: "query", Desc: "最多等多久（毫秒，上限 120000），到点只返回已经回来的平台结果。缺省 0 = 等全"},
 			},
-			Example:  "curl '" + baseURL + "/api/search?q=周杰伦%20夜曲&source=all'",
-			Notes:    "纯服务端能力，不需要浏览器，也不需要音源脚本。",
+			Example: "curl '" + baseURL + "/api/search?q=周杰伦%20夜曲&source=all&include=lx'",
+			Notes: "不需要浏览器（`include=lx` 要洛雪宿主在跑）。`include=lx` 的 source 形如 `lx:wy`，可直接喂给 /api/library/repair/replace 的 platform，" +
+				"quality / file_size 可能为空（脚本不给，不编造）。`budget_ms=12000` 避开 30s 超时；`budget_hit=true` 即到点截断。",
 			Requires: "none",
 		},
 		{

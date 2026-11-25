@@ -41,7 +41,7 @@ import (
 )
 
 // CurrentVersion 应用版本号。发布新版本时与 fpk-package/manifest 的 version 同步修改。
-const CurrentVersion = "2.35.0"
+const CurrentVersion = "2.36.0"
 
 // CurrentAppName 对外暴露的应用标识，必须与 fpk-package/manifest 的 appname 一致。
 //
@@ -894,12 +894,38 @@ func handleAudioStream(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
-	w.Header().Set("Accept-Ranges", "bytes")
-	if ct := resp.Header.Get("Content-Type"); ct != "" {
-		w.Header().Set("Content-Type", ct)
-	} else {
-		w.Header().Set("Content-Type", "audio/mpeg")
+	// 先读开头一小段，用来纠正「声明与实际不符」的 Content-Type（见下面的注释）。
+	// 只在响应确实从文件开头起时才有意义：Range 从中间开始取时，
+	// 前几个字节是音频流中段，拿它做魔数判断只会得出错误的结论。
+	const headPeek = 512
+	rangeHeader := r.Header.Get("Range")
+	startsAtZero := rangeHeader == "" ||
+		strings.HasPrefix(strings.TrimSpace(resp.Header.Get("Content-Range")), "bytes 0-")
+
+	var head []byte
+	if startsAtZero {
+		buf := make([]byte, headPeek)
+		n, err := io.ReadFull(resp.Body, buf)
+		if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
+			http.Error(w, "stream error: "+err.Error(), http.StatusBadGateway)
+			return
+		}
+		head = buf[:n]
 	}
+
+	w.Header().Set("Accept-Ranges", "bytes")
+	detected := downloader.MimeForAudioHead(head)
+	contentType := streamContentType(resp.Header.Get("Content-Type"), head)
+	// 从文件开头判出来的是可信的 → 记下来给后续 Range 中段请求复用；
+	// 中段请求自己判不了，就看这个 URL 之前有没有判过。
+	if startsAtZero {
+		if detected != "" {
+			rememberStreamType(targetURL, detected)
+		}
+	} else if cached := cachedStreamType(targetURL); cached != "" {
+		contentType = cached
+	}
+	w.Header().Set("Content-Type", contentType)
 	if cl := resp.Header.Get("Content-Length"); cl != "" {
 		w.Header().Set("Content-Length", cl)
 	}
@@ -908,7 +934,99 @@ func handleAudioStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(resp.StatusCode)
+	if len(head) > 0 {
+		if _, err := w.Write(head); err != nil {
+			return
+		}
+	}
 	_, _ = io.Copy(w, resp.Body)
+}
+
+// streamContentType 决定中转音频回给浏览器的 Content-Type。
+//
+// ⚠️ 上游声明不可信：实测网易云把 FLAC 直链标成 audio/mpeg。原样透传会让
+// 浏览器拿到「声明 mp3、实际 FLAC」的响应 —— 桌面 Chrome 靠内容嗅探仍能播，
+// 但 canPlayType / MSE 判定与部分移动端 WebView 会按声明类型走，表现成
+// 「明明有链接却不出声」，而且看不出是哪一环坏了。
+//
+// 判据与下载落地、播放预检共用一套（downloader.MimeForAudioHead）：
+// 认得出容器就以魔数为准；认不出（head 为空、或 Range 从中间起）才沿用上游声明。
+func streamContentType(upstreamCT string, head []byte) string {
+	if detected := downloader.MimeForAudioHead(head); detected != "" {
+		return detected
+	}
+	if ct := strings.TrimSpace(upstreamCT); ct != "" {
+		return ct
+	}
+	return "audio/mpeg"
+}
+
+// 拖动进度条会让同一个 URL 再来一串 Range 中段请求 —— 那些响应的开头是音频
+// 流中段，没法再判魔数，若上游本来就标错，同一个 URL 就会「头一段是 audio/flac、
+// 后续全是 audio/mpeg」。所以把从文件开头判出来的类型按 URL 记一小会儿，
+// 中段请求直接复用，整条播放过程的类型才是同一个。
+//
+// 只做有界内存缓存（256 条、1 小时），键里带 vkey 之类的查询串 —— 直链本来就
+// 短命，过期即失效，不做持久化。
+const (
+	streamTypeCacheMax = 256
+	streamTypeCacheTTL = time.Hour
+)
+
+type streamTypeEntry struct {
+	mime string
+	at   time.Time
+}
+
+var streamTypeCache = struct {
+	mu sync.Mutex
+	m  map[string]streamTypeEntry
+}{m: map[string]streamTypeEntry{}}
+
+func rememberStreamType(url, mime string) {
+	if url == "" || mime == "" {
+		return
+	}
+	streamTypeCache.mu.Lock()
+	defer streamTypeCache.mu.Unlock()
+	if len(streamTypeCache.m) >= streamTypeCacheMax {
+		// 满了就先清过期项；还满就整表丢掉 —— 这是纯加速用的缓存，
+		// 丢掉最多退化成「沿用上游声明」，不值得为它做 LRU。
+		now := time.Now()
+		for k, v := range streamTypeCache.m {
+			if now.Sub(v.at) > streamTypeCacheTTL {
+				delete(streamTypeCache.m, k)
+			}
+		}
+		if len(streamTypeCache.m) >= streamTypeCacheMax {
+			streamTypeCache.m = map[string]streamTypeEntry{}
+		}
+	}
+	streamTypeCache.m[url] = streamTypeEntry{mime: mime, at: time.Now()}
+}
+
+func cachedStreamType(url string) string {
+	if url == "" {
+		return ""
+	}
+	streamTypeCache.mu.Lock()
+	defer streamTypeCache.mu.Unlock()
+	e, ok := streamTypeCache.m[url]
+	if !ok {
+		return ""
+	}
+	if time.Since(e.at) > streamTypeCacheTTL {
+		delete(streamTypeCache.m, url)
+		return ""
+	}
+	return e.mime
+}
+
+// resetStreamTypeCache 只给测试用：缓存是包级状态，用例之间必须隔开。
+func resetStreamTypeCache() {
+	streamTypeCache.mu.Lock()
+	defer streamTypeCache.mu.Unlock()
+	streamTypeCache.m = map[string]streamTypeEntry{}
 }
 
 // handlePlayerCheck 轻量校验一个播放地址**是否真的能取到音频**。
@@ -972,7 +1090,12 @@ func handlePlayerCheck(w http.ResponseWriter, r *http.Request) {
 	n, _ := io.ReadFull(resp.Body, head)
 	head = head[:n]
 
-	contentType := resp.Header.Get("Content-Type")
+	contentType := streamContentType(resp.Header.Get("Content-Type"), head)
+	// 预检拿的也是文件开头，判出来的类型对后面的中继同样有效 —— 记下来，
+	// 免得预检说 audio/flac、真播时的中段 Range 又说 audio/mpeg。
+	if detected := downloader.MimeForAudioHead(head); detected != "" {
+		rememberStreamType(targetURL, detected)
+	}
 	ok, note := judgePlayerCheck(resp.StatusCode, resp.Status, contentType, head)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"code": 200, "message": "ok",

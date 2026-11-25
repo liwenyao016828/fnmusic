@@ -397,6 +397,32 @@ func searchNativeContext(keyword, plat string, page, pageSize int) []UnifiedSong
 	return nil
 }
 
+// snapshotResults 取一份加锁后的结果副本。
+//
+// 为什么不是直接读 results：`all` 分支可能因为 budget_ms 到点就返回，此时仍有
+// 平台在跑、还在往 results 上 append。读副本能保证「返回的这一份」不会被后续
+// 追加改写（append 可能换底层数组，也可能原地写 —— 不去猜）。
+func snapshotResults(mu *sync.Mutex, src []UnifiedSong) []UnifiedSong {
+	mu.Lock()
+	defer mu.Unlock()
+	out := make([]UnifiedSong, len(src))
+	copy(out, src)
+	return out
+}
+
+// parseBudgetMs 解析 `?budget_ms=`：0 / 空 / 负数 / 非法 = 不限（老行为）。
+// 上限 2 分钟，免得调用方写个离谱的值把连接挂死。
+func parseBudgetMs(raw string) time.Duration {
+	n, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil || n <= 0 {
+		return 0
+	}
+	if n > 120000 {
+		n = 120000
+	}
+	return time.Duration(n) * time.Millisecond
+}
+
 func HandleSearch(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 
@@ -436,6 +462,8 @@ func HandleSearch(w http.ResponseWriter, r *http.Request) {
 	results := make([]UnifiedSong, 0)
 	var wg sync.WaitGroup
 	var mu sync.Mutex
+	// budgetHit 只在调用方点名了 budget_ms 且真的到点截断时为 true（见下面 all 分支）。
+	budgetHit := false
 
 	appendResults := func(songs []UnifiedSong) {
 		mu.Lock()
@@ -453,15 +481,53 @@ func HandleSearch(w http.ResponseWriter, r *http.Request) {
 		// 全部平台：原生四个 + 当前注册的外挂平台一起并跑。
 		// 外挂平台从注册表**现取**（sidecar 关着时它就不在，不会白等一轮超时）。
 		plats := append([]string{"wy", "tx", "kg", "kw"}, ExternalSearcherPlatforms()...)
-		wg.Add(len(plats))
+
+		// 额外来源（`?include=lx`）：**默认不参与**，只有调用方点名才并进来。
+		//
+		// 为什么不并进 plats：这些渠道没有单平台身份（洛雪一条结果的标识是
+		// `lx:<src>`，与原生平台代号撞名，且缺档位/缺体积），并进注册表会把原生
+		// 搜索顶掉。详见 extra.go 顶部。
+		//
+		// 它们与平台搜索**同一个 WaitGroup**：谁慢谁等，不额外串行一轮。
+		extras := extraSourcesFor(parseInclude(q.Get("include")))
+		ctx := r.Context()
+
+		// 「最多等多久」：交互式调用（换版本候选抽屉）可以点名一个预算，
+		// 到点就把**已经回来的**平台结果交出去，而不是陪着最慢的那个平台一起等。
+		//
+		// 为什么必须是可选参数、而不是给 all 加一个默认上限：发现页搜索靠的就是
+		// 「能等就等全」，静默截断会让它莫名少一批结果且无从判断。这里缺省 0 =
+		// 不限（老行为一字不变），只有明确要快的一方（候选抽屉）自己点名。
+		budget := parseBudgetMs(q.Get("budget_ms"))
+
+		wg.Add(len(plats) + len(extras))
 		for _, p := range plats {
 			go func(p string) {
 				defer wg.Done()
 				appendResults(Search(keyword, p, page, 16))
 			}(p)
 		}
-		wg.Wait()
-		results = filterAndRankSongs(keyword, results)
+		for _, fn := range extras {
+			go func(fn ExtraSource) {
+				defer wg.Done()
+				appendResults(fn(ctx, keyword))
+			}(fn)
+		}
+
+		// 到点就走的等待。晚到的平台结果**仍然安全**：它们只往 results 上追加，
+		// 而下面取的是加锁后的快照副本 —— 返回之后才到的结果只是丢掉，不会串数据。
+		done := make(chan struct{})
+		go func() { wg.Wait(); close(done) }()
+		if budget > 0 {
+			select {
+			case <-done:
+			case <-time.After(budget):
+				budgetHit = true
+			}
+		} else {
+			<-done
+		}
+		results = filterAndRankSongs(keyword, snapshotResults(&mu, results))
 	default:
 		// 认不出的平台**返回空**，而不是偷偷回退到「全部平台」：
 		// 用户点名要咪咕，就不该拿到网易的歌（那种「搜到了但不是这个平台的」
@@ -474,10 +540,14 @@ func HandleSearch(w http.ResponseWriter, r *http.Request) {
 		"message":  "ok",
 		"keyword":  keyword,
 		"platform": platform,
+		// budget_hit=true 表示「到点截断过」：结果来自已经回来的平台，
+		// 还有平台在路上。false 就是「等全了」（老行为）。
+		"budget_hit": budgetHit,
 		"data": map[string]interface{}{
-			"list":     results,
-			"total":    len(results),
-			"keyword":  keyword,
+			"list":       results,
+			"total":      len(results),
+			"budget_hit": budgetHit,
+			"keyword":    keyword,
 			"platform": platform,
 		},
 		"list":  results,

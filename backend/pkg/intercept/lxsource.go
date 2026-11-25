@@ -75,6 +75,22 @@ func lxBudgetOf(ctx context.Context) time.Duration {
 	return 0
 }
 
+// lxSearchAPIBudget 是「换版本候选抽屉」问洛雪时最多等多久。
+//
+// 宿主自己的单次超时是 12s（见 lxnode）；交互式搜索等不了那么久 ——
+// 抽屉里转 12 秒用户会以为卡死了。宁可少几条洛雪候选。
+const lxSearchAPIBudget = 8 * time.Second
+
+// SearchLxCandidates 是 `lxCandidates` 的导出包装，供 `/api/search?include=lx` 用
+// （见 search.RegisterExtraSource）。
+//
+// 为什么不直接把 lxCandidates 导出：它的预算、静默失败口径都是为下载腿写的
+// （见上面 lxBudgetKey 的说明）。导出成通用入口会被误当成「一个普通搜索源」，
+// 而它其实只在「修复/换版本」这种需要多源候选的场景里有意义。
+func (i *Interceptor) SearchLxCandidates(ctx context.Context, keyword string) []search.UnifiedSong {
+	return i.lxCandidates(withLxBudget(ctx, lxSearchAPIBudget), keyword)
+}
+
 // lxCandidates 问一次洛雪宿主，把结果翻译成池能用的统一歌曲结构。
 //
 // 任何失败（宿主没开 / 连不上 / 脚本报错）都只记一笔日志并返回 nil ——

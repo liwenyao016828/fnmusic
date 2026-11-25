@@ -153,6 +153,32 @@ func TestDetectAudioExtByMagic(t *testing.T) {
 	}
 }
 
+func TestMimeForAudioHead(t *testing.T) {
+	// 判据与下载落地共用，这里只钉住「容器 → 标准 MIME」的映射，
+	// 以及最关键的一条：认不出来必须返回空串，让调用方沿用上游声明，
+	// 而不是胡乱兜底成 audio/mpeg（那正是要修的病）。
+	cases := []struct {
+		name string
+		head []byte
+		want string
+	}{
+		{"flac", append([]byte("fLaC"), make([]byte, 8)...), "audio/flac"},
+		{"mp3-id3", append([]byte("ID3"), make([]byte, 8)...), "audio/mpeg"},
+		{"mp3-sync", []byte{0xFF, 0xFB, 0x90, 0x00}, "audio/mpeg"},
+		{"ogg", append([]byte("OggS"), make([]byte, 8)...), "audio/ogg"},
+		{"m4a", []byte{0x00, 0x00, 0x00, 0x20, 'f', 't', 'y', 'p'}, "audio/mp4"},
+		{"html", []byte("<html><body>403 Forbidden"), ""},
+		{"empty", nil, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := MimeForAudioHead(tc.head); got != tc.want {
+				t.Errorf("MimeForAudioHead(%q) = %q, 期望 %q", string(tc.head), got, tc.want)
+			}
+		})
+	}
+}
+
 func TestIsErrorPayload(t *testing.T) {
 	cases := []struct {
 		name string

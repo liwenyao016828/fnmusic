@@ -497,6 +497,27 @@ function makeLx(meta, onRequestDone) {
   return { lx, handlers };
 }
 
+/**
+ * 沙箱里的 console：音源脚本会把它当浏览器控制台用，调 group/groupEnd/
+ * table/time/count 之类做分级日志。宿主原来只给了 log/warn/error 三个方法，
+ * 于是真脚本一进来就抛 `console.group is not a function`，整条取链被判失败
+ * （实测 `_new_URL_ikun音源_公益__v24.js`）。
+ *
+ * 未知方法一律返回空函数，而不是 undefined —— console 只是日志出口，
+ * 不该成为「这个脚本能不能跑」的分水岭。仍然全部静默：
+ * 脚本输出进宿主日志只会淹没真正的告警。
+ */
+function makeSandboxConsole() {
+  const sink = { log() {}, info() {}, warn() {}, error() {}, debug() {}, trace() {} };
+  return new Proxy(sink, {
+    get(target, key) {
+      if (key in target) return target[key];
+      if (typeof key === 'string') return () => {};
+      return undefined;
+    },
+  });
+}
+
 /** 加载一个脚本：在 Proxy 沙箱里求值，记下它伸手要了哪些宿主没给的东西。 */
 function loadOne(file) {
   const code = fs.readFileSync(file, 'utf8');
@@ -506,7 +527,7 @@ function loadOne(file) {
     // 脚本拿到的 `require` 是**白名单函数**（createLxRequire），不是真 require ——
     // 原来这里是 `createRequire(import.meta.url)`，等于把宿主的文件系统/进程交给任何丢进来的 .js。
     lx, require: createLxRequire(), module: { exports: {} }, exports: {}, global: {},
-    Buffer, console: { log() {}, warn() {}, error() {} },
+    Buffer, console: makeSandboxConsole(),
     setInterval: () => 0, clearInterval: () => {}, setTimeout: (f) => { try { f && f(); } catch {} return 0; }, clearTimeout: () => {}, requestAnimationFrame: () => 0,
   };
   const sandbox = new Proxy(base, {
@@ -583,7 +604,11 @@ const readBody = (req) => new Promise((res) => { let b = ''; req.on('data', (c) 
  *   · name     ← `name`；singer ← `singer`（字符串，不是数组）；album ← `albumName`。
  *   · duration ← **秒**（脚本把上游毫秒 floor 成秒：实测 269000 → 269）。
  *                正好是曲率统一结构要的单位，不需要再换算。
- *   · pic      ← `pic`。
+ *                脚本没给数字 `duration` 时退回解析 `interval`（"03:45"）——
+ *                官方 LX 契约的搜索结果里用的就是 `interval`，主流脚本（ikun / 星海 /
+ *                Ciallo）只给这个；不解析的话洛雪候选在池里恒为「时长未知」，
+ *                挑候选时按接近度排的那一步就整段失效。
+ *   · pic      ← `pic` ‖ `cover` ‖ `img`（`img` 是 Ciallo 那一族的字段名，实测）。
  *   · raw      ← 脚本那条记录**原样**，只删掉 `_raw`。
  *                `_raw` 是脚本自己的「上游原对象」透传，内容与体积都不可知（可能不是
  *                纯 JSON），而 `raw` 本身已经能证明「脚本自己报的字段一个都没丢」。
@@ -592,6 +617,17 @@ const readBody = (req) => new Promise((res) => { let b = ''; req.on('data', (c) 
  *                （不主动占优）与「缺音质」（算最低档，见 qualityRank）的处理完全不同，
  *                编一个就等于伪造决策依据。
  */
+// intervalToSec 把 "03:45" / "1:02:03" 解析成秒；解析不出来返回 0（= 未知）。
+// 与前端 services/repairList.js 的 parseInterval 同一个口径。
+function intervalToSec(text) {
+  const s = String(text == null ? '' : text).trim();
+  if (!s) return 0;
+  const parts = s.split(':').map((x) => Number(x) || 0);
+  if (parts.length === 3) return Math.floor(parts[0] * 3600 + parts[1] * 60 + parts[2]);
+  if (parts.length === 2) return Math.floor(parts[0] * 60 + parts[1]);
+  return 0;
+}
+
 function normalizeSearchItem(script, source, item) {
   const it = item && typeof item === 'object' ? item : {};
   const raw = Object.assign({}, it);
@@ -603,8 +639,8 @@ function normalizeSearchItem(script, source, item) {
     name: String(it.name || ''),
     singer: String(it.singer || ''),
     album: String(it.albumName || it.album || ''),
-    duration: Number(it.duration) > 0 ? Math.floor(Number(it.duration)) : 0,
-    pic: String(it.pic || it.cover || ''),
+    duration: Number(it.duration) > 0 ? Math.floor(Number(it.duration)) : intervalToSec(it.interval),
+    pic: String(it.pic || it.cover || it.img || ''),
     raw,
   };
   // 只在**脚本真给了**的时候透传 —— 缺就是缺，不补默认值（见函数顶部）
@@ -863,17 +899,32 @@ const serverHandler = async (req, res) => {
         if (wantSource && src !== wantSource) continue;
         const info = sources[src] || {};
         const actions = Array.isArray(info.actions) ? info.actions : [];
-        if (!actions.includes('musicSearch')) {
+        // 两种搜索动作都认：
+        //   · musicSearch —— 觅音那一族的约定（上面实测过形状）；
+        //   · search      —— **官方 LX 契约里的动作名**，主流脚本（ikun / 星海 / Ciallo）
+        //                    声明的是它。以前只认 musicSearch，于是这些脚本一条候选都
+        //                    交不出来（/search 恒为空），「加 lx 音源」等于白加。
+        // 优先 musicSearch（它的 info 形状已被实测钉死），没有再退回 search。
+        const useMusicSearch = actions.includes('musicSearch');
+        if (!useMusicSearch && !actions.includes('search')) {
           // 「不支持搜索」是**正常事实**，不是故障：说出来，别让调用方以为搜过而没结果
-          tried.push({ script: l.meta.file, source: src, error: '该源未声明 musicSearch，已跳过' });
+          tried.push({ script: l.meta.file, source: src, error: '该源未声明 musicSearch / search，已跳过' });
           continue;
         }
+        const action = useMusicSearch ? 'musicSearch' : 'search';
+        // 入参两套都带全（keyword / page / pagesize / limit）：脚本各认各的键，
+        // 多给不会出错，少给会静默返回空列表（实测，见上面那段注释）。
+        const searchInfo = { keyword, page, pagesize: limit, limit };
         try {
           const out = await Promise.race([
-            Promise.resolve(l.handler({ source: src, action: 'musicSearch', info: { keyword, page, pagesize: limit } })),
+            Promise.resolve(l.handler({ source: src, action, info: searchInfo })),
             new Promise((_, rej) => setTimeout(() => rej(new Error('timeout 8s')), 8000)),
           ]);
-          const list = Array.isArray(out && out.list) ? out.list : [];
+          // 结果列表的落点：musicSearch 是 `list`，官方 search 也是 `list`，
+          // 但个别脚本会包一层 `data`（实测见 tried 里的记录），一并认。
+          const list = Array.isArray(out && out.list)
+            ? out.list
+            : (Array.isArray(out && out.data && out.data.list) ? out.data.list : []);
           for (const it of list) results.push(normalizeSearchItem(l.meta.file, src, it));
           if (!list.length) tried.push({ script: l.meta.file, source: src, error: '上游没返回结果' });
         } catch (e) {

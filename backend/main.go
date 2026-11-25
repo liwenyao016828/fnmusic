@@ -399,6 +399,18 @@ func main() {
 				return ic.ReplaceTrackFromCandidate(r.Context(), req)
 			},
 		)
+
+		// 洛雪音源进「换版本」候选：`/api/search?include=lx`（v2.36.0）。
+		//
+		// 为什么放在 `if ic != nil` 里面，而不是像 musicdl 那样无条件注册：
+		// 洛雪候选**要靠拦截层的解析池才能取到直链**（池里 `lx:<src>` 的解析器由
+		// lxCandidates 顺手注册，见 pkg/intercept/lxresolve.go）。没有拦截层时给出
+		// 洛雪候选只会让用户选中一条注定解析失败的结果 —— 而且没有拦截层时
+		// 「换版本」接口本身也是关的（见上面 SetRepair），候选再多也没处用。
+		//
+		// musicdl 不需要在这里注册：它是**按平台**覆盖的搜索器，早就并进
+		// /api/search 了（见 pkg/search/provider.go）。
+		search.RegisterExtraSource("lx", ic.SearchLxCandidates)
 		// 后台「音质补强」的设置面（v2.22）。三件事：
 		//   status —— 把「内存里的配置 + 进程里的活状态（这一轮派了几首、
 		//             下次什么时候跑、还剩多少欠账）」合成一份给界面；

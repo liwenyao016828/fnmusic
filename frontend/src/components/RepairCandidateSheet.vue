@@ -124,7 +124,7 @@ import SideSheet from './SideSheet.vue'
 import InlineNotice from './InlineNotice.vue'
 import { RepairAPI, SearchAPI } from '../api/client'
 import { platformName } from '../services/libraryFields'
-import { qualityLabel } from '../engine/quality'
+import { qualityLabel as baseQualityLabel } from '../engine/quality'
 import { fail as failText } from '../services/userMsg'
 import { logInfo } from '../services/appLog'
 import {
@@ -176,7 +176,18 @@ const issueText = computed(() => {
 })
 
 function platformLabel(id) {
-  return platformName(id) || String(id || '').toUpperCase()
+  const value = String(id || '')
+  const musicdlNames = { mg: '咪咕', bq: '千千', bi: 'B站' }
+  const lxPlatformNames = { wy: '网易云', tx: 'QQ 音乐', kg: '酷狗', kw: '酷我', ...musicdlNames }
+  if (value.toLowerCase().startsWith('lx:')) {
+    const source = value.slice(3).toLowerCase()
+    return `洛雪 · ${lxPlatformNames[source] || platformName(source) || source.toUpperCase()}`
+  }
+  return musicdlNames[value.toLowerCase()] || platformName(value) || value.toUpperCase()
+}
+
+function qualityLabel(value) {
+  return value ? baseQualityLabel(value) : '音质未知'
 }
 
 function audioMeta(info) {
@@ -196,11 +207,15 @@ async function search() {
   errorText.value = ''
   armedKey.value = ''
   try {
-    const data = await SearchAPI.search(kw, 'all', 1, 30)
+    // 12s 预算：聚合全部平台实测能到 50s 以上（被最慢的平台拖住），远超 axios
+    // 默认的 30s —— 不点名预算的话抽屉就是「搜 60 秒然后超时报错」。到点后端把
+    // 已经回来的平台结果先交出来（budget_hit=true），洛雪自己的预算是 8s，赶得上。
+    const data = await SearchAPI.search(kw, 'all', 1, 30, 'lx', 12000)
     // /api/search 的信封把 list 放在顶层，同时也镜像一份在 data 里 —— 两种都认
     const payload = (data && (data.data || data)) || {}
     rows.value = candidateRows(payload.list, (props.item && props.item.duration_sec) || 0)
-    logInfo(`修复替换：搜「${kw}」得到 ${rows.value.length} 个版本`)
+    const hit = payload.budget_hit ? '（已到等待上限，只含先返回的平台）' : ''
+    logInfo(`修复替换：搜「${kw}」得到 ${rows.value.length} 个版本${hit}`)
   } catch (e) {
     // fail() 自己会写日志（完整信息进日志、一句人话给界面），不要再单独 logError
     errorText.value = failText('修复替换：搜索版本', e, '搜索失败，换个关键词再试')

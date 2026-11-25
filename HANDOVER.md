@@ -22,7 +22,7 @@
 | **后端依赖** | **已引入第三方依赖**（`modernc.org/sqlite v1.36.1`，纯 Go）。旧版「零依赖」规则已作废，见 §2 规则二 |
 | **前端依赖** | vue / vite / tailwindcss / axios / lucide-vue-next / crypto-js / buffer / qrcode |
 | **打包** | `bash scripts/build.sh`，**不需要 fnpack** |
-| **当前版本** | `2.35.0`（代码与 manifest 已同步，见 §7） |
+| **当前版本** | `2.36.0`（代码与 manifest 已同步，见 §7） |
 | **应用内更新** | `backend/pkg/appupdate` + `frontend/src/components/UpdateCard.vue`：查 GitHub Release → 流式下载到 `<数据目录>/updates/` → 执行 `/tmp/yinshu-update/apply-update.sh`。**v2.28.2 起回到「卸载旧版 → 安装新版」的老办法**（`appcenter-cli stop` → `uninstall` → `install-fpk` → 按 `/api/app/version` 版本验收）：v2.28.0 的「就地升级」在真机上被应用中心拦下（安装任务返回 10030 参数异常），而老办法只要 fpk 里**没有卸载向导**就能跑通 —— 所以 v2.28.1 起 `fpk-package/wizard/uninstall` 已删除。⚠️ 若要再给 fpk 加卸载向导，必须同时保证「应用内更新」这条路仍能卸载（带向导时应用中心命令行拒绝卸载且返回码仍是 0，见 §1.4.1）。**安装这一跳在开发机上无法验证**（没有 `appcenter-cli`、没有 `/var/apps/`），真机第一次用要盯着 log。 |
 | **文件名体检** | `backend/pkg/nas/health.go`：扫出非法 UTF-8 / 控制字符 / 首尾空格 / 0 字节音频 / `.part` 残留 / 权限 000 等条目（它们会让 fnOS 整层目录报「未知错误」）。修复接口**只收 `id`（路径字节的 base64url）不收 path** —— 非法 UTF-8 的名字过一次 JSON 就变成 U+FFFD，传 path 必然找不到文件；服务端在最近 8 次扫描缓存里回查。 |
 | **自动发布** | 功能完成并验证后由 DSH 提交、推送 main；GitHub Actions 校验四处版本 → 前端构建 → 后端/前端/洛雪测试 → FPK 自检 → 新版本 Release + SHA256。已有版本不覆盖；不自动部署 NAS。不用 git hook 自动暂存工作区。 |
@@ -41,8 +41,10 @@
 | **音质补强口径** | v2.17.0 起收藏自动下载**不再「只试一次就永久放弃」**：这次拿不到无损的先落一份能拿到的，之后由后台轮补强（`pkg/intercept/upgrade_sweeper.go`，每 20 分钟一轮、每轮最多 3 首），失败冷却 **24 小时**、累计 **5 回**收手，剩下的交给「替换音质」页手动做。账本在 `online.DownloadedItem` 的 `upgrade_tries/upgrade_next`（老数据只有 `upgrade_tried=true` 没有 `upgrade_next` ⇒ 视作「早可以再试」，用来救 2.15/2.16 那批被误判成「已放弃」的记录）。登记表里的触发来源是 `upgrade`（界面显示「音质补强」），与「收藏」触发的失败必须分开看：前者是「无损版还没搞到」，后者才是「你要的歌没下下来」 |
 | **替换音质口径** | v2.17.0 起「补全整理」页有「替换音质」段：扫曲库（默认只扫**有损**文件）→ 逐首列出**各渠道实际能拿到什么档位**（`POST /api/quality/scan`，异步 + 轮询）→ 勾选后用最高档位覆盖（`POST /api/quality/replace`，一次 ≤50 条，串行）。**档位一律按实际判**（`pkg/audioext.TierOfFile`，界面与下载器共用，v2.17.2）：容器（flac/ape/wav/dsf/dff 算无损）+ mp3 读第一帧标称码率（≥256k 算 320k、≥160k 算 192k、其余 128k；读不出来回落 320k）+ 洛雪那条按**实测字节数/时长**推算（第三方站常态是「名义无损、实际 128k」，真机见过 4,186,741 字节/295 秒 ≈ 113kbps 被标成 flac）。落盘带 `upgrade_if_better`：只有拿到**更高**档位才覆盖，绝不降级；「拿到同档、没覆盖」在结果里是 `ok:false` + `note`，与真失败分开。扫描/替换都要拦截层在跑（没接管时接口如实回 502 `available:false`，不是 500）。**v2.34.0 起结论落盘 + 增量扫描**：每条结果带 `scanned_at`，存 `<DataDir>/quality_scan.json`（原子写、上限 5000 条、按 `scanned_at` 淘汰最旧），`POST /api/quality/scan` 的 body 加 `refresh` —— `refresh=false`（默认，「继续扫描」）跳过**最近 7 天内扫过、且盘上文件与档位都没变**的歌并把条数回在 `skipped` 里；`refresh=true`（「全部重扫」）才是全量。失效判定三件套见 `qualityEntryFresh`（未过期 / 文件还在 / `qualityCurrentTierOfFile` 与结论里的 `currentTier` 一致）。被叫停的扫描**不记结论**（否则会白白跳过一个没探完的文件）；进页面读到的是落盘的历史结论（`state=idle` + `updated` 是上次扫描时间），不是空表 **v2.34.1 起提速**：探测腿给单个 musicdl 源 8 秒预算且只问 1 条候选（下载腿不限时）、失败音源熔断 2→4→8 分钟（封顶 15 分钟，**「搜到 0 条」不算失败**）、单首 25 秒围栏（到点记 `timed_out`＝**没探出**，不是「没有更高音质」，也不进 7 天免扫名单）、搜索限速改成按平台分槽。详见 §3.7「「替换音质」的三处提速」 |
 | **歌曲修复口径** | v2.35.0 起「补全整理 → 修复」是**一张合并清单**：歌名不对（AI 判名）、内容重复（哈希/同名分组）、文件名非法（`pkg/nas/health.go`）、音频不对（`pkg/audioprobe` 读文件头）四类问题合成同一张表，按类筛选、勾选后分派到各自既有接口。**「音频不对」= 扩展名与真实容器不符 / 时长 < 30 秒 / 无损容器但等效码率 < 200kbps**（`POST /api/library/repair/scan`，纯本地、只读前 64KB）。这类文件走 `POST /api/library/repair/replace`：搜歌名列出各版本让用户挑一个，**覆盖本体、不做档位比较**（坏文件同档位也必须换），落盘后复核空文件或 < 5 秒则保留旧文件。⚠️ 与「替换音质」规则相反 —— 那条只在拿到更高档位时才覆盖。详见 §3.7 |
+| **播放中转口径** | v2.35.1 起 `/api/player/stream` **不再原样透传上游 Content-Type**：魔数认得出容器就以魔数为准（`downloader.MimeForAudioHead`），认不出才沿用上游声明、两者都空回落 `audio/mpeg`（`api.streamContentType`）。**只在响应确实从文件开头起时嗅探**（无 `Range` 头，或 `Content-Range` 以 `bytes 0-` 开头）—— 中段 Range 的开头几个字节是音频流中段，拿去判魔数必然误判。判过的类型按 URL 记进有界缓存（`streamTypeCache`，256 条 / 1 小时 TTL），拖动进度条产生的中段 Range 复用同一个类型 —— 否则会出现「头一段 audio/flac、拖一下变 audio/mpeg」。`/api/player/check` 回报的类型走同一个函数、也写同一份缓存。实测：网易云把 FLAC 直链标成 `audio/mpeg`，桌面靠内容嗅探能播、Safari 与部分移动端 WebView 按声明走会「有链接却不出声」 |
+| **洛雪沙箱口径** | 宿主 `sidecar/lx_host/server.mjs` 给脚本的 `console` 必须**宽松**：`makeSandboxConsole()` 给 log/info/warn/error/debug/trace + Proxy，**未知方法返回空函数而不是 `undefined`**。真脚本会调 `console.group/table/time` 这些浏览器方法，缺一个就整条取链失败、还被记成「这个源坏了」（v2.35.1 实测 `_new_URL_ikun音源_公益__v24.js` 的 `console.group is not a function`） |
 | **推荐开发环境** | **WSL2 Debian**（见 §1.0）——Windows 下也能跑，但需要额外环境变量 |
-| **接口总数** | `backend/pkg/api/catalog.go` 共 **138 个**（core 101 / internal 37，见 §6.1）。目录**面向 AI**：顶层 `guide` 先说「是干嘛的、怎么做」，接口清单只是参考 ⚠️ `/api/catalog` 是**扁平结构** —— 数组在**顶层 `endpoints`**，不是 `data.endpoints` |
+| **接口总数** | `backend/pkg/api/catalog.go` 共 **197 个**（core 146 / internal 51，见 §6.1；实测命令见 §10 自检清单）。目录**面向 AI**：顶层 `guide` 先说「是干嘛的、怎么做」，接口清单只是参考 ⚠️ `/api/catalog` 是**扁平结构** —— 数组在**顶层 `endpoints`**，不是 `data.endpoints` |
 | **音乐入口接管** | 可选能力（`QULV_TAKEOVER=1`），默认关闭。接管官方 Unix socket 并全透传，见 §2 规则六 / §3.6 |
 | **在线曲库** | 接管生效时可用（v2.1.70 新增；v2.1.71 修真机接管失败；v2.1.72 修 isFavorite 写死）：网易 + QQ 的在线搜索/取流/歌词/封面/收藏/歌单/历史，合并进官方界面。**v2.33.0 起补上在线歌手与原生专辑**（搜歌手 / 歌手页 / 歌手的热门最新歌曲与专辑列表 / 专辑走平台原生接口取完整曲目；歌手链路目前只有网易，QQ 的歌手接口已下线）。见 §3.7 |
 | **音源协议** | **两种互补协议**：`official`（后端内置，免脚本，搜索/榜单/歌单/歌词）+ `lx`（浏览器脚本，取直链）。见 §3.4 |
@@ -3541,7 +3543,7 @@ GET /api/accounts/tracks?provider=netease&kind=playlist&id=<歌单ID>&limit=200
 
 ## 6. 接口契约（对外最重要）
 
-**`backend/pkg/api/catalog.go` 是接口文档的单一数据源**，`GET /api/catalog` 返回全部 **138 个**
+**`backend/pkg/api/catalog.go` 是接口文档的单一数据源**，`GET /api/catalog` 返回全部 **197 个**
 接口的结构化描述，前端「开放接口」抽屉渲染同一份数据。
 
 > **目录的主要读者是「替用户操作本应用」的外部 AI**，不是翻手册的人。
@@ -3595,8 +3597,8 @@ node .dev/catalog-audit.mjs http://127.0.0.1:8900               # 线上：跑�
 
 ### 6.1 `role` 分层：core / internal（取代旧的按分类折叠）
 
-`internalEndpoints`（键 = `"METHOD /path"`）决定谁被折起来；**当前 97 条 core / 37 条 internal**
-（2026-10-15 实测，共 134 条；上一轮 2026-09-26 是 87 / 33）。
+`internalEndpoints`（键 = `"METHOD /path"`）决定谁被折起来；**当前 146 条 core / 51 条 internal**
+（2026-11-22 实测，共 197 条；上一轮 2026-10-15 是 97 / 37，共 134）。
 `Endpoint.Hidden` 由 `Role` 推导（internal ⇒ hidden），所以「抽屉看到的」和
 「AI 按 role 分流的」永远是同一份判断 —— `catalog_test.go` 断言两者一致。
 
@@ -3615,11 +3617,11 @@ node .dev/catalog-audit.mjs http://127.0.0.1:8900               # 线上：跑�
 > 它粒度太粗必然折错：「整理与去重」里补全和命名规则混在一起，「飞牛集成」里 `rescan`
 > 是补全之后要做的、而 `token` 手工写入绝不该被外部调。
 >
-> **接口一条都没撤**：`/api/catalog` 仍返回全部 113 条（带 `role` / `hidden`）。
+> **接口一条都没撤**：`/api/catalog` 仍返回全部 197 条（带 `role` / `hidden`）。
 > 抽屉右上角开关文案是「显示内部接口（+N）」，展开后 internal 条目带「界面内部」灰标。
 
 > 改 `internalEndpoints` 后用 `/api/catalog` 复核 core / internal 两个数字
-> （2026-09-23 实测 `total=113 / core=84 / internal=29`）。
+> （2026-11-22 实测 `total=197 / core=146 / internal=51`）。
 > ⚠️ 别把 `/api/catalog` 返回的 `version` 抄进文档当「当前版本」—— 它随每个补丁版本变，必腐化。
 
 **安全环境变量**：
@@ -4215,9 +4217,9 @@ window.addEventListener('resize', () => this.resize())   // 匿名函数，移�
 接手后建议按顺序确认（**下面的数字是 2026-09-26 实测**，对不上说明环境有问题，不是文档错了）：
 
 - [ ] `bash .dev/wsl-run.sh status` 环境正常（WSL 下）；或 Windows 下 `bash scripts/dev.sh` 能起来，浏览器能看到界面
-- [ ] `go test ./...` 全绿（**698 个用例**，其中 8 个联网用例默认 skip）
-- [ ] `cd frontend && npm run test` 全绿（**138 个用例**）与 `npm run build` 通过
-- [ ] `GET /api/catalog` 返回 **138 个**接口（core 101 / internal 37），顶层带 `guide`（9 条任务食谱）
+- [ ] `go test ./...` 全绿（**1788 个顶层用例**，其中 16 个联网/环境依赖用例默认 skip）
+- [ ] `cd frontend && npm run test` 全绿（**657 个用例**：649 pass / 8 skip）与 `npm run build` 通过
+- [ ] `GET /api/catalog` 返回 **197 个**接口（core 146 / internal 51），顶层带 `guide`（9 条任务食谱）
 - [ ] `cd backend && go test ./pkg/api/ -run 'Catalog|Route'` 绿（源码：路由↔目录双向、目录自洽）
       `node .dev/catalog-audit.mjs http://127.0.0.1:8900` 输出「线上这一版与源码一致。」且 role/hidden 无不一致
 - [ ] `GET /api/fnos/status` 可访问（非飞牛环境两个 available 为 false 属正常）

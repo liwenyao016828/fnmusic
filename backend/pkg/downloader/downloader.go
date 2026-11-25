@@ -1208,6 +1208,33 @@ func extFromContentType(ct string) string {
 	return ""
 }
 
+// MimeForAudioHead 依据文件头魔数给出该音频容器的标准 MIME（认不出返回空串）。
+//
+// 为什么需要：第三方直链的 Content-Type 经常是错的。实测网易云把 FLAC 直链
+// 标成 audio/mpeg，播放中继原样透传，浏览器就拿到「声明是 mp3、内容是 FLAC」
+// 的响应 —— 桌面 Chrome 靠内容嗅探还能放，但 canPlayType/MSE 判定与部分
+// 移动端 WebView 会按声明类型走，表现为「明明有链接却不出声」。
+// 这里与下载落地、播放预检共用同一套魔数判据，避免三处各说各话。
+func MimeForAudioHead(head []byte) string {
+	switch detectAudioExtByMagic(head) {
+	case "flac":
+		return "audio/flac"
+	case "mp3":
+		return "audio/mpeg"
+	case "aac":
+		return "audio/aac"
+	case "m4a":
+		return "audio/mp4"
+	case "ogg":
+		return "audio/ogg"
+	case "wav":
+		return "audio/wav"
+	case "wma":
+		return "audio/x-ms-wma"
+	}
+	return ""
+}
+
 // SniffAudioExt 把魔数判断暴露给其它包（播放前预检用，见 api.handlePlayerCheck）。
 //
 // 播放前预检和下载落地必须用**同一套**判据，否则会出现「预检说能播、真播失败」

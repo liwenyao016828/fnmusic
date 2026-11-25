@@ -411,9 +411,27 @@ export const BackendDownloadAPI = {
 export const SearchAPI = {
   // pageSize 显式传才带上 page_size（不传 = 后端默认 20，老调用方行为不变）；
   // 搜索页按 30 条一页用它做触底自动加载（SearchView 的 SEARCH_PAGE_SIZE）。
-  search: (keyword, source = 'all', page = 1, pageSize = 0) =>
+  //
+  // include 同理：只有显式传才带上（后端缺省不含任何额外来源）。
+  // 目前只有「歌曲修复 / 换版本」的候选抽屉传 include='lx' —— 洛雪候选缺档位、
+  // 缺体积，混进发现页的搜索会改变排序，所以它必须 opt-in。
+  //
+  // budgetMs 也是 opt-in：传了就告诉后端「最多等这么久」，到点它把**已经回来**的
+  // 平台结果先交出来（响应里 budget_hit=true）。为什么不给 all 直接加个默认上限：
+  // 发现页搜索要的就是等全，静默截断会让它少一批结果还看不出来。缺省 0 = 不限。
+  search: (keyword, source = 'all', page = 1, pageSize = 0, include = '', budgetMs = 0) =>
     api.get('/search', {
-      params: { q: keyword, source, page, ...(pageSize > 0 ? { page_size: pageSize } : {}) },
+      params: {
+        q: keyword,
+        source,
+        page,
+        ...(pageSize > 0 ? { page_size: pageSize } : {}),
+        ...(include ? { include } : {}),
+        ...(budgetMs > 0 ? { budget_ms: budgetMs } : {}),
+      },
+      // 预算管的是「后端什么时候不再等平台」，不是「浏览器什么时候不再等后端」。
+      // 后者必须比前者宽，否则预算还没到、axios 先按默认 30s 掐了。
+      ...(budgetMs > 0 ? { timeout: budgetMs + 15000 } : {}),
     }).then(res => res.data),
   // 流式搜索：逐平台 NDJSON 推送（meta / partial / platform_timeout / done），
   // onEvent 逐事件回调；约定见 streamSearch 的注释。只服务界面渐进展示，

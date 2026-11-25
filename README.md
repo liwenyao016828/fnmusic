@@ -86,7 +86,7 @@
 
 本应用的设计目标之一就是**让别的 AI / 程序能直接调**：
 
-- 后端 **136 个** HTTP 接口，全部标准 JSON（`{code,message,data}`），16 个分类。
+- 后端 **197 个** HTTP 接口，全部标准 JSON（`{code,message,data}`），16 个分类。
 - **接口自描述**：`GET /api/catalog` 返回全部接口 + 工作流指南 + 坑位提醒；
   前端点左上角软件图标滑出「开放接口」抽屉，渲染的是同一份数据。
 - **下载任务接口**：提交后由后端取链、下载和保存结果，客户端通过查询与控制接口管理队列，无需保持网页连接。
@@ -98,8 +98,8 @@ curl http://NAS:8898/api/catalog                 # 全部接口 + 用法
 curl -X POST http://NAS:8898/api/search -H 'Content-Type: application/json' -d '{"keyword":"晴天"}'
 ```
 
-> 数数口径：`grep -cE "Method: +(http\.)?Method[A-Z]" backend/pkg/api/catalog.go` = 136；
-> internal 名单 37 条；`go list ./... | wc -l` = 36 包。
+> 数数口径：`grep -cE "Method: +(http\.)?Method[A-Z]" backend/pkg/api/catalog.go` = 197；
+> internal 名单 51 条（其余 146 条为 core）；`cd backend && go list ./... | wc -l` = 45 包。
 
 ## 🧭 架构一页话
 

@@ -344,14 +344,24 @@
               ((page-1)*pageSize + idx) —— 队列来自 sortedSongs 全量，
               传页内序号会让「下一首」播错歌。
             -->
+            <!--
+              2026-11-24（用户）：「本地曲库，将播放键替换为新功能：替换版本。播放功能交互改为
+              点击歌曲标题/封面那一块区域就是播放」。
+
+              · 行内那颗「立即播放」按钮换成了「换版本」（见操作列）；
+              · 播放改成**点标题 / 封面区域**（只给标题格绑定点击，不扩大到专辑、格式等列）。
+              · 原来的 `@dblclick` 一并去掉 —— 单击已经能播，再留双击会连播两次 / 播到一半重头。
+            -->
             <tr 
               v-for="(song, idx) in pagedSongs" 
               :key="song.path"
-              @dblclick="playSong(song, (page - 1) * pageSize + idx)"
-              class="group cursor-pointer transition-colors hover:bg-black/[0.02]"
+              class="group transition-colors hover:bg-black/[0.02]"
             >
               <td class="py-3 px-2 sm:px-3 text-center text-gray-500 font-mono">{{ (page - 1) * pageSize + idx + 1 }}</td>
-              <td class="py-3 px-3 sm:px-4 flex items-center gap-2.5 sm:gap-3 min-w-0">
+              <td
+                class="py-3 px-3 sm:px-4 flex items-center gap-2.5 sm:gap-3 min-w-0 cursor-pointer"
+                @click="playSong(song, (page - 1) * pageSize + idx)"
+              >
                 <div class="relative w-8 h-8 sm:w-9 sm:h-9 rounded-lg overflow-hidden bg-[var(--ys-surface-sunken)] border border-[var(--ys-border)] shrink-0 flex items-center justify-center">
                   <!-- 2026-11-01：封面地址**按 path 现算**，不再只信后端那份相对地址。
                        旧版扫描缓存 / 旧后端返回的 `cover_url` 没转义也没带网关前缀，
@@ -368,10 +378,18 @@
                     alt="cover"
                     loading="lazy"
                     referrerpolicy="no-referrer"
-                    class="absolute inset-0 h-full w-full bg-[var(--ys-surface-sunken)] object-cover"
+                    class="absolute inset-0 h-full w-full bg-[var(--ys-surface-sunken)] object-cover pointer-events-none"
                     @load="markCoverLoaded(song.path)"
                     @error="markCoverBroken(song.path)"
                   />
+                  <!-- 2026-11-24：封面悬停浮一个播放三角 —— 播放键撤掉之后，
+                       「这一块能点着播」得看得出来（手机上点整行同样会播）。 -->
+                  <span
+                    class="pointer-events-none absolute inset-0 grid place-items-center bg-black/35 opacity-0 transition-opacity duration-150 group-hover:opacity-100"
+                    aria-hidden="true"
+                  >
+                    <Play class="h-3.5 w-3.5 fill-current text-white" />
+                  </span>
                 </div>
                 <div class="min-w-0 flex-1 overflow-hidden">
                   <div class="flex min-w-0 items-center gap-1.5">
@@ -407,12 +425,19 @@
               <td class="hidden lg:table-cell py-3 px-3 text-right text-gray-500 font-mono">{{ formatSize(song.size) }}</td>
               <td class="py-3 px-3 sm:px-4 text-center">
                 <div class="flex items-center justify-center gap-1">
-                  <button 
-                    @click.stop="playSong(song, (page - 1) * pageSize + idx)"
+                  <!--
+                    2026-11-24（用户）：「本地曲库，将播放键替换为新功能：替换版本」。
+
+                    这一格原来是「立即播放」；播放交互搬到了**标题 / 封面区域**（见上方 <tr>），
+                    这里改成「换版本」：搜各平台的同一个歌，挑一个版本覆盖掉这个文件
+                    （复用「补全整理」里的 RepairCandidateSheet，同一套候选与替换逻辑）。
+                  -->
+                  <button
+                    @click.stop="openReplaceSheet(song)"
                     class="grid h-7 w-7 place-items-center rounded-[8px] text-[var(--ys-text-aux)] transition-colors hover:bg-[var(--ys-accent-soft)] hover:text-[var(--ys-accent)]"
-                    title="立即播放"
+                    title="换一个版本（搜各平台版本，覆盖这个文件）"
                   >
-                    <Play class="w-3.5 h-3.5 fill-current" />
+                    <Replace class="w-3.5 h-3.5" />
                   </button>
                   <!--
                     2026-10-24 用户：「列表中的操作，去掉每行的歌词单独补全，替换为删除按钮。」
@@ -732,6 +757,17 @@
       </div>
     </div>
     </Teleport>
+
+    <!--
+      2026-11-24：本地曲库的「换版本」入口。
+      RepairCandidateSheet 与「补全整理 → 修复清单」用的是同一个组件：
+      打开就按歌名+歌手搜各平台的版本，挑一个覆盖掉原文件（后端 /library/repair/replace）。
+    -->
+    <RepairCandidateSheet
+      v-model="candidateOpen"
+      :item="candidateItem"
+      @replaced="onSongReplaced"
+    />
   </div>
 </template>
 
@@ -754,10 +790,11 @@ import {
 import {
   RotateCw, Folder, FolderOpen, Play, X, Search, Check,
   HardDrive, CornerLeftUp, ChevronRight, ChevronUp, ChevronDown, Loader2,
-  Image as ImageIcon, Trash2, Eye, EyeOff
+  Image as ImageIcon, Trash2, Eye, EyeOff, Replace
 } from 'lucide-vue-next'
 import InlineNotice from './InlineNotice.vue'
 import ListPager from './ListPager.vue'
+import RepairCandidateSheet from './RepairCandidateSheet.vue'
 import { displayPage, normalizePageSize, clampPage } from '../services/displayPaging'
 import { describeError } from '../services/userMsg'
 import { logError, logInfo } from '../services/appLog'
@@ -957,6 +994,79 @@ async function deleteSong(song) {
 
 // 删除、扫描等操作结果统一走 FeedbackHost 的底部瞬时提示（services/feedback）。
 // 错误日志仍保留完整路径与 describeError detail，不把技术堆栈塞进提示条。
+
+// ── 换版本 ──
+// 复用「补全整理 → 修复清单」的候选版本抽屉；确认替换前由抽屉要求用户二次点击。
+const candidateOpen = ref(false)
+const candidateItem = ref(null)
+
+function openReplaceSheet(song) {
+  if (!song?.path) return
+  candidateItem.value = {
+    path: song.path,
+    name: song.filename || song.title || song.path,
+    title: song.title || '',
+    artist: song.artist || '',
+    duration_sec: Number(song.duration) || 0,
+    container: String(song.format || '').toLowerCase(),
+    size: Number(song.size) || 0,
+    kbps: 0,
+    kind: '',
+    detail: '',
+  }
+  candidateOpen.value = true
+}
+
+function patchSongInScanCache(oldPath, nextSong) {
+  for (const dir of new Set([currentDir.value, ...quickDirs.value])) {
+    const key = scanCacheKey(dir)
+    const cached = memGet(key)
+    if (!cached) continue
+    const view = scanViewOfCache(cached)
+    if (!view.songs.some((x) => x.path === oldPath)) continue
+    memSet(key, {
+      ...scanCachePayload({
+        ...view,
+        songs: view.songs.map((x) => x.path === oldPath ? nextSong : x),
+      }),
+      dir,
+    })
+  }
+}
+
+function onSongReplaced({ item, result } = {}) {
+  const oldPath = item?.path
+  if (!oldPath || !result?.ok) return
+
+  const after = result.after || {}
+  const newPath = result.path || oldPath
+  const oldSong = songs.value.find((song) => song.path === oldPath)
+  if (!oldSong) return
+
+  // 下载器会按新容器改扩展名（如 mp3 → flac），成功后旧路径可能已经被删；
+  // 必须同步换掉行 key 和前端扫描缓存，不能只更新 format/size。
+  const nextSong = {
+    ...oldSong,
+    path: newPath,
+    filename: newPath.split('/').pop() || oldSong.filename,
+    format: String(after.container || newPath.split('.').pop() || oldSong.format).toLowerCase(),
+    size: Number(after.size) || oldSong.size,
+    duration: Math.round(Number(after.duration_sec) || oldSong.duration || 0),
+    // 让 rowCoverSrc 按新 path 取封面，避免继续使用旧文件的绝对封面地址。
+    cover_url: '',
+    cover: '',
+  }
+  songs.value = songs.value.map((song) => song.path === oldPath ? nextSong : song)
+  patchSongInScanCache(oldPath, nextSong)
+  coverRetryCount.delete(oldPath)
+  const broken = new Set(brokenCovers.value)
+  broken.delete(oldPath)
+  brokenCovers.value = broken
+
+  const title = oldSong.title || oldSong.filename || '歌曲'
+  logInfo('本地曲库换版本', `已替换《${title}》：${oldPath} → ${newPath}`)
+  notifyOk(`《${title}》已换成新版本${result.note ? `（${result.note}）` : ''}`)
+}
 
 // ── 更换封面 ──
 //
