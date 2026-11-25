@@ -34,18 +34,57 @@ function hasCJK(s) {
 }
 
 /**
- * 后端的 message 能不能直接给用户看。
+ * 后端 message 能不能直接给用户看。
  * 判据：够短 + 含中文 + 不含接口路径 / 异常类名 / 换行堆栈。
  */
 export function usableMessage(msg) {
   const s = String(msg ?? '').trim()
   if (!s || s.length > MAX_UI_LEN) return false
   if (!hasCJK(s)) return false
-  if (s.includes('/api/')) return false
-  if (s.includes('\n')) return false
-  if (/^[A-Za-z]+Error\b/.test(s)) return false
-  if (/\bat .+:\d+/.test(s)) return false // 堆栈行
+  if (hasTechTrace(s)) return false
   return true
+}
+
+/** 带技术痕迹（接口路径 / 堆栈 / 异常类名）——这种串一个字都不能漏给用户。 */
+function hasTechTrace(s) {
+  if (s.includes('/api/')) return true
+  if (s.includes('\n')) return true
+  if (/^[A-Za-z]+Error\b/.test(s)) return true
+  if (/\bat .+:\d+/.test(s)) return true // 堆栈行
+  return false
+}
+
+/**
+ * 把「后端说得对但太长/夹着 id」的一句话修剪成能上界面的短语。
+ *
+ * 具体来历（2026-11-25，真机截图）：换版本点了个酷狗候选，后端回
+ * `这个版本取不到直链（kg/E8EE57D67169402710C4FF9259D841F）：该平台没有可用的直链解析器`。
+ * 这是**完全正确且用户最需要**的一句话，但长度 40+ 且夹着 32 位 id，
+ * usableMessage 判死 → 界面只剩「参数不对，请检查填写内容」，用户根本不知道
+ * 是「这个平台的版本用不了」。所以这里按结构修剪而不是整句丢弃：
+ * 去掉括号里的 `平台/id` 这类技术片段，剩下的中文照给。
+ */
+function trimForUI(msg) {
+  let s = String(msg ?? '').trim()
+  if (!s || !hasCJK(s) || hasTechTrace(s)) return ''
+  // 括号里带 `/` 或长串十六进制/数字的，基本就是「kg/E8EE…」这类技术片段
+  s = s
+    .replace(/[（(][^）)]*[/\\][^）)]*[）)]/g, '')
+    .replace(/[（(][^）)]*\b[0-9a-fA-F]{8,}\b[^）)]*[）)]/g, '')
+  s = s.replace(/\s{2,}/g, ' ').replace(/^[：:，,、\s]+|[：:，,、\s]+$/g, '').trim()
+  if (!s || !hasCJK(s)) return ''
+  return clip(s, MAX_UI_LEN)
+}
+
+/**
+ * 后端给的原因 → 界面能用的一句话（能直接用的直接用，太长但干净的修剪后给，
+ * 带技术痕迹的一律不给）。调用方拿不到时自己回退到按状态码猜。
+ */
+export function reasonFromServer(body) {
+  const msg = serverMessage(body)
+  if (!msg) return ''
+  if (usableMessage(msg)) return msg
+  return trimForUI(msg)
 }
 
 /**
@@ -105,9 +144,10 @@ export function shortReason(err, fallback = '操作失败') {
   const res = err?.response
   if (res) {
     // 后端自己给的人话优先（如「没能找到歌单 id」），比按状态码猜更准。
-    // 走 serverMessage 而不是只读 `.message`：补强/音质那批接口回的是 `msg`。
-    const serverMsg = serverMessage(res.data)
-    if (usableMessage(serverMsg)) return String(serverMsg).trim()
+    // 走 reasonFromServer 而不是 usableMessage：补强/音质那批接口回的是 `msg`，
+    // 而换版本这类接口的原因常常「对但太长」（见 trimForUI 的注释）。
+    const serverReason = reasonFromServer(res.data)
+    if (serverReason) return serverReason
 
     const s = res.status
     if (s === 401 || s === 403) return '没有权限，请先在「账号连接」登录'

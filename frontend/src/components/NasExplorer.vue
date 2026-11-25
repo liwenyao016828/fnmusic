@@ -798,6 +798,7 @@ import RepairCandidateSheet from './RepairCandidateSheet.vue'
 import { displayPage, normalizePageSize, clampPage } from '../services/displayPaging'
 import { describeError } from '../services/userMsg'
 import { logError, logInfo } from '../services/appLog'
+import { notifyTidyProgress } from '../services/tidyProgress'
 import { ok as notifyOk, fail as notifyFail } from '../services/feedback'
 import { deleteOutcome, normalizeScanSongs, withoutPath } from '../services/nasDelete'
 
@@ -1065,6 +1066,8 @@ function onSongReplaced({ item, result } = {}) {
 
   const title = oldSong.title || oldSong.filename || '歌曲'
   logInfo('本地曲库换版本', `已替换《${title}》：${oldPath} → ${newPath}`)
+  // 整理页的常驻进度条跟着变（后端快照已就地更新，这里只是让它重读）。
+  notifyTidyProgress()
   notifyOk(`《${title}》已换成新版本${result.note ? `（${result.note}）` : ''}`)
 }
 

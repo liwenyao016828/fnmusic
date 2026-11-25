@@ -1277,6 +1277,45 @@ func APICatalog(baseURL string) []Endpoint {
 				"返回 `{path,ok,note,before,after,tier}`，before/after 是替换前后的 `{container,duration_sec,size,kbps}`。",
 		},
 
+		{
+			Method: http.MethodPost, Path: "/api/library/repair/probe", Summary: "曲库管家：批量预检候选能不能取到直链（不下载）", Category: catTidy,
+			Params: []Param{
+				{Name: "items", In: "body", Required: true, Desc: "候选数组，每项 `{platform, platform_id}`（搜索接口返回的 source / songmid）"},
+			},
+			Example: "curl -X POST " + baseURL + "/api/library/repair/probe -H 'Content-Type: application/json' -d '{\"items\":[{\"platform\":\"wy\",\"platform_id\":\"186016\"}]}'",
+			Notes: "只走解析层，**不下载不写盘**，可对前 40 条并发跑（每条约 5 秒上限）。" +
+				"`ok=false` 且 `transient=false` 是稳定判死（无解析器 / 不可播放），`transient=true` 只是这次没拿到。" +
+				"解析结果进池的 5 分钟缓存，随后替换不会重复打上游。",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/library/repair/progress", Summary: "曲库管家：各类修复项的完成进度（已修复 / 已评估）", Category: catTidy,
+			Params:  []Param{{Name: "dir", In: "query", Desc: "曲库目录；省略时用配置里生效的曲库目录"}},
+			Example: "curl '" + baseURL + "/api/library/repair/progress?dir=/vol1/Music'",
+			Notes: "返回 `{dir,total,items[{id,label,pending,done,covered,known,at,note}]}`，items 固定三类 meta/audio/quality。" +
+				"分母是**已评估**的歌而不是全库：音质扫描一次只探一部分，按全库算会把没查过的歌算成已完成。" +
+				"`known=false` = 这一类还没扫过，先跑对应的扫描接口。",
+		},
+
+		{
+			Method: http.MethodPost, Path: "/api/organize/audio-audit", Summary: "曲库管家：检查本地音频格式、体积和码率", Category: catTidy,
+			Params:  []Param{{Name: "dir", In: "body", Desc: "曲库目录，省略则用配置目录"}},
+			Example: "curl -X POST " + baseURL + "/api/organize/audio-audit -H 'Content-Type: application/json' -d '{}'",
+			Notes:   "只读曲库索引中的本地文件。异常是筛查提示，不代表听感结论。",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/library/repair/duration", Summary: "曲库管家：读取所选本地音频的时长", Category: catTidy,
+			Params:  []Param{{Name: "dir", In: "body", Desc: "曲库目录"}, {Name: "path", In: "body", Required: true, Desc: "音频绝对路径"}},
+			Example: "curl -X POST " + baseURL + "/api/library/repair/duration -H 'Content-Type: application/json' -d '{\"path\":\"/vol1/Music/a.flac\"}'",
+			Notes:   "只读文件头。缺少时长表示无法测量；MP3 无帧数信息时为估算。",
+		},
+
+		{
+			Method: http.MethodPost, Path: "/api/library/repair/version-audit", Summary: "曲库管家：比较本地文件时长与同名平台版本", Category: catTidy,
+			Params:  []Param{{Name: "dir", In: "body", Desc: "曲库目录"}, {Name: "paths", In: "body", Required: true, Desc: "待核对的本地音频绝对路径，最多 20 条"}},
+			Example: "curl -X POST " + baseURL + "/api/library/repair/version-audit -H 'Content-Type: application/json' -d '{\"paths\":[\"/vol1/Music/a.flac\"]}'",
+			Notes:   "只按歌名搜索并比较时长；时长差异是提示，不证明版本相同。平台无候选或时长未知时不作结论。",
+		},
+
 		// ── 文件夹整理（v2.32.0）──
 		{
 			Method: http.MethodGet, Path: "/api/organize/presets", Summary: "文件夹整理的内置结构样式与当前模板", Category: catTidy,

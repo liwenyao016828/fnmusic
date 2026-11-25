@@ -7,6 +7,7 @@ import {
   titleFixRows, dupRows, healthRows, audioRows,
   mergeRows, filterRows, kindCounts, dupGroupsFromSelection, selectionCounts,
   selectableRows, candidateRows, parseInterval, candidateKeyword, qualityRank,
+  titleMatchScore, versionLabel, versionRank,
 } from './repairList.js'
 
 // ── 基础展示 ────────────────────────────────────────────────────────
@@ -187,16 +188,79 @@ test('同音质时更接近目标时长的排前面', () => {
   assert.deepEqual(rows.map((r) => r.platformId), ['b', 'a'])
 })
 
-test('interval 字符串能兜底成秒，搜索关键词去掉曲序只留第一位歌手', () => {
+test('interval 字符串能兜底成秒，搜索关键词只留歌名（不带歌手）', () => {
   assert.equal(parseInterval('03:45'), 225)
   assert.equal(parseInterval('1:02:05'), 3725)
   assert.equal(parseInterval(''), 0)
-  assert.equal(candidateKeyword('01 晴天', '周杰伦/某人'), '晴天 周杰伦')
+  // 2026-11-25 用户口径：搜索框只填歌名。歌手拼进去会把结果带偏
+  // （真机上「你瞒我瞒 陈柏宇」搜出 107 个版本，反而更难挑）。
+  assert.equal(candidateKeyword('01 晴天', '周杰伦/某人'), '晴天')
   assert.equal(candidateKeyword('稻香', ''), '稻香')
+  // 文件名里的「 - 歌手」「_来源」尾巴要切掉
+  assert.equal(candidateKeyword('你瞒我瞒 - ls 陈柏宇', '陈柏宇'), '你瞒我瞒')
+  assert.equal(candidateKeyword('夜曲_ls_周杰伦', ''), '夜曲')
+  // 括号里的版本说明（Live / 伴奏 / 翻唱）对「找同一首歌」没帮助
+  assert.equal(candidateKeyword('夜曲 (Live)', ''), '夜曲')
+  assert.equal(candidateKeyword('晴天【伴奏】', ''), '晴天')
 })
 
 test('音质档位排序：flac 高于 320k，未知档位垫底', () => {
   assert.ok(qualityRank('flac') > qualityRank('320k'))
   assert.ok(qualityRank('flac24bit') > qualityRank('flac'))
   assert.equal(qualityRank(''), -1)
+})
+
+// ── 匹配度与原唱/翻唱（2026-11-25 用户四条需求里的两条） ──
+
+test('titleMatchScore：同名最高，其次开头一致，其次包含，不沾边为 0', () => {
+  // 括号里的版本说明被剥掉 —— 「夜曲 (Live)」和「夜曲」是同一首歌，同档匹配度
+  assert.equal(titleMatchScore('夜曲 (Live)', '夜曲'), titleMatchScore('夜曲', '夜曲'))
+  // 加了后缀（remix 版）只能算「开头一致」
+  assert.ok(titleMatchScore('夜曲', '夜曲') > titleMatchScore('夜曲remix版', '夜曲'))
+  // 包含关系比不沾边高
+  assert.ok(titleMatchScore('夜曲remix版', '夜曲') > titleMatchScore('七里香', '夜曲'))
+  assert.equal(titleMatchScore('七里香', '夜曲'), 0)
+  // 标点/空格/大小写不影响判断
+  assert.equal(titleMatchScore('Hello, World!', 'hello world'), 100)
+})
+
+test('versionLabel：歌名对得上才打标签，歌手与原文件一致算原唱', () => {
+  // 同名 + 歌手一致 → 原唱
+  assert.equal(versionLabel('夜曲', '周杰伦', '夜曲', '周杰伦'), '原唱')
+  // 同名 + 歌手不同 → 翻唱
+  assert.equal(versionLabel('夜曲', '某翻唱歌手', '夜曲', '周杰伦'), '翻唱')
+  // 歌手拼接（「周杰伦/某某」）也算同一个人
+  assert.equal(versionLabel('夜曲', '周杰伦/某某', '夜曲', '周杰伦'), '原唱')
+  // 歌名都不沾边 → 不打标签（不能把别的歌标成翻唱）
+  assert.equal(versionLabel('七里香', '周杰伦', '夜曲', '周杰伦'), '')
+  // 没有原歌手信息时只能靠歌名里自带的「翻唱」字样
+  assert.equal(versionLabel('夜曲（翻唱版）', '某人', '夜曲', ''), '翻唱')
+  assert.equal(versionLabel('夜曲', '某人', '夜曲', ''), '')
+})
+
+test('candidateRows：匹配度 → 原唱 → 音质 → 时长，四层依次生效', () => {
+  const rows = candidateRows([
+    // 别的歌（不沾边），音质最高也要垫底
+    { source: 'wy', songmid: 'other', name: '七里香', singer: '周杰伦', quality: 'flac24bit', duration: 299 },
+    // 同名但翻唱
+    { source: 'kg', songmid: 'cover', name: '夜曲', singer: '某翻唱歌手', quality: 'flac', duration: 226 },
+    // 同名 + 原唱 + 低音质
+    { source: 'tx', songmid: 'orig', name: '夜曲', singer: '周杰伦', quality: '128k', duration: 226 },
+    // 同名 + 原唱 + 高音质（Live 版）
+    { source: 'wy', songmid: 'live', name: '夜曲 (Live)', singer: '周杰伦', quality: 'flac', duration: 228 },
+  ], 226, { keyword: '夜曲', artist: '周杰伦' })
+  // 同一首歌的三条都在「别的歌」前面；同为原唱时音质高的在前
+  assert.deepEqual(rows.map((r) => r.platformId), ['live', 'orig', 'cover', 'other'])
+  assert.equal(rows[0].version, '原唱')
+  assert.equal(rows[2].version, '翻唱')
+  assert.equal(rows[3].version, '') // 别的歌不打标签
+})
+
+test('candidateRows：不传 keyword 时退回老口径（音质 → 时长）', () => {
+  const rows = candidateRows([
+    { source: 'wy', songmid: 'a', name: 'x', quality: '128k', duration: 20 },
+    { source: 'wy', songmid: 'b', name: 'x', quality: 'flac', duration: 269 },
+  ], 269)
+  assert.deepEqual(rows.map((r) => r.platformId), ['b', 'a'])
+  assert.equal(rows[0].version, '')
 })

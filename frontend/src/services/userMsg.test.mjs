@@ -11,7 +11,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { usableMessage, shortReason, describeError, apiError, serverMessage } from './userMsg.js'
+import { usableMessage, shortReason, describeError, apiError, serverMessage, reasonFromServer } from './userMsg.js'
 
 /** 造一个 axios 风格的错误 */
 function httpError(status, data = {}, url = '/charts/playlist/detail') {
@@ -132,4 +132,30 @@ test('shortReason：axios 错误体用 msg 时也能取到人话', () => {
   assert.equal(shortReason(httpError(400, { msg: '登记表还没就绪' })), '登记表还没就绪')
   // 空的 msg 不能把状态码兜底挤掉
   assert.match(shortReason(httpError(500, { msg: '' })), /服务端/)
+})
+
+// ── 「对但太长」的后端原因要修剪，不能整句丢掉（2026-11-25 真机） ──
+//
+// 换版本点了个酷狗候选，后端回：
+//   这个版本取不到直链（kg/E8EE57D67169402710C4FF9259D841F）：该平台没有可用的直链解析器
+// 这是用户最需要的一句，但超过 40 字且夹着 32 位 id，usableMessage 判死 →
+// 界面只剩「参数不对，请检查填写内容」，等于什么都没说。
+test('reasonFromServer：长原因去掉括号里的技术片段后仍给用户看', () => {
+  const raw = '这个版本取不到直链（kg/E8EE57D67169402710C4FF9259D841F）：该平台没有可用的直链解析器'
+  assert.equal(usableMessage(raw), false) // 原句确实不能直接上界面
+  const out = reasonFromServer({ msg: raw })
+  assert.ok(out.length > 0, '修剪后不能变成空串')
+  assert.ok(out.length <= 40, `必须是一句短语，实际 ${out.length}：${out}`)
+  assert.ok(!out.includes('E8EE57D6'), `不能漏出平台 id：${out}`)
+  assert.match(out, /直链解析器/)
+  // 走完整链路时也确实拿到这句，而不是「参数不对」
+  const shown = shortReason(httpError(400, { msg: raw }))
+  assert.ok(!/参数不对/.test(shown), `不该退化成「参数不对」，实际：${shown}`)
+  assert.match(shown, /直链解析器/)
+})
+
+test('reasonFromServer：带接口路径 / 堆栈的原因一律不给，回退按状态码', () => {
+  assert.equal(reasonFromServer({ msg: 'POST /api/x failed' }), '')
+  assert.equal(reasonFromServer({ msg: 'TypeError: x is undefined\n    at foo (a.js:1:2)' }), '')
+  assert.equal(reasonFromServer(null), '')
 })

@@ -81,17 +81,12 @@
         <!--
           一行摘要：缺口数字（曲库目录已挪到分段导航行右边，见页面顶部 #actions-trail）
         -->
-        <div class="flex flex-wrap items-center gap-x-4 gap-y-2">
-          <StatLine
-            v-if="gaps"
-            :items="[
-              { label: '首曲目', value: gaps.total },
-              { label: '首读过标签', value: gaps.read },
-              { label: '首待补', value: gaps.any_field, dot: 'bg-amber-500' },
-            ]"
-          />
-          <span v-if="gapsAtText" class="text-[10.5px] text-[var(--ys-text-aux)]">{{ gapsAtText }}</span>
-        </div>
+        <!--
+          进度卡片（v2.37.0）：元数据这一类按字段各给一张卡（总数 / 还缺 / 歌词 / 封面 ...），
+          用户在 2026-11-25 明确要求「就显示在补全页面」「显示数字和对应类别就可以」。
+        -->
+        <TidyProgress v-if="sub === 'complete'" group="meta" class="mt-3" />
+        <div v-if="gapsAtText" class="mt-1 text-[10.5px] text-[var(--ys-text-aux)]">{{ gapsAtText }}</div>
 
         <!--
           「下一步点哪」常驻正文（2026-10-27 修）。
@@ -543,6 +538,9 @@
           >{{ repairBusy === 'all' ? '扫描中…' : '扫描' }}</button>
         </template>
 
+        <!-- 进度卡片（v2.37.0）：音频坏文件按问题类型拆开，见 TidyProgress 的口径说明。 -->
+        <TidyProgress v-if="sub === 'repair'" group="audio" class="mt-3" />
+
         <!-- 空态：只有四类都空才显示，且必须说清「是没查出来，不是被你扫丢了」 -->
         <div v-if="!repairRows.length && !repairBusy" class="ys-empty">
           <p>还没有扫描结果 —— 点右上「扫描」把四类问题一次查一遍</p>
@@ -703,6 +701,36 @@
                 </tr>
               </tbody>
             </table>
+          </div>
+
+          <!--
+            版本时长核对（v2.37.0，用户 2026-11-25：「文件修复的页面里新增时长检测，是否对应该版本」）。
+            口径：拿本地文件**实测**时长去比同名平台候选的时长。差得远说明可能不是同一版本
+            （现场版 / 翻唱 / 剪辑版），但**时长接近不等于已确认同一版本** —— 所以只给提示。
+          -->
+          <div class="rounded-[8px] border border-[var(--ys-border)] bg-white px-3.5 py-2">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <span class="text-[11px] font-semibold text-[var(--ys-text)]">版本时长核对</span>
+              <button
+                class="ys-btn ys-btn-sm ys-press"
+                :disabled="durationAuditBusy || !repairRows.length"
+                :title="repairRows.length ? '拿本地实测时长去比同名平台版本（一次最多 20 条）' : '先扫描一遍才有可核对的条目'"
+                @click="runDurationAudit"
+              >{{ durationAuditBusy ? '核对中…' : '开始核对' }}</button>
+            </div>
+            <p v-if="durationAuditNote" class="mt-1 text-[10.5px] text-[var(--ys-text-aux)]">{{ durationAuditNote }}</p>
+            <div v-if="durationAuditRows.length" class="mt-1.5 divide-y divide-[var(--ys-border)]">
+              <div v-for="row in durationAuditRows" :key="row.path" class="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 py-1.5 text-[11px]">
+                <span class="min-w-0 flex-1 truncate font-medium">{{ row.title || row.path.split('/').pop() }}</span>
+                <span class="font-mono text-[var(--ys-text-muted)]">本地 {{ formatAuditDuration(row.local_duration_sec) }}</span>
+                <span v-if="row.candidate_duration_sec" class="font-mono text-[var(--ys-text-muted)]">平台 {{ formatAuditDuration(row.candidate_duration_sec) }}</span>
+                <span
+                  class="rounded-full px-1.5 py-0.5 text-[10px]"
+                  :class="row.status === 'different' ? 'bg-rose-50 text-rose-700' : (row.status === 'matched' ? 'bg-[var(--ys-accent-soft)] text-[var(--ys-accent)]' : 'bg-[var(--ys-surface-control)] text-[var(--ys-text-muted)]')"
+                >{{ row.status === 'different' ? '可能不是这个版本' : (row.status === 'matched' ? '时长接近' : '无法判断') }}</span>
+                <span class="w-full text-[10.5px] text-[var(--ys-text-aux)]">{{ row.reason }}</span>
+              </div>
+            </div>
           </div>
 
           <div v-if="!repairVisibleRows.length" class="ys-empty ys-empty-sm">
@@ -1251,10 +1279,10 @@ import {
 import PageShell from './PageShell.vue'
 import SectionCard from './SectionCard.vue'
 import InlineNotice from './InlineNotice.vue'
+import TidyProgress from './TidyProgress.vue'
 // SideSheet 已不再使用（2026-10-25 补全选项改成弹窗）；OverflowMenu 也不再使用
 // （2026-10-27：「⋯」菜单早已拆掉，入口分别并进卡片内按钮与各分段）—— 两个 import 都已删，
 // 避免「改这里的菜单却不生效」这种死引用。
-import StatLine from './StatLine.vue'
 // 2026-10-29：SegmentedControl 不再在本页出现（分段器只在 App.vue 的
 // #page-head-tidy 里渲染一份），import 已删，避免死引用。
 // 2026-10-29：NameRulesPanel 已搬去「系统 → 设置 → 命名解析规则」（配置不是操作）
@@ -1292,6 +1320,7 @@ import {
 import { fail as failText, apiError } from '../services/userMsg'
 import { logError, logInfo } from '../services/appLog'
 import { ok as notifyOk, fail as notifyFail } from '../services/feedback'
+import { notifyTidyProgress } from '../services/tidyProgress'
 import { currentView, navigateTo, onNavigate, segmentOf } from '../services/navBus'
 
 /** 页面提示统一走全局 feedback（右下角浮层），不再占页面底部一条 InlineNotice */
@@ -1346,6 +1375,11 @@ const repairError = ref('')
 // 音频检查（后端 pkg/audioprobe 只读文件头，不信标签）
 const audioIssues = ref([])
 const audioAt = ref(0)
+
+// 版本时长核对（v2.37.0）：本地实测时长 vs 同名平台候选时长
+const durationAuditBusy = ref(false)
+const durationAuditRows = ref([])
+const durationAuditNote = ref('')
 
 // 文件名体检：以前是 LibraryHealthCard 的内部状态，合并进清单后搬到页面级
 const healthIssues = ref([])
@@ -1496,6 +1530,8 @@ async function scanRepairAudio(keepBusy = false) {
     const d = (res && res.data) || {}
     audioIssues.value = Array.isArray(d.issues) ? d.issues : []
     audioAt.value = Math.floor(Date.now() / 1000)
+    // 页头的常驻进度读的是这次扫描的落盘快照，扫完立刻让它刷新。
+    notifyTidyProgress()
     return true
   } catch (e) {
     repairError.value = failText('修复清单：检查音频', e, '音频检查失败')
@@ -1638,6 +1674,34 @@ async function fixSelectedHealth() {
 }
 
 /** 打开「换版本」抽屉：把这一行的音频信息带过去，抽屉会自己搜候选。 */
+function formatAuditDuration(sec) {
+  const raw = Number(sec) || 0
+  // 0 = 没测出来（audioprobe 的约定）；能测到但不到 1 秒的要如实说，别混成「未知」
+  if (!raw) return '未知'
+  if (raw < 1) return '不到 1 秒'
+  const s = Math.round(raw)
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
+}
+async function runDurationAudit() {
+  if (durationAuditBusy.value) return
+  // 核对的是**当前筛选出来的行**（不只是音频那类）—— 用户是想知道这些歌跟平台上的版本对不对得上
+  const rows = (repairVisibleRows.value.length ? repairVisibleRows.value : repairRows.value).slice(0, 20)
+  const paths = rows.map((it) => it.path).filter(Boolean)
+  if (!paths.length) { durationAuditNote.value = '没有可核对的条目（先跑一次「扫描」）'; return }
+  durationAuditBusy.value = true
+  durationAuditNote.value = ''
+  try {
+    const res = await RepairAPI.versionAudit(paths, curDir.value)
+    const items = res?.data?.items || []
+    durationAuditRows.value = items
+    durationAuditNote.value = `核对了 ${items.length} 条；时长接近只说明可能是同一版本，不等于已确认。`
+  } catch (e) {
+    durationAuditNote.value = failText('版本时长核对', e, '核对失败')
+  } finally {
+    durationAuditBusy.value = false
+  }
+}
+
 function openCandidate(row) {
   const it = row.ref || {}
   candidateItem.value = {

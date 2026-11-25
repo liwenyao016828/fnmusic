@@ -333,6 +333,15 @@ export const QualityAPI = {
 export const RepairAPI = {
   scan: (dir = '') => api.post('/library/repair/scan', { dir }).then(res => res.data),
   replace: (req) => api.post('/library/repair/replace', req, { timeout: 600000 }).then(res => res.data),
+  // 候选可用性预检（v2.37.0）：只解析不下载，后端对前 40 条 8 并发、每条约 5 秒上限，
+  // 所以最坏 25 秒左右；超时给 40 秒留余量。items = [{platform, platform_id}]
+  probe: (items) => api.post('/library/repair/probe', { items }, { timeout: 40000 }).then(res => res.data),
+  // 补全整理页头的常驻进度（v2.37.0）：只读落盘快照，秒回。
+  // data = {dir,total,items:[{id,label,pending,done,covered,known,at,note}]}
+  progress: (dir = '') => api.get('/library/repair/progress', { params: dir ? { dir } : {} }).then(res => res.data),
+  duration: (req) => api.post('/library/repair/duration', req).then(res => res.data),
+  // 版本时长核对（v2.37.0）：本地时长 vs 同名平台候选时长（最多 20 条）
+  versionAudit: (paths, dir = '') => api.post('/library/repair/version-audit', { paths, dir }, { timeout: 60000 }).then(res => res.data),
 }
 
 export const DownloadAPI = {
@@ -844,6 +853,7 @@ export const OrganizeAPI = {
       file_template: fileTemplate,
       number_unknown: !!numberUnknown,
     }).then(res => res.data),
+  audioAudit: (req = {}) => api.post('/organize/audio-audit', req).then(res => res.data),
 }
 
 // AI 大模型

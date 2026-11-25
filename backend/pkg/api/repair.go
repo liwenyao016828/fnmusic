@@ -94,6 +94,59 @@ func (s *Server) handleRepairReplace(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"code": 200, "data": data})
 }
 
+// SetRepairProbe 注入「候选可用性预检」（v2.37.0）。
+//
+// 单独一个注入点，不塞进 SetRepair：预检是**可选能力**，没有它换版本照样能用
+// （只是列表里要点了才知道能不能用）；而 SetRepair 那两件事缺一件这个功能就是残的。
+func (s *Server) SetRepairProbe(
+	probe func(r *http.Request, items []intercept.TrackProbeItem) []intercept.TrackProbeResult,
+) {
+	s.repairProbe = probe
+}
+
+// handleRepairProbe 批量预检候选「能不能真的取到直链」。
+//
+// POST /api/library/repair/probe
+// body: {"items":[{"platform":"wy","platform_id":"186016"}, ...]}
+// data: {items:[{key, platform, platform_id, ok, transient, reason, tier}], checked, ok_count}
+//
+// 为什么要有它：搜索层只保证「搜得到」，解析层才知道「拿不拿得到直链」。
+// 真机上用户从 107 个候选里点一个，才收到「该平台没有可用的直链解析器」——
+// 这条信息本该在列表里就显示出来。预检只做解析、不下载不写盘，所以能对前几十条并发跑。
+func (s *Server) handleRepairProbe(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"code": 405, "message": "只支持 POST"})
+		return
+	}
+	if s.repairProbe == nil || s.repairReplace == nil {
+		repairUnavailable(w)
+		return
+	}
+	var body struct {
+		Items []intercept.TrackProbeItem `json:"items"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"code": 400, "msg": "请求体不是合法 JSON"})
+		return
+	}
+	if len(body.Items) == 0 {
+		writeJSON(w, http.StatusOK, map[string]any{"code": 200, "data": map[string]any{
+			"items": []intercept.TrackProbeResult{}, "checked": 0, "ok_count": 0,
+		}})
+		return
+	}
+	items := s.repairProbe(r, body.Items)
+	okCount := 0
+	for _, it := range items {
+		if it.OK {
+			okCount++
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"code": 200, "data": map[string]any{
+		"items": items, "checked": len(items), "ok_count": okCount,
+	}})
+}
+
 func repairUnavailable(w http.ResponseWriter) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"code": 502,

@@ -228,6 +228,37 @@
         <span class="truncate font-mono text-[10.5px]" :title="journal.root">{{ journal.root }}</span>
       </div>
     </SectionCard>
+
+    <SectionCard
+      class="mt-3"
+      :icon="Activity"
+      tone="soft"
+      title="音质检测"
+      sub="读取文件头、体积与时长，筛出格式或码率明显对不上的文件；不会自动修改文件。"
+    >
+      <template #actions>
+        <span class="text-[11px] text-[var(--ys-text-muted)]">已检查 {{ auditScanned }} / {{ auditTotal }} 首</span>
+        <button type="button" class="ys-btn ys-btn-sm" :disabled="auditBusy" @click="scanAudioAudit">
+          {{ auditBusy ? '检测中…' : auditScanned ? '重新检测' : '开始检测' }}
+        </button>
+      </template>
+      <p v-if="auditError" class="mt-2 text-xs text-[var(--ys-danger)]">{{ auditError }}</p>
+      <div v-else-if="auditBusy && !auditItems.length" class="mt-2 text-xs text-[var(--ys-text-muted)]">正在读取曲库音频信息…</div>
+      <div v-else-if="!auditItems.length" class="mt-2 text-xs text-[var(--ys-text-muted)]">检测只读文件头、时长、体积；不代表听感鉴定。识别到可疑文件后可逐首播放、换版本或移入回收站。</div>
+      <div v-else class="mt-2 divide-y divide-[var(--ys-border)]">
+        <div v-for="song in auditItems" :key="song.path" class="flex items-center gap-2 py-2">
+          <button type="button" class="min-w-0 flex-1 text-left" @click="playAuditSong(song)">
+            <span class="block truncate text-xs font-medium">{{ song.title || song.name }}</span>
+            <span class="block truncate text-[11px] text-[var(--ys-text-muted)]">{{ song.artist || '未知歌手' }} · {{ song.ext || '未知扩展名' }} → {{ song.container || '未知容器' }} · {{ song.sizeText }} · {{ song.durationText }} · 标称 {{ song.nominal_kbps || '未知' }} / 等效 {{ song.effective_kbps ? Math.round(song.effective_kbps) : '未知' }} kbps</span>
+            <span class="block truncate text-[11px] text-[var(--ys-danger)]">{{ song.issues.join('；') }}</span>
+          </button>
+          <button type="button" class="ys-btn ys-btn-sm" :disabled="auditBusy" @click="replaceAuditSong(song)">替换</button>
+          <button type="button" class="ys-btn ys-btn-sm" :disabled="auditBusy" @click="deleteAuditSong(song)">删除</button>
+        </div>
+      </div>
+      <p v-if="auditScanned" class="mt-2 text-[11px] text-[var(--ys-text-muted)]">已检查 {{ auditScanned }} / {{ auditTotal }} 首，列出 {{ auditItems.length }} 个异常。码率和容器只能提示异常，不等于听感结论。</p>
+      <RepairCandidateSheet v-model="candidateOpen" :item="candidateItem" @replaced="onAuditReplaced" />
+    </SectionCard>
   </PageShell>
 </template>
 
@@ -255,15 +286,27 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import PageShell from './PageShell.vue'
 import SectionCard from './SectionCard.vue'
 import InlineNotice from './InlineNotice.vue'
-import { FolderTree, History } from 'lucide-vue-next'
-import { OrganizeAPI } from '../api/client'
+import { Activity, FolderTree, History } from 'lucide-vue-next'
+import { OrganizeAPI, RepairAPI, NasAPI } from '../api/client'
+import RepairCandidateSheet from './RepairCandidateSheet.vue'
+import { notifyTidyProgress } from '../services/tidyProgress'
 import { fail as failText, apiError } from '../services/userMsg'
 import { ok as notifyOk, fail as notifyFail } from '../services/feedback'
 import { loadPref } from '../services/prefs'
 import { fmtWhen } from '../services/libraryView'
+import { deleteOutcome } from '../services/nasDelete'
 
+const emit = defineEmits(['play'])
 const busy = ref(false)
 const planBusy = ref(false)
+const auditBusy = ref(false)
+const auditError = ref('')
+const auditScanned = ref(0)
+const auditTotal = ref(0)
+const auditItems = ref([])
+const candidateOpen = ref(false)
+const candidateItem = ref(null)
+
 
 /** 内置样式（后端下发）+ 一个「自定义」占位段 */
 const presets = ref([])
@@ -447,6 +490,31 @@ function requestBody() {
     number_unknown: !!numberUnknown.value,
   }
 }
+
+async function scanAudioAudit() {
+  if (auditBusy.value) return
+  auditBusy.value = true; auditError.value = ''
+  try {
+    const res = await OrganizeAPI.audioAudit({ dir: nasDir.value || '' })
+    const data = res?.data || {}
+    auditScanned.value = Number(data.scanned) || 0
+    auditTotal.value = Number(data.total) || 0
+    auditItems.value = (Array.isArray(data.issues) ? data.issues : []).map(x => ({ ...x, sizeText: fmtAuditSize(x.size), durationText: x.duration_sec ? `${Math.round(x.duration_sec)} 秒` : '时长未知' }))
+  } catch (e) { auditError.value = failText('检测音质', e, '检测失败') }
+  finally { auditBusy.value = false }
+}
+function fmtAuditSize(n) { const v=Number(n)||0; if(v<1024)return `${v} B`; if(v<1048576)return `${(v/1024).toFixed(1)} KB`; return `${(v/1048576).toFixed(1)} MB` }
+function playAuditSong(song) {
+ const playlist=auditItems.value.map(x=>({path:x.path,name:x.title||x.name,title:x.title||x.name,artist:x.artist,streamUrl:NasAPI.streamUrl(x.path),source:'nas',format:x.ext}))
+ emit('play',{song:playlist.find(x=>x.path===song.path),playlist,index:playlist.findIndex(x=>x.path===song.path)})
+}
+function replaceAuditSong(song) { candidateItem.value={path:song.path,name:song.name,title:song.title||song.name,artist:song.artist,duration_sec:song.duration_sec,container:song.container,size:song.size,kind:'',detail:''}; candidateOpen.value=true }
+function onAuditReplaced({item}) { auditItems.value=auditItems.value.filter(x=>x.path!==item.path); notifyTidyProgress() }
+async function deleteAuditSong(song) {
+ try { const res=await NasAPI.deleteFiles({paths:[song.path]}); const out=deleteOutcome(res); if(!out.ok)throw new Error(out.message); auditItems.value=auditItems.value.filter(x=>x.path!==song.path); notifyTidyProgress() }
+ catch(e){ auditError.value=failText('移入回收站',e,'操作失败') }
+}
+
 
 function onTemplateEdit() {
   presetId.value = 'custom'
@@ -666,6 +734,7 @@ onMounted(() => {
   void refresh()
   onDirChanged = (e) => {
     nasDir.value = (e && e.detail && e.detail.dir) || loadPref('nas_dir', '') || ''
+    auditItems.value = []; auditScanned.value = 0; auditTotal.value = 0
     planRoot.value = ''
     planItems.value = []
     planStats.value = { audio: 0, move: 0, same: 0, conflict: 0, skip: 0, sidecars: 0 }

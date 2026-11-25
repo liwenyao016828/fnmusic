@@ -495,6 +495,7 @@
             <OrganizeView
               v-if="segMounted('tidy', 'organize')"
               v-show="segmentOf('tidy') === 'organize'"
+              @play="playSong"
             />
           </div>
         </template>

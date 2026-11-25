@@ -400,6 +400,19 @@ func main() {
 			},
 		)
 
+		// 候选可用性预检（v2.37.0）：只走解析池，不下载不写盘。
+		// 与替换接口同一份拦截层（同一个 pool），所以预检命中的解析结果会被
+		// 池的 5 分钟缓存接住，用户随后点替换不会重复打上游。
+		server.SetRepairProbe(
+			func(r *http.Request, items []intercept.TrackProbeItem) []intercept.TrackProbeResult {
+				return ic.ProbeCandidates(r.Context(), items)
+			},
+		)
+
+		// 补全整理页头的常驻进度（v2.37.0）：音频/音质两类的结论都在拦截层的
+		// 落盘缓存里（repair_scan.json / quality_scan.json），索引口径走 API 层自己。
+		server.SetTidyProgress(ic)
+
 		// 洛雪音源进「换版本」候选：`/api/search?include=lx`（v2.36.0）。
 		//
 		// 为什么放在 `if ic != nil` 里面，而不是像 musicdl 那样无条件注册：

@@ -19,6 +19,9 @@
       title="替换音质"
       sub="对比三条渠道能拿到的最高档位，勾选后替换本地文件"
     >
+        <!-- 进度卡片（v2.37.0）：总数 / 已扫描 / 待替换 / 已修复，见 TidyProgress 的口径说明。 -->
+        <TidyProgress group="quality" class="mt-3" />
+
         <!-- 控制行：范围 / 开始（running 就地变进度形态） / 停止 / 数量上限 -->
         <div class="flex flex-wrap items-center gap-2">
           <!-- `swipe-no-drag`：这是页内筛选器，不是页面分段器。不标的话它自己也是
@@ -370,12 +373,14 @@ import PageShell from './PageShell.vue'
 import SectionCard from './SectionCard.vue'
 import SegmentedControl from './SegmentedControl.vue'
 import SelectionBar from './SelectionBar.vue'
+import TidyProgress from './TidyProgress.vue'
 import InlineNotice from './InlineNotice.vue'
 import { FileAudio, Gauge, Library, Replace, RotateCcw, Square } from 'lucide-vue-next'
 import { QualityAPI, DEFAULT_AUTO_DOWNLOAD_CHANNELS } from '../api/client'
 import { fail as failText, apiError } from '../services/userMsg'
 import { ok as notifyOk, fail as notifyFail } from '../services/feedback'
 import { loadPref, savePref } from '../services/prefs'
+import { notifyTidyProgress } from '../services/tidyProgress'
 import { fmtWhen } from '../services/libraryView'
 
 /** 页面提示统一走全局 feedback（右下角浮层），与原整理页同一口径 */
@@ -722,6 +727,8 @@ function startQualityPolling() {
       if (qState.value === 'done' || qState.value === 'failed') {
         stopQualityPolling()
         pruneQSelection()
+        // 页头常驻进度读的是音质扫描的落盘结论，扫完让它刷新一次。
+        notifyTidyProgress()
       }
     } catch (_) {
       // 轮询失败静默：后端重启/网络抖一下不该刷屏

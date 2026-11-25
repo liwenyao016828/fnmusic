@@ -214,6 +214,13 @@ var routeTable = []routeSpec{
 	{Path: "/api/library/snapshots", Handler: func(s *Server) http.HandlerFunc { return s.handleSnapshotSchedule }},
 	{Path: "/api/library/repair/scan", Handler: func(s *Server) http.HandlerFunc { return s.handleRepairScan }},
 	{Path: "/api/library/repair/replace", Handler: func(s *Server) http.HandlerFunc { return s.handleRepairReplace }},
+	// 候选可用性预检（v2.37.0）：列表里提前标出取不到直链的版本
+	{Path: "/api/library/repair/probe", Handler: func(s *Server) http.HandlerFunc { return s.handleRepairProbe }},
+	// 补全整理页头的常驻修复进度（v2.37.0）：已修复 xx / 已评估 xx
+	{Path: "/api/organize/audio-audit", Handler: func(s *Server) http.HandlerFunc { return s.HandleAudioAudit }},
+	{Path: "/api/library/repair/duration", Handler: func(s *Server) http.HandlerFunc { return s.HandleRepairDuration }},
+	{Path: "/api/library/repair/version-audit", Handler: func(s *Server) http.HandlerFunc { return s.HandleRepairVersionAudit }},
+	{Path: "/api/library/repair/progress", Handler: func(s *Server) http.HandlerFunc { return s.HandleTidyProgress }},
 	{Path: "/api/duplicates", Handler: func(s *Server) http.HandlerFunc { return s.HandleDuplicates }},
 	{Path: "/api/duplicates/resolve", Handler: func(s *Server) http.HandlerFunc { return s.HandleDuplicatesResolve }},
 

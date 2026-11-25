@@ -41,7 +41,7 @@ import (
 )
 
 // CurrentVersion 应用版本号。发布新版本时与 fpk-package/manifest 的 version 同步修改。
-const CurrentVersion = "2.36.0"
+const CurrentVersion = "2.37.0"
 
 // CurrentAppName 对外暴露的应用标识，必须与 fpk-package/manifest 的 appname 一致。
 //
@@ -160,6 +160,14 @@ type Server struct {
 	// 歌曲修复（v2.35.0）的两个动作：扫坏文件 + 用挑中的候选覆盖。
 	repairScan    func(r *http.Request, dir string) (intercept.RepairScanResult, error)
 	repairReplace func(r *http.Request, req intercept.TrackReplaceRequest) (intercept.TrackReplaceResult, error)
+
+	// 候选可用性预检（v2.37.0）：只解析不下载，用来在列表里提前标出「点了会失败」的版本。
+	repairProbe func(r *http.Request, items []intercept.TrackProbeItem) []intercept.TrackProbeResult
+
+	// 补全整理页头的常驻进度（v2.37.0，见 tidy_progress.go）。
+	// 只存一个来源接口：音频/音质两类的「现场扫描结论」都从拦截层的落盘缓存里读，
+	// 索引口径（元数据）直接用本包里的 libraryIndex()，不需要它。
+	tidyProgress TidyProgressSource
 
 	// 后台「音质补强」的设置面（见 pkg/api/quality_autoupgrade.go，v2.22）。
 	//

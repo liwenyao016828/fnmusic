@@ -2,10 +2,12 @@ package intercept
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"fn-lx-player/pkg/audioext"
@@ -160,7 +162,123 @@ func (i *Interceptor) ReplaceTrackFromCandidate(ctx context.Context, req TrackRe
 	}
 	i.logf("[INTERCEPT] 歌曲修复：%s ← %s/%s（%s，%s）",
 		filepath.Base(target), platform, platformID, res.Tier, out.Note)
+	// 进度快照里那一条跟着改：换完立刻重判新文件，修好了就从待修清单划掉，
+	// 没修好（比如换来的还是假无损）就按新结论留一条。见 repair_store.go。
+	i.updateRepairScanAfterReplace(path, target)
 	return out, nil
+}
+
+// ── 候选可用性预检（v2.37.0）─────────────────────────────────────────────
+//
+// 用户口径（2026-11-25）：「应用需提前检测列表中的歌曲是否可用」。
+//
+// 真机上踩过的坑：抽屉列出 107 个候选，用户点了一个才在替换时收到
+// `这个版本取不到直链（kg/E8EE…）：该平台没有可用的直链解析器`——
+// 搜索层只管「搜得到」，解析层才有「拿不拿得到直链」。两件事的中间没有
+// 闸门，于是列表里混着一堆点了必然失败的版本。
+//
+// 这里只做**解析层**的预检，不下音频、不写盘，所以可以对前若干条并发跑：
+//   - 无解析器 → 稳定判死（ErrNoResolver），标不可用；
+//   - 明确不可播（收费/版权）→ 稳定判死，标不可用；
+//   - 暂时故障（超时/宿主没起）→ 不判死，标「暂时取不到」，仍可点。
+//
+// 每条一个独立 context 超时；总时长由调用方的 HTTP 预算兜着。池本身带
+// 5 分钟结果缓存，预检过的候选在随后的替换里能直接命中，不重复打上游。
+
+// TrackProbeItem 一条待检候选（platform 就是搜索结果里的 source，
+// platformId 就是 songmid；「换版本」替换请求原样吃这两个值）。
+type TrackProbeItem struct {
+	Platform   string `json:"platform"`
+	PlatformID string `json:"platform_id"`
+}
+
+// TrackProbeResult 预检结论。Reason 是给人看的一句中文；OK=false 时
+// Transient=true 表示「这次没拿到，但别把这条判死」。
+type TrackProbeResult struct {
+	Key        string `json:"key"`
+	Platform   string `json:"platform"`
+	PlatformID string `json:"platform_id"`
+	OK         bool   `json:"ok"`
+	Transient  bool   `json:"transient,omitempty"`
+	Reason     string `json:"reason,omitempty"`
+	Tier       string `json:"tier,omitempty"`
+}
+
+const (
+	probeCandidateTimeout = 5 * time.Second
+	probeCandidateLimit   = 40 // 一次最多检前 40 条；再多抽屉也懒得看
+	probeConcurrency      = 8
+)
+
+func probeKey(platform, platformID string) string {
+	return strings.TrimSpace(platform) + ":" + strings.TrimSpace(platformID)
+}
+
+// ProbeCandidates 批量预检候选能否拿到直链（纯解析，不下载）。
+func (i *Interceptor) ProbeCandidates(ctx context.Context, items []TrackProbeItem) []TrackProbeResult {
+	if i == nil || i.pool == nil {
+		return nil
+	}
+	if len(items) > probeCandidateLimit {
+		items = items[:probeCandidateLimit]
+	}
+	out := make([]TrackProbeResult, len(items))
+	sem := make(chan struct{}, probeConcurrency)
+	var wg sync.WaitGroup
+	for n, it := range items {
+		out[n] = TrackProbeResult{
+			Key:      probeKey(it.Platform, it.PlatformID),
+			Platform: it.Platform, PlatformID: it.PlatformID,
+		}
+		wg.Add(1)
+		go func(n int, it TrackProbeItem) {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				out[n].Reason = "检测已取消"
+				out[n].Transient = true
+				return
+			}
+			platform := strings.TrimSpace(it.Platform)
+			id := strings.TrimSpace(it.PlatformID)
+			if platform == "" || id == "" {
+				out[n].Reason = "候选缺少平台或 ID"
+				return
+			}
+			if !i.pool.Supports(platform) {
+				out[n].Reason = "该平台没有可用的直链解析器"
+				return
+			}
+			probeCtx, cancel := context.WithTimeout(ctx, probeCandidateTimeout)
+			defer cancel()
+			res, err := i.pool.ResolveLadder(probeCtx, platform, id, i.downloadTiers())
+			switch {
+			case err == nil && res != nil && strings.TrimSpace(res.URL) != "":
+				out[n].OK = true
+				out[n].Tier = res.Tier
+			case errors.Is(err, online.ErrNoResolver):
+				out[n].Reason = "该平台没有可用的直链解析器"
+			case errors.Is(err, online.ErrNotPlayable):
+				out[n].Reason = "这个版本在该平台不可播放"
+			case errors.Is(err, online.ErrTransient):
+				out[n].Reason = "暂时取不到直链，稍后可重试"
+				out[n].Transient = true
+			case ctx.Err() != nil:
+				out[n].Reason = "检测已取消"
+				out[n].Transient = true
+			default:
+				out[n].Transient = true
+				out[n].Reason = "暂时取不到直链，稍后可重试"
+				if err != nil && err.Error() != "" {
+					out[n].Reason = err.Error()
+				}
+			}
+		}(n, it)
+	}
+	wg.Wait()
+	return out
 }
 
 // audioTierOf 读盘上档位；读不出来给空串（不拿空串冒充档位）。

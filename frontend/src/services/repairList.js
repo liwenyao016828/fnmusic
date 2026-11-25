@@ -304,21 +304,37 @@ export function qualityRank(quality) {
 /**
  * `/api/search` 的结果 → 候选版本行。
  *
- * 排序口径：音质高的在前；同音质按时长与目标时长接近的在前（换掉一首
- * 20 秒的坏文件时，用户最想要的是同一首的完整版，而不是另一个 20 秒的）。
+ * 排序口径（2026-11-25 用户明确要求「最适配搜索的排在前面：按与搜索词的匹配度
+ * 从高到低，原唱在前」）：
+ *   1. 歌名与搜索词的匹配度（完全同名 > 开头一致 > 包含 > 不沾边）；
+ *   2. 同一首歌里「原唱」在「翻唱」前面；
+ *   3. 音质高的在前；
+ *   4. 同音质按时长与目标时长接近的在前（换掉一首 20 秒的坏文件时，用户最想要
+ *      的是同一首的完整版，而不是另一个 20 秒的）；
+ *   5. 最后按歌名稳定排序。
+ *
  * 注意 `songmid` 才是平台内 id，`id` 是拼出来的跨平台键，传给后端会取不到流。
+ *
+ * @param {Array} list `/api/search` 的 list
+ * @param {number} [wantSec] 原文件时长（秒），0 = 不比时长
+ * @param {{keyword?: string, artist?: string}} [opts] keyword 用来算匹配度与原唱/翻唱，
+ *   artist 是原文件的歌手 —— 缺了就只能按时长/音质排（老行为）
  */
-export function candidateRows(list, wantSec = 0) {
+export function candidateRows(list, wantSec = 0, opts = {}) {
   const want = Number(wantSec) || 0
+  const keyword = String(opts.keyword || '').trim()
+  const wantArtist = String(opts.artist || '').trim()
   return (list || [])
     .map((it) => {
       const durationSec = Number(it.duration) || parseInterval(it.interval)
+      const name = it.name || ''
+      const singer = it.singer || ''
       return {
         key: `${it.source || ''}:${it.songmid || ''}`,
         platform: it.source || '',
         platformId: it.songmid || '',
-        name: it.name || '',
-        singer: it.singer || '',
+        name,
+        singer,
         album: it.album || '',
         cover: it.cover || '',
         quality: it.quality || '',
@@ -327,10 +343,18 @@ export function candidateRows(list, wantSec = 0) {
         sizeBytes: Number(it.file_size) || 0,
         albumMid: it.album_mid || '',
         hash: it.hash || '',
+        matchScore: keyword ? titleMatchScore(name, keyword) : 0,
+        version: versionLabel(name, singer, keyword, wantArtist),
+        // 可用性预检的结论，search 之后由 probeCandidates 填（见下）
+        probe: null,
       }
     })
     .filter((c) => c.platform && c.platformId)
     .sort((a, b) => {
+      if (a.matchScore !== b.matchScore) return b.matchScore - a.matchScore
+      const va = versionRank(a.version)
+      const vb = versionRank(b.version)
+      if (va !== vb) return vb - va
       const qa = qualityRank(a.quality)
       const qb = qualityRank(b.quality)
       if (qa !== qb) return qb - qa
@@ -343,6 +367,67 @@ export function candidateRows(list, wantSec = 0) {
     })
 }
 
+/** 原唱（2）> 翻唱（1）> 说不清（0）。 */
+export function versionRank(version) {
+  if (version === '原唱') return 2
+  if (version === '翻唱') return 1
+  return 0
+}
+
+/** 比较用的归一化：去空白、去标点、去大小写差异。 */
+function normText(text) {
+  return String(text || '')
+    .toLowerCase()
+    .replace(/[\s\u3000]+/g, '')
+    .replace(/[·・,，、/&;；\-–—_()（）[\]【】'‘’"“”!！?？.。~～+＋]/g, '')
+}
+
+/** 歌名归一化：额外剥掉末尾的括号补充（`夜曲 (Live)` → `夜曲`），
+ *  这样「同一个歌名的不同演绎」能落在同一档匹配度上，再由原唱/翻唱标签区分。 */
+function normTitle(text) {
+  return normText(String(text || '').replace(/[（(\[【][^）)\]】]*[）)\]】]/g, ' '))
+}
+
+/**
+ * 歌名与搜索词的匹配度（0 = 完全不沾边）。
+ *
+ * 为什么不用编辑距离：搜索结果里绝大多数是「同名不同演绎」或者「根本不沾边的
+ * 别的歌」，需要的是「是不是同一首歌」这个粗判断，而不是字符级相似度。
+ */
+export function titleMatchScore(name, keyword) {
+  const n = normTitle(name)
+  const k = normTitle(keyword)
+  if (!n || !k) return 0
+  if (n === k) return 100
+  if (n.startsWith(k)) return 90 - Math.min(9, n.length - k.length)
+  if (n.includes(k)) return 75 - Math.min(9, n.length - k.length)
+  if (k.includes(n)) return 60
+  return 0
+}
+
+/** 两个歌手名是不是同一个人（容忍「周杰伦/某某」「某某 feat. 周杰伦」这类拼接）。 */
+export function sameArtist(a, b) {
+  const x = normText(a)
+  const y = normText(b)
+  if (!x || !y) return false
+  return x === y || x.includes(y) || y.includes(x)
+}
+
+/**
+ * 候选是原唱还是翻唱。
+ *
+ * 判据只有歌手名 —— 各平台搜索结果里**没有**「是否翻唱」这个字段，编不出来。
+ * 所以口径是：歌名对得上（同一首歌）时，歌手与原文件歌手一致 = 原唱，否则 = 翻唱；
+ * 歌名都对不上（搜出来的别的歌）就不打标签，免得把「别的歌」标成翻唱。
+ */
+export function versionLabel(name, singer, keyword, wantArtist) {
+  if (titleMatchScore(name, keyword) <= 0) return ''
+  if (/翻唱|cover|翻自/i.test(String(name || ''))) return '翻唱'
+  if (!wantArtist || !singer) return ''
+  return sameArtist(singer, wantArtist) ? '原唱' : '翻唱'
+}
+
+
 /** `interval` 一般是 "03:45" 这种字符串，兜底解析成秒。 */
 export function parseInterval(text) {
   const s = String(text || '').trim()
@@ -354,14 +439,26 @@ export function parseInterval(text) {
 }
 
 /**
- * 搜索关键词：歌名 + 第一位歌手。
+ * 搜索关键词：**只要歌名**。
+ *
+ * 用户口径（2026-11-25）：「自动加入搜索框：只需要歌名（只填入歌名）」。
+ * 之前是「歌名 + 第一位歌手」，真机上反而更糟 —— 文件名里的歌手常带着噪声
+ * （`你瞒我瞒 - ls 陈柏宇` 这种），拼进去搜出来 107 个版本还没几个对得上；
+ * 各平台自己的相关性排序对纯歌名本来就更友好。歌手只在界面里作为参照显示。
  *
  * 标题要先去曲序（`01 晴天` → `晴天`）——后端 `qualityMatchTitle` 也是这么做的，
  * 但这里必须允许「空格」当分隔符：文件名里的曲序绝大多数是 `01 歌名` 而不是 `01.歌名`，
  * 只认标点会切不掉，搜出来的就是「01 晴天」这种没人匹配得上的关键词。
+ * 还要去掉 ` - xxx` / `_xxx` 这类尾巴（`你瞒我瞒 - ls 陈柏宇` → `你瞒我瞒`）：
+ * 那是文件名里「歌手 / 来源」的常见分隔，留在歌名里会污染搜索结果。
+ *
+ * artist 参数保留但不再参与拼接 —— 调用方还在传，签名不改成破窗。
  */
-export function candidateKeyword(title, artist) {
-  const t = String(title || '').replace(/^\s*\d{1,4}\s*[.\-_、)）\]】\s]\s*/, '').trim()
-  const a = String(artist || '').split(/[/、,，&;；]/)[0].trim()
-  return [t, a].filter(Boolean).join(' ')
+export function candidateKeyword(title, artist) { // eslint-disable-line no-unused-vars
+  let t = String(title || '').replace(/^\s*\d{1,4}\s*[.\-_、)）\]】\s]\s*/, '').trim()
+  // 「歌名 - 歌手」「歌名_ls 歌手」「歌名 - 歌手 (Live)」：只留前半段
+  t = t.split(/\s+[-–—]\s+|\s*[_|｜]\s*/)[0].trim()
+  // 括号里是版本说明（Live/伴奏/翻唱），对「找同一首歌」没帮助，去掉更好搜
+  t = t.replace(/[（(\[【][^）)\]】]*[）)\]】]/g, ' ').replace(/\s+/g, ' ').trim()
+  return t
 }

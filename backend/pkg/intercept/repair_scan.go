@@ -127,6 +127,9 @@ func (i *Interceptor) ScanRepairIssues(ctx context.Context, dir string) (RepairS
 		}
 	}
 	out.Elapsed = time.Since(start).Milliseconds()
+	// 顺手落盘：进度条（见 repair_store.go）读的就是这一份，不能让页面刷新
+	// 触发一次全库重扫。失败只记日志，不影响本次扫描的返回。
+	i.saveRepairScan(out)
 	return out, nil
 }
 

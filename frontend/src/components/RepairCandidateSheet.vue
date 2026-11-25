@@ -19,7 +19,7 @@
           v-model="keyword"
           type="search"
           class="h-8 min-w-0 flex-1 rounded-lg border border-[var(--ys-line-control)] px-2.5 text-xs"
-          placeholder="歌名 + 歌手"
+          placeholder="歌名（只填歌名，搜索更准）"
           @keyup.enter="search()"
         >
         <button class="ys-btn ys-btn-primary ys-btn-sm" :disabled="searching || !keyword.trim()" @click="search()">
@@ -55,7 +55,9 @@
           <button
             type="button"
             class="flex w-full items-center gap-2.5 py-2 text-left ys-press"
-            :disabled="replacing"
+            :class="probeDead(c) ? 'opacity-50' : ''"
+            :disabled="replacing || probeDead(c)"
+            :title="probeDead(c) ? `这个版本用不了：${c.probe.reason}` : ''"
             @click="pick(c)"
           >
             <img
@@ -69,9 +71,23 @@
             >
             <span v-else class="h-9 w-9 shrink-0 rounded-[6px] bg-[var(--ys-surface-sunken)]" />
             <span class="min-w-0 flex-1">
-              <span class="ys-cell block text-[12px] font-medium text-[var(--ys-text)]">{{ c.name || '（无标题）' }}</span>
+              <span class="flex min-w-0 items-center gap-1.5">
+                <span class="ys-cell min-w-0 text-[12px] font-medium text-[var(--ys-text)]">{{ c.name || '（无标题）' }}</span>
+                <!-- 原唱 / 翻唱：跟随主题色（--ys-accent-* 那一族，换主题自动跟着变） -->
+                <span
+                  v-if="c.version"
+                  class="shrink-0 rounded-full px-1.5 py-[1px] text-[10px] leading-[15px]"
+                  :class="c.version === '原唱'
+                    ? 'bg-[var(--ys-accent-soft)] text-[var(--ys-accent)]'
+                    : 'bg-[var(--ys-surface-sunken)] text-[var(--ys-text-muted)]'"
+                >{{ c.version }}</span>
+              </span>
               <span class="ys-cell block text-[11px] text-[var(--ys-text-muted)]">
                 {{ [c.singer, c.album].filter(Boolean).join(' · ') || '—' }}
+              </span>
+              <!-- 预检说这条用不了：把原因摆出来，别让用户点了才知道 -->
+              <span v-if="probeDead(c)" class="mt-0.5 block text-[11px] text-[var(--ys-danger)]">
+                {{ c.probe.reason || '这个版本取不到直链' }}
               </span>
             </span>
             <span class="shrink-0 text-right text-[11px] leading-tight ys-num">
@@ -96,6 +112,13 @@
           </div>
         </li>
       </ul>
+
+      <!-- 预检进度：只占一行，别做成阻塞式 loading -->
+      <div v-if="probing" class="flex items-center gap-1.5 text-[11px] text-[var(--ys-text-muted)]">
+        <Loader2 class="h-3 w-3 animate-spin" />
+        正在检测这些版本能不能取到直链…
+      </div>
+      <div v-else-if="probeNote" class="text-[11px] text-[var(--ys-text-muted)]">{{ probeNote }}</div>
     </div>
 
     <template #footer>
@@ -127,6 +150,7 @@ import { platformName } from '../services/libraryFields'
 import { qualityLabel as baseQualityLabel } from '../engine/quality'
 import { fail as failText } from '../services/userMsg'
 import { logInfo } from '../services/appLog'
+import { notifyTidyProgress } from '../services/tidyProgress'
 import {
   baseName, formatDuration, formatSize, candidateRows, candidateKeyword,
 } from '../services/repairList'
@@ -137,6 +161,9 @@ const props = defineProps({
   item: { type: Object, default: null },
 })
 const emit = defineEmits(['update:modelValue', 'replaced'])
+
+/** 只检前多少个候选：后端上限 40，排序已把最可能的放最前面，再多也没人看。 */
+const PROBE_LIMIT = 40
 
 const open = computed({
   get: () => props.modelValue,
@@ -150,6 +177,11 @@ const rows = ref([])
 const errorText = ref('')
 const armedKey = ref('')
 const lastResult = ref(null)
+/** 可用性预检：正在检测 / 一句结论（检测完给个汇总，别让人以为没发生） */
+const probing = ref(false)
+const probeNote = ref('')
+/** 预检代数：用户改关键词重搜时，上一轮预检的迟到结果必须丢掉 */
+let probeGen = 0
 
 const sheetTitle = computed(() => {
   const it = props.item
@@ -200,12 +232,66 @@ function audioMeta(info) {
   ].filter(Boolean).join(' · ')
 }
 
+/**
+ * 这条候选是不是「稳定用不了」。
+ *
+ * 只有 ok=false 且 transient=false 才算判死：transient 只是这次没拿到直链
+ * （宿主没起 / 上游抽风），禁掉它会让用户白等一轮重试。
+ */
+function probeDead(c) {
+  return !!(c.probe && !c.probe.ok && !c.probe.transient)
+}
+
+/**
+ * 对候选做可用性预检（用户要求「提前检测列表中的歌曲是否可用」）。
+ *
+ * 为什么不在 search() 里同步等：预检最坏要几秒（后端 8 并发、每条约 5 秒），
+ * 把搜索结果卡在它后面等于搜完再转圈 —— 先出列表，再在后台把「用不了」的标红，
+ * 用户想点的多半是排在前面那几条，等标注到达时他还没点到。
+ *
+ * 只检前 N 条（后端上限 40），因为排序已经把最可能的放在最前面了。
+ */
+async function probeRows(gen) {
+  const items = rows.value
+    .slice(0, PROBE_LIMIT)
+    .map((c) => ({ platform: c.platform, platform_id: c.platformId }))
+  if (!items.length) return
+  probing.value = true
+  probeNote.value = ''
+  try {
+    const res = await RepairAPI.probe(items)
+    if (gen !== probeGen) return // 已经重搜过一轮，这批结果作废
+    const payload = (res && (res.data || res)) || {}
+    const list = Array.isArray(payload.items) ? payload.items : []
+    const byKey = new Map()
+    list.forEach((it) => byKey.set(`${it.platform}:${it.platform_id}`, it))
+    rows.value = rows.value.map((c) => ({ ...c, probe: byKey.get(c.key) || c.probe || null }))
+    const dead = list.filter((it) => !it.ok && !it.transient).length
+    const soft = list.filter((it) => !it.ok && it.transient).length
+    const ok = list.filter((it) => it.ok).length
+    const parts = []
+    if (ok) parts.push(`${ok} 个可用`)
+    if (dead) parts.push(`${dead} 个用不了（已置灰）`)
+    if (soft) parts.push(`${soft} 个暂时取不到`)
+    probeNote.value = parts.length ? `已检测前 ${list.length} 个版本：${parts.join('，')}` : ''
+    logInfo(`修复替换：可用性检测 ${list.length} 条 → ${parts.join('，') || '无结论'}`)
+  } catch (e) {
+    // 预检失败不该毁掉搜索：只在界面留一句，详情进日志
+    if (gen === probeGen) probeNote.value = '可用性检测没跑成，仍可直接点选（取不到直链时会报原因）'
+    logInfo(`修复替换：可用性检测失败 ${e && e.message ? e.message : ''}`)
+  } finally {
+    if (gen === probeGen) probing.value = false
+  }
+}
+
 async function search() {
   const kw = keyword.value.trim()
   if (!kw) return
   searching.value = true
   errorText.value = ''
   armedKey.value = ''
+  probeNote.value = ''
+  const gen = ++probeGen
   try {
     // 12s 预算：聚合全部平台实测能到 50s 以上（被最慢的平台拖住），远超 axios
     // 默认的 30s —— 不点名预算的话抽屉就是「搜 60 秒然后超时报错」。到点后端把
@@ -213,9 +299,15 @@ async function search() {
     const data = await SearchAPI.search(kw, 'all', 1, 30, 'lx', 12000)
     // /api/search 的信封把 list 放在顶层，同时也镜像一份在 data 里 —— 两种都认
     const payload = (data && (data.data || data)) || {}
-    rows.value = candidateRows(payload.list, (props.item && props.item.duration_sec) || 0)
+    const it = props.item || {}
+    rows.value = candidateRows(payload.list, it.duration_sec || 0, {
+      keyword: kw,
+      // 原唱/翻唱按「原文件歌手」判，不是按搜索框里的词 —— 搜索框现在只有歌名
+      artist: it.artist || '',
+    })
     const hit = payload.budget_hit ? '（已到等待上限，只含先返回的平台）' : ''
     logInfo(`修复替换：搜「${kw}」得到 ${rows.value.length} 个版本${hit}`)
+    if (rows.value.length) probeRows(gen)
   } catch (e) {
     // fail() 自己会写日志（完整信息进日志、一句人话给界面），不要再单独 logError
     errorText.value = failText('修复替换：搜索版本', e, '搜索失败，换个关键词再试')
@@ -253,6 +345,8 @@ async function confirmReplace(c) {
     lastResult.value = result
     armedKey.value = ''
     logInfo(`修复替换：${baseName(it.path)} ← ${platformLabel(c.platform)} ${c.name}`)
+    // 进度条：修好一首，那一类的「还剩」就该减一（后端快照已就地更新）。
+    notifyTidyProgress()
     emit('replaced', { item: it, candidate: c, result })
   } catch (e) {
     errorText.value = failText('修复替换：覆盖文件', e, '替换失败，原文件没动')
@@ -270,6 +364,10 @@ watch(
     errorText.value = ''
     armedKey.value = ''
     rows.value = []
+    probing.value = false
+    probeNote.value = ''
+    probeGen += 1
+    // 只填歌名（用户 2026-11-25 明确）：拼歌手只会把搜索结果带偏
     keyword.value = candidateKeyword(it && (it.title || baseName(it.path)), it && it.artist)
     if (keyword.value) search()
   },
