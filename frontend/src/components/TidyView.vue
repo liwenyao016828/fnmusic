@@ -82,10 +82,20 @@
           一行摘要：缺口数字（曲库目录已挪到分段导航行右边，见页面顶部 #actions-trail）
         -->
         <!--
-          进度卡片（v2.37.0）：元数据这一类按字段各给一张卡（总数 / 还缺 / 歌词 / 封面 ...），
-          用户在 2026-11-25 明确要求「就显示在补全页面」「显示数字和对应类别就可以」。
+          进度卡片（v2.37.0）：元数据这一类按字段各给一张卡（总数 / 歌词 / 封面 ...），缺口数字红色，
+          用户在 2026-11-25 明确要求「就显示在补全页面」「显示数字和对应类别就可以」；
+          同一天又要求「把上方的缺失数字卡片和下面的选择卡片融合一下」——
+          所以这张卡同时就是字段开关：点一下勾选 / 取消要补的字段（selectable + @toggle）。
         -->
-        <TidyProgress v-if="sub === 'complete'" group="meta" class="mt-3" />
+        <TidyProgress
+          v-if="sub === 'complete'"
+          group="meta"
+          selectable
+          :selected="selectedFields"
+          :hints="fieldHints"
+          class="mt-3"
+          @toggle="toggleField"
+        />
         <div v-if="gapsAtText" class="mt-1 text-[10.5px] text-[var(--ys-text-aux)]">{{ gapsAtText }}</div>
 
         <!--
@@ -101,29 +111,11 @@
         </p>
 
         <!--
-          字段选择压成一行 chip（原来 6 张卡片画满一屏）。
-          数字 = 该字段缺的曲目数；点一下就勾 / 取消，不需要进抽屉。
+          字段选择已经并进上面的进度卡片（数字和勾选在同一张卡上，用户 2026-11-25 要求融合），
+          这里只留「扫描」按钮 —— 它要先收新文件，再重算缺口。
         -->
-        <div class="mt-3 flex flex-wrap items-center gap-1.5">
+        <div v-if="completeStep === 1" class="mt-3 flex flex-wrap items-center gap-1.5">
           <button
-            v-for="f in fieldOptions"
-            :key="f.key"
-            type="button"
-            :title="f.hint"
-            class="flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11.5px] transition-colors"
-            :class="selectedFields.includes(f.key)
-              ? 'border-emerald-500/35 bg-[var(--ys-accent-soft)] text-[var(--ys-accent)]'
-              : 'border-[var(--ys-border)] text-[var(--ys-text-aux)] hover:bg-black/[0.03] hover:text-[var(--ys-text-muted)]'"
-            @click="toggleField(f.key)"
-          >
-            <Check v-if="selectedFields.includes(f.key)" class="h-3 w-3" :stroke-width="2.4" />
-            <span class="font-medium">{{ f.name }}</span>
-            <span v-if="gaps" class="font-mono text-[10.5px]" :class="f.missing ? 'text-amber-600' : 'opacity-50'">{{ f.missing }}</span>
-          </button>
-          <span class="ml-0.5 text-[11px] text-[var(--ys-text-aux)]">点字段可勾选 / 取消</span>
-          <!-- 合并后的唯一扫描按钮（原「扫描缺失」）：先收新文件，再重算缺口 -->
-          <button
-            v-if="completeStep === 1"
             :disabled="indexing || gapsLoading"
             :title="indexing || gapsLoading ? '正在扫描磁盘并重算缺口…' : '扫描磁盘上新增 / 变化的文件，并重新统计缺哪些字段'"
             class="ys-btn ys-btn-primary ys-press ml-auto"
@@ -643,8 +635,56 @@
             </span>
           </div>
 
-          <!-- 清单本体 -->
-          <div class="max-h-[26rem] overflow-auto rounded-[8px] border border-[var(--ys-border)] bg-white">
+          <!--
+            窄屏清单：下面那张表最少 760px 宽，手机上只能横向拖、读不完
+            （用户 2026-11-25：「歌单修复页面中，扫描后的列表适配移动端」）——
+            所以 sm 以下改成一卡一条，勾选 / 问题 / 建议 / 操作都在卡里。
+          -->
+          <div class="space-y-2 sm:hidden">
+            <div
+              v-for="row in repairVisibleRows"
+              :key="'m-' + row.id"
+              class="rounded-[10px] border border-[var(--ys-border)] bg-white px-2.5 py-2"
+            >
+              <div class="flex items-start gap-2">
+                <label
+                  v-if="row.role !== 'keep' && !row.done && row.kind !== 'audio'"
+                  class="mt-0.5 flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center"
+                >
+                  <input type="checkbox" class="h-4 w-4" :checked="row.selected" @change="toggleRepairRow(row)" />
+                </label>
+                <span v-else class="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center text-[10px] text-[var(--ys-text-aux)]">
+                  {{ row.role === 'keep' ? '留' : (row.kind === 'audio' ? '!' : '✓') }}
+                </span>
+                <div class="min-w-0 flex-1">
+                  <div class="ys-cell font-mono text-[11px] text-[var(--ys-text-muted)]" :title="row.path">{{ row.name }}</div>
+                  <div
+                    v-if="row.title || row.artist"
+                    class="ys-cell text-[10px] text-[var(--ys-text-aux)]"
+                    :title="[row.title, row.artist].filter(Boolean).join(' · ')"
+                  >{{ [row.title, row.artist].filter(Boolean).join(' · ') }}</div>
+                  <div class="mt-1 flex flex-wrap items-center gap-1.5">
+                    <span class="rounded-full px-1.5 py-0.5 text-[10px]" :class="repairKindTone(row.kind)">{{ repairKindName(row.kind) }}</span>
+                    <span class="text-[11px] text-[var(--ys-text)]">{{ row.detail }}</span>
+                    <span v-if="row.meta" class="text-[10px] text-[var(--ys-text-aux)]">{{ row.meta }}</span>
+                  </div>
+                  <div v-if="row.done" class="mt-0.5 text-[10.5px] text-[var(--ys-accent)]">✓ {{ row.written || row.suggest }}</div>
+                  <div v-else-if="row.suggest" class="mt-0.5 text-[10.5px] text-[var(--ys-text)]">{{ row.suggest }}</div>
+                  <div v-if="row.error" class="mt-0.5 text-[10px] text-rose-500">{{ row.error }}</div>
+                </div>
+              </div>
+              <div v-if="row.kind === 'audio'" class="mt-2 flex justify-end">
+                <button
+                  class="ys-btn ys-btn-sm ys-press"
+                  title="搜各平台的版本，挑一个换掉这个坏文件"
+                  @click="openCandidate(row)"
+                >换版本</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 清单本体（宽屏表格；窄屏走上面的卡片） -->
+          <div class="hidden max-h-[26rem] overflow-auto rounded-[8px] border border-[var(--ys-border)] bg-white sm:block">
             <table class="w-full min-w-[760px] text-[11px]">
               <thead class="sticky top-0 z-10 bg-[var(--ys-bg-soft)] text-[var(--ys-text-aux)]">
                 <tr>
@@ -2869,6 +2909,9 @@ const fieldOptions = computed(() => FIELD_DEFS.map((f) => ({
   ...f,
   missing: gaps.value ? (gaps.value[f.key] ?? 0) : '—',
 })))
+
+/** 字段卡上的提示语（从 FIELD_DEFS 拿，与原来那排 chip 的 title 一致）。 */
+const fieldHints = computed(() => Object.fromEntries(fieldOptions.value.map((f) => [f.key, f.hint])))
 
 /**
  * ⚠️ 2026-10-27 删除：`completeSteps = COMPLETE_STEPS`。

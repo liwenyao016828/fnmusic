@@ -106,24 +106,47 @@
               </button>
             </div>
 
-            <!-- 并排的断点从 400 提到 520：卡里现在有平台名 + 132px 二维码位，
-                 400 宽时两列只剩 ~150px，名字会被截成「网易…」。窄了就上下排。 -->
-            <div class="mt-3.5 grid grid-cols-1 gap-3 min-[520px]:grid-cols-2">
+            <!-- 2026-11-25 用户口径：「移动端适配一下两个扫码卡片。太大了，改为一行两个卡片。
+                 我觉得移动端不需要扫码，比较一个手机怎么扫自己。只需要显示是否连接就可以。」
+                 所以手机上固定两列，只留品牌标 + 平台名 + 连接状态；二维码位 / 品牌色登录按钮 /
+                 每日推荐 / 歌单在 sm 以下全部收起（等宽两栅格 + grid stretch 让两卡等高）。 -->
+            <div class="mt-3.5 grid grid-cols-2 gap-2.5 sm:gap-3">
               <div
                 v-for="p in recommendPlatforms" :key="p.id"
-                class="flex flex-col rounded-[12px] border border-[var(--ys-border)] bg-[var(--ys-surface-sunken)] px-3.5 py-3.5"
+                class="flex flex-col rounded-[12px] border border-[var(--ys-border)] bg-[var(--ys-surface-sunken)] px-2.5 py-2.5 sm:px-3.5 sm:py-3.5"
               >
                 <!-- 卡头：官方品牌标 + 平台名（品牌色只在这里和下面的按钮上出现） -->
-                <div class="flex items-center gap-2.5" :title="platformCardTitle(p)">
-                  <BrandMark :platform="p.id" class="h-9 w-9" />
-                  <b class="min-w-0 truncate text-[16px] font-semibold tracking-[-0.01em] text-[var(--ys-text)]">{{ p.name }}</b>
+                <div class="flex items-center gap-2 sm:gap-2.5" :title="platformCardTitle(p)">
+                  <BrandMark :platform="p.id" class="h-7 w-7 shrink-0 sm:h-9 sm:w-9" />
+                  <b class="min-w-0 truncate text-[13px] font-semibold tracking-[-0.01em] text-[var(--ys-text)] sm:text-[16px]"><span class="sm:hidden">{{ p.short || p.name }}</span><span class="hidden sm:inline">{{ p.name }}</span></b>
+                  <!--
+                    移动端：状态胶囊紧跟在平台名后面同一行，字号小一点
+                    （用户 2026-11-25：「未连接便签字小一点放在xx音乐后面同一行，
+                    点击的时候，弹出项目用的提示框：电脑上扫码…」）。
+                    手机扫不了自己屏上的码，所以未连接时点它只给一句提示。
+                  -->
+                  <span
+                    v-if="p.connected"
+                    class="shrink-0 rounded-full bg-emerald-50 px-1.5 py-[1px] text-[10px] font-medium leading-[15px] text-emerald-700 sm:hidden"
+                  >已连接</span>
+                  <button
+                    v-else
+                    class="shrink-0 rounded-full bg-black/[0.06] px-1.5 py-[1px] text-[10px] font-medium leading-[15px] text-[var(--ys-text-muted)] active:bg-black/[0.1] sm:hidden"
+                    title="请在电脑上扫码登录"
+                    @click="hintScanOnDesktop(p)"
+                  >未连接</button>
                 </div>
 
-                <div class="my-3 border-t border-[var(--ys-border)]"></div>
+                <!-- 分隔线只在桌面出现（用户 2026-11-25：「账号连接（移动端）卡片：取消卡片里的线条。」）
+                     手机端两列窄卡里，这条线把 logo 行和状态行割成两截，反而更挤。 -->
+                <div class="my-2 hidden border-t border-[var(--ys-border)] sm:block sm:my-3"></div>
+
+                <!-- 移动端（sm 以下）：已登录时把昵称留一行；未连接不再重复写「请在电脑上扫码登录」 -->
+                <p v-if="p.connected" class="mt-1 truncate text-[10.5px] leading-[15px] text-[var(--ys-text-aux)] sm:hidden">{{ p.nickname || '已登录' }}</p>
 
                 <template v-if="p.connected">
                   <!-- 账号行：谁登着 + 登出（登出=断开本机凭据，下次要重新扫码）。UID 收进 title。 -->
-                  <div class="flex items-center gap-2.5" :title="`UID ${p.uid || '-'}`">
+                  <div class="hidden items-center gap-2.5 sm:flex" :title="`UID ${p.uid || '-'}`">
                     <img
                       v-if="p.avatar"
                       :src="p.avatar"
@@ -147,7 +170,7 @@
                     @click="loadRecommend(p.id, 'daily')"
                     :disabled="!!recommendLoading"
                     :title="p.dailyHint"
-                    class="ys-press mt-3 flex w-full items-center gap-2 rounded-[10px] border border-[var(--ys-border)] bg-white px-2.5 py-2.5 text-left hover:border-emerald-500/30 hover:bg-[var(--ys-accent-soft)] disabled:opacity-60"
+                    class="ys-press mt-3 hidden w-full items-center gap-2 rounded-[10px] border border-[var(--ys-border)] bg-white px-2.5 py-2.5 text-left hover:border-emerald-500/30 hover:bg-[var(--ys-accent-soft)] disabled:opacity-60 sm:flex"
                   >
                     <div class="grid h-8 w-8 shrink-0 place-items-center rounded-[8px] bg-[var(--ys-accent-soft)] text-[var(--ys-accent)]">
                       <CalendarHeart class="h-4 w-4" />
@@ -158,7 +181,7 @@
                   </button>
 
                   <!-- 我的歌单（最多 4 个） -->
-                  <div v-if="p.playlists.length" class="mt-2.5">
+                  <div v-if="p.playlists.length" class="mt-2.5 hidden sm:block">
                     <span class="mb-1.5 block text-[11px] text-[var(--ys-text-aux)]">我的歌单</span>
                     <div class="flex flex-wrap gap-1.5">
                       <button
@@ -170,19 +193,19 @@
                       >{{ pl.name }}</button>
                     </div>
                   </div>
-                  <p v-else-if="p.playlistsLoading" class="mt-2.5 text-[11px] text-[var(--ys-text-aux)]">正在读取歌单…</p>
+                  <p v-else-if="p.playlistsLoading" class="mt-2.5 hidden text-[11px] text-[var(--ys-text-aux)] sm:block">正在读取歌单…</p>
                 </template>
 
                 <!-- 未连接：状态胶囊 + 卡内二维码位 + 品牌色整宽按钮（原弹窗已去掉） -->
                 <template v-else>
-                  <div class="flex justify-center">
+                  <div class="hidden justify-center sm:flex">
                     <span class="rounded-full bg-black/[0.06] px-3 py-1 text-[11.5px] font-medium text-[var(--ys-text-muted)]">未连接</span>
                   </div>
 
                   <!-- 二维码位：没点登录时是空白占位框（虚线），点了就在原地出码 —— 
                        用户 2026-11-21：「把文字『登录同步歌单』所在的位置替换为一个空白二维码框；
                        点击扫码后，再在卡片内显示二维码」。 -->
-                  <div class="mt-3 flex flex-col items-center">
+                  <div class="mt-3 hidden flex-col items-center sm:flex">
                     <div
                       class="grid h-[132px] w-[132px] place-items-center overflow-hidden rounded-[10px] bg-white"
                       :class="qrFor(p.id) ? 'border border-[var(--ys-border)]' : 'border border-dashed border-[var(--ys-border-strong)]'"
@@ -209,7 +232,7 @@
                     @click="onPlatformLoginButton(p)"
                     :disabled="!!platformBusy"
                     :title="p.loginHint"
-                    class="ys-press mt-2.5 h-10 w-full rounded-[8px] text-[13px] font-semibold text-white transition-[filter] hover:brightness-95 disabled:opacity-50"
+                    class="ys-press mt-2.5 mb-3 hidden h-10 w-full rounded-[8px] text-[13px] font-semibold text-white transition-[filter] hover:brightness-95 disabled:opacity-50 sm:block"
                     :style="{ backgroundColor: p.brand }"
                   >{{ platformLoginLabel(p) }}</button>
                 </template>
@@ -924,7 +947,7 @@ import {
   loadConfig as loadInjectConfig,
 } from '../services/chartInject'
 import { fail, apiError, describeError } from '../services/userMsg'
-import { ok as notifyOk, fail as notifyFail } from '../services/feedback'
+import { ok as notifyOk, fail as notifyFail, notify } from '../services/feedback'
 import { createSearchPager, SEARCH_PAGE_SIZE } from '../services/searchPaging'
 import {
   officialPlatform, setOfficialPlatform, ensureOfficialPlatform,
@@ -1224,6 +1247,15 @@ function platformLoginLabel(p) {
   const session = qrFor(p.id)
   if (!session) return '扫码登录'
   return session.expired ? '刷新二维码' : '取消扫码'
+}
+
+/**
+ * 移动端点「未连接」胶囊：手机扫不了自己屏上的码，所以不假装能登，
+ * 只弹一句项目里的瞬时提示，告诉用户去电脑上扫码（用户 2026-11-25：
+ * 「点击的时候，弹出项目用的提示框：电脑上扫码…」）。
+ */
+function hintScanOnDesktop(p) {
+  notify(`电脑上扫码：打开曲率点「${platformLoginLabel(p)}」，再用手机扫二维码登录${p.name}`, { level: 'info' })
 }
 
 /** 那颗按钮点下去：没码就取码，过期就换一张，正在等扫码就收起 */

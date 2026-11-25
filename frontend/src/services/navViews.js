@@ -133,6 +133,11 @@ export const VIEWS = [
     name: '系统',
     short: '系统',
     group: 'config',
+    // 2026-11-25 用户：「侧边栏的系统导航可以去掉了.」
+    // 视图本身留着（设置/日志还是它的两段，侧栏左下角的「设置」直接落到这里），
+    // 只是不再在导航里占位 —— navHidden 只在 viewsOfGroup 里过滤，
+    // VIEW_IDS 不动（它是左右滑动/底栏顺序的基准，删了会把顺序测挂）。
+    navHidden: true,
     desc: '运行日志与各项设置',
     // 顺序 = 分段器上的先后，也决定「打开这一页先落在哪一段」（defaultSegment 取 [0]）。
     // 用户 2026-10-24：设置在前，日志在后 —— 打开「系统」是想改东西，不是先看日志。
@@ -162,7 +167,7 @@ export const VIEW_IDS = VIEWS.map((v) => v.id)
 export const MOBILE_TAB_IDS = ['search', 'library', 'tidy', 'push']
 
 export function viewsOfGroup(groupId) {
-  return VIEWS.filter((v) => v.group === groupId)
+  return VIEWS.filter((v) => v.group === groupId && !v.navHidden)
 }
 
 /** 默认落在哪一段（没有分段时返回空串） */

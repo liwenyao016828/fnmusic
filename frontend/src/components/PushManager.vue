@@ -550,15 +550,21 @@
               <button
                 v-if="pushRunSelected.size"
                 :disabled="clearingRuns"
-                @click="clearPushRuns(Array.from(pushRunSelected))"
-                class="rounded-lg bg-rose-50 px-2.5 py-1 text-[11px] font-bold text-rose-600 transition-colors hover:bg-rose-100 disabled:opacity-50"
-              >清除选中（{{ pushRunSelected.size }}）</button>
+                @click="clearArm === 'sel' ? clearPushRuns(Array.from(pushRunSelected)) : armClear('sel')"
+                class="rounded-lg px-2.5 py-1 text-[11px] font-bold transition-colors disabled:opacity-50"
+                :class="clearArm === 'sel'
+                  ? 'bg-rose-600 text-white hover:bg-rose-700'
+                  : 'bg-rose-50 text-rose-600 hover:bg-rose-100'"
+              >{{ clearArm === 'sel' ? `确定清除选中的 ${pushRunSelected.size} 条？` : `清除选中（${pushRunSelected.size}）` }}</button>
               <button
                 :disabled="clearingRuns"
-                @click="clearPushRuns([])"
-                class="rounded-lg px-2.5 py-1 text-[11px] font-bold text-gray-500 transition-colors hover:bg-[var(--ys-surface-hover)] hover:text-gray-600 disabled:opacity-50"
-                title="清除全部同步历史（不动订阅任务本身）"
-              >{{ clearingRuns ? '清除中…' : '一键清除记录' }}</button>
+                @click="clearArm === 'all' ? clearPushRuns([]) : armClear('all')"
+                class="rounded-lg px-2.5 py-1 text-[11px] font-bold transition-colors disabled:opacity-50"
+                :class="clearArm === 'all'
+                  ? 'bg-rose-600 text-white hover:bg-rose-700'
+                  : 'text-gray-500 hover:bg-[var(--ys-surface-hover)] hover:text-gray-600'"
+                :title="clearArm === 'all' ? '再点一次就清除，5 秒内不点会自动取消' : '清除全部同步历史（不动订阅任务本身）'"
+              >{{ clearingRuns ? '清除中…' : clearArm === 'all' ? `确定清除全部 ${pushRuns.length} 条？` : '一键清除记录' }}</button>
             </div>
           </div>
           <!--
@@ -1480,15 +1486,35 @@ function toggleAllPushRuns() {
  */
 const clearingRuns = ref(false)
 
+/**
+ * 两步确认（取代 window.confirm）。
+ *
+ * 用户 2026-11-25 报「飞牛同步里的一键清除记录失效了」。查下来功能本身是通的
+ * （DELETE /api/push/runs 实测 returned removed>0），失效的是**确认这一步**：
+ * 应用在飞牛面板/手机 WebView 里以 iframe 运行，没有 allow-modals 时
+ * window.confirm 会被静默吞掉并直接返回 false —— 点一下什么都不会发生，
+ * 看着就是「按钮坏了」。全站其它地方（如日志清空）早就换成两步确认了，
+ * 这里补上：第一次点把按钮改成「确定清除全部 N 条？」（玫瑰色，5 秒后自动还原），
+ * 第二次点才真删。
+ */
+const clearArm = ref('')       // '' | 'all' | 'sel'
+let clearArmTimer = 0
+function armClear(scope) {
+  clearArm.value = clearArm.value === scope ? '' : scope
+  clearTimeout(clearArmTimer)
+  if (clearArm.value) {
+    clearArmTimer = setTimeout(() => { clearArm.value = '' }, 5000)
+  }
+}
+
 async function clearPushRuns(ids) {
   if (clearingRuns.value) return
   const list = (ids || []).map((v) => String(v))
   const total = pushRuns.value.length
   const n = list.length
+  clearArm.value = ''
+  clearTimeout(clearArmTimer)
   if (!n && !total) { flashWarn('没有可清除的同步历史'); return }
-  if (!confirm(n
-    ? `确定清除选中的 ${n} 条同步历史？`
-    : `确定清除全部 ${total} 条同步历史？（订阅任务本身不受影响）`)) return
 
   clearingRuns.value = true
   try {

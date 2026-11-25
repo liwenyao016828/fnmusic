@@ -3,12 +3,34 @@
     <div class="space-y-4">
       <InlineNotice v-if="notice" :text="notice" :tone="noticeOk ? 'ok' : 'error'" :log-link="!noticeOk" />
 
+      <!-- 2026-11-25 用户口径（参照 magpie）：「设置项按分类组织…页面只负责显示对应的设置」。
+           分类入口不在这张页面里 —— 它在侧栏左下角那颗「设置」按钮弹出的框里
+           （见 App.vue 的 settingsPop），这里只渲染当前分类下的设置块。
+           新增设置块时：写块本身 → 加 v-if="inGroup('块键')" → 在 GROUPS 里给某个分类登记块键。 -->
+      <!-- 窄屏没有侧栏，也就没有左下角那颗按钮弹出的分类框 —— 这里给一条横向 chips 兜底。
+           桌面端（sm 以上）隐藏：分类只在侧栏那个框里选，页面保持干净。 -->
+      <div class="-mx-1 flex gap-1 overflow-x-auto pb-0.5 sm:hidden">
+        <button
+          v-for="g in SETTINGS_GROUPS"
+          :key="g.id"
+          type="button"
+          class="ys-press shrink-0 rounded-full border px-2.5 py-1 text-[12px] font-medium transition-colors"
+          :class="settingsGroup === g.id
+            ? 'border-emerald-500/35 bg-[var(--ys-accent-soft)] text-[var(--ys-accent)]'
+            : 'border-[var(--ys-border)] bg-white text-[var(--ys-text-muted)]'"
+          @click="pickMobileGroup(g.id)"
+        >{{ g.name }}</button>
+      </div>
+
+      <div class="space-y-4">
+
       <!-- ① 外观（2026-10-29 新增：主题色）
            四套强调色：钴蓝（默认）/ 青玉（改版前的老品牌色）/ 樱粉 / 石墨灰。
            选中的色块用**白底 + 强调色描边 + 强调色勾**表示，不用彩色填充 ——
            这是飞牛的口径（选中态是「底色淡彩 + 描边」，不是一整块重色）。
            改完立刻生效：主题只是 html 的 data-theme，全站按钮/图标/描边一起变。 -->
       <DisclosureSection
+        v-if="inGroup('appearance')"
         :open="openKey === 'appearance'"
         @toggle="toggleSection('appearance')"
         :summary="themeSummary"
@@ -47,6 +69,7 @@
            小节简介统一走 SectionCard 的 subTitle（2026-10-18 用户口径：「去掉简介」，改成悬浮可见）。
            原来那句里还写着 Markdown 的 ** 星号，页面会照原样显示 —— 顺手去掉。 -->
       <DisclosureSection
+        v-if="inGroup('quality')"
         :open="openKey === 'quality'"
         @toggle="toggleSection('quality')"
         :summary="qualitySummary"
@@ -79,6 +102,7 @@
 
       <!-- ⑥ 取音渠道（需求 m02588）：数组顺序=优先级，改动即存 -->
       <DisclosureSection
+        v-if="inGroup('channels')"
         :open="openKey === 'channels'"
         @toggle="toggleSection('channels')"
         :summary="channelsSummary"
@@ -144,6 +168,7 @@
 
       <!-- ② 文件命名 -->
       <DisclosureSection
+        v-if="inGroup('naming')"
         :open="openKey === 'naming'"
         @toggle="toggleSection('naming')"
         :summary="namingSummary"
@@ -174,6 +199,7 @@
            放在整理页里，用户每次修歌名都要穿过一屏配置才够到「扫描歌名」。
            组件自包含（自己拉规则 / 试算 / 生成 / 保存），见 NameRulesPanel.vue。 -->
       <DisclosureSection
+        v-if="inGroup('namerules')"
         :open="openKey === 'namerules'"
         @toggle="toggleSection('namerules')"
         :summary="nameRulesSummary"
@@ -187,6 +213,7 @@
       <!-- 这里设置的是飞牛音乐官方页面中注入的面板，不是曲率自己的 AI 助手。
            曲率助手的模型、执行模式和能力仍在「账号连接 / 助手」里设置。 -->
       <DisclosureSection
+        v-if="inGroup('injectedpanel')"
         :open="openKey === 'injectedpanel'"
         @toggle="toggleSection('injectedpanel')"
         :summary="injectedPanelSummary"
@@ -237,6 +264,7 @@
 
       <!-- ⑧ 存储目录 -->
       <DisclosureSection
+        v-if="inGroup('dirs')"
         :open="openKey === 'dirs'"
         @toggle="toggleSection('dirs')"
         :summary="dirsSummary"
@@ -421,6 +449,7 @@
 
       <!-- 下载行为（v2.5.0 从旧「曲库管家 → 下载」标签搬来；四个开关行为原样未动） -->
       <DisclosureSection
+        v-if="inGroup('behavior')"
         :open="openKey === 'behavior'"
         @toggle="toggleSection('behavior')"
         :summary="behaviorSummary"
@@ -646,6 +675,7 @@
            与 nas_page_size 同口径）。消费方是发现页歌单和榜单卡片网格，
            见 services/listColumns.js。本地曲库是曲目表格，不在本项范围内。 -->
       <DisclosureSection
+        v-if="inGroup('listdisplay')"
         :open="openKey === 'listdisplay'"
         @toggle="toggleSection('listdisplay')"
         :summary="listDisplaySummary"
@@ -676,11 +706,11 @@
       </DisclosureSection>
 
       <!-- 版本更新：检查 GitHub Release、下载 fpk、自动安装。后端执行，前端只展示状态。 -->
-      <UpdateCard />
+      <UpdateCard v-if="inGroup('about')" />
 
       <!-- ③ 关于 / 导出日志：不再是一张「带图标方块」的卡（那套视觉语言属于内容分区），
            收尾信息用一个安静的信息块：版本一行 + 两个轻按钮。 -->
-      <section class="mt-1 rounded-[var(--ys-radius-card)] border border-[var(--ys-border)] bg-[var(--ys-surface-sunken)] px-4 py-3.5 sm:px-5">
+      <section v-if="inGroup('about')" class="mt-1 rounded-[var(--ys-radius-card)] border border-[var(--ys-border)] bg-[var(--ys-surface-sunken)] px-4 py-3.5 sm:px-5">
         <div class="flex flex-wrap items-center gap-x-5 gap-y-1 text-[11.5px] text-[var(--ys-text-muted)]">
           <span class="flex items-center gap-1.5">
             <Info class="h-3.5 w-3.5 text-[var(--ys-text-aux)]" :stroke-width="1.8" />
@@ -713,6 +743,8 @@
         </div>
       </section>
 
+      </div>
+
       <!-- 开放接口弹窗：只在打开时挂载（ApiConsole 会拉一次接口目录，不必常驻） -->
       <ApiModal v-model="showApiModal" />
 
@@ -721,7 +753,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import PageShell from './PageShell.vue'
 import DisclosureSection from './DisclosureSection.vue'
 // 2026-10-29：命名解析规则从「补全整理 → 歌名修复」搬来（配置不是操作）
@@ -734,6 +766,8 @@ import { THEMES, loadTheme, setTheme } from '../services/theme'
 import { COLUMN_OPTIONS, DEFAULT_COLUMNS, LIST_COLUMNS_KEY, normalizeColumns, columnSummary } from '../services/listColumns'
 import { loadPref, savePref } from '../services/prefs'
 import { fail, apiError } from '../services/userMsg'
+import { SETTINGS_GROUPS, settingsGroup, setSettingsGroup } from '../services/settingsGroup'
+import { navigateTo } from '../services/navBus'
 import { logInfo } from '../services/appLog'
 import InlineNotice from './InlineNotice.vue'
 import NasDirPicker from './NasDirPicker.vue'
@@ -758,6 +792,42 @@ const openKey = ref('')
 function toggleSection(k) {
   openKey.value = openKey.value === k ? '' : k
 }
+
+/**
+ * 设置分类（2026-11-25 用户口径，参照 magpie：分类在侧栏左下角的弹框里选，
+ * 「页面只负责显示对应的设置」）。
+ *
+ * 分类清单与「当前分类」在 services/settingsGroup.js —— App.vue 的弹框和这里共用它。
+ * 这张表只回答一件事：某个分类下要渲染哪几块。新增设置块时：
+ *   写块本身 → 加 v-if="inGroup('块键')" → 在下面某个分类里登记块键。
+ */
+const GROUP_KEYS = {
+  general: ['appearance', 'listdisplay'],
+  download: ['quality', 'channels', 'behavior'],
+  files: ['naming', 'namerules'],
+  storage: ['dirs'],
+  integration: ['injectedpanel'],
+  // UpdateCard 与版本/免责声明/开放接口那条收尾信息块一起算「关于」。
+  about: ['about'],
+}
+function inGroup(key) {
+  return (GROUP_KEYS[settingsGroup.value] || []).includes(key)
+}
+// 窄屏 chips 用：选中即切（「日志」不是设置块，跳到 system 的日志那一段）。
+function pickMobileGroup(id) {
+  if (id === 'logs') {
+    navigateTo('logs')
+    return
+  }
+  setSettingsGroup(id)
+}
+// 换分类时把这一类的第一块展开：一页只有一两块，全收起等于让人多点一次。
+watch(settingsGroup, (g) => {
+  openKey.value = (GROUP_KEYS[g] || [])[0] || ''
+})
+onMounted(() => {
+  openKey.value = (GROUP_KEYS[settingsGroup.value] || [])[0] || ''
+})
 
 /* ── 外观（主题色，2026-10-29）────────────────────────────────────────
    主题是「整站强调色」，不是单个组件的状态，所以实现极薄：

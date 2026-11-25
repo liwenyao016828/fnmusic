@@ -219,27 +219,6 @@
         </div>
       </nav>
 
-      <!-- 任务状态：只列「需要你处理」的项；都为 0 时给一句明确结论，而不是摆一排 0。
-           跳转走 resolveRoute 的别名表（tab: 'complete'→整理页、'download'→下载队列…）。
-           侧栏收缩时整个隐藏（56px 放不下文字+数字）。 -->
-      <div class="sb-collapse shrink-0 border-t border-[var(--ys-border)] px-2 py-3" v-if="statusItems.length">
-        <div class="sb-collapse-inner">
-        <p class="mb-1.5 px-2.5 text-[11px] font-medium text-[var(--ys-text-aux)]">任务状态</p>
-        <div class="space-y-0.5">
-          <button
-            v-for="s in statusItems" :key="s.id"
-            @click="s.go()"
-            class="flex w-full items-center gap-2 rounded-[var(--ys-radius-control)] px-2.5 py-1.5 text-left text-[12px] text-[var(--ys-text-secondary)] transition-colors duration-[var(--ys-dur-1)] hover:bg-[var(--ys-surface-hover)] hover:text-[var(--ys-text)]"
-            :title="s.label"
-          >
-            <component :is="s.icon" class="h-3.5 w-3.5 shrink-0" :class="s.iconClass" :stroke-width="1.8" />
-            <span class="min-w-0 flex-1 truncate">{{ s.label }}</span>
-            <span class="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium" :class="s.badgeClass">{{ s.count }}</span>
-          </button>
-        </div>
-        </div>
-      </div>
-
       <!-- 侧栏底部：只留两颗图标按钮 —— 项目图标（AI 助手）+ 音源。
            2026-10-29 用户：「只保留ai图标和音源图标,不需要曲率文字和音源文字,就用音源首字代表就可以了.
            ai图标缩小,采用黑白配色.白底黑图标,呼吸灯改为图标的副星星闪烁,主星星不变.」
@@ -247,9 +226,113 @@
              音源用首字代表（如「极」）。
            其余（版本号 / GitHub / 更新 / 播放器 / 收缩）保留，折叠时收高淡出。 -->
       <div class="shrink-0 border-t border-[var(--ys-border)] p-2.5" :class="sidebarCollapsed ? 'space-y-1.5' : 'space-y-2'">
-        <!-- 图标列：展开时 AI 与音源并排；侧栏收缩时改为竖排一列（AI → 音源 → 地球），
-             2026-10-29 用户：「收缩的时候,应该适配一下.垂直排列ai,音源,地球图标,这些按钮.」 -->
-        <div class="flex items-center justify-center" :class="sidebarCollapsed ? 'flex-col gap-1.5' : 'flex-row gap-2'">
+        <!--
+          底部图标行（2026-11-25 用户口径）：
+            「「发现新版本」卡片：浓缩为一个图标，和 AI 图标、音源图标排在同一行。」
+            「任务状态也改为图标，放在同一行。」
+            「侧栏的收缩图标与其他图标位置不对齐，请修正。」
+          → 所以这一行是**统一规格**的一排按钮：36×36 圆角方块，内容居中；
+            更新 = 箭头图标（角点小圆点表示有新版本/已装好）；
+            待处理 = 收件箱图标（角标数字为待处理条数），点开在图标上方弹出明细；
+            折叠按钮也进来当同规格的一颗 —— 之前它是整宽按钮，图标中心与上面那排
+            对不齐（用户看出来的就是这一处）。
+            侧栏收缩到 56px 时，flex-wrap 会让它们自然竖成一列，不再单独写 flex-col 分支。
+        -->
+        <!--
+          设置入口（2026-11-25 用户最终口径，改自 magpie 的 #prefs）：
+            侧栏最下面的「设置」——**样式与其他导航项完全一致**（选中态也是白底 + 结构线 + 图标转主题色，
+            不是另画一颗 bordered pill）；点它展开分类列表，列表是普通块级元素、撑开侧栏参与布局。
+            用户原话：「侧边栏的系统导航可以去掉了.设置的样式依旧保持其他侧边栏的样式,选中状态框和颜色.
+            并且我觉得这个不应该是个顶上加一个弹出框,而是一个展开框,点击其他区域不会自动收缩。」
+            选分类 = 落到 system/settings 那一段，页面只渲染该类的设置块
+            （分类清单与「当前分类」在 services/settingsGroup.js）。
+            「日志」也在这里 —— 用户：「日志就加在设置里好了」，
+            它走 navigateTo('logs')，仍然是 system 页的另一段，通知里的「查看日志」不受影响。
+        -->
+        <div class="space-y-0.5">
+          <!--
+            分类列表是**普通块级元素**（不是 absolute 浮层）：展开时撑开侧栏、参与布局，
+            「设置」按钮因此会被顶上去 —— 用户 2026-11-25 明确接受这一点：
+              「我觉得这个不应该是个顶上加一个弹出框,而是一个展开框,点击其他区域不会自动收缩。」
+            所以这里没有 outside-click 收起，只有再点一次「设置」才收。
+          -->
+          <div v-if="settingsOpen && !sidebarCollapsed" id="settings-cats" role="menu" aria-label="设置分类">
+            <button
+              v-for="g in SETTINGS_GROUPS"
+              :key="g.id"
+              type="button"
+              role="menuitem"
+              class="relative flex w-full items-center gap-2.5 rounded-[var(--ys-radius-control)] px-2.5 py-[7px] text-left text-[13px] font-medium transition-colors duration-[var(--ys-dur-1)]"
+              :class="settingsGroupOn(g.id)
+                ? 'bg-white text-[var(--ys-text)] shadow-[0_1px_2px_rgba(0,0,0,0.06)]'
+                : 'text-[var(--ys-text-secondary)] hover:bg-[var(--ys-surface-hover)] hover:text-[var(--ys-text)]'"
+              :aria-current="settingsGroupOn(g.id) ? 'true' : undefined"
+              @click="openSettingsGroup(g.id)"
+            >
+              <component
+                :is="SETTINGS_ICONS[g.id]"
+                class="h-4 w-4 shrink-0"
+                :class="settingsGroupOn(g.id) ? 'text-[var(--ys-accent)]' : 'text-[var(--ys-text-aux)]'"
+                :stroke-width="1.8"
+              />
+              <span class="truncate">{{ g.name }}</span>
+            </button>
+          </div>
+          <!-- 设置本身也是一颗标准导航项（同样的 13px/圆角/白底选中态），不是另一套 pill。 -->
+          <button
+            type="button"
+            class="relative flex w-full items-center rounded-[var(--ys-radius-control)] px-2.5 py-[7px] text-[13px] font-medium transition-colors duration-[var(--ys-dur-1)]"
+            :class="[
+              sidebarCollapsed ? 'justify-center' : 'gap-2.5',
+              settingsActive
+                ? 'bg-white text-[var(--ys-text)] shadow-[0_1px_2px_rgba(0,0,0,0.06)]'
+                : 'text-[var(--ys-text-secondary)] hover:bg-[var(--ys-surface-hover)] hover:text-[var(--ys-text)]'
+            ]"
+            data-settings-toggle
+            :aria-expanded="settingsOpen ? 'true' : 'false'"
+            aria-controls="settings-cats"
+            title="设置"
+            @click="toggleSettings"
+          >
+            <Settings
+              class="h-4 w-4 shrink-0"
+              :class="settingsActive ? 'text-[var(--ys-accent)]' : 'text-[var(--ys-text-aux)]'"
+              :stroke-width="1.8"
+            />
+            <span class="sb-label flex-1 truncate text-left">设置</span>
+            <ChevronUp
+              v-if="!sidebarCollapsed"
+              class="sb-label h-3.5 w-3.5 shrink-0 text-[var(--ys-text-aux)] transition-transform duration-200"
+              :class="settingsOpen ? 'rotate-180' : ''"
+              :stroke-width="2"
+            />
+          </button>
+        </div>
+
+        <div ref="statusRowRef" class="relative flex flex-wrap items-center justify-center gap-2">
+          <!--
+            待处理弹层：贴在图标行上方。内容与原来侧栏底部那份「任务状态」列表完全同源
+            （statusItems，口径在 services/libraryView.js，有单测），只是从常驻改成按需展开。
+          -->
+          <div
+            v-if="showStatusPop && statusItems.length"
+            class="absolute bottom-full left-1/2 z-30 mb-2 w-[216px] -translate-x-1/2 overflow-hidden rounded-[12px] border border-[var(--ys-border)] bg-white shadow-[0_10px_28px_rgba(0,0,0,0.14)]"
+            role="dialog"
+            aria-label="待处理"
+          >
+            <p class="border-b border-[var(--ys-border)] px-2.5 py-1.5 text-[11px] font-medium text-[var(--ys-text-aux)]">待处理</p>
+            <button
+              v-for="s in statusItems" :key="s.id"
+              @click="s.go(); showStatusPop = false"
+              class="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12px] transition-colors hover:bg-[var(--ys-surface-hover)]"
+              :title="s.label"
+            >
+              <component :is="s.icon" class="h-3.5 w-3.5 shrink-0" :class="s.iconClass" :stroke-width="1.8" />
+              <span class="min-w-0 flex-1 truncate text-[var(--ys-text-secondary)]">{{ s.label }}</span>
+              <span class="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium" :class="s.badgeClass">{{ s.count }}</span>
+            </button>
+          </div>
+
           <!-- 项目图标（AI 助手）：白底 + 黑星主星 + 黑星副星闪烁 -->
           <button
             @click="showAssistant = true"
@@ -274,6 +357,50 @@
             <span class="leading-none">{{ sourceInitial }}</span>
             <span class="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full ring-2 ring-[var(--ys-chrome)]" :class="activeSourceMeta ? 'bg-[var(--ys-ok)]' : 'bg-[var(--ys-warn)]'"></span>
           </button>
+
+          <!-- 新版本：一颗图标（只在检测到更新 / 更新在跑时出现） -->
+          <button
+            v-if="updateEntry"
+            @click="showUpdateModal = true"
+            class="relative grid h-9 w-9 shrink-0 cursor-pointer place-items-center rounded-[12px] border bg-white transition-colors hover:bg-[var(--ys-surface-hover)]"
+            :class="updateEntry.tone === 'done'
+              ? 'border-[var(--ys-accent)]/40 text-[var(--ys-accent)]'
+              : 'border-[var(--ys-border)] text-[var(--ys-text-muted)] hover:text-[var(--ys-text)]'"
+            :title="updateEntry.label"
+            :aria-label="updateEntry.label"
+          >
+            <ArrowUpCircle class="h-[17px] w-[17px]" :class="{ 'animate-pulse': updateEntry.tone === 'new' }" :stroke-width="1.8" />
+            <span
+              class="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full ring-2 ring-[var(--ys-chrome)]"
+              :class="updateEntry.tone === 'done' ? 'bg-[var(--ys-ok)]' : 'bg-[var(--ys-accent)]'"
+            ></span>
+          </button>
+
+          <!-- 待处理：一颗图标 + 条数角标，点开上方弹层 -->
+          <button
+            v-if="statusItems.length"
+            @click="showStatusPop = !showStatusPop"
+            class="relative grid h-9 w-9 shrink-0 cursor-pointer place-items-center rounded-[12px] border bg-white transition-colors hover:bg-[var(--ys-surface-hover)]"
+            :class="showStatusPop
+              ? 'border-[var(--ys-accent)]/40 bg-[var(--ys-accent-soft)] text-[var(--ys-accent)]'
+              : 'border-[var(--ys-border)] text-[var(--ys-text-muted)] hover:text-[var(--ys-text)]'"
+            :title="`待处理 ${statusPendingCount} 项`"
+            :aria-label="`待处理 ${statusPendingCount} 项，点开查看`"
+            :aria-expanded="showStatusPop ? 'true' : 'false'"
+          >
+            <Inbox class="h-[17px] w-[17px]" :stroke-width="1.8" />
+            <span class="absolute -top-1 -right-1 grid min-w-[15px] place-items-center rounded-full bg-[var(--ys-accent)] px-1 text-[9.5px] font-semibold leading-[15px] text-white">{{ statusPendingCount > 99 ? '99+' : statusPendingCount }}</span>
+          </button>
+
+          <!-- 折叠：同规格的一颗（原来整宽，导致图标中心与上面那排错位） -->
+          <button
+            @click="toggleSidebar"
+            class="grid h-9 w-9 shrink-0 cursor-pointer place-items-center rounded-[12px] text-[var(--ys-text-aux)] transition-colors hover:bg-[var(--ys-surface-hover)] hover:text-[var(--ys-text)]"
+            :title="sidebarCollapsed ? '展开侧栏' : '收缩侧栏'"
+            :aria-label="sidebarCollapsed ? '展开侧栏' : '收缩侧栏'"
+          >
+            <component :is="sidebarCollapsed ? PanelLeftOpen : PanelLeftClose" class="h-[17px] w-[17px]" :stroke-width="1.8" />
+          </button>
         </div>
 
         <!-- 版本号 + 项目地址（2026-10-29 用户：「项目地址的图标替换到互联网图标,并且版本号也可以跳转」）
@@ -295,37 +422,6 @@
             <span class="sb-label truncate text-[11px] font-medium leading-none">v{{ appVersion }}</span>
           </a>
         </div>
-
-        <!-- 版本更新入口（只在检测到更新 / 更新在跑时出现） -->
-        <button
-          v-if="updateEntry"
-          @click="showUpdateModal = true"
-          class="ys-press flex w-full items-center gap-1.5 rounded-[8px] border px-3 py-2 text-[12px] font-medium shadow-sm transition-colors"
-          :class="updateEntry.tone === 'done'
-            ? 'border-[var(--ys-accent-soft)] bg-[var(--ys-accent-soft)] text-[var(--ys-accent)] hover:brightness-[0.98]'
-            : 'border-[var(--ys-line-control)] bg-white text-[var(--ys-text)] hover:bg-[var(--ys-surface-hover)]'"
-          :title="updateEntry.tone === 'done' ? '新版本已安装，点击重启生效' : '有新版本可更新，点击查看'"
-        >
-          <ArrowUpCircle
-            class="h-3.5 w-3.5 shrink-0 text-[var(--ys-accent)]"
-            :class="{ 'animate-pulse': updateEntry.tone === 'new' }"
-          />
-          <span class="sb-label min-w-0 flex-1 truncate text-left">{{ updateEntry.label }}</span>
-          <span
-            v-if="updateEntry.tone === 'new'"
-            class="sb-label shrink-0 rounded-full bg-[var(--ys-accent-soft)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--ys-accent)]"
-          >更新</span>
-        </button>
-
-        <!-- 侧栏收缩按钮（2026-10-29 用户：「折叠按钮不需要外框卡片包裹.直接图标就好」） -->
-        <button
-          @click="toggleSidebar"
-          class="flex w-full items-center justify-center rounded-[var(--ys-radius-control)] py-1.5 text-[var(--ys-text-aux)] transition-colors hover:bg-[var(--ys-surface-hover)] hover:text-[var(--ys-text)]"
-          :title="sidebarCollapsed ? '展开侧栏' : '收缩侧栏'"
-          :aria-label="sidebarCollapsed ? '展开侧栏' : '收缩侧栏'"
-        >
-          <component :is="sidebarCollapsed ? PanelLeftOpen : PanelLeftClose" class="h-4 w-4" :stroke-width="1.8" />
-        </button>
       </div>
     </aside>
 
@@ -537,14 +633,11 @@
         <template #view-accounts><AccountManager /></template>
         <!-- 系统（设置 / 日志）：都是「工具/配置」页，出问题时来看，改完就走。
              日志里看到失败 → 去设置改参数，所以并成一页的两段。 -->
+        <!-- 2026-11-25：系统页不再挂「设置 / 日志」分段器 —— 切换入口统一到侧栏左下角
+             那颗「设置」按钮弹出的分类框（用户：「日志就加在设置里好了」）。
+             navigateTo('logs') 仍然有效（通知里的「查看日志」照旧落到日志那一段）。 -->
         <template #page-head-system>
-          <div class="bg-white px-4 pt-3 pb-1">
-            <SegmentedControl
-              :segments="decoratedSegments('system')"
-              :model-value="segmentOf('system')"
-              @update:model-value="v => setSegment('system', v)"
-            />
-          </div>
+          <div class="bg-white" />
         </template>
         <!--
           ⚠️ 2026-10-29：每格只放**自己那一段**的组件。
@@ -766,6 +859,24 @@
               >{{ downloadManager.activeCount.value }}</span>
             </button>
 
+            <!--
+              设置（2026-11-25 用户：「侧边栏的系统导航可以去掉了.」之后，手机端从这里进）。
+              桌面侧栏左下角有「设置」+ 分类展开；手机没有侧栏，就在抽屉里给一条入口，
+              分类由设置页自己的窄屏 chips 选（AppSettings.vue 的 pickMobileGroup）。
+            -->
+            <button
+              @click="navigateTo('settings'); showMoreDrawer = false"
+              :class="[
+                'ys-press flex w-full items-center gap-3 rounded-[8px] px-3 py-3 text-left text-[13px] font-medium',
+                currentView === 'system' && segmentOf('system') === 'settings'
+                  ? 'bg-white text-[var(--ys-text)] shadow-[0_1px_2px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.04]'
+                  : 'text-[var(--ys-text-muted)] hover:bg-black/[0.05] hover:text-[var(--ys-text)]'
+              ]"
+            >
+              <Settings class="h-[18px] w-[18px] shrink-0" />
+              <span class="flex-1 text-left">设置</span>
+            </button>
+
             <!-- 任务状态（手机：抽屉里看；桌面：侧栏底部） -->
             <template v-if="statusItems.length">
               <p class="mb-1 mt-4 px-3 text-[11px] font-medium text-[var(--ys-text-aux)]">任务状态</p>
@@ -921,6 +1032,7 @@ import {
   onNavigate, navigateTo,
 } from './services/navBus'
 import { VIEWS, NAV_GROUPS, MOBILE_TAB_IDS, viewsOfGroup, segmentsOf, defaultSegment, resolveRoute } from './services/navViews'
+import { SETTINGS_GROUPS, settingsGroup, setSettingsGroup } from './services/settingsGroup'
 import { fail as feedbackFail } from './services/feedback'
 import { pickSearchHit } from './services/fillSource'
 import { invalidate } from './services/viewCache'
@@ -932,7 +1044,8 @@ import {
   Wand2, Send, Download, ListMusic, ListPlus, CloudDownload,
   MoreHorizontal, X, Loader2, AlertTriangle, Search, ArrowRight,
   Sparkles, Copy, ScanSearch, History, Gauge, ArrowUpCircle, Wrench,
-  FolderTree, Github, PanelLeftOpen, PanelLeftClose, Globe, Volume2,
+  FolderTree, Github, PanelLeftOpen, PanelLeftClose, Globe, Volume2, Inbox, ChevronUp,
+  SlidersHorizontal, FileText, HardDrive, Plug, Info,
 } from 'lucide-vue-next'
 import { sidebarStatusItems } from './services/libraryView'
 import { pushNavBadge, navLabelWithBadge } from './services/sidebarBadges'
@@ -1018,6 +1131,75 @@ function toggleSidebar() {
   savePref('sidebarCollapsed', sidebarCollapsed.value ? '1' : '0')
 }
 
+/**
+ * 设置入口（2026-11-25 用户第二次口径）：
+ *   「设置的样式依旧保持其他侧边栏的样式,选中状态框和颜色.并且我觉得这个不应该是个顶上
+ *     加一个弹出框,而是一个展开框,点击其他区域不会自动收缩。」
+ * → 展开框是**普通块级元素**（模板里没有 absolute），展开就撑开侧栏、按钮被顶上去；
+ *   没有 outside-click 收起，只有再点一次「设置」才收。
+ *   分类行用的就是导航项那套 class（13px/medium、radius-control、选中白底+1px 结构线、
+ *   图标转 accent）—— 与「系统」导航项移除后的观感一致。
+ *   选分类 = setSettingsGroup + 落到 system/settings；「日志」走 navigateTo('logs')。
+ */
+const settingsOpen = ref(false)
+const SETTINGS_ICONS = {
+  general: SlidersHorizontal,
+  download: Download,
+  files: FileText,
+  storage: HardDrive,
+  integration: Plug,
+  logs: ScrollText,
+  about: Info,
+}
+/** 「设置」这颗按钮亮不亮：停在 system 页（设置或日志）就算选中。 */
+const settingsActive = computed(() => currentView.value === 'system')
+/** 分类行各自的选中态：日志类看当前分段，其余看当前分类。 */
+function settingsGroupOn(id) {
+  if (currentView.value !== 'system') return false
+  if (id === 'logs') return segmentOf('system') === 'logs'
+  return segmentOf('system') !== 'logs' && settingsGroup.value === id
+}
+function toggleSettings() {
+  // 折叠态下没有横向空间放分类行，先展开侧栏再打开列表。
+  if (sidebarCollapsed.value) {
+    sidebarCollapsed.value = false
+    savePref('sidebarCollapsed', '0')
+    settingsOpen.value = true
+    return
+  }
+  settingsOpen.value = !settingsOpen.value
+}
+function openSettingsGroup(id) {
+  // 2026-11-25 用户：「展开框点击里面的设置也不要收」→ 选分类后列表保持展开，
+  // 只有再点一次「设置」才收（按钮自己 toggle）。
+  if (id === 'logs') {
+    navigateTo('logs')
+    return
+  }
+  setSettingsGroup(id)
+  navigateTo('settings')
+}
+
+/**
+ * 侧栏底部「待处理」图标弹出的明细层（2026-11-25 用户：「任务状态也改为图标，放在同一行」）。
+ * 原来它是常驻的一整块列表，占着侧栏 60–120px 的高度，而它大多数时候是空的；
+ * 现在收成一颗图标 + 条数角标，点开才在上面浮出明细。数据源没变（statusItems）。
+ */
+const showStatusPop = ref(false)
+const statusRowRef = ref(null)
+const statusPendingCount = computed(() =>
+  statusItems.value.reduce((n, s) => n + (Number(s.count) || 0), 0))
+function onDocPointerDown(e) {
+  if (showStatusPop.value) {
+    const row = statusRowRef.value
+    if (row && !row.contains(e.target)) showStatusPop.value = false
+  }
+  // 设置分类框**不**在这里收起：用户要的是展开框，点别处不自动收缩，
+  // 只有再点一次「设置」才收（见 toggleSettings）。
+}
+onMounted(() => document.addEventListener('pointerdown', onDocPointerDown, true))
+onUnmounted(() => document.removeEventListener('pointerdown', onDocPointerDown, true))
+
 // 应用版本号（侧栏底部显示，2026-10-29 用户要求）
 const appVersion = ref('')
 /** 项目主页（侧栏底部的版本号 / 互联网图标都指向这里）。 */
@@ -1029,6 +1211,11 @@ const PROJECT_URL_LABEL = 'GitHub'
 const showMoreDrawer = ref(false)
 // 切了视图就收抽屉 —— 不管跳转来自抽屉里的按钮还是别处（navigateTo 深链）
 watch(currentView, () => { showMoreDrawer.value = false })
+
+// 设置展开框：点侧栏其它页面就收（用户 2026-11-25：「点击侧边栏的其他页面需要收」）。
+// 只认「离开 system」这一种情况 —— 在框里选分类也是切页（→ system/settings 或 logs），
+// 那种必须保持展开（用户同一天先说「展开框点击里面的设置也不要收」）。
+watch(currentView, (v) => { if (v !== 'system') settingsOpen.value = false })
 
 /**
  * 侧栏底部的「版本更新」入口（用户 2026-10-24：「检测到更新后显示有更新的窗口，
@@ -1194,7 +1381,9 @@ const mobileTabs = MOBILE_TAB_IDS
   .filter(Boolean)
 
 /** 「更多」抽屉：其余全部视图 */
-const moreItems = navItems.filter((i) => !MOBILE_TAB_IDS.includes(i.id))
+// 手机「更多」抽屉：VIEWS 里除底栏以外的全部，**跳过 navHidden**（「系统」2026-11-25 起
+// 不在导航里出现，它由侧栏左下角的「设置」和抽屉里那条「设置」入口进）。
+const moreItems = navItems.filter((i) => !MOBILE_TAB_IDS.includes(i.id) && !i.navHidden)
 
 /** 段位清单（带图标），给 SegmentedControl 用 */
 function decoratedSegments(view) {
