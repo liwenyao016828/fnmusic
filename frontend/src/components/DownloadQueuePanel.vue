@@ -153,7 +153,7 @@
   </div>
 
   <!-- 4. 任务列表内容区 -->
-  <div class="min-h-0 flex-1 space-y-2 overflow-y-auto bg-[var(--ys-surface-sunken)] p-3 sm:p-4">
+  <div class="download-task-list min-h-0 flex-1 space-y-2 overflow-y-auto bg-[var(--ys-surface-sunken)] p-3 sm:p-4">
     <!--
       按序号快速勾选（2026-10-23 用户：「多选框上方增加多选功能，比如输入 100 就是 0-100，
       也可以输入 11-200」）。行号 = 每行最左边那一列 #，**按当前筛选后的可见列表数**：
@@ -221,179 +221,173 @@
       v-for="(task, rowIndex) in pagedTasks"
       :key="task.id"
       :class="[
-        'group flex items-center gap-3 rounded-[12px] border bg-white p-3 transition-all select-none cursor-pointer',
+        'download-task rounded-[14px] border px-3 py-3 transition-colors select-none cursor-pointer',
         selected.has(task.id)
           ? 'border-transparent ring-2 ring-emerald-500/40 bg-emerald-50/30'
-          : 'border-[var(--ys-border)] hover:border-[var(--ys-border-strong)]',
+          : 'border-[var(--ys-border)] bg-white hover:border-[var(--ys-border-strong)]',
       ]"
       :title="selected.has(task.id) ? '点击取消选中' : '点击选中这一行'"
       @click="toggleSelect(task.id)"
     >
-      <!--
-        行号：与上面「按序号选」的输入是同一套口径（当前可见列表里的第几行）。
-        没有这一列数字，用户输 11-200 时无从对照。
-      -->
-      <span class="w-7 shrink-0 text-center font-mono text-[11px] text-gray-300 tabular-nums">
-        {{ (page - 1) * pageSize + rowIndex + 1 }}
-      </span>
+      <div class="download-task__song flex min-w-0 items-center gap-2.5">
+        <div class="flex shrink-0 flex-col items-center gap-1.5">
+          <span class="min-w-4 text-center font-mono text-[11px] text-[var(--ys-text-muted)] tabular-nums">
+            {{ (page - 1) * pageSize + rowIndex + 1 }}
+          </span>
 
-      <!-- 选中状态指示：所有行都有（2026-10-25 #4 起在跑/排队的行也能勾）；绿勾 = 已选，灰圈 = 可点但未选 -->
-      <span
-        class="pointer-events-none grid h-4 w-4 shrink-0 place-items-center rounded-[6px] border transition-colors"
-        :class="selected.has(task.id)
-          ? 'border-emerald-500 bg-emerald-600 text-white'
-          : 'border-[var(--ys-border-strong)] bg-white text-transparent'"
-        aria-hidden="true"
-      >
-        <Check class="h-3 w-3" :stroke-width="3" />
-      </span>
-
-      <!-- 封面 -->
-      <div class="w-10 h-10 rounded-lg overflow-hidden bg-[var(--ys-surface-sunken)] shrink-0 relative flex items-center justify-center">
-        <img
-          v-if="task.song.cover"
-          :src="task.song.cover"
-          alt="cover"
-          referrerpolicy="no-referrer"
-          class="w-full h-full object-cover"
-          @error="task.song.cover = ''"
-        />
-        <Music2 v-else class="h-4 w-4 text-[var(--ys-text-aux)]" :stroke-width="1.8" />
-      </div>
-
-      <!-- 歌曲信息与状态 -->
-      <div class="flex-1 min-w-0">
-        <div class="flex items-center justify-between gap-1 mb-0.5">
-          <p class="text-xs font-semibold text-gray-800 truncate" :title="task.song.name">
+          <!-- 选中状态指示：所有行都有（2026-10-25 #4 起在跑/排队的行也能勾）；绿勾 = 已选，灰圈 = 可点但未选 -->
+          <span
+            class="pointer-events-none grid h-4 w-4 shrink-0 place-items-center rounded-[6px] border transition-colors"
+            :class="selected.has(task.id)
+              ? 'border-emerald-500 bg-emerald-600 text-white'
+              : 'border-[var(--ys-border-strong)] bg-white text-transparent'"
+            aria-hidden="true"
+          >
+            <Check class="h-3 w-3" :stroke-width="3" />
+          </span>
+        </div>
+        <!-- 封面（2026-11-26 用户口径：48–56px、适度圆角；歌名才是最醒目的那一格） -->
+        <div class="w-[52px] h-[52px] rounded-[10px] overflow-hidden bg-[var(--ys-surface-sunken)] shrink-0 flex items-center justify-center">
+          <img
+            v-if="task.song.cover"
+            :src="task.song.cover"
+            alt=""
+            referrerpolicy="no-referrer"
+            class="w-full h-full object-cover"
+            @error="task.song.cover = ''"
+          />
+          <Music2 v-else class="h-4 w-4 text-[var(--ys-text-aux)]" :stroke-width="1.8" />
+        </div>
+        <div class="min-w-0 flex-1">
+          <p class="truncate text-[15px] font-semibold leading-tight text-[var(--ys-text)]" :title="task.song.name">
             {{ task.song.name }}
           </p>
-          <!-- 平台标签 -->
-          <span
-            class="shrink-0 rounded-full bg-[var(--ys-surface-sunken)] px-1.5 py-0.2 text-[9px] text-gray-500"
-            :title="`原歌曲平台：${platformName(task.song.source || task.platform)}`"
-          >{{ platformName(task.song.source || task.platform) }}</span>
+          <p v-if="task.song.singer || task.song.album" class="mt-0.5 truncate text-xs text-[var(--ys-text-muted)]"
+            :title="[task.song.singer, task.song.album].filter(Boolean).join(' · ')">
+            {{ [task.song.singer, task.song.album].filter(Boolean).join(' · ') }}
+          </p>
+
+          <!-- 状态行一：状态徽标 + 音源平台灰标签（绿色只给成功，其余统一灰调） -->
+          <div class="flex items-center mt-1.5 flex-wrap gap-1.5 text-[11px]">
+            <!-- 后台排队中 -->
+            <span
+              v-if="task.status === 'pending'"
+              class="rounded-full px-2 py-0.5 bg-[var(--ys-surface-sunken)] text-gray-500 flex items-center gap-1"
+              title="已提交到 NAS 后台队列，前端关闭也会继续"
+            >
+              <Clock class="w-3 h-3 text-gray-500" />
+              <span>后台排队中</span>
+            </span>
+
+            <!-- 后台下载中 -->
+            <span
+              v-else-if="task.status === 'downloading'"
+              class="rounded-full px-2 py-0.5 bg-emerald-50 text-emerald-700 flex items-center gap-1 font-medium"
+              title="NAS 正在解析并下载；原平台无链时会尝试其他已配置渠道，以最终结果为准"
+            >
+              <Loader2 class="w-3 h-3 animate-spin text-emerald-600" />
+              <span>解析与下载中</span>
+            </span>
+
+            <!-- 已暂停 -->
+            <span
+              v-else-if="task.status === 'paused'"
+              class="rounded-full px-2 py-0.5 bg-amber-50 text-amber-600 flex items-center gap-1 font-medium"
+            >
+              <Pause class="w-3 h-3 text-amber-500" />
+              <span>已暂停</span>
+            </span>
+
+            <!-- 下载成功 -->
+            <span
+              v-else-if="task.status === 'success'"
+              class="rounded-full px-2 py-0.5 bg-green-100 text-green-800 flex items-center gap-1 font-medium"
+            >
+              <Check class="w-3 h-3" />
+              <span>已保存至 NAS</span>
+            </span>
+
+            <!--
+              下载失败：徽标给一句 4~6 字的结论（平台无此档 / 洛雪宿主未开 / 写盘失败…），
+              具体原因链在下面单独一行摊开 —— 以前只把整串塞进 title 悬停，
+              用户根本看不到（issue #10 原话「个别下载任务成功，歌单全部失败，这是废了吗」）。
+            -->
+            <span
+              v-else-if="task.status === 'failed'"
+              class="rounded-full px-2 py-0.5 bg-rose-50 text-rose-600 flex items-center gap-1"
+              :title="task.error || '下载失败'"
+            >
+              <AlertCircle class="w-3 h-3 text-rose-500 shrink-0" />
+              <span>{{ explainFailure(task.error).label }}</span>
+            </span>
+
+            <!--
+              已停止：点过「停止全部」/ 订阅行「停止」后留下的任务。
+              ⚠️ 这一档以前**连状态文字都没有**，右侧也没有任何按钮 ——
+              用户看得到任务却动不了（2026-09-22 反馈：「下载-停止后，已停止增加恢复下载」）。
+            -->
+            <span
+              v-else-if="task.status === 'stopped'"
+              class="rounded-full px-2 py-0.5 bg-[var(--ys-surface-sunken)] text-gray-500 flex items-center gap-1"
+              :title="task.error || '已被用户停止'"
+            >
+              <Square class="w-3 h-3 text-gray-500" />
+              <span>已停止</span>
+            </span>
+
+            <!-- 音源平台：灰底低调标签（规格第 3 条：与状态同行、不抢色） -->
+            <span
+              class="rounded-full bg-[var(--ys-surface-hover)] px-2 py-0.5 text-[var(--ys-text-muted)]"
+              :title="`原歌曲平台：${platformName(task.song.source || task.platform)}`"
+            >{{ platformName(task.song.source || task.platform) }}</span>
+          </div>
         </div>
-        <p class="text-[11px] text-gray-500 truncate mb-1" :title="task.song.singer">
-          {{ task.song.singer }}{{ task.song.album ? ' · ' + task.song.album : '' }}
-        </p>
+      </div>
 
-        <!-- 状态徽标与提示 -->
-        <div class="flex items-center gap-1.5 text-[10px]">
-          <!-- 后台排队中 -->
-          <span
-            v-if="task.status === 'pending'"
-            class="px-2 py-0.5 rounded-md bg-[var(--ys-surface-sunken)] text-gray-500 flex items-center gap-1"
-            title="已提交到 NAS 后台队列，前端关闭也会继续"
-          >
-            <Clock class="w-3 h-3 text-gray-500" />
-            <span>后台排队中</span>
+      <div class="download-task__details min-w-0 space-y-2">
+        <div class="flex flex-wrap items-center gap-1.5 text-[11px]">
+          <span class="download-task__pill">
+            音质 <b>{{ downloadManager.qualityLabel(task.quality) || '最高音质' }}</b>
           </span>
-
-          <!-- 后台下载中 -->
-          <span
-            v-else-if="task.status === 'downloading'"
-            class="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-600 flex items-center gap-1 font-medium"
-            title="NAS 正在解析并下载；原平台无链时会尝试其他已配置渠道，以最终结果为准"
-          >
-            <Loader2 class="w-3 h-3 animate-spin text-emerald-600" />
-            <span>解析与下载中</span>
-          </span>
-
-          <!-- 已暂停 -->
-          <span
-            v-else-if="task.status === 'paused'"
-            class="px-2 py-0.5 rounded-md bg-amber-50 text-amber-600 flex items-center gap-1 font-medium"
-          >
-            <Pause class="w-3 h-3 text-amber-500" />
-            <span>已暂停</span>
-          </span>
-
-          <!-- 下载成功 -->
-          <span
-            v-else-if="task.status === 'success'"
-            class="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-600 flex items-center gap-1 font-medium"
-          >
-            <Check class="w-3 h-3 text-emerald-600" />
-            <span>已保存至 NAS</span>
-          </span>
-
-          <!--
-            下载失败：徽标给一句 4~6 字的结论（平台无此档 / 洛雪宿主未开 / 写盘失败…），
-            具体原因链在下面单独一行摊开 —— 以前只把整串塞进 title 悬停，
-            用户根本看不到（issue #10 原话「个别下载任务成功，歌单全部失败，这是废了吗」）。
-          -->
-          <span
-            v-else-if="task.status === 'failed'"
-            class="px-2 py-0.5 rounded-md bg-rose-50 text-rose-600 flex items-center gap-1"
-            :title="task.error || '下载失败'"
-          >
-            <AlertCircle class="w-3 h-3 text-rose-500 shrink-0" />
-            <span>{{ explainFailure(task.error).label }}</span>
-          </span>
-
-          <!--
-            已停止：点过「停止全部」/ 订阅行「停止」后留下的任务。
-            ⚠️ 这一档以前**连状态文字都没有**，右侧也没有任何按钮 ——
-            用户看得到任务却动不了（2026-09-22 反馈：「下载-停止后，已停止增加恢复下载」）。
-          -->
-          <span
-            v-else-if="task.status === 'stopped'"
-            class="px-2 py-0.5 rounded-md bg-[var(--ys-surface-sunken)] text-gray-500 flex items-center gap-1"
-            :title="task.error || '已被用户停止'"
-          >
-            <Square class="w-3 h-3 text-gray-500" />
-            <span>已停止</span>
-          </span>
-        </div>
-
-        <!-- 音质 / 实际音源 / 重试次数 -->
-        <div class="flex items-center gap-1.5 mt-1 text-[10px] flex-wrap">
-          <!--
-            音质标签（2026-10-23 修「下载队列显示音质与实际音质不符」）。
-
-            以前这里只显示**请求的档位**：用户选了「最高音质」，这一格就写成「最高音质」，
-            而盘上那份可能只有 128k —— 用户看到的就是「显示的音质和实际不符」。
-
-            现在按事实分层显示：
-              · 用户请求 `highest` 时，绝不把 `resolvedQuality` 顶上来冒充档位
-                （`resolvedQuality` 是**渠道推出来的**档位，渠道常把它说高）；
-              · 任务还没落地 → 「最高音质」+「待取」；
-              · 已落地 → 「最高音质」+ **实际容器**（后端按魔数嗅探，是权威结论）；
-              · 请求的是固定档位且与盘上一致 → 只显示该档位（不必啰嗦）。
-          -->
-          <span class="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-600 font-mono">
-            {{ downloadManager.qualityLabel(task.quality) || '最高音质' }}
+          <span v-if="task.path || task.actualFormat" class="download-task__pill">
+            <template v-if="taskFormat(task)">格式 <b>{{ taskFormat(task) }}</b></template>
+            <template v-else>格式未知</template>
           </span>
           <span
-            v-if="task.resolvedQuality && task.resolvedQuality !== task.quality"
-            class="px-1.5 py-0.5 rounded bg-[var(--ys-surface-sunken)] text-gray-500 font-mono"
-            :title="'后台实际拿到的音质/容器'"
-          >
-            实际 {{ task.resolvedQuality }}
+            v-if="task.resolvedQuality && task.resolvedQuality !== task.quality && task.resolvedQuality.toUpperCase() !== taskFormat(task)"
+            class="download-task__pill"
+            title="后台实际取到的音质"
+          >实际 <b>{{ task.resolvedQuality }}</b></span>
+          <span v-if="task.attempts > 0" class="download-task__pill">
+            重试 <b>{{ task.attempts }} 次</b>
           </span>
           <span
             v-if="task.resolvedSource"
-            class="px-1.5 py-0.5 rounded bg-[var(--ys-surface-sunken)] text-gray-500 truncate max-w-[130px]"
+            class="download-task__pill min-w-0 max-w-full"
             :title="`实际音频平台：${platformName(task.resolvedSource)}${task.resolvedSourceDetail ? `；实际音源：${task.resolvedSourceDetail}` : ''}${task.resolvedSource !== task.platform ? `；原歌曲平台：${platformName(task.platform)}` : ''}`"
           >
-            音频 {{ platformName(task.resolvedSource) }}<template v-if="task.resolvedSourceDetail"> · {{ task.resolvedSourceDetail }}</template>
+            音频 <b class="truncate">{{ platformName(task.resolvedSource) }}<template v-if="task.resolvedSourceDetail"> · {{ task.resolvedSourceDetail }}</template></b>
           </span>
-          <span v-if="task.attempts > 0" class="text-gray-500">
-            重试 {{ task.attempts }} 次
-          </span>
-          <!--
-            去重标记：同一首歌在失败段里被收了 N 条（不同来源/不同 client_id 提交过
-            同一首，后端按 client_id 去重所以它们本来就是多条，见 dedupeBySong 的说明）。
-            只在这一行上标个数，不再列 N 行 —— 用户原话「失败里怎么出现多个同一首歌曲」。
-          -->
           <span
             v-if="task.dupCount > 1"
-            class="rounded bg-rose-50 px-1.5 py-0.5 font-mono text-rose-600"
+            class="rounded-full bg-rose-50 px-2 py-0.5 text-rose-600"
             :title="`同一首歌有 ${task.dupCount} 条失败记录（不同来源/不同时间提交），这里只列最新一条`"
-          >
-            共 {{ task.dupCount }} 条
-          </span>
-          <span v-if="task.path" class="text-gray-500 truncate max-w-[220px]" :title="task.path">{{ task.path }}</span>
+          >共 {{ task.dupCount }} 条</span>
+          <SelectField
+            v-if="task.status === 'failed'"
+            compact
+            class="w-[104px]"
+            :model-value="task.quality"
+            :options="downloadManager.QUALITY_OPTIONS"
+            hint="为该任务单独指定音质后重试"
+            @click.stop
+            @update:model-value="v => onTaskQualityPick(task, v)"
+          />
+        </div>
+
+        <div v-if="task.path" class="flex min-w-0 items-center gap-1.5 text-xs text-[var(--ys-text-muted)]">
+          <Folder class="h-4 w-4 shrink-0" :stroke-width="1.8" aria-hidden="true" />
+          <span class="truncate" :title="task.path">{{ task.path }}</span>
         </div>
 
         <!--
@@ -410,26 +404,27 @@
         </ul>
       </div>
 
-      <!-- 右侧操作按钮 -->
-      <div class="shrink-0 flex items-center gap-1">
+      <div class="download-task__actions flex shrink-0 items-center gap-1.5">
         <!-- 排队或下载中：暂停按钮 -->
         <button
           v-if="task.status === 'pending' || task.status === 'downloading'"
           @click.stop="downloadManager.pauseTask(task.id)"
-          class="p-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-600 transition-colors"
+          class="download-task__button bg-amber-50 text-amber-700 hover:bg-amber-100"
           title="暂停下载"
+          aria-label="暂停下载"
         >
-          <Pause class="w-3.5 h-3.5" />
+          <Pause class="h-4 w-4" />
         </button>
 
         <!-- 已暂停：继续按钮 -->
         <button
           v-if="task.status === 'paused'"
           @click.stop="downloadManager.resumeTask(task.id)"
-          class="p-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-50 text-emerald-600 transition-colors"
+          class="download-task__button bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
           title="继续下载"
+          aria-label="继续下载"
         >
-          <PlayCircle class="w-3.5 h-3.5" :stroke-width="1.9" />
+          <PlayCircle class="h-4 w-4" :stroke-width="1.9" />
         </button>
 
         <!--
@@ -440,61 +435,54 @@
         <button
           v-if="task.status === 'stopped'"
           @click.stop="downloadManager.resumeTask(task.id)"
-          class="px-2 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-50 text-emerald-600 text-[10px] font-medium transition-colors flex items-center gap-1"
+          class="download-task__button bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
           title="恢复下载（重新排队并继续）"
+          aria-label="恢复下载"
         >
-          <PlayCircle class="w-3 h-3" :stroke-width="1.9" />
-          <span>恢复下载</span>
+          <PlayCircle class="h-4 w-4" :stroke-width="1.9" />
         </button>
 
         <!-- 排队中/下载中/已暂停：取消并停止按钮 -->
         <button
           v-if="task.status === 'pending' || task.status === 'downloading' || task.status === 'paused'"
           @click.stop="downloadManager.cancelTask(task.id)"
-          class="p-1.5 rounded-lg text-gray-500 hover:text-rose-600 hover:bg-rose-50 transition-colors"
+          class="download-task__button download-task__button--neutral"
           title="停止并取消此任务"
+          aria-label="停止并取消此任务"
         >
-          <Square class="w-3.5 h-3.5" />
+          <Square class="h-4 w-4" />
         </button>
 
-        <!-- 失败任务：选音质后重试；渠道由后台按顺序自动选，前端不提供换源 -->
-        <template v-if="task.status === 'failed'">
-          <SelectField
-            compact
-            class="w-[104px]"
-            :model-value="task.quality"
-            :options="downloadManager.QUALITY_OPTIONS"
-            hint="为该任务单独指定音质后重试"
-            @update:model-value="v => onTaskQualityPick(task, v)"
-          />
-
-          <button
-            @click.stop="downloadManager.retryTask(task.id)"
-            class="p-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-50 text-emerald-600 transition-colors"
-            title="重新下载"
-          >
-            <RotateCw class="w-3.5 h-3.5" />
-          </button>
-        </template>
+        <button
+          v-if="task.status === 'failed'"
+          @click.stop="downloadManager.retryTask(task.id)"
+          class="download-task__button bg-rose-50 text-rose-700 hover:bg-rose-100"
+          title="重新下载"
+          aria-label="重新下载"
+        >
+          <RotateCw class="h-4 w-4" />
+        </button>
 
         <!-- 已完成：用当前默认音质再下一次 -->
         <button
           v-if="task.status === 'success'"
           @click.stop="downloadManager.redownloadTasksByIds([task.id])"
-          class="p-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-50 text-emerald-600 transition-colors"
+          class="download-task__button bg-rose-50 text-rose-700 hover:bg-rose-100"
           title="重新下载（用当前默认音质再入队一次）"
+          aria-label="重新下载"
         >
-          <RotateCw class="w-3.5 h-3.5" />
+          <RotateCw class="h-4 w-4" />
         </button>
 
         <!-- 移除记录按钮 (已完成 / 失败 / 已停止) -->
         <button
           v-if="task.status === 'success' || task.status === 'failed' || task.status === 'stopped'"
           @click.stop="downloadManager.removeTask(task.id)"
-          class="p-1.5 rounded-lg text-gray-300 hover:text-gray-500 hover:bg-[var(--ys-surface-hover)] transition-colors"
+          class="download-task__button download-task__button--neutral"
           title="移除记录"
+          aria-label="移除记录"
         >
-          <Trash2 class="w-3.5 h-3.5" />
+          <Trash2 class="h-4 w-4" />
         </button>
       </div>
     </div>
@@ -598,7 +586,7 @@ import { displayPage, normalizePageSize, clampPage } from '../services/displayPa
 import ListPager from './ListPager.vue'
 import { ok as notifyOk, warn as notifyWarn } from '../services/feedback'
 import {
-  X, RotateCw, Trash2, Check,
+  X, RotateCw, Trash2, Check, Folder,
   AlertCircle, Loader2, Music2, Clock, Pause, PlayCircle, Square,
   ListChecks, Eraser, RotateCcw, RefreshCw, Info
 } from 'lucide-vue-next'
@@ -1138,6 +1126,12 @@ function dedupeBySong(list) {
   return [...seen.values()].map(({ task, dup }) => (dup ? { ...task, dupCount: dup + 1 } : task))
 }
 
+// 已保存文件的扩展名描述容器，请求音质仍单独显示。
+function taskFormat(task) {
+  const extension = task.path?.match(/\.([a-z0-9]+)$/i)?.[1]
+  return (task.actualFormat || extension || '').toUpperCase()
+}
+
 const filteredTasks = computed(() => {
   const list = downloadManager.tasks.value
   // 2026-10-26 用户口径：下载队列「新的在最上方」。tasks 仍保持后端到达顺序
@@ -1188,6 +1182,65 @@ watch([() => filteredTasks.value.length, pageSize], () => {
 </script>
 
 <style scoped>
+.download-task-list { container: download-tasks / inline-size; }
+.download-task {
+  display: grid;
+  grid-template: "song actions" auto "details details" auto / minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px 12px;
+}
+.download-task__song { grid-area: song; }
+.download-task__details {
+  grid-area: details;
+  border-top: 1px solid var(--ys-border);
+  padding-top: 8px;
+}
+.download-task__actions { grid-area: actions; justify-self: end; }
+.download-task__pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: 999px;
+  background: var(--ys-surface-hover);
+  padding: 3px 8px;
+  color: var(--ys-text-muted);
+  white-space: nowrap;
+}
+.download-task__pill b { color: var(--ys-text); font-weight: 600; }
+.download-task__button {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  transition: background-color 150ms, color 150ms;
+}
+.download-task__button--neutral {
+  border-color: var(--ys-border);
+  background: var(--ys-surface-sunken);
+  color: var(--ys-text-muted);
+}
+.download-task__button--neutral:hover {
+  background: var(--ys-surface-hover);
+  color: var(--ys-text);
+}
+@container download-tasks (min-width: 620px) {
+  .download-task {
+    grid-template: "song details actions" auto / minmax(0, 1.1fr) minmax(0, 1fr) auto;
+    align-items: stretch;
+    column-gap: 14px;
+  }
+  .download-task__details,
+  .download-task__actions {
+    align-content: center;
+    border-top: 0;
+    border-left: 1px solid var(--ys-border);
+    padding: 0 0 0 14px;
+  }
+  .download-task__actions { min-width: 90px; justify-content: flex-end; }
+}
+
 /* 依据内容区而非视口切换，侧栏与抽屉中也保留足够空间。 */
 .ys-download-toolbar { container-type: inline-size; }
 .ys-download-action { min-width: 32px; min-height: 32px; }
